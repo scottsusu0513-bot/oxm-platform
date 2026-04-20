@@ -106,14 +106,22 @@ export function registerOAuthRoutes(app: Express) {
       }
 
       const openId = `google_${userInfo.id}`;
+      console.log("[oauth callback] upserting user openId:", openId);
 
-      await db.upsertUser({
-        openId,
-        name: userInfo.name || null,
-        email: userInfo.email || null,
-        loginMethod: "google",
-        lastSignedIn: new Date(),
-      });
+      try {
+        await db.upsertUser({
+          openId,
+          name: userInfo.name || null,
+          email: userInfo.email || null,
+          loginMethod: "google",
+          lastSignedIn: new Date(),
+        });
+        console.log("[oauth callback] upsertUser SUCCESS");
+      } catch (dbErr) {
+        console.error("[oauth callback] upsertUser FAILED:", dbErr);
+        res.status(500).json({ error: "DB write failed" });
+        return;
+      }
 
       const sessionToken = await sdk.createSessionToken(openId, {
         name: userInfo.name || "",
