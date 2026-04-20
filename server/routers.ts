@@ -21,8 +21,7 @@ export const appRouter = router({
   auth: router({
     me: publicProcedure.query(opts => opts.ctx.user),
     logout: publicProcedure.mutation(({ ctx }) => {
-      const cookieOptions = getSessionCookieOptions(ctx.req);
-      ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
+      ctx.res.clearCookie(COOKIE_NAME, { path: "/", httpOnly: true, sameSite: "lax", secure: true });
       return { success: true } as const;
     }),
   }),
@@ -44,8 +43,7 @@ export const appRouter = router({
     }),
     deleteAccount: protectedProcedure.mutation(async ({ ctx }) => {
       await db.softDeleteUser(ctx.user.id);
-      const cookieOptions = getSessionCookieOptions(ctx.req);
-      ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
+      ctx.res.clearCookie(COOKIE_NAME, { path: "/", httpOnly: true, sameSite: "lax", secure: true });
       return { success: true };
     }),
   }),
