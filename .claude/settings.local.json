@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mysql *)",
+      "Bash(node -e ' *)",
+      "Bash(pnpm db:push)",
+      "Bash(python3 -c \"import sys,json; j=json.load\\(sys.stdin\\); [print\\(e['tag']\\) for e in j['entries']]\")",
+      "Bash(node *)",
+      "Bash(npx drizzle-kit *)",
+      "Bash(npx tsc *)",
+      "Bash(pnpm add *)",
+      "Bash(pnpm install *)",
+      "Bash(pnpm check *)",
+      "Bash(npm --version)",
+      "Bash(npx cap *)",
+      "Bash(pnpm build *)"
+    ]
+  }
+}

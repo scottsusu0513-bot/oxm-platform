@@ -1,0 +1,1 @@
+ALTER TABLE `factories` MODIFY COLUMN `status` enum('pending','approved','rejected');

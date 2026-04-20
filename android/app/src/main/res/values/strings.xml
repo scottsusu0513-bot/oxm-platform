@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">OXM全台最大代工平台</string>
+    <string name="title_activity_main">OXM全台最大代工平台</string>
+    <string name="package_name">com.oxmmatch.app</string>
+    <string name="custom_url_scheme">com.oxmmatch.app</string>
+</resources>
