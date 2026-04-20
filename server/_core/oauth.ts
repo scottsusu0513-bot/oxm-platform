@@ -21,7 +21,8 @@ function getCookieValue(req: Request, name: string): string | undefined {
 
 export function registerOAuthRoutes(app: Express) {
   app.get("/api/oauth/google", (req: Request, res: Response) => {
-    const redirectUri = `${req.protocol}://${req.get("host")}/api/oauth/callback`;
+    const baseUrl = process.env.OAUTH_SERVER_URL || `${req.protocol}://${req.get("host")}`;
+    const redirectUri = `${baseUrl}/api/oauth/callback`;
     const nonce = randomBytes(16).toString("hex");
     const state = Buffer.from(JSON.stringify({ redirectUri, nonce })).toString("base64url");
 
@@ -70,7 +71,8 @@ export function registerOAuthRoutes(app: Express) {
     res.clearCookie(OAUTH_STATE_COOKIE);
 
     try {
-      const redirectUri = `${req.protocol}://${req.get("host")}/api/oauth/callback`;
+      const baseUrl = process.env.OAUTH_SERVER_URL || `${req.protocol}://${req.get("host")}`;
+      const redirectUri = `${baseUrl}/api/oauth/callback`;
 
       const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
         method: "POST",

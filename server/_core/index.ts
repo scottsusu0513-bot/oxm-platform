@@ -15,6 +15,7 @@ async function startServer() {
   console.log("[boot] PORT =", process.env.PORT);
 
   const app = express();
+  app.set("trust proxy", 1);
   const server = createServer(app);
 
   console.log("[boot] applying security headers");
