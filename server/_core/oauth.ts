@@ -121,6 +121,10 @@ export function registerOAuthRoutes(app: Express) {
       });
 
       const cookieOptions = getSessionCookieOptions(req);
+      console.log("[oauth callback] protocol:", req.protocol);
+      console.log("[oauth callback] hostname:", req.hostname);
+      console.log("[oauth callback] cookieOptions:", JSON.stringify(cookieOptions));
+      console.log("[oauth callback] x-forwarded-proto:", req.headers["x-forwarded-proto"]);
       res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: THIRTY_DAYS_MS });
       res.redirect(302, "/");
     } catch (error) {

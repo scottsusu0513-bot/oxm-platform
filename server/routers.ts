@@ -19,7 +19,11 @@ export const appRouter = router({
   system: systemRouter,
 
   auth: router({
-    me: publicProcedure.query(opts => opts.ctx.user),
+    me: publicProcedure.query(opts => {
+      console.log("[auth.me] cookie header:", opts.ctx.req.headers.cookie ?? "(none)");
+      console.log("[auth.me] user:", opts.ctx.user?.email ?? "(not authenticated)");
+      return opts.ctx.user;
+    }),
     logout: publicProcedure.mutation(({ ctx }) => {
       const cookieOptions = getSessionCookieOptions(ctx.req);
       ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
