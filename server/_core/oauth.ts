@@ -106,22 +106,14 @@ export function registerOAuthRoutes(app: Express) {
       }
 
       const openId = `google_${userInfo.id}`;
-      console.log("[oauth callback] upserting user openId:", openId);
 
-      try {
-        await db.upsertUser({
-          openId,
-          name: userInfo.name || null,
-          email: userInfo.email || null,
-          loginMethod: "google",
-          lastSignedIn: new Date(),
-        });
-        console.log("[oauth callback] upsertUser SUCCESS");
-      } catch (dbErr) {
-        console.error("[oauth callback] upsertUser FAILED:", dbErr);
-        res.status(500).json({ error: "DB write failed" });
-        return;
-      }
+      await db.upsertUser({
+        openId,
+        name: userInfo.name || null,
+        email: userInfo.email || null,
+        loginMethod: "google",
+        lastSignedIn: new Date(),
+      });
 
       const sessionToken = await sdk.createSessionToken(openId, {
         name: userInfo.name || "",
@@ -129,10 +121,6 @@ export function registerOAuthRoutes(app: Express) {
       });
 
       const cookieOptions = getSessionCookieOptions(req);
-      console.log("[oauth callback] protocol:", req.protocol);
-      console.log("[oauth callback] hostname:", req.hostname);
-      console.log("[oauth callback] cookieOptions:", JSON.stringify(cookieOptions));
-      console.log("[oauth callback] x-forwarded-proto:", req.headers["x-forwarded-proto"]);
       res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: THIRTY_DAYS_MS });
       res.redirect(302, "/");
     } catch (error) {
