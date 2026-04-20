@@ -209,12 +209,12 @@ class SDKServer {
       });
       const { openId, appId, name } = payload as Record<string, unknown>;
 
-      if (!isNonEmptyString(openId) || !isNonEmptyString(appId)) return null;
+      if (!isNonEmptyString(openId)) return null;
       // name 可以為空字符串
 
       return {
-        openId,
-        appId,
+        openId: openId as string,
+        appId: typeof appId === 'string' ? appId : '',
         name: typeof name === 'string' ? name : '',
       };
     } catch {
