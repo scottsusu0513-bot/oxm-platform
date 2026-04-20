@@ -200,7 +200,13 @@ class SDKServer {
   async verifySession(
     cookieValue: string | undefined | null
   ): Promise<{ openId: string; appId: string; name: string } | null> {
-    if (!cookieValue) return null;
+    console.log("[verifySession] token exists:", Boolean(cookieValue));
+    if (!cookieValue) {
+      console.log("[verifySession] returning null: no cookie value");
+      return null;
+    }
+    console.log("[verifySession] token prefix:", cookieValue.slice(0, 20));
+    console.log("[verifySession] JWT_SECRET set:", Boolean(ENV.cookieSecret), "length:", ENV.cookieSecret?.length ?? 0);
 
     try {
       const secretKey = this.getSessionSecret();
@@ -208,16 +214,21 @@ class SDKServer {
         algorithms: ["HS256"],
       });
       const { openId, appId, name } = payload as Record<string, unknown>;
+      console.log("[verifySession] payload:", JSON.stringify({ openId, appId, name }));
 
-      if (!isNonEmptyString(openId)) return null;
-      // name 可以為空字符串
+      if (!isNonEmptyString(openId)) {
+        console.log("[verifySession] returning null: openId is empty or not string");
+        return null;
+      }
 
+      console.log("[verifySession] success, openId:", openId);
       return {
         openId: openId as string,
         appId: typeof appId === 'string' ? appId : '',
         name: typeof name === 'string' ? name : '',
       };
-    } catch {
+    } catch (err) {
+      console.log("[verifySession] returning null: jwtVerify threw:", String(err));
       return null;
     }
   }
@@ -249,17 +260,22 @@ class SDKServer {
   async authenticateRequest(req: Request): Promise<User> {
     const cookies = this.parseCookies(req.headers.cookie);
     const sessionCookie = cookies.get(COOKIE_NAME);
+    console.log("[authenticateRequest] COOKIE_NAME:", COOKIE_NAME);
+    console.log("[authenticateRequest] sessionCookie found:", Boolean(sessionCookie));
     const session = await this.verifySession(sessionCookie);
 
     if (!session) {
+      console.log("[authenticateRequest] returning null: verifySession returned null");
       throw ForbiddenError("Invalid session cookie");
     }
 
     const sessionUserId = session.openId;
     const signedInAt = new Date();
     let user = await db.getUserByOpenId(sessionUserId);
+    console.log("[authenticateRequest] db.getUserByOpenId result:", user ? user.email : "(not found)");
 
     if (!user) {
+      console.log("[authenticateRequest] returning null: user not found in DB for openId:", sessionUserId);
       throw ForbiddenError("User not found");
     }
 
