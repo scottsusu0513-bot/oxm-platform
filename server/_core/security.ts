@@ -54,15 +54,26 @@ export function setupOriginCheck(app: Express) {
     const origin = req.headers.origin;
     const referer = req.headers.referer;
 
-    // 設定 CORS headers：只反射白名單內的 origin
-    if (origin) {
-      const isAllowed = allowedOrigins.length === 0 ? !isProd : allowedOrigins.includes(origin);
-      if (isAllowed) {
-        res.setHeader("Access-Control-Allow-Origin", origin);
-        res.setHeader("Access-Control-Allow-Credentials", "true");
-        res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-        res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    const isSameOrigin = (o: string) => {
+      try {
+        return new URL(o).host === req.get("host");
+      } catch {
+        return false;
       }
+    };
+
+    const isOriginAllowed = (o: string) => {
+      if (isSameOrigin(o)) return true;
+      if (allowedOrigins.length === 0) return !isProd;
+      return allowedOrigins.includes(o);
+    };
+
+    // 設定 CORS headers：只反射白名單內的 origin
+    if (origin && isOriginAllowed(origin)) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Access-Control-Allow-Credentials", "true");
+      res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
     }
 
     // 處理 OPTIONS 預檢請求
@@ -72,16 +83,13 @@ export function setupOriginCheck(app: Express) {
 
     // 只檢查 POST/PUT/DELETE 請求
     if (["POST", "PUT", "DELETE"].includes(req.method)) {
-      if (origin) {
-        const isAllowed = allowedOrigins.length === 0 ? !isProd : allowedOrigins.includes(origin);
-        if (!isAllowed) {
-          return res.status(403).json({ error: "Origin not allowed" });
-        }
+      if (origin && !isOriginAllowed(origin)) {
+        return res.status(403).json({ error: "Origin not allowed" });
       }
       if (referer && allowedOrigins.length > 0) {
         try {
           const refererOrigin = new URL(referer).origin;
-          if (!allowedOrigins.includes(refererOrigin)) {
+          if (!isSameOrigin(refererOrigin) && !allowedOrigins.includes(refererOrigin)) {
             return res.status(403).json({ error: "Referer not allowed" });
           }
         } catch {
