@@ -21,7 +21,7 @@ export const appRouter = router({
   auth: router({
     me: publicProcedure.query(opts => opts.ctx.user),
     logout: publicProcedure.mutation(({ ctx }) => {
-      ctx.res.clearCookie(COOKIE_NAME, { path: "/", httpOnly: true, sameSite: "lax", secure: true });
+      ctx.res.clearCookie(COOKIE_NAME, getSessionCookieOptions(ctx.req));
       return { success: true } as const;
     }),
   }),
