@@ -104,37 +104,37 @@ export default function FactoryDashboard() {
           <ArrowLeft className="h-4 w-4" />返回首頁
         </Button>
 
-        <div className="flex items-start justify-between mb-6">
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-6">
           <div className="flex items-center gap-4">
             {/* 大頭貼 */}
             {factory.avatarUrl && (
-              <img src={factory.avatarUrl} alt={factory.name} className="w-16 h-16 rounded-full object-cover border-2 border-border" />
+              <img src={factory.avatarUrl} alt={factory.name} className="w-16 h-16 rounded-full object-cover border-2 border-border shrink-0" />
             )}
             {!factory.avatarUrl && (
-              <div className="w-16 h-16 rounded-full bg-orange-100 flex items-center justify-center border-2 border-border">
+              <div className="w-16 h-16 rounded-full bg-orange-100 flex items-center justify-center border-2 border-border shrink-0">
                 <Factory className="w-8 h-8 text-orange-500" />
               </div>
             )}
-            <div>
-              <h1 className="text-2xl font-bold flex items-center gap-2">
-  {factory.name}
-  {(factory as any).businessType === "studio" ? (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 text-sm font-medium">
-      <Wrench className="w-3 h-3" />工作室
-    </span>
-  ) : (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-orange-100 text-orange-700 text-sm font-medium">
-      <Factory className="w-3 h-3" />代工廠
-    </span>
-  )}
-  {(factory as any).certified && (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-50 border border-blue-200 text-blue-700 text-sm font-medium">
-      ✓ 認證工廠
-    </span>
-  )}
-</h1>
+            <div className="min-w-0">
+              <h1 className="text-xl sm:text-2xl font-bold flex flex-wrap items-center gap-2">
+                {factory.name}
+                {(factory as any).businessType === "studio" ? (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 text-sm font-medium">
+                    <Wrench className="w-3 h-3" />工作室
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-orange-100 text-orange-700 text-sm font-medium">
+                    <Factory className="w-3 h-3" />代工廠
+                  </span>
+                )}
+                {(factory as any).certified && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-50 border border-blue-200 text-blue-700 text-sm font-medium">
+                    ✓ 認證工廠
+                  </span>
+                )}
+              </h1>
               <p className="text-sm text-muted-foreground mt-0.5">工廠管理後台</p>
-              <div className="mt-2 flex items-center gap-2">
+              <div className="mt-2 flex flex-wrap items-center gap-2">
                 <StatusBadge status={factory.status} />
                 {factory.status === 'rejected' && factory.rejectionReason && (
                   <span className="text-xs text-red-600">原因：{factory.rejectionReason}</span>
@@ -142,7 +142,7 @@ export default function FactoryDashboard() {
               </div>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0">
             <Badge variant="secondary">
               <Star className="w-3 h-3 mr-1 text-yellow-500" />
               {Number(factory.avgRating).toFixed(1)} ({factory.reviewCount})
@@ -185,30 +185,32 @@ export default function FactoryDashboard() {
         )}
 
         <Tabs defaultValue="info">
-          <TabsList className="mb-4">
-            <TabsTrigger value="info"><Settings className="w-4 h-4 mr-1" />基本資料</TabsTrigger>
-            <TabsTrigger value="photos"><Images className="w-4 h-4 mr-1" />照片集</TabsTrigger>
-            <TabsTrigger value="products"><Package className="w-4 h-4 mr-1" />產品管理</TabsTrigger>
-            <TabsTrigger value="messages">
-              <MessageCircle className="w-4 h-4 mr-1" />客戶詢問
-              {convs && convs.some(c => c.unreadCount > 0) && (
-                <span className="ml-1 bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
-                  {convs.reduce((sum, c) => sum + c.unreadCount, 0)}
-                </span>
-              )}
-            </TabsTrigger>
-            <TabsTrigger value="reviews" onClick={handleReviewTabClick}>
-              <Star className="w-4 h-4 mr-1" />客戶評價
-              {showReviewBadge && (
-                <span className="ml-1 bg-red-500 text-white text-xs rounded-full min-w-5 h-5 px-1 flex items-center justify-center">
-                  {unrepliedCount}
-                </span>
-              )}
-            </TabsTrigger>
-            <TabsTrigger value="ads">
-              <Megaphone className="w-4 h-4 mr-1" />廣告曝光
-            </TabsTrigger>
-          </TabsList>
+          <div className="overflow-x-auto mb-4">
+            <TabsList className="w-max min-w-full">
+              <TabsTrigger value="info"><Settings className="w-4 h-4 mr-1" />基本資料</TabsTrigger>
+              <TabsTrigger value="photos"><Images className="w-4 h-4 mr-1" />照片集</TabsTrigger>
+              <TabsTrigger value="products"><Package className="w-4 h-4 mr-1" />產品管理</TabsTrigger>
+              <TabsTrigger value="messages">
+                <MessageCircle className="w-4 h-4 mr-1" />客戶詢問
+                {convs && convs.some(c => c.unreadCount > 0) && (
+                  <span className="ml-1 bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
+                    {convs.reduce((sum, c) => sum + c.unreadCount, 0)}
+                  </span>
+                )}
+              </TabsTrigger>
+              <TabsTrigger value="reviews" onClick={handleReviewTabClick}>
+                <Star className="w-4 h-4 mr-1" />客戶評價
+                {showReviewBadge && (
+                  <span className="ml-1 bg-red-500 text-white text-xs rounded-full min-w-5 h-5 px-1 flex items-center justify-center">
+                    {unrepliedCount}
+                  </span>
+                )}
+              </TabsTrigger>
+              <TabsTrigger value="ads">
+                <Megaphone className="w-4 h-4 mr-1" />廣告曝光
+              </TabsTrigger>
+            </TabsList>
+          </div>
 
           <TabsContent value="info">
             <FactoryInfoForm factory={factory} />
@@ -499,7 +501,7 @@ function FactoryInfoForm({ factory }: { factory: any }) {
 
         <div>
           <Label>營業狀態</Label>
-          <div className="flex gap-2 mt-2">
+          <div className="flex flex-wrap gap-2 mt-2">
             {OPERATION_STATUS_OPTIONS.map(opt => (
               <button
                 key={opt.value}
