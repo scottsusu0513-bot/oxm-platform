@@ -29,7 +29,7 @@ export async function sendNewInquiryEmail(params: {
     if (!resend) return;
     await resend.emails.send({
       from: FROM_EMAIL,
-      to: params.factoryEmail,
+      to: "scottsusu0513@gmail.com", // TODO: 測試用，之後要改回真實收件人（params.factoryEmail）
       subject: `【OXM】您有一則新的客戶詢問`,
       html: `
         <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
@@ -70,7 +70,7 @@ export async function sendFactoryApprovedEmail(params: {
     if (!resend) return;
     await resend.emails.send({
       from: FROM_EMAIL,
-      to: params.factoryEmail,
+      to: "scottsusu0513@gmail.com", // TODO: 測試用，之後要改回真實收件人（params.factoryEmail）
       subject: `【OXM】您的工廠已通過審核`,
       html: `
         <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
