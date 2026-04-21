@@ -37,6 +37,7 @@ export function useAuth(options?: UseAuthOptions) {
       throw error;
     } finally {
       utils.auth.me.setData(undefined, null);
+      localStorage.removeItem("manus-runtime-user-info");
       window.location.href = "/";
     }
   }, [logoutMutation, utils]);

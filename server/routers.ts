@@ -21,7 +21,10 @@ export const appRouter = router({
   auth: router({
     me: publicProcedure.query(opts => opts.ctx.user),
     logout: publicProcedure.mutation(({ ctx }) => {
-      ctx.res.clearCookie(COOKIE_NAME, getSessionCookieOptions(ctx.req));
+      const isLocal = ["localhost", "127.0.0.1", "::1"].includes(ctx.req.hostname);
+      const secureFlag = isLocal ? "" : "; Secure";
+      ctx.res.setHeader("Set-Cookie", `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT${secureFlag}`);
+      ctx.res.setHeader("Cache-Control", "no-store");
       return { success: true } as const;
     }),
   }),
@@ -43,7 +46,8 @@ export const appRouter = router({
     }),
     deleteAccount: protectedProcedure.mutation(async ({ ctx }) => {
       await db.softDeleteUser(ctx.user.id);
-      ctx.res.clearCookie(COOKIE_NAME, { path: "/", httpOnly: true, sameSite: "lax", secure: true });
+      const isLocalReq = ["localhost", "127.0.0.1", "::1"].includes(ctx.req.hostname);
+      ctx.res.setHeader("Set-Cookie", `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT${isLocalReq ? "" : "; Secure"}`);
       return { success: true };
     }),
   }),
