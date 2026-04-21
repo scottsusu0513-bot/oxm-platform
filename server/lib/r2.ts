@@ -38,6 +38,9 @@ export async function uploadImage(
     throw new Error("R2 config missing: R2_BUCKET_NAME, R2_ENDPOINT required");
   }
 
+  console.log("[R2] endpoint:", process.env.R2_ENDPOINT);
+  console.log("[R2] bucket:", process.env.R2_BUCKET_NAME);
+
   const key = `images/${Date.now()}-${fileName}`;
 
   try {
