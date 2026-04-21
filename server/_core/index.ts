@@ -49,6 +49,10 @@ async function startServer() {
 
   registerOAuthRoutes(app);
 
+  app.get("/api/health", (_req, res) => {
+    res.json({ status: "ok" });
+  });
+
   // Standalone logout route — does NOT go through tRPC/httpBatchLink
   app.post("/api/logout", (req, res) => {
     const isLocal = ["localhost", "127.0.0.1", "::1"].includes(req.hostname);
