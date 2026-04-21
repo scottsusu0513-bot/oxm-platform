@@ -33,7 +33,10 @@ const redirectToLoginIfUnauthorized = (error: unknown) => {
 queryClient.getQueryCache().subscribe(event => {
   if (event.type === "updated" && event.action.type === "error") {
     const error = event.query.state.error;
-    redirectToLoginIfUnauthorized(error);
+    // auth.me returning UNAUTHORIZED is expected when logged out — don't auto-redirect
+    const queryPath = event.query.queryKey[0];
+    const isAuthMe = Array.isArray(queryPath) && queryPath[0] === "auth" && queryPath[1] === "me";
+    if (!isAuthMe) redirectToLoginIfUnauthorized(error);
     console.error("[API Query Error]", error);
   }
 });
