@@ -305,6 +305,8 @@ function FactoryInfoForm({ factory }: { factory: any }) {
       try {
         const { url } = await uploadAvatarMut.mutateAsync({ base64, mimeType: file.type || "image/jpeg" });
         setAvatarUrl(url);
+        setAvatarPreview(url);
+        await utils.factory.getMine.invalidate();
       } catch {
         toast.error("圖片上傳失敗，請重試");
         setAvatarPreview(null);

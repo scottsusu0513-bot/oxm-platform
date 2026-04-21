@@ -201,6 +201,7 @@ export const appRouter = router({
       const ext = input.mimeType.includes("png") ? "png" : input.mimeType.includes("webp") ? "webp" : "jpg";
       const key = `factory-avatars/${factory.id}/${nanoid()}.${ext}`;
       const { url } = await storagePut(key, buffer, input.mimeType);
+      await db.updateFactory(factory.id, ctx.user.id, { avatarUrl: url });
       return { url };
     }),
 
