@@ -9,6 +9,7 @@ import { serveStatic, setupVite } from "./vite";
 import { setupSecurityHeaders, setupOriginCheck } from "./security";
 import { apiLimiter, loginLimiter, uploadLimiter, messageLimiter, submitReviewLimiter, adminLimiter } from "./rateLimit";
 import { COOKIE_NAME } from "@shared/const";
+import { getDb } from "../db";
 
 async function startServer() {
   console.log("[boot] startServer called");
@@ -49,8 +50,18 @@ async function startServer() {
 
   registerOAuthRoutes(app);
 
-  app.get("/api/health", (_req, res) => {
-    res.json({ status: "ok" });
+  app.get("/api/health", async (_req, res) => {
+    res.set({
+      "Cache-Control": "no-store, no-cache, max-age=0",
+      "Pragma": "no-cache",
+      "Expires": "0",
+    });
+    try {
+      await getDb();
+    } catch {
+      // DB wake-up best-effort; don't fail health check
+    }
+    res.status(200).json({ status: "ok" });
   });
 
   // Standalone logout route — does NOT go through tRPC/httpBatchLink
