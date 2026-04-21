@@ -1,19 +1,5 @@
 import { S3Client, PutObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
 
-const bucket = process.env.R2_BUCKET_NAME ?? "";
-const endpoint = process.env.R2_ENDPOINT ?? "";
-
-function getClient(): S3Client {
-  return new S3Client({
-    region: "auto",
-    endpoint,
-    credentials: {
-      accessKeyId: process.env.R2_ACCESS_KEY_ID ?? "",
-      secretAccessKey: process.env.R2_SECRET_ACCESS_KEY ?? "",
-    },
-  });
-}
-
 export function isR2Enabled(): boolean {
   return !!(
     process.env.R2_ENDPOINT &&
@@ -23,16 +9,38 @@ export function isR2Enabled(): boolean {
   );
 }
 
+function getClient(): S3Client {
+  const endpoint = process.env.R2_ENDPOINT;
+  const accessKeyId = process.env.R2_ACCESS_KEY_ID;
+  const secretAccessKey = process.env.R2_SECRET_ACCESS_KEY;
+
+  if (!endpoint || !accessKeyId || !secretAccessKey) {
+    throw new Error("R2 config missing: R2_ENDPOINT, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY required");
+  }
+
+  return new S3Client({
+    region: "auto",
+    endpoint,
+    credentials: { accessKeyId, secretAccessKey },
+  });
+}
+
 export async function uploadImage(
   fileBuffer: Buffer | Uint8Array,
   fileName: string,
   mimeType: string
 ): Promise<{ key: string; url: string }> {
+  const bucket = process.env.R2_BUCKET_NAME;
+  const endpoint = process.env.R2_ENDPOINT;
+
+  if (!bucket || !endpoint) {
+    throw new Error("R2 config missing: R2_BUCKET_NAME, R2_ENDPOINT required");
+  }
+
   const key = `images/${Date.now()}-${fileName}`;
-  const client = getClient();
 
   try {
-    await client.send(
+    await getClient().send(
       new PutObjectCommand({
         Bucket: bucket,
         Key: key,
@@ -50,13 +58,15 @@ export async function uploadImage(
 }
 
 export async function deleteImage(key: string): Promise<void> {
-  const client = getClient();
+  const bucket = process.env.R2_BUCKET_NAME;
+
+  if (!bucket) {
+    throw new Error("R2 config missing: R2_BUCKET_NAME required");
+  }
+
   try {
-    await client.send(
-      new DeleteObjectCommand({
-        Bucket: bucket,
-        Key: key,
-      })
+    await getClient().send(
+      new DeleteObjectCommand({ Bucket: bucket, Key: key })
     );
   } catch (err) {
     console.error("[R2] delete failed:", err);
