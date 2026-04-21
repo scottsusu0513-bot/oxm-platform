@@ -1,6 +1,4 @@
-import https from "node:https";
 import { S3Client, PutObjectCommand, DeleteObjectCommand, HeadBucketCommand } from "@aws-sdk/client-s3";
-import { NodeHttpHandler } from "@smithy/node-http-handler";
 
 export function isR2Enabled(): boolean {
   return !!(
@@ -25,12 +23,6 @@ function getClient(): S3Client {
     endpoint,
     forcePathStyle: true,
     credentials: { accessKeyId, secretAccessKey },
-    requestHandler: new NodeHttpHandler({
-      httpsAgent: new https.Agent({
-        keepAlive: true,
-        minVersion: "TLSv1.2",
-      }),
-    }),
   });
 }
 
@@ -49,7 +41,6 @@ export async function uploadImage(
   console.log("[R2] endpoint:", endpoint);
   console.log("[R2] bucket:", bucket);
 
-  // HeadBucket 連線測試
   try {
     await getClient().send(new HeadBucketCommand({ Bucket: bucket }));
   } catch (err) {
