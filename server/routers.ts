@@ -1,6 +1,6 @@
 import { COOKIE_NAME } from "@shared/const";
 import { enhanceSearchKeyword } from './semantic-search';
-import { sendNewInquiryEmail, sendFactoryApprovedEmail } from './email';
+import { sendNewInquiryEmail, sendFactoryApprovedEmail, sendFactorySubmittedEmail, sendReportEmail, sendSupportTicketEmail } from './email';
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, protectedProcedure, adminProcedure, router } from "./_core/trpc";
@@ -56,6 +56,15 @@ export const appRouter = router({
       description: z.string().min(1),
     })).mutation(async ({ ctx, input }) => {
       await db.createSupportTicket({ ...input, userId: ctx.user.id });
+      sendSupportTicketEmail({
+        userName: ctx.user.name ?? '未知用戶',
+        userEmail: ctx.user.email,
+        type: input.type,
+        subject: input.subject,
+        description: input.description,
+      }).catch((err) => {
+        console.error("[Email] admin notification failed:", err);
+      });
       return { success: true };
     }),
     myTickets: protectedProcedure.query(async ({ ctx }) => {
@@ -205,6 +214,14 @@ export const appRouter = router({
         if (products.length === 0) throw new Error("請至少新增一項產品後再送出審核");
       }
       await db.updateFactory(factory.id, ctx.user.id, { status: 'pending', submittedAt: new Date() });
+      sendFactorySubmittedEmail({
+        factoryName: factory.name ?? '未命名工廠',
+        factoryId: factory.id,
+        ownerName: ctx.user.name ?? '未知用戶',
+        ownerEmail: ctx.user.email,
+      }).catch((err) => {
+        console.error("[Email] admin notification failed:", err);
+      });
       return { success: true };
     }),
 
@@ -830,6 +847,15 @@ export const appRouter = router({
       const db_ = await getDb();
       if (!db_) throw new Error("DB not available");
       await db_.insert(reports).values({ factoryId: input.factoryId, userId: ctx.user.id, reason: input.reason });
+      const reportedFactory = await db.getFactoryById(input.factoryId);
+      sendReportEmail({
+        reporterName: ctx.user.name ?? '未知用戶',
+        factoryName: reportedFactory?.name ?? `工廠 #${input.factoryId}`,
+        factoryId: input.factoryId,
+        reason: input.reason,
+      }).catch((err) => {
+        console.error("[Email] admin notification failed:", err);
+      });
       return { success: true };
     }),
     myReports: protectedProcedure.query(async ({ ctx }) => {
