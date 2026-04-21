@@ -8,6 +8,7 @@ import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import { setupSecurityHeaders, setupOriginCheck } from "./security";
 import { apiLimiter, loginLimiter, uploadLimiter, messageLimiter, submitReviewLimiter, adminLimiter } from "./rateLimit";
+import { COOKIE_NAME } from "@shared/const";
 
 async function startServer() {
   console.log("[boot] startServer called");
@@ -47,6 +48,15 @@ async function startServer() {
   });
 
   registerOAuthRoutes(app);
+
+  // Standalone logout route — does NOT go through tRPC/httpBatchLink
+  app.post("/api/logout", (req, res) => {
+    const isLocal = ["localhost", "127.0.0.1", "::1"].includes(req.hostname);
+    const secure = isLocal ? "" : "; Secure";
+    res.setHeader("Set-Cookie", `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT${secure}`);
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    res.json({ success: true });
+  });
 
   console.log("[boot] registering trpc");
   app.use(

@@ -1,6 +1,5 @@
 import { getLoginUrl } from "@/const";
 import { trpc } from "@/lib/trpc";
-import { TRPCClientError } from "@trpc/client";
 import { useCallback, useEffect, useMemo } from "react";
 
 type UseAuthOptions = {
@@ -18,29 +17,16 @@ export function useAuth(options?: UseAuthOptions) {
     refetchOnWindowFocus: false,
   });
 
-  const logoutMutation = trpc.auth.logout.useMutation({
-    onSuccess: () => {
-      utils.auth.me.setData(undefined, null);
-    },
-  });
-
   const logout = useCallback(async () => {
     try {
-      await logoutMutation.mutateAsync();
-    } catch (error: unknown) {
-      if (
-        error instanceof TRPCClientError &&
-        error.data?.code === "UNAUTHORIZED"
-      ) {
-        return;
-      }
-      throw error;
-    } finally {
-      utils.auth.me.setData(undefined, null);
-      localStorage.removeItem("manus-runtime-user-info");
-      window.location.href = "/";
+      await fetch("/api/logout", { method: "POST", credentials: "include" });
+    } catch {
+      // ignore network errors — proceed with client-side cleanup regardless
     }
-  }, [logoutMutation, utils]);
+    utils.auth.me.setData(undefined, null);
+    localStorage.removeItem("manus-runtime-user-info");
+    window.location.href = "/";
+  }, [utils]);
 
   const state = useMemo(() => {
     localStorage.setItem(
