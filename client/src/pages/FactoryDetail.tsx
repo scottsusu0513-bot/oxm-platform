@@ -17,6 +17,33 @@ import {
   MessageCircle, Package, Check, X, ArrowLeft, Send, Heart, Wrench, Factory as FactoryIcon, Flag, Clock, ChevronLeft, ChevronRight, Images
 } from "lucide-react";
 
+function ProductImageCarousel({ images }: { images: string[] }) {
+  const [idx, setIdx] = useState(0);
+  if (!images.length) return null;
+  const prev = (e: React.MouseEvent) => { e.stopPropagation(); setIdx(i => (i - 1 + images.length) % images.length); };
+  const next = (e: React.MouseEvent) => { e.stopPropagation(); setIdx(i => (i + 1) % images.length); };
+  return (
+    <div className="relative w-28 h-28 shrink-0 rounded-lg overflow-hidden bg-muted">
+      <img src={images[idx]} alt="" className="w-full h-full object-cover" loading="lazy" />
+      {images.length > 1 && (
+        <>
+          <button onClick={prev} className="absolute left-0 inset-y-0 w-7 flex items-center justify-center bg-black/30 hover:bg-black/50 text-white transition-colors">
+            <ChevronLeft className="w-4 h-4" />
+          </button>
+          <button onClick={next} className="absolute right-0 inset-y-0 w-7 flex items-center justify-center bg-black/30 hover:bg-black/50 text-white transition-colors">
+            <ChevronRight className="w-4 h-4" />
+          </button>
+          <div className="absolute bottom-1 left-0 right-0 flex justify-center gap-1">
+            {images.map((_, i) => (
+              <span key={i} className={`w-1.5 h-1.5 rounded-full ${i === idx ? "bg-white" : "bg-white/50"}`} />
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function isValidUrl(url: string): boolean {
   if (!url || url.trim() === "" || url === "無" || url === "N/A" || url === "-") return false;
   try {
@@ -396,12 +423,7 @@ export default function FactoryDetail() {
                     <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
                       <div className="flex gap-3 flex-1">
                         {product.images && (product.images as string[]).length > 0 && (
-                          <img
-                            src={(product.images as string[])[0]}
-                            alt={product.name}
-                            className="w-20 h-20 rounded-lg object-cover shrink-0"
-                            loading="lazy"
-                          />
+                          <ProductImageCarousel images={product.images as string[]} />
                         )}
                         <div className="flex-1">
                           <h4 className="font-medium mb-1">{product.name}</h4>
@@ -424,13 +446,6 @@ export default function FactoryDetail() {
                               {product.provideSample ? "提供打樣" : "不提供打樣"}
                             </span>
                           </div>
-                          {product.images && (product.images as string[]).length > 1 && (
-                            <div className="flex gap-1.5 mt-2">
-                              {(product.images as string[]).slice(1).map((img: string, i: number) => (
-                                <img key={i} src={img} alt="" className="w-14 h-14 rounded object-cover" loading="lazy" />
-                              ))}
-                            </div>
-                          )}
                         </div>
                       </div>
                       <Button variant="outline" size="sm" onClick={() => handleChat(product.id, product.name)} className="shrink-0">
