@@ -1,4 +1,6 @@
-import { S3Client, PutObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
+import https from "node:https";
+import { S3Client, PutObjectCommand, DeleteObjectCommand, HeadBucketCommand } from "@aws-sdk/client-s3";
+import { NodeHttpHandler } from "@smithy/node-http-handler";
 
 export function isR2Enabled(): boolean {
   return !!(
@@ -23,6 +25,12 @@ function getClient(): S3Client {
     endpoint,
     forcePathStyle: true,
     credentials: { accessKeyId, secretAccessKey },
+    requestHandler: new NodeHttpHandler({
+      httpsAgent: new https.Agent({
+        keepAlive: true,
+        minVersion: "TLSv1.2",
+      }),
+    }),
   });
 }
 
@@ -38,8 +46,16 @@ export async function uploadImage(
     throw new Error("R2 config missing: R2_BUCKET_NAME, R2_ENDPOINT required");
   }
 
-  console.log("[R2] endpoint:", process.env.R2_ENDPOINT);
-  console.log("[R2] bucket:", process.env.R2_BUCKET_NAME);
+  console.log("[R2] endpoint:", endpoint);
+  console.log("[R2] bucket:", bucket);
+
+  // HeadBucket 連線測試
+  try {
+    await getClient().send(new HeadBucketCommand({ Bucket: bucket }));
+  } catch (err) {
+    console.error("[R2] headBucket failed:", err);
+    throw err;
+  }
 
   const key = `images/${Date.now()}-${fileName}`;
 
