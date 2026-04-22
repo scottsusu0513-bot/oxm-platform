@@ -18,6 +18,15 @@ import { getDb } from "./db";
 export const appRouter = router({
   system: systemRouter,
 
+  analytics: router({
+    record: publicProcedure.input(z.object({ visitorId: z.string().max(64) })).mutation(async ({ input }) => {
+      await db.recordPageView(input.visitorId);
+    }),
+    getStats: adminProcedure.query(async () => {
+      return db.getPageViewStats();
+    }),
+  }),
+
   auth: router({
     me: publicProcedure.query(opts => opts.ctx.user),
     logout: publicProcedure.mutation(({ ctx }) => {

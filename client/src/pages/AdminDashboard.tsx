@@ -3,7 +3,7 @@ import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { AlertCircle, BarChart3, Users, Factory, Zap, MessageSquare, Star, ArrowLeft, ShieldCheck, Shield, HeadphonesIcon, Megaphone } from "lucide-react";
+import { AlertCircle, BarChart3, Users, Factory, Zap, MessageSquare, Star, ArrowLeft, ShieldCheck, Shield, HeadphonesIcon, Megaphone, Eye } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
@@ -37,6 +37,7 @@ function AdminDashboardContent() {
 
   // 統計數字：一進來就載入
   const statsQuery = trpc.admin.getStats.useQuery(undefined, { enabled: isAdmin });
+  const viewStatsQuery = trpc.analytics.getStats.useQuery(undefined, { enabled: isAdmin });
 
   // 待審核：一進來就載入（重要功能）
   const pendingFactoriesQuery = trpc.admin.getPendingFactories.useQuery(
@@ -66,6 +67,7 @@ function AdminDashboardContent() {
   const utils = trpc.useUtils();
 
   const stats = statsQuery.data;
+  const viewStats = viewStatsQuery.data;
 
   const handleApprove = async (factoryId: number) => {
     try {
@@ -184,6 +186,57 @@ function AdminDashboardContent() {
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold text-orange-500">→</div>
+            </CardContent>
+          </Card>
+
+          <Card className="col-span-1 md:col-span-2 lg:col-span-3">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-gray-600 flex items-center gap-2">
+                <Eye className="h-4 w-4" />全站不重複訪客數
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="flex gap-6 mb-4">
+                <div className="text-center">
+                  <div className="text-2xl font-bold">{viewStats?.today ?? 0}</div>
+                  <div className="text-xs text-gray-500">今日</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-2xl font-bold">{viewStats?.yesterday ?? 0}</div>
+                  <div className="text-xs text-gray-500">昨日</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-2xl font-bold">{viewStats?.last7Days ?? 0}</div>
+                  <div className="text-xs text-gray-500">近7天</div>
+                </div>
+              </div>
+              {viewStats?.todayHours && (
+                <div>
+                  <div className="text-xs text-gray-500 mb-1">今日每小時訪客</div>
+                  <div className="flex items-end gap-0.5 h-12">
+                    {viewStats.todayHours.map((count: number, hour: number) => {
+                      const max = Math.max(...viewStats.todayHours, 1);
+                      const height = Math.round((count / max) * 100);
+                      return (
+                        <div key={hour} className="flex-1 flex flex-col items-center group relative">
+                          <div
+                            className="w-full bg-orange-400 rounded-sm transition-all"
+                            style={{ height: `${height}%`, minHeight: count > 0 ? 2 : 0 }}
+                          />
+                          <div className="absolute -top-6 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-xs px-1 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none z-10">
+                            {hour}時: {count}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="flex justify-between text-xs text-gray-400 mt-1">
+                    <span>0時</span>
+                    <span>12時</span>
+                    <span>23時</span>
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
 

@@ -1,4 +1,4 @@
-import { int, mysqlEnum, mysqlTable, text, timestamp, varchar, boolean, decimal, json } from "drizzle-orm/mysql-core";
+import { int, mysqlEnum, mysqlTable, text, timestamp, varchar, boolean, decimal, json, uniqueIndex } from "drizzle-orm/mysql-core";
 
 // ===== 使用者表 =====
 export const users = mysqlTable("users", {
@@ -237,3 +237,14 @@ export const factoryPhotos = mysqlTable("factoryPhotos", {
 });
 
 export type FactoryPhoto = typeof factoryPhotos.$inferSelect;
+
+// ===== 全站瀏覽統計 =====
+export const pageViews = mysqlTable("pageViews", {
+  id: int("id").autoincrement().primaryKey(),
+  visitorId: varchar("visitorId", { length: 64 }).notNull(),
+  date: varchar("date", { length: 10 }).notNull(), // YYYY-MM-DD (台灣時間)
+  hour: int("hour").notNull(), // 0-23 (台灣時間)
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => ({
+  visitorDateHourIdx: uniqueIndex("visitor_date_hour_idx").on(table.visitorId, table.date, table.hour),
+}));

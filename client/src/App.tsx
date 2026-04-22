@@ -3,6 +3,8 @@ import AdminConversationDetail from "@/pages/AdminConversationDetail";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/NotFound";
 import { Route, Switch } from "wouter";
+import { trpc } from "@/lib/trpc";
+import { useEffect } from "react";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import Home from "./pages/Home";
@@ -59,12 +61,26 @@ function Router() {
   );
 }
 
+function PageViewTracker() {
+  const record = trpc.analytics.record.useMutation();
+  useEffect(() => {
+    let visitorId = localStorage.getItem("oxm_visitor_id");
+    if (!visitorId) {
+      visitorId = crypto.randomUUID();
+      localStorage.setItem("oxm_visitor_id", visitorId);
+    }
+    record.mutate({ visitorId });
+  }, []);
+  return null;
+}
+
 function App() {
   return (
     <ErrorBoundary>
       <ThemeProvider defaultTheme="light">
         <TooltipProvider>
           <Toaster />
+          <PageViewTracker />
           <Router />
         </TooltipProvider>
       </ThemeProvider>

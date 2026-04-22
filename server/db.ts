@@ -8,7 +8,7 @@ import {
   reviews, reviews as reviewsTable,
   advertisements, advertisements as advertisementsTable,
   favorites, factoryPhotos, reports, supportTickets, reportStatusHistory, ticketStatusHistory,
-  announcements,
+  announcements, pageViews,
   type Factory, type InsertFactory, type Product, type InsertProduct, type Favorite, type InsertFavorite
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
@@ -500,6 +500,66 @@ export async function deleteFactory(id: number, ownerId: number) {
 
   // 7. 刪除工廠本體
   await db.delete(factories).where(and(eq(factories.id, id), eq(factories.ownerId, ownerId)));
+}
+
+// ===== 全站瀏覽統計 =====
+
+// 台灣時間 (UTC+8) 的日期字串 YYYY-MM-DD
+function twDateStr(offsetDays = 0): string {
+  const now = new Date(Date.now() + 8 * 3600 * 1000);
+  if (offsetDays) now.setUTCDate(now.getUTCDate() - offsetDays);
+  return now.toISOString().slice(0, 10);
+}
+
+// 台灣時間的當前小時 (0-23)
+function twHour(): number {
+  return new Date(Date.now() + 8 * 3600 * 1000).getUTCHours();
+}
+
+export async function recordPageView(visitorId: string): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  const today = twDateStr();
+  const hour = twHour();
+  try {
+    await db.execute(sql`INSERT IGNORE INTO pageViews (visitorId, date, hour) VALUES (${visitorId}, ${today}, ${hour})`);
+  } catch {
+    // 重複或其他錯誤，靜默忽略
+  }
+}
+
+export async function getPageViewStats() {
+  const db = await getDb();
+  if (!db) return { today: 0, yesterday: 0, last7Days: 0, todayHours: Array(24).fill(0) };
+
+  const todayStr = twDateStr();
+  const yesterdayStr = twDateStr(1);
+  const sevenDaysAgoStr = twDateStr(6);
+
+  const [todayRow] = await db.select({ count: sql<number>`COUNT(DISTINCT visitorId)` })
+    .from(pageViews).where(eq(pageViews.date, todayStr));
+
+  const [yesterdayRow] = await db.select({ count: sql<number>`COUNT(DISTINCT visitorId)` })
+    .from(pageViews).where(eq(pageViews.date, yesterdayStr));
+
+  const [weekRow] = await db.select({ count: sql<number>`COUNT(DISTINCT visitorId)` })
+    .from(pageViews).where(sql`date >= ${sevenDaysAgoStr}`);
+
+  const hourlyRows = await db.select({ hour: pageViews.hour, count: sql<number>`COUNT(DISTINCT visitorId)` })
+    .from(pageViews).where(eq(pageViews.date, todayStr))
+    .groupBy(pageViews.hour);
+
+  const todayHours = Array(24).fill(0);
+  for (const row of hourlyRows) {
+    todayHours[row.hour] = Number(row.count);
+  }
+
+  return {
+    today: Number(todayRow?.count ?? 0),
+    yesterday: Number(yesterdayRow?.count ?? 0),
+    last7Days: Number(weekRow?.count ?? 0),
+    todayHours,
+  };
 }
 
 // ===== 管理員統計 =====
