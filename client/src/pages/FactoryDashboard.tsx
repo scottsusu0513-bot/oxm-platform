@@ -185,32 +185,30 @@ export default function FactoryDashboard() {
         )}
 
         <Tabs defaultValue="info">
-          <div className="overflow-x-auto mb-4">
-            <TabsList className="w-max min-w-full">
-              <TabsTrigger value="info"><Settings className="w-4 h-4 mr-1" />基本資料</TabsTrigger>
-              <TabsTrigger value="photos"><Images className="w-4 h-4 mr-1" />照片集</TabsTrigger>
-              <TabsTrigger value="products"><Package className="w-4 h-4 mr-1" />產品管理</TabsTrigger>
-              <TabsTrigger value="messages">
-                <MessageCircle className="w-4 h-4 mr-1" />客戶詢問
-                {convs && convs.some(c => c.unreadCount > 0) && (
-                  <span className="ml-1 bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
-                    {convs.reduce((sum, c) => sum + c.unreadCount, 0)}
-                  </span>
-                )}
-              </TabsTrigger>
-              <TabsTrigger value="reviews" onClick={handleReviewTabClick}>
-                <Star className="w-4 h-4 mr-1" />客戶評價
-                {showReviewBadge && (
-                  <span className="ml-1 bg-red-500 text-white text-xs rounded-full min-w-5 h-5 px-1 flex items-center justify-center">
-                    {unrepliedCount}
-                  </span>
-                )}
-              </TabsTrigger>
-              <TabsTrigger value="ads">
-                <Megaphone className="w-4 h-4 mr-1" />廣告曝光
-              </TabsTrigger>
-            </TabsList>
-          </div>
+          <TabsList className="h-auto flex-wrap w-full mb-4">
+            <TabsTrigger value="info"><Settings className="w-4 h-4 mr-1" />基本資料</TabsTrigger>
+            <TabsTrigger value="photos"><Images className="w-4 h-4 mr-1" />照片集</TabsTrigger>
+            <TabsTrigger value="products"><Package className="w-4 h-4 mr-1" />產品管理</TabsTrigger>
+            <TabsTrigger value="messages">
+              <MessageCircle className="w-4 h-4 mr-1" />客戶詢問
+              {convs && convs.some(c => c.unreadCount > 0) && (
+                <span className="ml-1 bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
+                  {convs.reduce((sum, c) => sum + c.unreadCount, 0)}
+                </span>
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="reviews" onClick={handleReviewTabClick}>
+              <Star className="w-4 h-4 mr-1" />客戶評價
+              {showReviewBadge && (
+                <span className="ml-1 bg-red-500 text-white text-xs rounded-full min-w-5 h-5 px-1 flex items-center justify-center">
+                  {unrepliedCount}
+                </span>
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="ads">
+              <Megaphone className="w-4 h-4 mr-1" />廣告曝光
+            </TabsTrigger>
+          </TabsList>
 
           <TabsContent value="info">
             <FactoryInfoForm factory={factory} />

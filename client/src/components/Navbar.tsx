@@ -37,7 +37,12 @@ export default function Navbar() {
   const showReviewDot = rawReviewUnread > 0 && !reviewDismissed;
 
   const pendingCount = pendingCountQuery.data?.count ?? 0;
-  const totalUnread = (unreadQuery.data?.userCount ?? 0) + (unreadQuery.data?.factoryCount ?? 0);
+  // userUnread：買家收到工廠回覆 → 顯示在「我的訊息」
+  // factoryUnread：工廠收到買家詢問 → 顯示在「工廠後台」按鈕
+  const userUnread = unreadQuery.data?.userCount ?? 0;
+  const factoryUnread = unreadQuery.data?.factoryCount ?? 0;
+  const factoryBadgeCount = factoryUnread + (showReviewDot ? rawReviewUnread : 0);
+  const showFactoryBadge = factoryBadgeCount > 0;
 
   const markReviewsSeen = () => setReviewDismissed(true);
 
@@ -63,9 +68,9 @@ export default function Navbar() {
                 <Button variant={location === "/messages" ? "secondary" : "ghost"} size="sm" className="relative">
                   <MessageCircle className="w-4 h-4 mr-1" />
                   我的訊息
-                  {totalUnread > 0 && (
+                  {userUnread > 0 && (
                     <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs font-bold rounded-full min-w-5 h-5 px-1 flex items-center justify-center">
-                      {totalUnread}
+                      {userUnread}
                     </span>
                   )}
                 </Button>
@@ -81,9 +86,9 @@ export default function Navbar() {
                   <Button variant={location === "/dashboard" ? "secondary" : "ghost"} size="sm" className="relative">
                     <LayoutDashboard className="w-4 h-4 mr-1" />
                     工廠/工作室
-                    {showReviewDot && (
+                    {showFactoryBadge && (
                       <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs font-bold rounded-full min-w-5 h-5 px-1 flex items-center justify-center">
-                        {rawReviewUnread}
+                        {factoryBadgeCount}
                       </span>
                     )}
                   </Button>
@@ -180,9 +185,9 @@ export default function Navbar() {
                 <Button variant="ghost" className="w-full justify-start relative">
                   <MessageCircle className="w-4 h-4 mr-2" />
                   我的訊息
-                  {totalUnread > 0 && (
+                  {userUnread > 0 && (
                     <span className="ml-auto bg-red-500 text-white text-xs font-bold rounded-full min-w-5 h-5 px-1 flex items-center justify-center">
-                      {totalUnread}
+                      {userUnread}
                     </span>
                   )}
                 </Button>
@@ -192,9 +197,9 @@ export default function Navbar() {
                   <Button variant="ghost" className="w-full justify-start relative">
                     <LayoutDashboard className="w-4 h-4 mr-2" />
                     工廠管理
-                    {showReviewDot && (
+                    {showFactoryBadge && (
                       <span className="ml-auto bg-red-500 text-white text-xs font-bold rounded-full min-w-5 h-5 px-1 flex items-center justify-center">
-                        {rawReviewUnread}
+                        {factoryBadgeCount}
                       </span>
                     )}
                   </Button>
