@@ -31,23 +31,18 @@ export function useAuth(options?: UseAuthOptions) {
     window.location.href = "/";
   }, [utils]);
 
-  const state = useMemo(() => {
-    localStorage.setItem(
-      "manus-runtime-user-info",
-      JSON.stringify(meQuery.data)
-    );
-    return {
-      user: meQuery.data ?? null,
-      loading: meQuery.isLoading || isLoggingOut,
-      error: meQuery.error ?? null,
-      isAuthenticated: Boolean(meQuery.data),
-    };
-  }, [
-    meQuery.data,
-    meQuery.error,
-    meQuery.isLoading,
-    isLoggingOut,
-  ]);
+  const state = useMemo(() => ({
+    user: meQuery.data ?? null,
+    loading: meQuery.isLoading || isLoggingOut,
+    error: meQuery.error ?? null,
+    isAuthenticated: Boolean(meQuery.data),
+  }), [meQuery.data, meQuery.error, meQuery.isLoading, isLoggingOut]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("manus-runtime-user-info", JSON.stringify(meQuery.data));
+    } catch {}
+  }, [meQuery.data]);
 
   useEffect(() => {
     if (!redirectOnUnauthenticated) return;

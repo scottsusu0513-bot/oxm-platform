@@ -61,15 +61,33 @@ function Router() {
   );
 }
 
+function safeVisitorId(): string {
+  try {
+    let id = localStorage.getItem("oxm_visitor_id");
+    if (!id) {
+      id = typeof crypto?.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+      localStorage.setItem("oxm_visitor_id", id);
+    }
+    return id;
+  } catch {
+    return `anon-${Math.random().toString(36).slice(2)}`;
+  }
+}
+
 function PageViewTracker() {
   const record = trpc.analytics.record.useMutation();
   useEffect(() => {
-    let visitorId = localStorage.getItem("oxm_visitor_id");
-    if (!visitorId) {
-      visitorId = crypto.randomUUID();
-      localStorage.setItem("oxm_visitor_id", visitorId);
-    }
-    record.mutate({ visitorId });
+    const run = () => {
+      try {
+        const visitorId = safeVisitorId();
+        record.mutate({ visitorId });
+      } catch {
+        // never let analytics crash the app
+      }
+    };
+    setTimeout(run, 0);
   }, []);
   return null;
 }
