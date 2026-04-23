@@ -2,8 +2,6 @@ import { Helmet } from "react-helmet-async";
 import Navbar from "@/components/Navbar";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft } from "lucide-react";
-import { useLocation } from "wouter";
-
 const SECTIONS = [
   {
     title: "一、平台性質",
@@ -79,8 +77,6 @@ const SECTIONS = [
 ];
 
 export default function TermsPage() {
-  const [, navigate] = useLocation();
-
   return (
     <div className="min-h-screen bg-background">
       <Helmet>
@@ -91,7 +87,7 @@ export default function TermsPage() {
       <Navbar />
 
       <div className="container py-8">
-        <Button variant="ghost" size="sm" className="mb-6" onClick={() => navigate(-1 as any)}>
+        <Button variant="ghost" size="sm" className="mb-6" onClick={() => window.history.back()}>
           <ArrowLeft className="w-4 h-4 mr-1" />返回
         </Button>
 
