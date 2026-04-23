@@ -29,6 +29,13 @@ export default function Navbar() {
   );
   const reviewUnread = reviewUnreadQuery.data?.count ?? 0;
 
+  // 次管理者：無 isFactoryOwner 但有 co-managed factories → 也顯示工廠後台按鈕
+  const coManagedQuery = trpc.factory.getCoManagedFactories.useQuery(undefined, {
+    enabled: isAuthenticated && !user?.isFactoryOwner,
+    staleTime: 60000,
+  });
+  const showDashboardBtn = user?.isFactoryOwner || (!coManagedQuery.isLoading && (coManagedQuery.data?.length ?? 0) > 0);
+
   const pendingCount = pendingCountQuery.data?.count ?? 0;
   // userUnread：買家收到工廠回覆 → 顯示在「我的訊息」
   // factoryUnread：工廠收到買家詢問 → 顯示在「工廠後台」按鈕
@@ -72,7 +79,7 @@ export default function Navbar() {
                   我的收藏
                 </Button>
               </Link>
-              {user?.isFactoryOwner && (
+              {showDashboardBtn && (
                 <Link href="/dashboard">
                   <Button variant={location === "/dashboard" ? "secondary" : "ghost"} size="sm" className="relative">
                     <LayoutDashboard className="w-4 h-4 mr-1" />
@@ -85,7 +92,7 @@ export default function Navbar() {
                   </Button>
                 </Link>
               )}
-              {!user?.isFactoryOwner && (
+              {!showDashboardBtn && !coManagedQuery.isLoading && (
                 <Link href="/register-factory">
                   <Button variant="ghost" size="sm">
                     <Factory className="w-4 h-4 mr-1" />
@@ -195,7 +202,7 @@ export default function Navbar() {
                   )}
                 </Button>
               </Link>
-              {user?.isFactoryOwner ? (
+              {showDashboardBtn ? (
                 <Link href="/dashboard" onClick={() => setMobileOpen(false)}>
                   <Button variant="ghost" className="w-full justify-start relative">
                     <LayoutDashboard className="w-4 h-4 mr-2" />
@@ -207,11 +214,11 @@ export default function Navbar() {
                     )}
                   </Button>
                 </Link>
-              ) : (
+              ) : !coManagedQuery.isLoading ? (
                 <Link href="/register-factory" onClick={() => setMobileOpen(false)}>
                   <Button variant="ghost" className="w-full justify-start"><Factory className="w-4 h-4 mr-2" />註冊工廠</Button>
                 </Link>
-              )}
+              ) : null}
               {user?.role === "admin" && (
   <Link href="/admin" onClick={() => setMobileOpen(false)}>
     <Button variant="ghost" className="w-full justify-start relative">

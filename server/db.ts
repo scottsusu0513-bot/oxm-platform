@@ -9,6 +9,7 @@ import {
   advertisements, advertisements as advertisementsTable,
   favorites, factoryPhotos, reports, supportTickets, reportStatusHistory, ticketStatusHistory,
   announcements, pageViews,
+  factoryCoManagerInvitations, factoryCoManagers,
   type Factory, type InsertFactory, type Product, type InsertProduct, type Favorite, type InsertFavorite
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
@@ -267,8 +268,25 @@ export async function sendMessage(conversationId: number, senderId: number, send
 export async function getMessagesByConversation(conversationId: number, page = 1, pageSize = 50) {
   const db = await getDb();
   if (!db) return [];
-  return db.select().from(messages).where(eq(messages.conversationId, conversationId))
-    .orderBy(asc(messages.createdAt)).limit(pageSize).offset((page - 1) * pageSize);
+  return db.select({
+    id: messages.id,
+    conversationId: messages.conversationId,
+    senderId: messages.senderId,
+    senderRole: messages.senderRole,
+    content: messages.content,
+    isRead: messages.isRead,
+    type: messages.type,
+    invitationId: messages.invitationId,
+    createdAt: messages.createdAt,
+    invitationStatus: factoryCoManagerInvitations.status,
+    invitationExpiresAt: factoryCoManagerInvitations.expiresAt,
+  })
+    .from(messages)
+    .leftJoin(factoryCoManagerInvitations, eq(messages.invitationId, factoryCoManagerInvitations.id))
+    .where(eq(messages.conversationId, conversationId))
+    .orderBy(asc(messages.createdAt))
+    .limit(pageSize)
+    .offset((page - 1) * pageSize);
 }
 
 export async function markMessagesAsRead(conversationId: number, readerId: number) {
@@ -1439,4 +1457,245 @@ export async function deleteAnnouncement(id: number) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
   await db.delete(announcements).where(eq(announcements.id, id));
+}
+
+// ===== 共同管理者 =====
+
+export async function getUserByEmail(email: string) {
+  const db = await getDb();
+  if (!db) return null;
+  const result = await db.select().from(users).where(eq(users.email, email)).limit(1);
+  return result[0] ?? null;
+}
+
+export async function hasPendingInvitation(factoryId: number, inviteeUserId: number): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const result = await db.select({ id: factoryCoManagerInvitations.id })
+    .from(factoryCoManagerInvitations)
+    .where(and(
+      eq(factoryCoManagerInvitations.factoryId, factoryId),
+      eq(factoryCoManagerInvitations.inviteeUserId, inviteeUserId),
+      eq(factoryCoManagerInvitations.status, "pending"),
+      sql`${factoryCoManagerInvitations.expiresAt} > NOW()`
+    ))
+    .limit(1);
+  return result.length > 0;
+}
+
+export async function isActiveCoManager(factoryId: number, userId: number): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const result = await db.select({ id: factoryCoManagers.id })
+    .from(factoryCoManagers)
+    .where(and(
+      eq(factoryCoManagers.factoryId, factoryId),
+      eq(factoryCoManagers.userId, userId),
+      isNull(factoryCoManagers.removedAt)
+    ))
+    .limit(1);
+  return result.length > 0;
+}
+
+export async function getActiveCoManagerCount(factoryId: number): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const result = await db.select({ count: sql<number>`COUNT(*)` })
+    .from(factoryCoManagers)
+    .where(and(
+      eq(factoryCoManagers.factoryId, factoryId),
+      isNull(factoryCoManagers.removedAt)
+    ));
+  return result[0]?.count ?? 0;
+}
+
+export async function createCoManagerInvitation(data: {
+  factoryId: number;
+  inviterUserId: number;
+  inviteeUserId: number;
+  conversationId: number;
+  expiresAt: Date;
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  const result = await db.insert(factoryCoManagerInvitations).values({
+    ...data,
+    status: "pending",
+  });
+  return result[0].insertId;
+}
+
+export async function linkInvitationToMessage(invitationId: number, messageId: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(messages).set({ invitationId }).where(eq(messages.id, messageId));
+}
+
+export async function getInvitationById(id: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const result = await db.select().from(factoryCoManagerInvitations)
+    .where(eq(factoryCoManagerInvitations.id, id))
+    .limit(1);
+  return result[0] ?? null;
+}
+
+export async function acceptInvitation(invitationId: number, inviteeUserId: number): Promise<void> {
+  await getDb(); // 確保 _pool 已初始化
+  const pool = _pool;
+  if (!pool) throw new Error("DB not available");
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    // 鎖住這筆邀請，防止競態
+    const [rows]: any = await conn.execute(
+      "SELECT * FROM factoryCoManagerInvitations WHERE id = ? AND status = 'pending' AND expiresAt > NOW() FOR UPDATE",
+      [invitationId]
+    );
+    if (!rows || rows.length === 0) {
+      throw new Error("邀請不存在、已處理或已過期");
+    }
+    const inv = rows[0];
+    if (inv.inviteeUserId !== inviteeUserId) {
+      throw new Error("無權限操作此邀請");
+    }
+
+    // 檢查是否已為 active co-manager
+    const [existing]: any = await conn.execute(
+      "SELECT id FROM factoryCoManagers WHERE factoryId = ? AND userId = ? AND removedAt IS NULL",
+      [inv.factoryId, inviteeUserId]
+    );
+    if (existing && existing.length > 0) {
+      throw new Error("您已是此工廠的次管理者");
+    }
+
+    // 檢查人數上限
+    const [countRows]: any = await conn.execute(
+      "SELECT COUNT(*) as cnt FROM factoryCoManagers WHERE factoryId = ? AND removedAt IS NULL",
+      [inv.factoryId]
+    );
+    if (countRows[0].cnt >= 6) {
+      throw new Error("此工廠次管理者已達 6 人上限");
+    }
+
+    // 寫入 co-manager
+    await conn.execute(
+      "INSERT INTO factoryCoManagers (factoryId, userId, invitedBy, createdAt) VALUES (?, ?, ?, NOW())",
+      [inv.factoryId, inviteeUserId, inv.inviterUserId]
+    );
+
+    // 更新邀請狀態
+    await conn.execute(
+      "UPDATE factoryCoManagerInvitations SET status = 'accepted', respondedAt = NOW() WHERE id = ?",
+      [invitationId]
+    );
+
+    await conn.commit();
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
+export async function declineInvitation(invitationId: number, inviteeUserId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  const inv = await getInvitationById(invitationId);
+  if (!inv || inv.status !== "pending") throw new Error("邀請不存在或已處理");
+  if (inv.inviteeUserId !== inviteeUserId) throw new Error("無權限操作此邀請");
+  await db.update(factoryCoManagerInvitations)
+    .set({ status: "declined", respondedAt: new Date() })
+    .where(eq(factoryCoManagerInvitations.id, invitationId));
+}
+
+export async function getCoManagersByFactory(factoryId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select({
+    id: factoryCoManagers.id,
+    userId: factoryCoManagers.userId,
+    invitedBy: factoryCoManagers.invitedBy,
+    createdAt: factoryCoManagers.createdAt,
+    name: users.name,
+    email: users.email,
+  })
+    .from(factoryCoManagers)
+    .innerJoin(users, eq(factoryCoManagers.userId, users.id))
+    .where(and(
+      eq(factoryCoManagers.factoryId, factoryId),
+      isNull(factoryCoManagers.removedAt)
+    ))
+    .orderBy(asc(factoryCoManagers.createdAt));
+}
+
+export async function getPendingInvitationsByFactory(factoryId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select({
+    id: factoryCoManagerInvitations.id,
+    inviteeUserId: factoryCoManagerInvitations.inviteeUserId,
+    expiresAt: factoryCoManagerInvitations.expiresAt,
+    createdAt: factoryCoManagerInvitations.createdAt,
+    name: users.name,
+    email: users.email,
+  })
+    .from(factoryCoManagerInvitations)
+    .innerJoin(users, eq(factoryCoManagerInvitations.inviteeUserId, users.id))
+    .where(and(
+      eq(factoryCoManagerInvitations.factoryId, factoryId),
+      eq(factoryCoManagerInvitations.status, "pending"),
+      sql`${factoryCoManagerInvitations.expiresAt} > NOW()`
+    ))
+    .orderBy(desc(factoryCoManagerInvitations.createdAt));
+}
+
+export async function removeCoManager(factoryId: number, userId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  await db.update(factoryCoManagers)
+    .set({ removedAt: new Date() })
+    .where(and(
+      eq(factoryCoManagers.factoryId, factoryId),
+      eq(factoryCoManagers.userId, userId),
+      isNull(factoryCoManagers.removedAt)
+    ));
+}
+
+export async function getCoManagedFactories(userId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select({
+    factoryId: factoryCoManagers.factoryId,
+    name: factories.name,
+    industry: factories.industry,
+    status: factories.status,
+  })
+    .from(factoryCoManagers)
+    .innerJoin(factories, eq(factoryCoManagers.factoryId, factories.id))
+    .where(and(
+      eq(factoryCoManagers.userId, userId),
+      isNull(factoryCoManagers.removedAt)
+    ));
+}
+
+export async function sendCoManagerInviteMessage(
+  conversationId: number,
+  senderId: number,
+  content: string,
+) {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  const result = await db.insert(messages).values({
+    conversationId,
+    senderId,
+    senderRole: "factory",
+    content,
+    type: "co_manager_invite",
+    isRead: false,
+  });
+  await db.update(conversations).set({ lastMessageAt: new Date() }).where(eq(conversations.id, conversationId));
+  return result[0].insertId;
 }

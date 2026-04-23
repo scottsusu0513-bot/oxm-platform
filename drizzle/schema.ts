@@ -1,4 +1,4 @@
-import { int, mysqlEnum, mysqlTable, text, timestamp, varchar, boolean, decimal, json, uniqueIndex } from "drizzle-orm/mysql-core";
+import { int, mysqlEnum, mysqlTable, text, timestamp, varchar, boolean, decimal, json, uniqueIndex, index } from "drizzle-orm/mysql-core";
 
 // ===== 使用者表 =====
 export const users = mysqlTable("users", {
@@ -112,6 +112,8 @@ export const messages = mysqlTable("messages", {
   senderRole: mysqlEnum("senderRole", ["user", "factory"]).notNull(),
   content: text("content").notNull(),
   isRead: boolean("isRead").default(false).notNull(),
+  type: mysqlEnum("type", ["text", "co_manager_invite"]).default("text").notNull(),
+  invitationId: int("invitationId"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 
@@ -248,3 +250,34 @@ export const pageViews = mysqlTable("pageViews", {
 }, (table) => ({
   visitorDateHourIdx: uniqueIndex("visitor_date_hour_idx").on(table.visitorId, table.date, table.hour),
 }));
+
+// ===== 工廠共同管理者邀請表 =====
+export const factoryCoManagerInvitations = mysqlTable("factoryCoManagerInvitations", {
+  id: int("id").autoincrement().primaryKey(),
+  factoryId: int("factoryId").notNull().references(() => factories.id, { onDelete: "cascade" }),
+  inviterUserId: int("inviterUserId").notNull().references(() => users.id, { onDelete: "cascade" }),
+  inviteeUserId: int("inviteeUserId").notNull().references(() => users.id, { onDelete: "cascade" }),
+  status: mysqlEnum("status", ["pending", "accepted", "declined"]).default("pending").notNull(),
+  conversationId: int("conversationId").references(() => conversations.id, { onDelete: "set null" }),
+  expiresAt: timestamp("expiresAt").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  respondedAt: timestamp("respondedAt"),
+}, (table) => ({
+  invitationLookupIdx: index("idx_invitation_lookup").on(table.factoryId, table.inviteeUserId, table.status),
+}));
+
+export type FactoryCoManagerInvitation = typeof factoryCoManagerInvitations.$inferSelect;
+
+// ===== 工廠共同管理者表 =====
+export const factoryCoManagers = mysqlTable("factoryCoManagers", {
+  id: int("id").autoincrement().primaryKey(),
+  factoryId: int("factoryId").notNull().references(() => factories.id, { onDelete: "cascade" }),
+  userId: int("userId").notNull().references(() => users.id, { onDelete: "cascade" }),
+  invitedBy: int("invitedBy").notNull().references(() => users.id, { onDelete: "cascade" }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  removedAt: timestamp("removedAt"),
+}, (table) => ({
+  coManagerLookupIdx: index("idx_co_manager_lookup").on(table.factoryId, table.userId),
+}));
+
+export type FactoryCoManager = typeof factoryCoManagers.$inferSelect;

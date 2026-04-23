@@ -156,7 +156,12 @@ export const appRouter = router({
       businessNote: z.string().max(500).optional(),
     })).mutation(async ({ ctx, input }) => {
       const { id, ...data } = input;
-      await db.updateFactory(id, ctx.user.id, data);
+      const factory = await db.getFactoryById(id);
+      if (!factory) throw new Error("工廠不存在");
+      const isOwner = factory.ownerId === ctx.user.id;
+      const isCoMgr = !isOwner && await db.isActiveCoManager(id, ctx.user.id);
+      if (!isOwner && !isCoMgr) throw new Error("無權限修改此工廠");
+      await db.updateFactory(id, isOwner ? ctx.user.id : -1, data);
       return { success: true };
     }),
 
@@ -283,7 +288,81 @@ export const appRouter = router({
       if (!factory || factory.ownerId !== ctx.user.id) throw new Error("無權限");
       return [] as { id: number; action: string; createdAt: Date; submitCountSnapshot?: number; note?: string; rejectReason?: string }[];
     }),
-}),
+
+    // ===== 共同管理者 =====
+    inviteCoManager: protectedProcedure.input(z.object({
+      email: z.string().email(),
+    })).mutation(async ({ ctx, input }) => {
+      const factory = await db.getFactoryByOwnerId(ctx.user.id);
+      if (!factory) throw new Error("您尚未擁有工廠");
+
+      const invitee = await db.getUserByEmail(input.email);
+      if (!invitee) throw new Error("此 Email 尚未在平台上註冊");
+      if (invitee.id === ctx.user.id) throw new Error("不能邀請自己");
+
+      const alreadyCoManager = await db.isActiveCoManager(factory.id, invitee.id);
+      if (alreadyCoManager) throw new Error("此用戶已是本工廠的次管理者");
+
+      const hasPending = await db.hasPendingInvitation(factory.id, invitee.id);
+      if (hasPending) throw new Error("已有一筆待處理的邀請，請等對方回應後再試");
+
+      const count = await db.getActiveCoManagerCount(factory.id);
+      if (count >= 6) throw new Error("次管理者已達 6 人上限");
+
+      const conv = await db.getOrCreateConversation(invitee.id, factory.id);
+
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+      const invitationId = await db.createCoManagerInvitation({
+        factoryId: factory.id,
+        inviterUserId: ctx.user.id,
+        inviteeUserId: invitee.id,
+        conversationId: conv.id,
+        expiresAt,
+      });
+
+      const content = `您好，我是【${factory.name}】的主管理者 ${ctx.user.name ?? ctx.user.email}，誠摯邀請您成為本工廠的次管理者，共同管理工廠後台。\n\n邀請有效期限：7 天\n\n請點選下方按鈕確認是否接受。`;
+      const messageId = await db.sendCoManagerInviteMessage(conv.id, ctx.user.id, content);
+      await db.linkInvitationToMessage(invitationId, messageId);
+
+      return { success: true, conversationId: conv.id };
+    }),
+
+    respondToInvitation: protectedProcedure.input(z.object({
+      invitationId: z.number(),
+      action: z.enum(["accept", "decline"]),
+    })).mutation(async ({ ctx, input }) => {
+      if (input.action === "accept") {
+        await db.acceptInvitation(input.invitationId, ctx.user.id);
+      } else {
+        await db.declineInvitation(input.invitationId, ctx.user.id);
+      }
+      return { success: true };
+    }),
+
+    removeCoManager: protectedProcedure.input(z.object({
+      userId: z.number(),
+    })).mutation(async ({ ctx, input }) => {
+      const factory = await db.getFactoryByOwnerId(ctx.user.id);
+      if (!factory) throw new Error("您尚未擁有工廠");
+      if (input.userId === ctx.user.id) throw new Error("無法移除自己");
+      await db.removeCoManager(factory.id, input.userId);
+      return { success: true };
+    }),
+
+    getCoManagers: protectedProcedure.query(async ({ ctx }) => {
+      const factory = await db.getFactoryByOwnerId(ctx.user.id);
+      if (!factory) throw new Error("您尚未擁有工廠");
+      const [coManagers, pending] = await Promise.all([
+        db.getCoManagersByFactory(factory.id),
+        db.getPendingInvitationsByFactory(factory.id),
+      ]);
+      return { coManagers, pending };
+    }),
+
+    getCoManagedFactories: protectedProcedure.query(async ({ ctx }) => {
+      return db.getCoManagedFactories(ctx.user.id);
+    }),
+  }),
 
   // ===== 產品分類 =====
   category: router({
@@ -434,10 +513,13 @@ export const appRouter = router({
 
     // 取得工廠的所有對話（含未讀計數與最後訊息）
     factoryConversations: protectedProcedure.input(z.object({ factoryId: z.number() })).query(async ({ ctx, input }) => {
-  const factory = await db.getFactoryById(input.factoryId);
-  if (!factory || factory.ownerId !== ctx.user.id) throw new Error("無權限");
-  return db.getConversationsByFactoryWithDetails(input.factoryId, ctx.user.id);
-}),
+      const factory = await db.getFactoryById(input.factoryId);
+      if (!factory) throw new Error("工廠不存在");
+      const isOwner = factory.ownerId === ctx.user.id;
+      const isCoMgr = !isOwner && await db.isActiveCoManager(input.factoryId, ctx.user.id);
+      if (!isOwner && !isCoMgr) throw new Error("無權限");
+      return db.getConversationsByFactoryWithDetails(input.factoryId, ctx.user.id);
+    }),
 
     getMessages: protectedProcedure.input(z.object({
       conversationId: z.number(),

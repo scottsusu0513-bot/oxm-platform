@@ -10,7 +10,7 @@ import { trpc } from "@/lib/trpc";
 import { useRoute, useLocation, useSearch } from "wouter";
 import { useState, useRef, useEffect } from "react";
 import { toast } from "sonner";
-import { Send, ArrowLeft, Factory, User } from "lucide-react";
+import { Send, ArrowLeft, Factory, User, CheckCircle, XCircle } from "lucide-react";
 
 export default function ChatPage() {
   const [matchExisting, params] = useRoute("/chat/:conversationId");
@@ -174,12 +174,16 @@ useEffect(() => {
               ) : (
                 msgs?.map((msg) => {
                   const isMine = msg.senderId === user?.id;
+                  const isInvite = (msg as any).type === "co_manager_invite";
+                  const invStatus = (msg as any).invitationStatus;
+                  const invId = (msg as any).invitationId;
+                  const canRespond = isInvite && !isMine && invStatus === "pending" && invId;
                   return (
                     <div key={msg.id} className={`flex ${isMine ? "justify-end" : "justify-start"}`}>
                       <div className={`max-w-[75%] rounded-2xl px-4 py-2.5 ${
                         isMine
                           ? "bg-primary text-primary-foreground rounded-br-md"
-                          : "bg-muted rounded-bl-md"
+                          : isInvite ? "bg-orange-50 border border-orange-200 rounded-bl-md" : "bg-muted rounded-bl-md"
                       }`}>
                         <div className="flex items-center gap-1.5 mb-0.5">
                           {msg.senderRole === "factory" ? (
@@ -190,8 +194,20 @@ useEffect(() => {
                           <span className="text-xs opacity-70">
                             {msg.senderRole === "factory" ? "工廠" : "使用者"}
                           </span>
+                          {isInvite && <span className="text-xs text-orange-600 font-medium">次管理者邀請</span>}
                         </div>
                         <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                        {canRespond && (
+                          <InviteResponseButtons
+                            invitationId={invId}
+                            onResponded={() => utils.chat.getMessages.invalidate({ conversationId: conversationId! })}
+                          />
+                        )}
+                        {isInvite && !canRespond && invStatus && invStatus !== "pending" && (
+                          <p className="text-xs mt-2 font-medium text-muted-foreground">
+                            {invStatus === "accepted" ? "✓ 已接受邀請" : "✗ 已拒絕邀請"}
+                          </p>
+                        )}
                         <p className={`text-xs mt-1 ${isMine ? "text-primary-foreground/60" : "text-muted-foreground"}`}>
                           {new Date(msg.createdAt).toLocaleString("zh-TW")}
                         </p>
@@ -220,6 +236,38 @@ useEffect(() => {
           </CardContent>
         </Card>
       </div>
+    </div>
+  );
+}
+
+function InviteResponseButtons({ invitationId, onResponded }: { invitationId: number; onResponded: () => void }) {
+  const respondMut = trpc.factory.respondToInvitation.useMutation({
+    onSuccess: (_, vars) => {
+      toast.success(vars.action === "accept" ? "已接受邀請，您現在是次管理者" : "已拒絕邀請");
+      onResponded();
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  return (
+    <div className="flex gap-2 mt-3">
+      <Button
+        size="sm"
+        className="flex-1 bg-orange-500 hover:bg-orange-600 text-white"
+        disabled={respondMut.isPending}
+        onClick={() => respondMut.mutate({ invitationId, action: "accept" })}
+      >
+        <CheckCircle className="w-3.5 h-3.5 mr-1" />接受
+      </Button>
+      <Button
+        size="sm"
+        variant="outline"
+        className="flex-1"
+        disabled={respondMut.isPending}
+        onClick={() => respondMut.mutate({ invitationId, action: "decline" })}
+      >
+        <XCircle className="w-3.5 h-3.5 mr-1" />拒絕
+      </Button>
     </div>
   );
 }

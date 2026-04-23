@@ -16,7 +16,7 @@ import { useState, useEffect, useRef } from "react";
 import { useLocation, Link } from "wouter";
 import { toast } from "sonner";
 import {
-  Factory, Package, MessageCircle, Settings, Plus, Pencil, Trash2, Save, Star, AlertTriangle, ImagePlus, X, ArrowLeft, Camera, Send, CheckCircle, Clock, XCircle, Wrench, Images, ChevronDown, Megaphone
+  Factory, Package, MessageCircle, Settings, Plus, Pencil, Trash2, Save, Star, AlertTriangle, ImagePlus, X, ArrowLeft, Camera, Send, CheckCircle, Clock, XCircle, Wrench, Images, ChevronDown, Megaphone, Users, UserMinus
 } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
@@ -63,7 +63,22 @@ export default function FactoryDashboard() {
   const { user, isAuthenticated, loading } = useAuth();
   const [, navigate] = useLocation();
 
-  const { data: factory, isLoading: factoryLoading } = trpc.factory.getMine.useQuery(undefined, { enabled: isAuthenticated });
+  const { data: ownedFactory, isLoading: ownedLoading } = trpc.factory.getMine.useQuery(undefined, { enabled: isAuthenticated });
+
+  // 次管理者：若本身不是工廠主，查詢是否有被共同管理的工廠
+  const { data: coManagedList, isLoading: coManagedLoading } = trpc.factory.getCoManagedFactories.useQuery(undefined, {
+    enabled: isAuthenticated && !ownedLoading && !ownedFactory,
+  });
+  const firstCoManaged = coManagedList?.[0];
+  const { data: coManagedFactory, isLoading: coManagedFactoryLoading } = trpc.factory.getById.useQuery(
+    { id: firstCoManaged?.factoryId ?? 0 },
+    { enabled: !!firstCoManaged?.factoryId }
+  );
+
+  const factory = ownedFactory ?? coManagedFactory ?? null;
+  const isOwner = !!ownedFactory;
+  const factoryLoading = ownedLoading || coManagedLoading || (!!firstCoManaged && coManagedFactoryLoading);
+
   const { data: convs } = trpc.chat.factoryConversations.useQuery(
     { factoryId: factory?.id ?? 0 },
     { enabled: !!factory?.id, refetchInterval: 30000 }
@@ -82,8 +97,12 @@ export default function FactoryDashboard() {
 
   useEffect(() => {
     if (!loading && !isAuthenticated) navigate("/");
-    if (!loading && isAuthenticated && !factoryLoading && !factory) navigate("/register-factory");
-  }, [loading, isAuthenticated, factoryLoading, factory, navigate]);
+    // 只有在確認不是 owner 且不是 co-manager 時才導向註冊
+    if (!loading && isAuthenticated && !factoryLoading && !factory &&
+        coManagedList !== undefined && coManagedList.length === 0) {
+      navigate("/register-factory");
+    }
+  }, [loading, isAuthenticated, factoryLoading, factory, coManagedList, navigate]);
 
   if (loading || factoryLoading || !factory) {
     return (
@@ -147,7 +166,10 @@ export default function FactoryDashboard() {
               <Star className="w-3 h-3 mr-1 text-yellow-500" />
               {Number(factory.avgRating).toFixed(1)} ({factory.reviewCount})
             </Badge>
-            <DeleteFactoryButton factoryId={factory.id} />
+            {isOwner && <DeleteFactoryButton factoryId={factory.id} />}
+            {!isOwner && (
+              <Badge variant="outline" className="text-xs text-muted-foreground">次管理者</Badge>
+            )}
           </div>
         </div>
 
@@ -211,7 +233,7 @@ export default function FactoryDashboard() {
           </TabsList>
 
           <TabsContent value="info">
-            <FactoryInfoForm factory={factory} />
+            <FactoryInfoForm factory={factory} isOwner={isOwner} />
           </TabsContent>
           <TabsContent value="photos">
             <PhotoManager factoryId={factory.id} />
@@ -235,6 +257,8 @@ export default function FactoryDashboard() {
             </div>
           </TabsContent>
         </Tabs>
+
+        {isOwner && <CoManagerPanel factoryId={factory.id} />}
       </div>
     </div>
   );
@@ -247,7 +271,7 @@ const OPERATION_STATUS_OPTIONS = [
   { value: "full",   label: "產線滿載", dot: "bg-red-500" },
 ] as const;
 
-function FactoryInfoForm({ factory }: { factory: any }) {
+function FactoryInfoForm({ factory, isOwner = true }: { factory: any; isOwner?: boolean }) {
   const [name, setName] = useState(factory.name);
   const [industry, setIndustry] = useState(factory.industry);
   const [subIndustry, setSubIndustry] = useState<string[]>((factory as any).subIndustry ?? []);
@@ -272,7 +296,11 @@ function FactoryInfoForm({ factory }: { factory: any }) {
 
   const utils = trpc.useUtils();
   const updateFactory = trpc.factory.update.useMutation({
-    onSuccess: () => { toast.success("資料已更新"); utils.factory.getMine.invalidate(); },
+    onSuccess: () => {
+      toast.success("資料已更新");
+      utils.factory.getMine.invalidate();
+      utils.factory.getById.invalidate({ id: factory.id });
+    },
     onError: (err) => toast.error(err.message),
   });
   const uploadAvatarMut = trpc.factory.uploadAvatar.useMutation();
@@ -541,7 +569,7 @@ function FactoryInfoForm({ factory }: { factory: any }) {
             <Button onClick={handleSave} disabled={updateFactory.isPending} variant="outline">
               <Save className="w-4 h-4 mr-1" />{updateFactory.isPending ? "儲存中..." : "儲存變更"}
             </Button>
-            {(factory.status === 'draft' || factory.status === 'rejected') && (
+            {isOwner && (factory.status === 'draft' || factory.status === 'rejected') && (
               <AlertDialog>
                 <AlertDialogTrigger asChild>
                   <Button className="bg-blue-600 hover:bg-blue-700 text-white">
@@ -1200,6 +1228,131 @@ function DeleteFactoryButton({ factoryId }: { factoryId: number }) {
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
+  );
+}
+
+// ===== Co-Manager Panel =====
+function CoManagerPanel({ factoryId }: { factoryId: number }) {
+  const utils = trpc.useUtils();
+  const [email, setEmail] = useState("");
+
+  const { data } = trpc.factory.getCoManagers.useQuery(undefined, { refetchOnWindowFocus: false });
+
+  const inviteMut = trpc.factory.inviteCoManager.useMutation({
+    onSuccess: () => {
+      toast.success("邀請已送出，對方將在訊息頁看到邀請");
+      setEmail("");
+      utils.factory.getCoManagers.invalidate();
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const removeMut = trpc.factory.removeCoManager.useMutation({
+    onSuccess: () => { toast.success("已移除次管理者"); utils.factory.getCoManagers.invalidate(); },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const activeCount = data?.coManagers.length ?? 0;
+
+  return (
+    <Card className="mt-6">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Users className="w-4 h-4" />共同管理者
+        </CardTitle>
+        <CardDescription className="text-xs">
+          可邀請最多 6 位次管理者共同編輯工廠後台。次管理者無法刪除工廠或管理其他管理者。
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div>
+          <Label className="text-sm font-medium mb-1.5 block">邀請次管理者</Label>
+          <div className="flex gap-2">
+            <input
+              type="email"
+              placeholder="輸入對方在 OXM 註冊的 Gmail..."
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && email.trim() && inviteMut.mutate({ email: email.trim() })}
+              className="flex-1 h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            />
+            <Button
+              size="sm"
+              onClick={() => inviteMut.mutate({ email: email.trim() })}
+              disabled={!email.trim() || inviteMut.isPending || activeCount >= 6}
+            >
+              {inviteMut.isPending ? "送出中..." : "送出邀請"}
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground mt-1">
+            對方需已在 OXM 上註冊，邀請有效期 7 天。目前 {activeCount} / 6 位。
+          </p>
+        </div>
+
+        {activeCount > 0 && (
+          <div>
+            <Label className="text-sm font-medium mb-2 block">目前次管理者</Label>
+            <div className="space-y-2">
+              {data!.coManagers.map((cm) => (
+                <div key={cm.id} className="flex items-center justify-between p-2.5 rounded-lg border bg-muted/30">
+                  <div>
+                    <p className="text-sm font-medium">{cm.name ?? "未知用戶"}</p>
+                    <p className="text-xs text-muted-foreground">{cm.email}</p>
+                  </div>
+                  <AlertDialog>
+                    <AlertDialogTrigger asChild>
+                      <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive hover:bg-destructive/10">
+                        <UserMinus className="w-4 h-4" />
+                      </Button>
+                    </AlertDialogTrigger>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>確認移除次管理者</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          確定要移除 {cm.name ?? cm.email} 的次管理者權限？對方將無法繼續存取此工廠後台。
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel>取消</AlertDialogCancel>
+                        <AlertDialogAction
+                          className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                          onClick={() => removeMut.mutate({ userId: cm.userId })}
+                        >
+                          確認移除
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {(data?.pending.length ?? 0) > 0 && (
+          <div>
+            <Label className="text-sm font-medium mb-2 block text-muted-foreground">待確認邀請</Label>
+            <div className="space-y-2">
+              {data!.pending.map((inv) => (
+                <div key={inv.id} className="flex items-center justify-between p-2.5 rounded-lg border border-dashed">
+                  <div>
+                    <p className="text-sm">{inv.name ?? inv.email}</p>
+                    <p className="text-xs text-muted-foreground">
+                      截止：{new Date(inv.expiresAt).toLocaleDateString("zh-TW")}
+                    </p>
+                  </div>
+                  <Badge variant="secondary" className="text-xs">等待回覆</Badge>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {activeCount === 0 && (data?.pending.length ?? 0) === 0 && (
+          <p className="text-sm text-muted-foreground text-center py-2">尚未邀請任何次管理者</p>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
