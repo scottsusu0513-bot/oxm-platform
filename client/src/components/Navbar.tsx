@@ -244,6 +244,9 @@ export default function Navbar() {
               <a href={getLoginUrl()} onClick={() => setMobileOpen(false)}>
                 <Button className="w-full bg-gradient-to-r from-orange-500 to-amber-500 text-white border-0">登入</Button>
               </a>
+              <p className="text-xs text-muted-foreground text-center pt-1">
+                手機請使用 Chrome 或 Safari 登入
+              </p>
             </div>
           )}
         </div>
