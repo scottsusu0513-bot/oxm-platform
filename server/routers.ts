@@ -1,6 +1,6 @@
 import { COOKIE_NAME } from "@shared/const";
 import { enhanceSearchKeyword } from './semantic-search';
-import { sendNewInquiryEmail, sendFactoryApprovedEmail, sendFactorySubmittedEmail, sendReportEmail, sendSupportTicketEmail } from './email';
+import { sendNewInquiryEmail, sendFactoryApprovedEmail, sendFactorySubmittedEmail, sendReportEmail, sendSupportTicketEmail, sendReviewReplyEmail, sendNewMessageNotificationEmail, sendReportStatusUpdateEmail, sendTicketStatusUpdateEmail } from './email';
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, protectedProcedure, adminProcedure, router } from "./_core/trpc";
@@ -480,6 +480,23 @@ export const appRouter = router({
       if (!isFactoryOwner && !isUser) throw new Error("無權限");
       const senderRole = isFactoryOwner ? "factory" as const : "user" as const;
       await db.saveMessage(input.conversationId, ctx.user.id, senderRole, input.content);
+
+      // 工廠回覆時通知使用者（若有開啟 newMessage 通知設定）
+      if (senderRole === "factory") {
+        db.getUserById(conv.userId).then((convUser) => {
+          const settings = (convUser?.notificationSettings as Record<string, boolean> | null) ?? {};
+          if (convUser?.email && settings.newMessage !== false) {
+            sendNewMessageNotificationEmail({
+              userEmail: convUser.email,
+              userName: convUser.name ?? '您',
+              factoryName: factory?.name ?? '工廠',
+              messagePreview: input.content.substring(0, 200),
+              conversationId: input.conversationId,
+            }).catch(() => {});
+          }
+        }).catch(() => {});
+      }
+
       if (senderRole === "user") {
         try {
           const productInfo = conv.productId ? await db.getProductById(conv.productId) : null;
@@ -595,6 +612,22 @@ export const appRouter = router({
         reply: input.reply,
         repliedAt: new Date(),
       }).where(eq(reviews.id, input.reviewId));
+
+      // 通知評價者（若有開啟 reviewReply 通知設定）
+      db.getUserById(review.userId).then((reviewer) => {
+        const settings = (reviewer?.notificationSettings as Record<string, boolean> | null) ?? {};
+        if (reviewer?.email && settings.reviewReply !== false) {
+          sendReviewReplyEmail({
+            userEmail: reviewer.email,
+            userName: reviewer.name ?? '您',
+            factoryName: factory.name,
+            originalComment: review.comment ?? '',
+            replyContent: input.reply,
+            factoryId: factory.id,
+          }).catch(() => {});
+        }
+      }).catch(() => {});
+
       return { success: true };
     }),
   }),
@@ -767,7 +800,20 @@ export const appRouter = router({
       status: z.enum(['pending', 'received', 'reviewing', 'processing', 'resolved']),
       adminNote: z.string().optional(),
     })).mutation(async ({ input }) => {
+      const report = await db.getReportById(input.id);
       await db.updateReportStatus(input.id, input.status, input.adminNote);
+      // 通知檢舉者（若有開啟 reportUpdate 通知設定）
+      if (report?.userEmail) {
+        const settings = (report.notificationSettings as Record<string, boolean> | null) ?? {};
+        if (settings.reportUpdate !== false) {
+          sendReportStatusUpdateEmail({
+            userEmail: report.userEmail,
+            userName: report.userName ?? '您',
+            factoryName: report.factoryName ?? '工廠',
+            status: input.status,
+          }).catch(() => {});
+        }
+      }
       return { success: true };
     }),
     getReportHistory: adminProcedure.input(z.object({ id: z.number() })).query(async ({ input }) => {
@@ -788,7 +834,20 @@ export const appRouter = router({
       status: z.enum(['pending', 'received', 'reviewing', 'processing', 'resolved']),
       adminNote: z.string().optional(),
     })).mutation(async ({ input }) => {
+      const ticket = await db.getSupportTicketById(input.id);
       await db.updateSupportTicketStatus(input.id, input.status, input.adminNote);
+      // 通知投訴者（若有開啟 ticketUpdate 通知設定）
+      if (ticket?.userEmail) {
+        const settings = (ticket.notificationSettings as Record<string, boolean> | null) ?? {};
+        if (settings.ticketUpdate !== false) {
+          sendTicketStatusUpdateEmail({
+            userEmail: ticket.userEmail,
+            userName: ticket.userName ?? '您',
+            subject: ticket.subject,
+            status: input.status,
+          }).catch(() => {});
+        }
+      }
       return { success: true };
     }),
     getTicketHistory: adminProcedure.input(z.object({ id: z.number() })).query(async ({ input }) => {

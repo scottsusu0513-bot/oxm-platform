@@ -1313,6 +1313,25 @@ export async function getAdminReports(page = 1, pageSize = 20, status?: string, 
   return { items, total };
 }
 
+export async function getReportById(id: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select({
+    id: reports.id,
+    userId: reports.userId,
+    factoryId: reports.factoryId,
+    factoryName: factories.name,
+    userName: users.name,
+    userEmail: users.email,
+    notificationSettings: users.notificationSettings,
+  }).from(reports)
+    .leftJoin(factories, eq(reports.factoryId, factories.id))
+    .leftJoin(users, eq(reports.userId, users.id))
+    .where(eq(reports.id, id))
+    .limit(1);
+  return result.length > 0 ? result[0] : undefined;
+}
+
 export async function updateReportStatus(id: number, status: string, adminNote?: string) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
@@ -1359,6 +1378,23 @@ export async function getAdminSupportTickets(page = 1, pageSize = 20, status?: s
     .orderBy(desc(supportTickets.createdAt))
     .limit(pageSize).offset((page - 1) * pageSize);
   return { items, total };
+}
+
+export async function getSupportTicketById(id: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select({
+    id: supportTickets.id,
+    userId: supportTickets.userId,
+    subject: supportTickets.subject,
+    userName: users.name,
+    userEmail: users.email,
+    notificationSettings: users.notificationSettings,
+  }).from(supportTickets)
+    .leftJoin(users, eq(supportTickets.userId, users.id))
+    .where(eq(supportTickets.id, id))
+    .limit(1);
+  return result.length > 0 ? result[0] : undefined;
 }
 
 export async function updateSupportTicketStatus(id: number, status: string, adminNote?: string) {

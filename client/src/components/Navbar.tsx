@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
 import { Link, useLocation } from "wouter";
 import { Factory, MessageCircle, User, LogOut, LayoutDashboard, Menu, X, UserPlus, Search, Settings, Heart, UserCircle, ChevronDown } from "lucide-react";
-import { useState, useEffect, useRef } from "react";
+import { useState } from "react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import {
   DropdownMenu,
@@ -25,26 +25,17 @@ export default function Navbar() {
   });
   const reviewUnreadQuery = trpc.review.unreadCount.useQuery(
     undefined,
-    { enabled: isAuthenticated && !!user?.isFactoryOwner, refetchInterval: 120000 }
+    { enabled: isAuthenticated && !!user?.isFactoryOwner, refetchInterval: 60000 }
   );
-  const rawReviewUnread = reviewUnreadQuery.data?.count ?? 0;
-  const [reviewDismissed, setReviewDismissed] = useState(false);
-  const prevCountRef = useRef(0);
-  useEffect(() => {
-    if (rawReviewUnread > prevCountRef.current) setReviewDismissed(false);
-    prevCountRef.current = rawReviewUnread;
-  }, [rawReviewUnread]);
-  const showReviewDot = rawReviewUnread > 0 && !reviewDismissed;
+  const reviewUnread = reviewUnreadQuery.data?.count ?? 0;
 
   const pendingCount = pendingCountQuery.data?.count ?? 0;
   // userUnread：買家收到工廠回覆 → 顯示在「我的訊息」
   // factoryUnread：工廠收到買家詢問 → 顯示在「工廠後台」按鈕
   const userUnread = unreadQuery.data?.userCount ?? 0;
   const factoryUnread = unreadQuery.data?.factoryCount ?? 0;
-  const factoryBadgeCount = factoryUnread + (showReviewDot ? rawReviewUnread : 0);
+  const factoryBadgeCount = factoryUnread + reviewUnread;
   const showFactoryBadge = factoryBadgeCount > 0;
-
-  const markReviewsSeen = () => setReviewDismissed(true);
 
   return (
     <header className="sticky top-0 z-50 bg-white/95 backdrop-blur border-b border-border">
@@ -82,7 +73,7 @@ export default function Navbar() {
                 </Button>
               </Link>
               {user?.isFactoryOwner && (
-                <Link href="/dashboard" onClick={markReviewsSeen}>
+                <Link href="/dashboard">
                   <Button variant={location === "/dashboard" ? "secondary" : "ghost"} size="sm" className="relative">
                     <LayoutDashboard className="w-4 h-4 mr-1" />
                     工廠/工作室
@@ -193,7 +184,7 @@ export default function Navbar() {
                 </Button>
               </Link>
               {user?.isFactoryOwner ? (
-                <Link href="/dashboard" onClick={() => { setMobileOpen(false); markReviewsSeen(); }}>
+                <Link href="/dashboard" onClick={() => setMobileOpen(false)}>
                   <Button variant="ghost" className="w-full justify-start relative">
                     <LayoutDashboard className="w-4 h-4 mr-2" />
                     工廠管理
