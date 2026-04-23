@@ -1,3 +1,4 @@
+import { Helmet } from "react-helmet-async";
 import Navbar from "@/components/Navbar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -155,6 +156,10 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-background">
+      <Helmet>
+        <title>台灣代工廠搜尋平台｜OEM ODM 工廠推薦｜OXM</title>
+        <meta name="description" content="收錄台灣各地代工廠，包含塑膠射出、金屬加工、紡織、食品等，快速找到適合的 OEM / ODM 廠商。" />
+      </Helmet>
       <Navbar />
 
       {/* Hero Section */}
@@ -179,14 +184,15 @@ export default function Home() {
 
         <div className="container relative">
           <div className="max-w-3xl mx-auto text-center mb-10">
+            <h1 className="sr-only">台灣代工廠搜尋平台</h1>
             <div className="inline-flex items-center gap-2 bg-gradient-to-r from-orange-100 to-purple-100 text-orange-700 px-4 py-1.5 rounded-full text-sm font-medium mb-6">
               <Zap className="w-4 h-4" />
               全台最大代工媒合平台
             </div>
-            <h1 className="text-4xl md:text-6xl font-extrabold text-foreground mb-5 leading-tight tracking-tight">
+            <p className="text-4xl md:text-6xl font-extrabold text-foreground mb-5 leading-tight tracking-tight">
               用最低價格<br />
               找到<span className="bg-gradient-to-r from-orange-500 via-amber-500 to-purple-500 bg-clip-text text-transparent">最優質夥伴</span>
-            </h1>
+            </p>
             <p className="text-lg md:text-xl text-muted-foreground mb-8 max-w-xl mx-auto">
               一鍵搜尋全台
               <span className="text-orange-500 font-semibold">代工廠</span>

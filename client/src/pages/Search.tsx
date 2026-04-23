@@ -1,3 +1,4 @@
+import { Helmet } from "react-helmet-async";
 import Navbar from "@/components/Navbar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -242,13 +243,28 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
 
   const totalPages = Math.ceil((data?.total ?? 0) / 20);
 
+  const seoIndustry = industry && industry !== "all" ? industry : null;
+  const pageTitle = seoIndustry
+    ? `${seoIndustry}代工｜台灣OEM ODM工廠推薦｜OXM`
+    : "搜尋台灣代工廠｜OEM ODM 工廠媒合｜OXM";
+  const pageDesc = seoIndustry
+    ? `尋找台灣${seoIndustry}代工廠，OEM / ODM 皆可配合，快速詢價、直接聯繫廠商。`
+    : "搜尋全台代工廠與工作室，可依產業、地區、資本額篩選，快速找到合適的 OEM / ODM 廠商。";
+
   return (
     <div className="min-h-screen bg-background">
+      <Helmet>
+        <title>{pageTitle}</title>
+        <meta name="description" content={pageDesc} />
+      </Helmet>
       <Navbar />
       <div className="container py-6">
         <Button variant="outline" onClick={() => navigate("/")} className="mb-4 flex items-center gap-2">
           <ChevronLeft className="h-4 w-4" />返回首頁
         </Button>
+        <h1 className="sr-only">
+          {seoIndustry ? `${seoIndustry}代工廠` : "台灣代工廠搜尋"}
+        </h1>
 
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
           {/* 左側篩選欄 - 桌面 */}

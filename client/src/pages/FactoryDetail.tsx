@@ -1,3 +1,4 @@
+import { Helmet } from "react-helmet-async";
 import Navbar from "@/components/Navbar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -209,8 +210,21 @@ export default function FactoryDetail() {
     );
   }
 
+  const factoryIndustry = factory.industry ?? "";
+  const factoryRegion = factory.region ?? "";
+  const moq = (factory as any).minOrderQuantity;
+  const mfgMode = (factory as any).mfgMode;
+  const descBase = factory.description
+    ? factory.description.slice(0, 100)
+    : `${factoryIndustry}代工廠，位於${factoryRegion}，提供優質 OEM / ODM 服務。`;
+  const metaDesc = `${factory.name}｜${factoryRegion}${factoryIndustry}代工廠${mfgMode ? `，${mfgMode}` : ""}${moq ? `，最低訂購量 ${moq}` : ""}。${descBase}`;
+
   return (
     <div className="min-h-screen bg-background">
+      <Helmet>
+        <title>{`${factory.name}｜${factoryIndustry}代工｜OXM`}</title>
+        <meta name="description" content={metaDesc} />
+      </Helmet>
       <Navbar />
 
       <div className="container py-6">

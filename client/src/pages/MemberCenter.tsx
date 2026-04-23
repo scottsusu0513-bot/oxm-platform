@@ -14,8 +14,9 @@ import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import {
   User, Heart, Clock, Star, MessageCircle, Flag, Bell, Shield, HeadphonesIcon,
-  ExternalLink, Edit2, Trash2, AlertTriangle, Phone, ArrowLeft, History,
+  ExternalLink, Edit2, Trash2, AlertTriangle, Phone, ArrowLeft, History, FileText, ScrollText,
 } from "lucide-react";
+import { Link } from "wouter";
 import { StatusTimeline } from "@/components/StatusTimeline";
 
 const STATUS_LABELS: Record<string, { label: string; color: string }> = {
@@ -90,6 +91,21 @@ export default function MemberCenter() {
           <TabsContent value="security"><SecurityTab /></TabsContent>
           <TabsContent value="support"><SupportTab /></TabsContent>
         </Tabs>
+
+        <div className="mt-6 pt-4 border-t border-border/50 flex justify-center gap-6">
+          <Link href="/privacy">
+            <button className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors">
+              <FileText className="w-3.5 h-3.5" />
+              隱私權政策
+            </button>
+          </Link>
+          <Link href="/terms">
+            <button className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors">
+              <ScrollText className="w-3.5 h-3.5" />
+              服務條款
+            </button>
+          </Link>
+        </div>
       </div>
     </div>
   );

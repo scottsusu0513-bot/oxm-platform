@@ -7,9 +7,13 @@ import { trpc } from "@/lib/trpc";
 import { useEffect } from "react";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
+import { HelmetProvider } from "react-helmet-async";
 import Home from "./pages/Home";
 import Search from "./pages/Search";
 import FactoryDetail from "./pages/FactoryDetail";
+import IndustryPage from "./pages/IndustryPage";
+import PrivacyPolicyPage from "./pages/PrivacyPolicyPage";
+import TermsPage from "./pages/TermsPage";
 import FactoryRegister from "./pages/FactoryRegister";
 import FactoryDashboard from "./pages/FactoryDashboard";
 import ChatPage from "./pages/ChatPage";
@@ -34,6 +38,7 @@ function Router() {
     <Switch>
       <Route path="/" component={Home} />
       <Route path="/search" component={Search} />
+      <Route path="/industry/:slug" component={IndustryPage} />
       <Route path="/factory/:id" component={FactoryDetail} />
       <Route path="/register-factory" component={FactoryRegister} />
       <Route path="/dashboard" component={FactoryDashboard} />
@@ -55,6 +60,8 @@ function Router() {
       <Route path="/admin/support" component={AdminSupportCenter} />
       <Route path="/admin/announcements" component={AdminAnnouncements} />
       <Route path="/announcements" component={Announcements} />
+      <Route path="/privacy" component={PrivacyPolicyPage} />
+      <Route path="/terms" component={TermsPage} />
       <Route path="/404" component={NotFound} />
       <Route component={NotFound} />
     </Switch>
@@ -94,15 +101,17 @@ function PageViewTracker() {
 
 function App() {
   return (
-    <ErrorBoundary>
-      <ThemeProvider defaultTheme="light">
-        <TooltipProvider>
-          <Toaster />
-          <PageViewTracker />
-          <Router />
-        </TooltipProvider>
-      </ThemeProvider>
-    </ErrorBoundary>
+    <HelmetProvider>
+      <ErrorBoundary>
+        <ThemeProvider defaultTheme="light">
+          <TooltipProvider>
+            <Toaster />
+            <PageViewTracker />
+            <Router />
+          </TooltipProvider>
+        </ThemeProvider>
+      </ErrorBoundary>
+    </HelmetProvider>
   );
 }
 

@@ -2,7 +2,7 @@ import { getLoginUrl } from "@/const";
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
 import { Link, useLocation } from "wouter";
-import { Factory, MessageCircle, User, LogOut, LayoutDashboard, Menu, X, UserPlus, Search, Settings, Heart, UserCircle, ChevronDown } from "lucide-react";
+import { Factory, MessageCircle, User, LogOut, LayoutDashboard, Menu, X, UserPlus, Search, Settings, Heart, UserCircle, ChevronDown, FileText, ScrollText } from "lucide-react";
 import { useState } from "react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import {
@@ -127,6 +127,18 @@ export default function Navbar() {
                     <Link href="/member" className="flex items-center gap-2 cursor-pointer">
                       <UserCircle className="w-4 h-4" />
                       會員中心
+                    </Link>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem asChild>
+                    <Link href="/privacy" className="flex items-center gap-2 cursor-pointer">
+                      <FileText className="w-4 h-4" />
+                      隱私權政策
+                    </Link>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem asChild>
+                    <Link href="/terms" className="flex items-center gap-2 cursor-pointer">
+                      <ScrollText className="w-4 h-4" />
+                      服務條款
                     </Link>
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
