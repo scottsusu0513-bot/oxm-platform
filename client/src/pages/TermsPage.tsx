@@ -93,7 +93,7 @@ export default function TermsPage() {
 
         <div className="max-w-[800px] mx-auto">
           <h1 className="text-3xl font-bold mb-2">服務條款</h1>
-          <p className="text-sm text-muted-foreground mb-8">最後更新：2025 年</p>
+          <p className="text-sm text-muted-foreground mb-8">最後更新：2026 年</p>
 
           <p className="text-muted-foreground leading-relaxed mb-8">
             歡迎您使用 OXM 代工廠媒合平台（以下簡稱「本平台」）。當您註冊或使用本平台服務時，即表示您已閱讀、理解並同意遵守以下條款：

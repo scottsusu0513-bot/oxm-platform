@@ -70,7 +70,7 @@ export default function PrivacyPolicyPage() {
 
         <div className="max-w-[800px] mx-auto">
           <h1 className="text-3xl font-bold mb-2">隱私權政策</h1>
-          <p className="text-sm text-muted-foreground mb-8">最後更新：2025 年</p>
+          <p className="text-sm text-muted-foreground mb-8">最後更新：2026 年</p>
 
           <p className="text-muted-foreground leading-relaxed mb-8">
             歡迎您使用 OXM（以下簡稱「本平台」）。我們非常重視您的個人資料與隱私權，並依據相關法規保護您的資料安全。
