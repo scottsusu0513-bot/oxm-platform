@@ -7,7 +7,7 @@ import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import { setupSecurityHeaders, setupOriginCheck } from "./security";
-import { apiLimiter, loginLimiter, uploadLimiter, messageLimiter, submitReviewLimiter, adminLimiter } from "./rateLimit";
+import { apiLimiter, loginLimiter, uploadLimiter, messageLimiter, submitReviewLimiter, adminLimiter, searchLimiter, reportLimiter } from "./rateLimit";
 import { COOKIE_NAME } from "@shared/const";
 import { getDb } from "../db";
 
@@ -25,8 +25,15 @@ async function startServer() {
   console.log("[boot] applying origin check");
   setupOriginCheck(app);
 
-  app.use(express.json({ limit: "15mb" }));
-  app.use(express.urlencoded({ limit: "15mb", extended: true }));
+  // 圖片上傳路由放寬到 15 MB，其他 API 限制 100 KB
+  app.use((req, res, next) => {
+    const path = req.path ?? "";
+    if (/uploadAvatar|uploadPhoto|uploadImage/.test(path)) {
+      return express.json({ limit: "15mb" })(req, res, next);
+    }
+    return express.json({ limit: "100kb" })(req, res, next);
+  });
+  app.use(express.urlencoded({ limit: "100kb", extended: true }));
 
   console.log("[boot] registering oauth routes");
   app.use("/api/", apiLimiter);
@@ -44,6 +51,12 @@ async function startServer() {
     }
     if (path.includes("factory.submitForReview")) {
       return submitReviewLimiter(req, _res, next);
+    }
+    if (path.includes("factory.search")) {
+      return searchLimiter(req, _res, next);
+    }
+    if (path.includes("report.create")) {
+      return reportLimiter(req, _res, next);
     }
     next();
   });

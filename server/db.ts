@@ -810,49 +810,40 @@ export async function getFavoritesByUser(userId: number, page = 1, pageSize = 20
 
 
 // ===== Admin helpers =====
+const adminFactorySelect = {
+  factory: factories,
+  ownerAccountName: users.name,
+  ownerAccountEmail: users.email,
+};
+
+async function queryAdminFactories(db: ReturnType<typeof drizzle>, status: 'pending' | 'rejected' | 'approved', page: number, pageSize: number) {
+  const [countResult] = await db.select({ count: sql<number>`COUNT(*)` }).from(factories).where(eq(factories.status, status));
+  const total = Number(countResult?.count ?? 0);
+  const rows = await db.select(adminFactorySelect).from(factories)
+    .leftJoin(users, eq(factories.ownerId, users.id))
+    .where(eq(factories.status, status))
+    .orderBy(desc(factories.createdAt))
+    .limit(pageSize).offset((page - 1) * pageSize);
+  const items = rows.map(r => ({ ...r.factory, ownerAccountName: r.ownerAccountName, ownerAccountEmail: r.ownerAccountEmail }));
+  return { items, total, page, pageSize };
+}
+
 export async function getAdminPendingFactories(page: number = 1, pageSize: number = 20) {
   const db = await getDb();
   if (!db) return { items: [], total: 0 };
-  
-  const [countResult] = await db.select({ count: sql<number>`COUNT(*)` }).from(factories).where(eq(factories.status, 'pending'));
-  const total = Number(countResult?.count ?? 0);
-  
-  const items = await db.select().from(factories)
-    .where(eq(factories.status, 'pending'))
-    .orderBy(desc(factories.createdAt))
-    .limit(pageSize).offset((page - 1) * pageSize);
-  
-  return { items, total, page, pageSize };
+  return queryAdminFactories(db, 'pending', page, pageSize);
 }
 
 export async function getAdminRejectedFactories(page: number = 1, pageSize: number = 20) {
   const db = await getDb();
   if (!db) return { items: [], total: 0 };
-  
-  const [countResult] = await db.select({ count: sql<number>`COUNT(*)` }).from(factories).where(eq(factories.status, 'rejected'));
-  const total = Number(countResult?.count ?? 0);
-  
-  const items = await db.select().from(factories)
-    .where(eq(factories.status, 'rejected'))
-    .orderBy(desc(factories.createdAt))
-    .limit(pageSize).offset((page - 1) * pageSize);
-  
-  return { items, total, page, pageSize };
+  return queryAdminFactories(db, 'rejected', page, pageSize);
 }
 
 export async function getAdminApprovedFactories(page: number = 1, pageSize: number = 20) {
   const db = await getDb();
   if (!db) return { items: [], total: 0 };
-  
-  const [countResult] = await db.select({ count: sql<number>`COUNT(*)` }).from(factories).where(eq(factories.status, 'approved'));
-  const total = Number(countResult?.count ?? 0);
-  
-  const items = await db.select().from(factories)
-    .where(eq(factories.status, 'approved'))
-    .orderBy(desc(factories.createdAt))
-    .limit(pageSize).offset((page - 1) * pageSize);
-  
-  return { items, total, page, pageSize };
+  return queryAdminFactories(db, 'approved', page, pageSize);
 }
 
 export async function getAdminProducts(page = 1, pageSize = 20, search?: string, industry?: string) {

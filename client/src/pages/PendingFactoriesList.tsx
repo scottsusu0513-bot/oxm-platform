@@ -5,7 +5,7 @@ import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ArrowLeft, Building2, MapPin, Check, X } from "lucide-react";
+import { ArrowLeft, Building2, MapPin, Check, X, User } from "lucide-react";
 
 export default function PendingFactoriesList() {
   const { user, loading: authLoading } = useAuth();
@@ -85,10 +85,16 @@ export default function PendingFactoriesList() {
                               <Building2 className="h-4 w-4 text-orange-600" />
                               <h3 className="font-semibold text-lg">{factory.name}</h3>
                             </div>
-                            <div className="flex items-center gap-2 text-sm text-gray-600 mb-2">
+                            <div className="flex items-center gap-2 text-sm text-gray-600 mb-1">
                               <MapPin className="h-4 w-4" />
                               {factory.region} | {((factory as any).industry as string[] | null)?.join("、") ?? ""}
                             </div>
+                            {((factory as any).ownerAccountName || (factory as any).ownerAccountEmail) && (
+                              <div className="flex items-center gap-1.5 text-xs text-blue-700 bg-blue-50 border border-blue-100 rounded px-2 py-0.5 w-fit mb-1">
+                                <User className="h-3 w-3 shrink-0" />
+                                <span>{(factory as any).ownerAccountName ?? ""}{(factory as any).ownerAccountEmail ? ` (${(factory as any).ownerAccountEmail})` : ""}</span>
+                              </div>
+                            )}
                             <p className="text-sm text-gray-600 line-clamp-2">{factory.description}</p>
                           </div>
                           <div className="text-right">

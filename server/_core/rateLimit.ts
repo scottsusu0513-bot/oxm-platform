@@ -7,10 +7,6 @@ const createLimiter = (windowMs: number, max: number) => {
     message: "請求過於頻繁，請稍後再試",
     standardHeaders: true,
     legacyHeaders: false,
-    skip: (req: any) => {
-      // 跳過 GET 請求
-      return req.method === "GET";
-    },
   });
 };
 
@@ -28,6 +24,12 @@ export const messageLimiter = createLimiter(60 * 60 * 1000, 20);
 
 // 圖片上傳: 10 次/小時
 export const uploadLimiter = createLimiter(60 * 60 * 1000, 10);
+
+// 搜尋 API: 120 次/分鐘（防爬蟲）
+export const searchLimiter = createLimiter(60 * 1000, 120);
+
+// 檢舉: 5 次/小時（防濫用）
+export const reportLimiter = createLimiter(60 * 60 * 1000, 5);
 
 // 通用 API: 1000 次/小時
 export const apiLimiter = createLimiter(60 * 60 * 1000, 1000);

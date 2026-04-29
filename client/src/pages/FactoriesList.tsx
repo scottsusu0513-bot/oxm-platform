@@ -6,7 +6,7 @@ import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ArrowLeft, Search, MapPin, Building2, Phone, Globe, Star, Shield, ShieldCheck, Clock } from "lucide-react";
+import { ArrowLeft, Search, MapPin, Building2, Phone, Globe, Star, Shield, ShieldCheck, Clock, User } from "lucide-react";
 import { toast } from "sonner";
 
 export default function FactoriesList() {
@@ -185,6 +185,12 @@ export default function FactoriesList() {
                           <div className="flex items-center gap-1.5">
                             <span className="text-gray-400 text-xs">負責人</span>
                             <span>{f.ownerName}</span>
+                          </div>
+                        )}
+                        {(f.ownerAccountName || f.ownerAccountEmail) && (
+                          <div className="flex items-center gap-1.5">
+                            <User className="h-3.5 w-3.5 text-blue-400 shrink-0" />
+                            <span className="text-blue-700">{f.ownerAccountName ?? ""}{f.ownerAccountEmail ? ` (${f.ownerAccountEmail})` : ""}</span>
                           </div>
                         )}
                         {(f.avgRating > 0) && (

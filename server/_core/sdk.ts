@@ -262,6 +262,10 @@ class SDKServer {
       throw ForbiddenError("User not found");
     }
 
+    if (user.deletedAt) {
+      throw ForbiddenError("Account has been deleted");
+    }
+
     await db.upsertUser({
       openId: user.openId,
       lastSignedIn: signedInAt,

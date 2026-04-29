@@ -336,7 +336,7 @@ function FactoryInfoForm({ factory, isOwner = true }: { factory: any; isOwner?: 
       setAvatarPreview(base64);
       setAvatarUploading(true);
       try {
-        const { url } = await uploadAvatarMut.mutateAsync({ base64, mimeType: file.type || "image/jpeg" });
+        const { url } = await uploadAvatarMut.mutateAsync({ base64, mimeType: (file.type || "image/jpeg") as "image/jpeg" | "image/png" | "image/webp" });
         setAvatarUrl(url);
         setAvatarPreview(url);
         await utils.factory.getMine.invalidate();
@@ -671,7 +671,7 @@ function PhotoManager({ factoryId }: { factoryId: number }) {
         const reader = new FileReader();
         reader.onload = async (ev) => {
           try {
-            await uploadMut.mutateAsync({ base64: ev.target?.result as string, mimeType: file.type || "image/jpeg" });
+            await uploadMut.mutateAsync({ base64: ev.target?.result as string, mimeType: (file.type || "image/jpeg") as "image/jpeg" | "image/png" | "image/webp" });
           } catch {}
           resolve();
         };
@@ -971,7 +971,7 @@ function ProductForm({ factoryId, product, categories = [], onDone }: { factoryI
       for (const file of Array.from(files)) {
         if (file.size > 5 * 1024 * 1024) { toast.error(`${file.name} 超過 5MB 限制`); continue; }
         const base64 = await fileToBase64(file);
-        const result = await uploadMut.mutateAsync({ factoryId, base64, mimeType: file.type || "image/jpeg" });
+        const result = await uploadMut.mutateAsync({ factoryId, base64, mimeType: (file.type || "image/jpeg") as "image/jpeg" | "image/png" | "image/webp" });
         setImages(prev => [...prev, result.url]);
       }
     } catch { toast.error("圖片上傳失敗"); }

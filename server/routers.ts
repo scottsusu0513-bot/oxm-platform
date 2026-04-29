@@ -66,7 +66,7 @@ export const appRouter = router({
     create: protectedProcedure.input(z.object({
       type: z.string().min(1).max(50),
       subject: z.string().min(1).max(200),
-      description: z.string().min(1),
+      description: z.string().min(1).max(5000),
     })).mutation(async ({ ctx, input }) => {
       await db.createSupportTicket({ ...input, userId: ctx.user.id });
       sendSupportTicketEmail({
@@ -208,7 +208,7 @@ export const appRouter = router({
 
     uploadAvatar: protectedProcedure.input(z.object({
       base64: z.string().max(10 * 1024 * 1024),
-      mimeType: z.string().default("image/jpeg"),
+      mimeType: z.enum(["image/jpeg", "image/png", "image/webp"]).default("image/jpeg"),
     })).mutation(async ({ ctx, input }) => {
       const factory = await db.getFactoryByOwnerId(ctx.user.id);
       if (!factory) throw new Error("找不到工廠");
@@ -250,7 +250,7 @@ export const appRouter = router({
 
     uploadPhoto: protectedProcedure.input(z.object({
       base64: z.string().max(10 * 1024 * 1024),
-      mimeType: z.string().default("image/jpeg"),
+      mimeType: z.enum(["image/jpeg", "image/png", "image/webp"]).default("image/jpeg"),
       caption: z.string().max(200).optional(),
     })).mutation(async ({ ctx, input }) => {
       const factory = await db.getFactoryByOwnerId(ctx.user.id);
@@ -464,7 +464,7 @@ export const appRouter = router({
     uploadImage: protectedProcedure.input(z.object({
       factoryId: z.number(),
       base64: z.string().max(10 * 1024 * 1024),
-      mimeType: z.string().default("image/jpeg"),
+      mimeType: z.enum(["image/jpeg", "image/png", "image/webp"]).default("image/jpeg"),
     })).mutation(async ({ ctx, input }) => {
       const factory = await db.getFactoryById(input.factoryId);
       if (!factory || factory.ownerId !== ctx.user.id) throw new Error("無權限");
@@ -727,7 +727,7 @@ export const appRouter = router({
   }),
 
   batchIsLiked: protectedProcedure
-    .input(z.object({ factoryIds: z.array(z.number()) }))
+    .input(z.object({ factoryIds: z.array(z.number()).max(100) }))
     .query(async ({ ctx, input }) => {
       const favoritedSet = await db.getFavoritedFactoryIds(ctx.user.id, input.factoryIds);
       const result: Record<number, boolean> = {};
@@ -792,7 +792,10 @@ export const appRouter = router({
     }),
 
     getFactoryDetail: adminProcedure.input(z.object({ id: z.number() })).query(async ({ input }) => {
-      return db.getFactoryById(input.id);
+      const factory = await db.getFactoryById(input.id);
+      if (!factory) return null;
+      const owner = await db.getUserById(factory.ownerId);
+      return { ...factory, ownerAccountName: owner?.name ?? null, ownerAccountEmail: owner?.email ?? null };
     }),
 
     approveFactory: adminProcedure.input(z.object({ factoryId: z.number() })).mutation(async ({ input }) => {
