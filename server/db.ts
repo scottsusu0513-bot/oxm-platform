@@ -102,31 +102,43 @@ export async function createFactory(data: Omit<InsertFactory, "id" | "createdAt"
   const db = await getDb();
   if (!db) throw new Error("DB not available");
 
-  // ── 診斷日誌（定位問題後移除） ──────────────────────────────
-  console.log("[createFactory] industry type:", typeof (data as any).industry, "| value:", JSON.stringify((data as any).industry));
-  console.log("[createFactory] subIndustry type:", typeof (data as any).subIndustry, "| value:", JSON.stringify((data as any).subIndustry));
-  const stmt = db.insert(factories).values(data);
-  try { const { sql: rawSql, params: rawParams } = (stmt as any).toSQL(); console.log("[createFactory] SQL:", rawSql, "\nParams:", rawParams); } catch {}
-  // ────────────────────────────────────────────────────────────
+  // Normalize JSON array fields — Drizzle's json() mapToDriverValue requires a real JS array.
+  // If a bare string arrives (e.g. from a stale deployed schema treating these as varchar),
+  // wrap it so mysql2 receives valid JSON text for the JSON NOT NULL column.
+  const toArray = (v: unknown): string[] => {
+    if (Array.isArray(v)) return v as string[];
+    if (typeof v === "string" && v) return [v];
+    return [];
+  };
+  const normalizedData = {
+    ...data,
+    industry: toArray((data as any).industry),
+    mfgModes: toArray((data as any).mfgModes),
+    subIndustry: Array.isArray((data as any).subIndustry) ? (data as any).subIndustry : [],
+  };
 
-  try {
-    const result = await stmt;
-    return (result as any)[0].insertId;
-  } catch (err: any) {
-    console.error("[createFactory] FAIL ─ message:", err?.message);
-    console.error("[createFactory] FAIL ─ code:", err?.code, "| errno:", err?.errno, "| sqlState:", err?.sqlState, "| sqlMessage:", err?.sqlMessage);
-    console.error("[createFactory] FAIL ─ sql:", err?.sql);
-    throw err;
-  }
+  const result = await db.insert(factories).values(normalizedData as any);
+  return (result as any)[0].insertId;
 }
 
 export async function updateFactory(id: number, ownerId: number, data: Partial<InsertFactory>) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
+
+  const toArray = (v: unknown): string[] => {
+    if (Array.isArray(v)) return v as string[];
+    if (typeof v === "string" && v) return [v];
+    return [];
+  };
+  const normalized: Partial<InsertFactory> = { ...data };
+  if ("industry" in data) (normalized as any).industry = toArray((data as any).industry);
+  if ("mfgModes" in data) (normalized as any).mfgModes = toArray((data as any).mfgModes);
+  if ("subIndustry" in data) (normalized as any).subIndustry = Array.isArray((data as any).subIndustry) ? (data as any).subIndustry : [];
+
   if (ownerId === -1) {
-    await db.update(factories).set(data).where(eq(factories.id, id));
+    await db.update(factories).set(normalized).where(eq(factories.id, id));
   } else {
-    await db.update(factories).set(data).where(and(eq(factories.id, id), eq(factories.ownerId, ownerId)));
+    await db.update(factories).set(normalized).where(and(eq(factories.id, id), eq(factories.ownerId, ownerId)));
   }
 }
 export async function getFactoryById(id: number) {
