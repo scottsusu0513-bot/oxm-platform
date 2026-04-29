@@ -101,11 +101,21 @@ export async function setFactoryOwner(userId: number, isOwner: boolean) {
 export async function createFactory(data: Omit<InsertFactory, "id" | "createdAt" | "updatedAt" | "avgRating" | "reviewCount">) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
+
+  // ── 診斷日誌（定位問題後移除） ──────────────────────────────
+  console.log("[createFactory] industry type:", typeof (data as any).industry, "| value:", JSON.stringify((data as any).industry));
+  console.log("[createFactory] subIndustry type:", typeof (data as any).subIndustry, "| value:", JSON.stringify((data as any).subIndustry));
+  const stmt = db.insert(factories).values(data);
+  try { const { sql: rawSql, params: rawParams } = (stmt as any).toSQL(); console.log("[createFactory] SQL:", rawSql, "\nParams:", rawParams); } catch {}
+  // ────────────────────────────────────────────────────────────
+
   try {
-    const result = await db.insert(factories).values(data);
-    return result[0].insertId;
+    const result = await stmt;
+    return (result as any)[0].insertId;
   } catch (err: any) {
-    console.error("[createFactory] MySQL error:", err?.message ?? err, "| code:", err?.code, "| cause:", err?.cause);
+    console.error("[createFactory] FAIL ─ message:", err?.message);
+    console.error("[createFactory] FAIL ─ code:", err?.code, "| errno:", err?.errno, "| sqlState:", err?.sqlState, "| sqlMessage:", err?.sqlMessage);
+    console.error("[createFactory] FAIL ─ sql:", err?.sql);
     throw err;
   }
 }
