@@ -25,10 +25,10 @@ async function startServer() {
   console.log("[boot] applying origin check");
   setupOriginCheck(app);
 
-  // 圖片上傳路由放寬到 15 MB，其他 API 限制 100 KB
+  // 圖片上傳及含 avatarUrl 的工廠建立/更新路由放寬到 15 MB，其他 API 限制 100 KB
   app.use((req, res, next) => {
     const path = req.path ?? "";
-    if (/uploadAvatar|uploadPhoto|uploadImage/.test(path)) {
+    if (/uploadAvatar|uploadPhoto|uploadImage|factory\.create|factory\.update/.test(path)) {
       return express.json({ limit: "15mb" })(req, res, next);
     }
     return express.json({ limit: "100kb" })(req, res, next);
