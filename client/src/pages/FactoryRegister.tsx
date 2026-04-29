@@ -335,11 +335,11 @@ export default function FactoryRegister() {
 
               {/* 子產業（選擇主產業後出現） */}
               {industry.length > 0 && (() => {
-                const subOptions = Array.from(new Set(industry.flatMap(ind => {
-                  const found = INDUSTRIES.find(i => i.name === ind);
-                  return found ? found.sub as unknown as string[] : [];
-                })));
-                if (subOptions.length === 0) return null;
+                const groups = industry
+                  .map(ind => ({ name: ind, found: INDUSTRIES.find(i => i.name === ind) }))
+                  .filter(({ found }) => found && found.sub.length > 0)
+                  .map(({ name, found }) => ({ name, subs: found!.sub as unknown as string[] }));
+                if (groups.length === 0) return null;
                 const label = subIndustry.length === 0 ? "選擇子產業（可複選）" : subIndustry.join("、");
                 return (
                   <div>
@@ -352,17 +352,26 @@ export default function FactoryRegister() {
                         </Button>
                       </PopoverTrigger>
                       <PopoverContent className="w-72 p-2" align="start">
-                        <div className="max-h-60 overflow-y-auto space-y-1">
-                          {subOptions.map(opt => (
-                            <label key={opt} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted cursor-pointer text-sm">
-                              <Checkbox
-                                checked={subIndustry.includes(opt)}
-                                onCheckedChange={() => setSubIndustry(prev =>
-                                  prev.includes(opt) ? prev.filter(s => s !== opt) : [...prev, opt]
-                                )}
-                              />
-                              {opt}
-                            </label>
+                        <div className="max-h-60 overflow-y-auto">
+                          {groups.map(group => (
+                            <div key={group.name}>
+                              <div className="px-2 py-1 mt-1 mb-0.5 text-xs font-semibold text-muted-foreground bg-muted rounded select-none">
+                                {group.name}
+                              </div>
+                              <div className="space-y-0.5">
+                                {group.subs.map(opt => (
+                                  <label key={opt} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted cursor-pointer text-sm">
+                                    <Checkbox
+                                      checked={subIndustry.includes(opt)}
+                                      onCheckedChange={() => setSubIndustry(prev =>
+                                        prev.includes(opt) ? prev.filter(s => s !== opt) : [...prev, opt]
+                                      )}
+                                    />
+                                    {opt}
+                                  </label>
+                                ))}
+                              </div>
+                            </div>
                           ))}
                         </div>
                       </PopoverContent>
