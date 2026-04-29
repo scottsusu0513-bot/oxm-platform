@@ -108,7 +108,7 @@ export const appRouter = router({
 
     create: protectedProcedure.input(z.object({
       name: z.string().min(1).max(200),
-      industry: z.string(),
+      industry: z.array(z.string()).min(1),
       subIndustry: z.array(z.string()).optional(),
       mfgModes: z.array(z.string()).min(1),
       region: z.string(),
@@ -136,7 +136,7 @@ export const appRouter = router({
     update: protectedProcedure.input(z.object({
       id: z.number(),
       name: z.string().min(1).max(200).optional(),
-      industry: z.string().optional(),
+      industry: z.array(z.string()).min(1).optional(),
       subIndustry: z.array(z.string()).optional(),
       mfgModes: z.array(z.string()).optional(),
       region: z.string().optional(),
@@ -166,7 +166,7 @@ export const appRouter = router({
     }),
 
     search: publicProcedure.input(z.object({
-  industry: z.string().max(50).optional(),
+  industry: z.array(z.string().max(50)).max(15).optional(),
   subIndustry: z.array(z.string().max(50)).max(20).optional(),
   region: z.array(z.string().max(20)).max(25).optional(),
   capitalLevel: z.array(z.string().max(30)).max(10).optional(),
@@ -178,7 +178,7 @@ export const appRouter = router({
   pageSize: z.number().int().min(1).max(50).default(20),
 })).query(async ({ input }) => {
   const enhancedKeyword = input.keyword ? await enhanceSearchKeyword(input.keyword) : input.keyword;
-  const industry = input.industry === 'all' ? undefined : input.industry;
+  const industry = input.industry && input.industry.length > 0 ? input.industry : undefined;
   const subIndustry = input.subIndustry && input.subIndustry.length > 0 ? input.subIndustry : undefined;
   const region = input.region && input.region.length > 0 ? input.region : undefined;
   const capitalLevel = input.capitalLevel && input.capitalLevel.length > 0 ? input.capitalLevel : undefined;
@@ -187,7 +187,7 @@ export const appRouter = router({
   let ads: Awaited<ReturnType<typeof db.getActiveAds>> = [];
 
   if (input.page === 1) {
-    ads = await db.getActiveAds({ industry: input.industry, capitalLevel: input.capitalLevel?.[0], region: input.region?.[0] });
+    ads = await db.getActiveAds({ industry: input.industry?.[0], capitalLevel: input.capitalLevel?.[0], region: input.region?.[0] });
     const adFactoryIds = new Set(ads.slice(0, 5).map(a => a.factoryId));
     const promoted = result.items.filter(f => adFactoryIds.has(f.id));
     const regular = result.items.filter(f => !adFactoryIds.has(f.id));

@@ -13,8 +13,12 @@ export const INDUSTRIES = [
     sub: ["PCB / 電路板", "電子組裝 / SMT", "線束 / 連接器", "感測器 / 模組", "半導體封裝", "其他"],
   },
   {
-    name: "塑膠 / 橡膠",
-    sub: ["射出成型", "吹塑 / 吸塑", "橡膠製品", "矽膠製品", "複合材料", "模具開發", "其他"],
+    name: "塑膠",
+    sub: ["塑膠外殼 / 零件", "塑膠容器 / 瓶罐", "塑膠管材 / 板材", "塑膠包裝", "發泡塑膠", "客製塑膠製品", "其他"],
+  },
+  {
+    name: "橡膠 / 矽膠",
+    sub: ["橡膠 / 矽膠密封件", "工業橡膠 / 矽膠製品", "PU製品（聚氨酯）", "食品 / 醫療級矽膠", "高精密矽膠（LSR）", "客製橡膠 / 矽膠製品", "其他"],
   },
   {
     name: "木工",
@@ -44,6 +48,17 @@ export const INDUSTRIES = [
 
 export const INDUSTRY_OPTIONS = INDUSTRIES.map(i => i.name) as unknown as readonly string[];
 export type Industry = (typeof INDUSTRIES)[number]["name"];
+
+// ===== 工廠能力（跨產業通用，自由複選）=====
+export const CAPABILITIES = [
+  "提供模具開發",
+  "提供打樣",
+  "可小量生產",
+  "可大量生產",
+  "可客製化",
+  "可代工包裝",
+] as const;
+export type Capability = (typeof CAPABILITIES)[number];
 
 // ===== 代工模式 =====
 export const MFG_MODE_OPTIONS = ["ODM", "OEM"] as const;
@@ -106,7 +121,8 @@ export const INDUSTRY_SLUGS: Record<string, string> = {
   "紡織": "textile",
   "金屬加工": "metal-processing",
   "電子零件": "electronics",
-  "塑膠 / 橡膠": "plastic-rubber",
+  "塑膠": "plastic",
+  "橡膠 / 矽膠": "rubber-silicone",
   "木工": "woodworking",
   "包裝": "packaging",
   "食品": "food",
@@ -115,8 +131,14 @@ export const INDUSTRY_SLUGS: Record<string, string> = {
   "印刷": "printing",
 };
 
+// 每個 slug 對應一或多個主產業名稱（backward compat：plastic-rubber 同時對應塑膠與橡膠/矽膠）
+export const INDUSTRY_SLUG_TO_NAMES: Record<string, string[]> = {
+  ...Object.fromEntries(Object.entries(INDUSTRY_SLUGS).map(([name, slug]) => [slug, [name]])),
+  "plastic-rubber": ["塑膠", "橡膠 / 矽膠"],
+};
+// 保留單值版本供其他地方使用（取第一個名稱）
 export const INDUSTRY_SLUG_TO_NAME: Record<string, string> = Object.fromEntries(
-  Object.entries(INDUSTRY_SLUGS).map(([name, slug]) => [slug, name])
+  Object.entries(INDUSTRY_SLUG_TO_NAMES).map(([slug, names]) => [slug, names[0]])
 );
 
 // ===== 產業頁 SEO 內容 =====
@@ -136,10 +158,15 @@ export const INDUSTRY_SEO_CONTENT: Record<string, { intro: string; applications:
     applications: "電子零件代工常見應用包含：IoT 物聯網裝置與模組、工業控制面板與 PLC 周邊、醫療監測設備電路板、車用 ECU 及感測器模組、智慧家電控制主板、穿戴裝置電子模組、LED 驅動電路與電源供應器，以及 RF 無線通訊模組等，適合新創品牌、ODM 設計公司與電子系統整合商尋找可靠製造夥伴。",
     howToChoose: "選擇電子零件代工廠時，建議確認廠商是否具備 IPC-A-610 Class 2/3 組裝認證；是否有 AOI 自動光學檢測、X-Ray 及 ICT 線路測試設備；對微型化元件（如 01005 被動元件）的貼片能力；以及物料管理系統（避免假料）。此外，小量彈性代工的起訂門檻與報價透明度也是選擇關鍵。",
   },
-  "塑膠 / 橡膠": {
-    intro: "台灣塑膠與橡膠代工產業歷史悠久，射出成型、吹塑、矽膠與橡膠製品工廠遍及全台各工業區。廠商普遍具備自主模具開發能力，可依客戶 3D 圖面或樣品進行模具設計與試模，材料覆蓋 ABS、PP、PA、PC、TPU、矽膠及各類橡膠，能配合食品級、醫療級或阻燃等特殊規格，提供從模具開發、試模到量產的一站式服務。",
-    applications: "塑膠橡膠代工常見應用包含：消費電子外殼與保護套、汽機車內外裝塑件、家電產品外觀件、食品接觸容器（PP、HDPE）、醫療器材外殼與耗材、工業密封墊圈（O-Ring、NBR）、矽膠廚具與嬰兒用品、戶外休閒設備零件，以及建材門窗橡膠密封條等。",
-    howToChoose: "選擇塑膠橡膠代工廠時，應確認廠商的模具製作經驗與試模週期；是否提供材料規格書（SDS）及符合 RoHS、REACH 等法規的材料選用；廠商是否具備短射、縮水、翹曲等瑕疵改善能力；以及後加工服務（噴漆、烤漆、二次成型）是否一站提供。建議要求試模樣品做尺寸與外觀確認後再批量生產。",
+  "塑膠": {
+    intro: "台灣塑膠代工產業歷史悠久，射出成型、吹塑、押出等工廠遍布全台各工業區。廠商普遍具備自主模具開發能力，可依客戶 3D 圖面或樣品進行模具設計與試模，材料覆蓋 ABS、PP、PA、PC、TPU、HDPE 等各類工程塑膠，能配合食品級、阻燃、抗靜電等特殊規格，提供從模具開發、試模到大量生產的一站式服務。",
+    applications: "塑膠代工常見應用包含：消費電子外殼與保護套、汽機車內外裝塑件、家電產品外觀件、食品接觸容器（PP、HDPE）、醫療器材外殼與耗材、工業設備零件、戶外休閒設備配件，以及各類客製化塑膠射出、吹塑、吸塑成品等。",
+    howToChoose: "選擇塑膠代工廠時，應確認廠商的模具製作經驗與試模週期；是否提供材料規格書（SDS）及符合 RoHS、REACH 等法規的材料選用；廠商是否具備短射、縮水、翹曲等瑕疵改善能力；以及後加工服務（噴漆、烤漆、二次成型）是否一站提供。建議要求試模樣品做尺寸與外觀確認後再批量生產。",
+  },
+  "橡膠 / 矽膠": {
+    intro: "台灣橡膠與矽膠代工產業具備精密成型與材料應用技術，涵蓋工業橡膠密封件、液態矽膠（LSR）精密射出、食品醫療級矽膠製品等多元領域。廠商熟悉 NBR、EPDM、Silicone、LSR 等各類彈性體材料特性，能依客戶需求設計模具並提供認證測試支援，廣泛服務汽車、電子、醫療、食品等高規格產業。",
+    applications: "橡膠矽膠代工常見應用包含：工業 O-Ring 與客製密封件、汽車橡膠零件與防震元件、液態矽膠（LSR）精密射出件、食品級矽膠廚具與嬰兒用品、醫療耗材與矽膠導管、電子設備防水密封條，以及高精密 LSR 光學與感測元件等。",
+    howToChoose: "選擇橡膠矽膠代工廠時，應確認廠商熟悉的材料種類與硬度範圍（Shore A）；是否具備 LSR 液態矽膠射出設備；食品醫療級製品是否通過 FDA、LFGB 等認證；模具精度與試模週期是否合理；以及是否提供材料規格書（SDS）與物性測試報告。建議提供完整圖面並索取樣品確認後再量產。",
   },
   "木工": {
     intro: "台灣木工代工產業以精緻手工藝與現代 CNC 加工技術並存著稱，從實木家具、木製工藝品、竹製品到建築裝潢材料，廠商普遍具備優異的榫接、烤漆與表面塗裝工藝。部分廠商提供 FSC 認證木材來源，符合國際環保採購要求，能配合客製化尺寸、木種選用與表面處理，服務範圍涵蓋室內設計、家具品牌代工及禮品訂製等。",

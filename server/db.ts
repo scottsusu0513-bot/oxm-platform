@@ -129,7 +129,7 @@ export async function getFactoryByOwnerId(ownerId: number) {
 }
 
 export async function searchFactories(params: {
-  industry?: string;
+  industry?: string[];
   subIndustry?: string[];
   region?: string[];
   capitalLevel?: string[];
@@ -145,7 +145,9 @@ export async function searchFactories(params: {
   const { industry, subIndustry, region, capitalLevel, mfgMode, keyword, businessType, page = 1, pageSize = 20, sortBy } = params;
 
   const conditions = [eq(factories.status, 'approved')];
-  if (industry) conditions.push(eq(factories.industry, industry));
+  if (industry && industry.length > 0) {
+    conditions.push(sql`JSON_OVERLAPS(${factories.industry}, ${JSON.stringify(industry)})`);
+  }
   if (subIndustry && subIndustry.length > 0) {
     const subConditions = subIndustry.map(s => sql`JSON_CONTAINS(${factories.subIndustry}, ${JSON.stringify([s])})`);
     conditions.push(or(...subConditions)!);
@@ -159,7 +161,7 @@ export async function searchFactories(params: {
     const keywordConditions = [
       like(factories.name, `%${keyword}%`),
       like(factories.description, `%${keyword}%`),
-      like(factories.industry, `%${keyword}%`),
+      sql`JSON_SEARCH(${factories.industry}, 'one', ${`%${keyword}%`}) IS NOT NULL`,
     ];
     conditions.push(or(...keywordConditions)!);
   }
@@ -611,7 +613,7 @@ export async function getAdminFactories(page = 1, pageSize = 20, search?: string
     conditions.push(
       or(
         like(factories.name, `%${search}%`),
-        like(factories.industry, `%${search}%`),
+        sql`JSON_SEARCH(${factories.industry}, 'one', ${`%${search}%`}) IS NOT NULL`,
         like(factories.region, `%${search}%`)
       )
     );
@@ -843,9 +845,8 @@ export async function getAdminProducts(page = 1, pageSize = 20, search?: string,
   }
   
   if (industry) {
-    // 需要通過 factory 表進行篩選
     const factoriesInIndustry = await db.select({ id: factories.id }).from(factories)
-      .where(eq(factories.industry, industry));
+      .where(sql`JSON_OVERLAPS(${factories.industry}, ${JSON.stringify([industry])})`);
     const factoryIds = factoriesInIndustry.map(f => f.id);
     if (factoryIds.length > 0) {
       conditions.push(inArray(products.factoryId, factoryIds));

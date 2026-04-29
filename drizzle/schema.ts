@@ -27,7 +27,7 @@ export const factories = mysqlTable("factories", {
   id: int("id").autoincrement().primaryKey(),
   ownerId: int("ownerId").notNull(), // references users.id
   name: varchar("name", { length: 200 }).notNull(),
-  industry: varchar("industry", { length: 50 }).notNull(),
+  industry: json("industry").$type<string[]>().notNull(),
   // ODM, OEM 以 JSON 陣列儲存，支援複選
   mfgModes: json("mfgModes").$type<string[]>().notNull(),
   region: varchar("region", { length: 20 }).notNull(),
@@ -47,7 +47,7 @@ export const factories = mysqlTable("factories", {
   businessType: mysqlEnum("businessType", ["factory", "studio"]).default("factory").notNull(), // 代工廠或工作室
   operationStatus: mysqlEnum("operationStatus", ["normal", "busy", "full"]).default("normal").notNull(),
   certified: boolean("certified").default(false).notNull(),
-  subIndustry: json("subIndustry").$type<string[]>().default([]),
+  subIndustry: json("subIndustry").$type<string[]>(),
   avgResponseHours: decimal("avgResponseHours", { precision: 8, scale: 2 }),
   weekdayHours: varchar("weekdayHours", { length: 50 }),
   weekendHours: varchar("weekendHours", { length: 50 }),

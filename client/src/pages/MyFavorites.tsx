@@ -17,7 +17,7 @@ const RECENT_KEY = "oxm_recent_viewed";
 type RecentItem = {
   id: number;
   name: string;
-  industry: string;
+  industry: string | string[];
   region: string;
   businessType: string;
   avatarUrl: string | null;
@@ -81,7 +81,12 @@ function FactoryCard({ factory, onRemove, removeLabel, removeIcon }: {
               <Factory className="w-3 h-3 mr-1" />代工廠
             </Badge>
           )}
-          <Badge className="text-xs">{factory.industry}</Badge>
+          {(Array.isArray((factory as any).industry)
+            ? (factory as any).industry as string[]
+            : typeof (factory as any).industry === 'string' && (factory as any).industry
+              ? [(factory as any).industry as string]
+              : []
+          ).map((ind: string) => <Badge key={ind} className="text-xs">{ind}</Badge>)}
         </div>
 
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -118,14 +123,21 @@ export default function MyFavorites() {
 
   const industries = useMemo(() => {
     if (!favData?.items) return [];
-    const set = new Set(favData.items.map((f: any) => f.industry));
+    const set = new Set(favData.items.flatMap((f: any) => {
+      const ind = f.industry;
+      if (Array.isArray(ind)) return ind as string[];
+      if (typeof ind === 'string' && ind) return [ind];
+      return [];
+    }));
     return Array.from(set).sort() as string[];
   }, [favData?.items]);
 
   const filteredItems = useMemo(() => {
     if (!favData?.items) return [];
     if (selectedIndustry === "all") return favData.items;
-    return favData.items.filter((f: any) => f.industry === selectedIndustry);
+    return favData.items.filter((f: any) =>
+      (Array.isArray((f as any).industry) ? (f as any).industry as string[] : typeof (f as any).industry === 'string' ? [(f as any).industry] : []).includes(selectedIndustry)
+    );
   }, [favData?.items, selectedIndustry]);
 
   const handleRemoveRecent = (id: number) => {
@@ -200,7 +212,9 @@ export default function MyFavorites() {
                           全部（{favData.items.length}）
                         </Button>
                         {industries.map(industry => {
-                          const count = favData.items.filter((f: any) => f.industry === industry).length;
+                          const count = favData.items.filter((f: any) =>
+                            (Array.isArray((f as any).industry) ? (f as any).industry as string[] : typeof (f as any).industry === 'string' ? [(f as any).industry] : []).includes(industry)
+                          ).length;
                           return (
                             <Button key={industry} size="sm" variant={selectedIndustry === industry ? "default" : "outline"} onClick={() => setSelectedIndustry(industry)}>
                               {industry}（{count}）

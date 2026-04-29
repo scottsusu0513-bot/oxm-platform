@@ -115,7 +115,7 @@ export default function FactoryDetail() {
       const entry = {
         id: factory.id,
         name: factory.name,
-        industry: factory.industry,
+        industry: factoryIndustryArr,
         region: factory.region,
         businessType: (factory as any).businessType ?? "factory",
         avatarUrl: (factory as any).avatarUrl ?? null,
@@ -210,7 +210,13 @@ export default function FactoryDetail() {
     );
   }
 
-  const factoryIndustry = factory.industry ?? "";
+  const factoryIndustryArr: string[] = (() => {
+    const raw = (factory as any).industry;
+    if (Array.isArray(raw)) return raw;
+    if (typeof raw === 'string' && raw) return [raw];
+    return [];
+  })();
+  const factoryIndustry = factoryIndustryArr.join("、");
   const factoryRegion = factory.region ?? "";
   const moq = (factory as any).minOrderQuantity;
   const mfgMode = (factory as any).mfgMode;
@@ -275,7 +281,7 @@ export default function FactoryDetail() {
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2 mb-4">
-                  <Badge>{factory.industry}</Badge>
+                  {factoryIndustryArr.map(ind => <Badge key={ind}>{ind}</Badge>)}
                   {((factory as any).subIndustry as string[] | null)?.map(s => (
                     <Badge key={s} variant="outline" className="text-xs">{s}</Badge>
                   ))}

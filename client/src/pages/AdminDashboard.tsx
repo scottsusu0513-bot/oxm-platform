@@ -279,7 +279,7 @@ function AdminDashboardContent() {
                       <div key={factory.id} className="flex items-center justify-between p-4 border rounded-lg">
                         <div className="flex-1 cursor-pointer hover:bg-gray-50 p-2 rounded" onClick={() => setLocation(`/admin/factory-review?id=${factory.id}`)}>
                           <h3 className="font-semibold">{factory.name}</h3>
-                          <p className="text-sm text-gray-600">{factory.industry} - {factory.region}</p>
+                          <p className="text-sm text-gray-600">{((factory as any).industry as string[] | null)?.join("、") ?? ""} - {factory.region}</p>
                         </div>
                         <Button size="sm" variant="outline" onClick={() => setLocation(`/admin/factory-review?id=${factory.id}`)}>
                           查看詳情
@@ -317,7 +317,7 @@ function AdminDashboardContent() {
                               </span>
                             )}
                           </div>
-                          <p className="text-sm text-gray-600">{factory.industry} - {factory.region}</p>
+                          <p className="text-sm text-gray-600">{((factory as any).industry as string[] | null)?.join("、") ?? ""} - {factory.region}</p>
                         </div>
                         <Button
                           size="sm"

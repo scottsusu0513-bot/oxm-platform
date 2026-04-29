@@ -87,7 +87,7 @@ export default function PendingFactoriesList() {
                             </div>
                             <div className="flex items-center gap-2 text-sm text-gray-600 mb-2">
                               <MapPin className="h-4 w-4" />
-                              {factory.region} | {factory.industry}
+                              {factory.region} | {((factory as any).industry as string[] | null)?.join("、") ?? ""}
                             </div>
                             <p className="text-sm text-gray-600 line-clamp-2">{factory.description}</p>
                           </div>

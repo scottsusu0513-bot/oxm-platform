@@ -100,7 +100,7 @@ export default function FactoryReviewDetail() {
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <Label className="text-gray-600">產業分類</Label>
-                <p className="font-medium">{factory.industry}</p>
+                <p className="font-medium">{((factory as any).industry as string[] | null)?.join("、") ?? ""}</p>
               </div>
               <div>
                 <Label className="text-gray-600">地區</Label>

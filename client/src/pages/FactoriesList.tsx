@@ -197,7 +197,9 @@ export default function FactoriesList() {
 
                       {/* Tags */}
                       <div className="flex gap-2 flex-wrap mb-2">
-                        <span className="text-xs bg-gray-100 px-2 py-1 rounded">{factory.industry}</span>
+                        {((factory as any).industry as string[] | null)?.map(ind => (
+                          <span key={ind} className="text-xs bg-gray-100 px-2 py-1 rounded">{ind}</span>
+                        ))}
                         {factory.capitalLevel && (
                           <span className="text-xs bg-blue-50 text-blue-800 px-2 py-1 rounded">資本額: {factory.capitalLevel}</span>
                         )}

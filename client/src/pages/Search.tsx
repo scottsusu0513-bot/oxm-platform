@@ -115,7 +115,7 @@ const params = new URLSearchParams(window.location.search);
 const { isAuthenticated } = useAuth();
 
   const [mfgMode, setMfgMode] = useState("");
-  const [industry, setIndustry] = useState("all");
+  const [industry, setIndustry] = useState<string[]>([]);
   const [subIndustry, setSubIndustry] = useState<string[]>([]);
   const [region, setRegion] = useState<string[]>([]);
   const [keyword, setKeyword] = useState("");
@@ -141,7 +141,7 @@ const { isAuthenticated } = useAuth();
 
   useEffect(() => {
     setMfgMode(params.get("mfgMode") ?? "");
-    setIndustry(params.get("industry") ?? "all");
+    setIndustry(params.getAll("industry").filter(Boolean));
     setSubIndustry(params.getAll("subIndustry").filter(Boolean));
     setRegion(params.getAll("region").filter(Boolean));
     setKeyword(params.get("keyword") ?? "");
@@ -154,7 +154,7 @@ const { isAuthenticated } = useAuth();
 
     const searchInput = useMemo(() => ({
     mfgMode: mfgMode || undefined,
-    industry: industry && industry !== "all" ? industry : undefined,
+    industry: industry.length > 0 ? industry : undefined,
     subIndustry: subIndustry.length > 0 ? subIndustry : undefined,
     region: region.length > 0 ? region : undefined,
     keyword: keyword || undefined,
@@ -167,8 +167,8 @@ const { isAuthenticated } = useAuth();
   const appliedFilters = useMemo(() => {
     const filters: Array<{ key: string; label: string; value: string }> = [];
     if (mfgMode) filters.push({ key: "mfgMode", label: "代工模式", value: mfgMode });
-    if (industry && industry !== "all") filters.push({ key: "industry", label: "產業", value: industry });
-    if (subIndustry.length > 0) filters.push({ key: "subIndustry", label: "小分類", value: subIndustry.join("、") });
+    if (industry.length > 0) filters.push({ key: "industry", label: "產業", value: industry.join("、") });
+    if (subIndustry.length > 0) filters.push({ key: "subIndustry", label: "子產業", value: subIndustry.join("、") });
     if (region.length > 0) filters.push({ key: "region", label: "地區", value: region.join("、") });
     if (keyword) filters.push({ key: "keyword", label: "關鍵字", value: keyword });
     if (businessType && businessType !== "all") filters.push({ key: "businessType", label: "類型", value: businessType === "factory" ? "代工廠" : "工作室" });
@@ -178,7 +178,7 @@ const { isAuthenticated } = useAuth();
   const removeFilter = (key: string) => {
     if (key === "businessType") setBusinessType("all");
     else if (key === "mfgMode") setMfgMode("");
-    else if (key === "industry") { setIndustry("all"); setSubIndustry([]); }
+    else if (key === "industry") { setIndustry([]); setSubIndustry([]); }
     else if (key === "subIndustry") setSubIndustry([]);
     else if (key === "region") setRegion([]);
     else if (key === "keyword") setKeyword("");
@@ -188,7 +188,6 @@ const { isAuthenticated } = useAuth();
   const { data, isLoading } = trpc.factory.search.useQuery(searchInput);
 const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 API
 
-  // 前端篩選 businessType
   const filteredItems = useMemo(() => {
     if (!data?.items) return [];
     if (businessType === "all") return data.items;
@@ -226,7 +225,7 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
     setPage(1);
     const p = new URLSearchParams();
     if (mfgMode) p.set("mfgMode", mfgMode);
-    if (industry && industry !== "all") p.set("industry", industry);
+    industry.forEach(i => p.append("industry", i));
     subIndustry.forEach(s => p.append("subIndustry", s));
     region.forEach(r => p.append("region", r));
     if (keyword) p.set("keyword", keyword);
@@ -236,14 +235,14 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
   };
 
   const clearFilters = () => {
-    setMfgMode(""); setIndustry("all"); setSubIndustry([]); setRegion([]);
+    setMfgMode(""); setIndustry([]); setSubIndustry([]); setRegion([]);
     setKeyword(""); setBusinessType("all"); setPage(1);
     navigate("/search", { replace: true });
   };
 
   const totalPages = Math.ceil((data?.total ?? 0) / 20);
 
-  const seoIndustry = industry && industry !== "all" ? industry : null;
+  const seoIndustry = industry.length > 0 ? industry[0] : null;
   const pageTitle = seoIndustry
     ? `${seoIndustry}代工｜台灣OEM ODM工廠推薦｜OXM`
     : "搜尋台灣代工廠｜OEM ODM 工廠媒合｜OXM";
@@ -309,23 +308,26 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
                 </div>
 
                 <div className="mb-4">
-                  <label className="text-xs font-medium text-muted-foreground mb-2 block">產業</label>
-                  <Select value={industry} onValueChange={(val) => { setIndustry(val); setSubIndustry([]); setPage(1); }}>
-                    <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">不限</SelectItem>
-                      {INDUSTRY_OPTIONS.map(o => <SelectItem key={o} value={o}>{o}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
+                  <label className="text-xs font-medium text-muted-foreground mb-2 block">主產業</label>
+                  <MultiSelect
+                    options={INDUSTRY_OPTIONS}
+                    value={industry}
+                    onChange={(val) => { setIndustry(val); setSubIndustry([]); setPage(1); }}
+                    placeholder="不限"
+                    className="h-9 w-full"
+                    withClear
+                  />
                 </div>
 
-                {industry && industry !== "all" && (() => {
-                  const found = INDUSTRIES.find(i => i.name === industry);
-                  if (!found) return null;
-                  const subOptions = found.sub as unknown as string[];
+                {industry.length > 0 && (() => {
+                  const subOptions = Array.from(new Set(industry.flatMap(ind => {
+                    const found = INDUSTRIES.find(i => i.name === ind);
+                    return found ? found.sub as unknown as string[] : [];
+                  })));
+                  if (subOptions.length === 0) return null;
                   return (
                     <div className="mb-4">
-                      <label className="text-xs font-medium text-muted-foreground mb-2 block">小分類</label>
+                      <label className="text-xs font-medium text-muted-foreground mb-2 block">子產業</label>
                       <MultiSelect
                         options={subOptions}
                         value={subIndustry}
@@ -404,23 +406,26 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
                       </Button>
                     ))}
                   </div>
-                  <Select value={industry} onValueChange={(val) => { setIndustry(val); setSubIndustry([]); setPage(1); }}>
-                    <SelectTrigger className="w-[140px]"><SelectValue placeholder="產業" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">不限</SelectItem>
-                      {INDUSTRY_OPTIONS.map(o => <SelectItem key={o} value={o}>{o}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                  {industry && industry !== "all" && (() => {
-                    const found = INDUSTRIES.find(i => i.name === industry);
-                    if (!found) return null;
-                    const subOptions = found.sub as unknown as string[];
+                  <MultiSelect
+                    options={INDUSTRY_OPTIONS}
+                    value={industry}
+                    onChange={(val) => { setIndustry(val); setSubIndustry([]); setPage(1); }}
+                    placeholder="主產業"
+                    className="w-[130px]"
+                    withClear
+                  />
+                  {industry.length > 0 && (() => {
+                    const subOptions = Array.from(new Set(industry.flatMap(ind => {
+                      const found = INDUSTRIES.find(i => i.name === ind);
+                      return found ? found.sub as unknown as string[] : [];
+                    })));
+                    if (subOptions.length === 0) return null;
                     return (
                       <MultiSelect
                         options={subOptions}
                         value={subIndustry}
                         onChange={(val) => { setSubIndustry(val); setPage(1); }}
-                        placeholder="小分類"
+                        placeholder="子產業"
                         className="w-[130px]"
                       />
                     );
@@ -479,7 +484,9 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
                               </div>
                               <div className="flex flex-wrap gap-1 mb-2">
                                 <BusinessTypeBadge businessType={(ad.factory as any).businessType} />
-                                <Badge variant="outline" className="text-xs">{ad.factory.industry}</Badge>
+                                {((ad.factory as any).industry as string[] | null)?.map(ind => (
+                                  <Badge key={ind} variant="outline" className="text-xs">{ind}</Badge>
+                                ))}
                                 {(ad.factory.mfgModes as string[]).map(m => (
                                   <Badge key={m} variant="outline" className="text-xs">{m}</Badge>
                                 ))}
@@ -586,7 +593,9 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
                             </div>
                             <div className="flex flex-wrap gap-1">
                               <BusinessTypeBadge businessType={(factory as any).businessType} />
-                              <Badge>{factory.industry}</Badge>
+                              {((factory as any).industry as string[] | null)?.map(ind => (
+                                <Badge key={ind}>{ind}</Badge>
+                              ))}
                               {((factory as any).subIndustry as string[] | null)?.map(s => (
                                 <Badge key={s} variant="outline" className="text-xs">{s}</Badge>
                               ))}

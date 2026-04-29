@@ -127,7 +127,7 @@ export default function ProductsList() {
                       <tr key={p.id} className="border-b hover:bg-gray-50">
                         <td className="py-3 px-4 font-semibold">{p.name}</td>
                         <td className="py-3 px-4">{p.factory?.name || "-"}</td>
-                        <td className="py-3 px-4">{p.factory?.industry || "-"}</td>
+                        <td className="py-3 px-4">{((p.factory as any)?.industry as string[] | null)?.join("、") ?? "-"}</td>
                         <td className="py-3 px-4">
                           {p.priceMin && p.priceMax
                             ? `$${p.priceMin} - $${p.priceMax}`

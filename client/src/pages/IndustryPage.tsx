@@ -6,22 +6,23 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { trpc } from "@/lib/trpc";
 import { useRoute, useLocation, Link } from "wouter";
-import { INDUSTRY_SLUG_TO_NAME, INDUSTRY_SEO_CONTENT, INDUSTRY_SLUGS } from "@shared/constants";
+import { INDUSTRY_SLUG_TO_NAMES, INDUSTRY_SLUG_TO_NAME, INDUSTRY_SEO_CONTENT, INDUSTRY_SLUGS } from "@shared/constants";
 import { ChevronLeft, Factory, Wrench, Star, MapPin, Search } from "lucide-react";
 
 export default function IndustryPage() {
   const [, params] = useRoute("/industry/:slug");
   const [, navigate] = useLocation();
   const slug = params?.slug ?? "";
-  const industryName = INDUSTRY_SLUG_TO_NAME[slug];
+  const industryNames = INDUSTRY_SLUG_TO_NAMES[slug] ?? [];
+  const industryName = INDUSTRY_SLUG_TO_NAME[slug] ?? "";
   const seoContent = industryName ? INDUSTRY_SEO_CONTENT[industryName] : null;
 
   const { data, isLoading } = trpc.factory.search.useQuery(
-    { industry: industryName, page: 1, pageSize: 20, sortBy: "rating" },
+    { industry: industryName ? [industryName] : undefined, page: 1, pageSize: 20, sortBy: "rating" },
     { enabled: !!industryName }
   );
 
-  if (!industryName) {
+  if (industryNames.length === 0) {
     return (
       <div className="min-h-screen bg-background">
         <Navbar />
@@ -111,7 +112,9 @@ export default function IndustryPage() {
                   <CardContent className="p-4">
                     <h2 className="font-semibold text-base mb-1 line-clamp-1">{factory.name}</h2>
                     <div className="flex flex-wrap gap-1 mb-2">
-                      <Badge variant="outline" className="text-xs">{factory.industry}</Badge>
+                      {((factory as any).industry as string[] | null)?.map(ind => (
+                        <Badge key={ind} variant="outline" className="text-xs">{ind}</Badge>
+                      ))}
                       {(factory.mfgModes as string[]).map(m => (
                         <Badge key={m} variant="secondary" className="text-xs">{m}</Badge>
                       ))}

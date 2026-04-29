@@ -273,7 +273,12 @@ const OPERATION_STATUS_OPTIONS = [
 
 function FactoryInfoForm({ factory, isOwner = true }: { factory: any; isOwner?: boolean }) {
   const [name, setName] = useState(factory.name);
-  const [industry, setIndustry] = useState(factory.industry);
+  const [industry, setIndustry] = useState<string[]>(() => {
+    const raw = (factory as any).industry;
+    if (Array.isArray(raw)) return raw;
+    if (typeof raw === 'string' && raw) return [raw];
+    return [];
+  });
   const [subIndustry, setSubIndustry] = useState<string[]>((factory as any).subIndustry ?? []);
   const [mfgModes, setMfgModes] = useState<string[]>(factory.mfgModes as string[]);
   const [region, setRegion] = useState(factory.region);
@@ -350,7 +355,9 @@ function FactoryInfoForm({ factory, isOwner = true }: { factory: any; isOwner?: 
     if (avatarUploading) { toast.error("圖片上傳中，請稍候"); return; }
     if (foundedYear && foundedYear.length !== 4) { toast.error("成立年份請輸入4位數西元年"); return; }
     updateFactory.mutate({
-      id: factory.id, name, industry, subIndustry: subIndustry.length > 0 ? subIndustry : undefined,
+      id: factory.id, name,
+      industry: industry.length > 0 ? industry : undefined,
+      subIndustry: subIndustry.length > 0 ? subIndustry : undefined,
       mfgModes, region, description, capitalLevel, address,
       operationStatus,
       weekdayHours: weekdayHours || undefined,
@@ -433,24 +440,42 @@ function FactoryInfoForm({ factory, isOwner = true }: { factory: any; isOwner?: 
         </div>
           <div><Label>工廠名稱</Label><Input disabled={isLocked} value={name} onChange={e => setName(e.target.value)} /></div>
           <div>
-            <Label>產業分類</Label>
-            <Select disabled={true} value={industry} onValueChange={v => { setIndustry(v); setSubIndustry([]); }}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>{INDUSTRY_OPTIONS.map(o => <SelectItem key={o} value={o}>{o}</SelectItem>)}</SelectContent>
-            </Select>
-            <p className="text-xs text-muted-foreground mt-1">產業分類於建立後不可更改</p>
+            <Label>主產業（可複選）</Label>
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button type="button" variant="outline" className="w-full justify-between font-normal mt-1" disabled={isLocked}>
+                  <span className="truncate text-sm">{industry.length === 0 ? "選擇主產業" : industry.join("、")}</span>
+                  <ChevronDown className="w-3 h-3 shrink-0 opacity-50 ml-1" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-72 p-2" align="start">
+                <div className="max-h-60 overflow-y-auto space-y-1">
+                  {INDUSTRY_OPTIONS.map(opt => (
+                    <label key={opt} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted cursor-pointer text-sm">
+                      <Checkbox
+                        checked={industry.includes(opt)}
+                        onCheckedChange={() => setIndustry(prev => prev.includes(opt) ? prev.filter(i => i !== opt) : [...prev, opt])}
+                      />
+                      {opt}
+                    </label>
+                  ))}
+                </div>
+              </PopoverContent>
+            </Popover>
           </div>
         </div>
 
-        {/* 小分類多選 */}
-        {industry && (() => {
-          const found = INDUSTRIES.find(i => i.name === industry);
-          if (!found) return null;
-          const subOptions = found.sub as unknown as string[];
-          const label = subIndustry.length === 0 ? "選擇小分類（可複選）" : subIndustry.join("、");
+        {/* 子產業（選擇主產業後出現） */}
+        {industry.length > 0 && (() => {
+          const subOptions = Array.from(new Set(industry.flatMap(ind => {
+            const found = INDUSTRIES.find(i => i.name === ind);
+            return found ? found.sub as unknown as string[] : [];
+          })));
+          if (subOptions.length === 0) return null;
+          const label = subIndustry.length === 0 ? "選擇子產業（可複選）" : subIndustry.join("、");
           return (
             <div>
-              <Label>小分類（可複選）</Label>
+              <Label>子產業（可複選）</Label>
               <Popover>
                 <PopoverTrigger asChild>
                   <Button type="button" variant="outline" className="w-full justify-between font-normal mt-1">
