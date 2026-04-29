@@ -101,8 +101,13 @@ export async function setFactoryOwner(userId: number, isOwner: boolean) {
 export async function createFactory(data: Omit<InsertFactory, "id" | "createdAt" | "updatedAt" | "avgRating" | "reviewCount">) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
-  const result = await db.insert(factories).values(data);
-  return result[0].insertId;
+  try {
+    const result = await db.insert(factories).values(data);
+    return result[0].insertId;
+  } catch (err: any) {
+    console.error("[createFactory] MySQL error:", err?.message ?? err, "| code:", err?.code, "| cause:", err?.cause);
+    throw err;
+  }
 }
 
 export async function updateFactory(id: number, ownerId: number, data: Partial<InsertFactory>) {

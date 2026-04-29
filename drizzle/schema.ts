@@ -47,7 +47,7 @@ export const factories = mysqlTable("factories", {
   businessType: mysqlEnum("businessType", ["factory", "studio"]).default("factory").notNull(), // 代工廠或工作室
   operationStatus: mysqlEnum("operationStatus", ["normal", "busy", "full"]).default("normal").notNull(),
   certified: boolean("certified").default(false).notNull(),
-  subIndustry: json("subIndustry").$type<string[]>(),
+  subIndustry: json("subIndustry").$type<string[]>().default([]),
   avgResponseHours: decimal("avgResponseHours", { precision: 8, scale: 2 }),
   weekdayHours: varchar("weekdayHours", { length: 50 }),
   weekendHours: varchar("weekendHours", { length: 50 }),
