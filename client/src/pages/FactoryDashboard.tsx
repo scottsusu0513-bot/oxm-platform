@@ -454,7 +454,17 @@ function FactoryInfoForm({ factory, isOwner = true }: { factory: any; isOwner?: 
                     <label key={opt} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted cursor-pointer text-sm">
                       <Checkbox
                         checked={industry.includes(opt)}
-                        onCheckedChange={() => setIndustry(prev => prev.includes(opt) ? prev.filter(i => i !== opt) : [...prev, opt])}
+                        onCheckedChange={() => {
+                          setIndustry(prev => {
+                            const next = prev.includes(opt) ? prev.filter(i => i !== opt) : [...prev, opt];
+                            // 移除不再屬於任何已選主產業的子產業
+                            const validSubs = new Set(
+                              INDUSTRIES.filter(i => next.includes(i.name)).flatMap(i => i.sub)
+                            );
+                            setSubIndustry(s => s.filter(sub => validSubs.has(sub as any)));
+                            return next;
+                          });
+                        }}
                       />
                       {opt}
                     </label>

@@ -331,7 +331,14 @@ export default function FactoryRegister() {
                           <Checkbox
                             checked={industry.includes(opt)}
                             onCheckedChange={() => {
-                              setIndustry(prev => prev.includes(opt) ? prev.filter(i => i !== opt) : [...prev, opt]);
+                              setIndustry(prev => {
+                                const next = prev.includes(opt) ? prev.filter(i => i !== opt) : [...prev, opt];
+                                const validSubs = new Set(
+                                  INDUSTRIES.filter(i => next.includes(i.name)).flatMap(i => i.sub)
+                                );
+                                setSubIndustry(s => s.filter(sub => validSubs.has(sub as any)));
+                                return next;
+                              });
                               if (errors.industry) setErrors(p => ({ ...p, industry: undefined }));
                             }}
                           />
