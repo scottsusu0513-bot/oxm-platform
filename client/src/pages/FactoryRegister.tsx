@@ -62,13 +62,8 @@ export default function FactoryRegister() {
   const namePlaceholder = businessType === "factory" ? "請輸入工廠名稱" : "請輸入工作室名稱";
   const descPlaceholder = businessType === "factory" ? "介紹您的代工廠服務、專長與設備..." : "介紹您的工作室服務、風格與專長...";
 
-  const createFactory = trpc.factory.create.useMutation({
-    onSuccess: () => {
-      toast.success(`${typeLabel}建立成功！請在後台完善資料後送出審核。`);
-      window.location.href = "/dashboard";
-    },
-    onError: (err) => toast.error(err.message),
-  });
+  const createFactoryMut = trpc.factory.create.useMutation();
+  const uploadAvatarMut = trpc.factory.uploadAvatar.useMutation();
 
   const toggleMode = (mode: string) => {
     setMfgModes(prev => prev.includes(mode) ? prev.filter(m => m !== mode) : [...prev, mode]);
@@ -107,20 +102,36 @@ export default function FactoryRegister() {
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!validate()) return;
-    createFactory.mutate({
-      name, industry, subIndustry: subIndustry.length > 0 ? subIndustry : undefined,
-      mfgModes, region, description, capitalLevel, address,
-      businessType,
-      foundedYear: foundedYear ? parseInt(foundedYear) : undefined,
-      ownerName: ownerName || undefined,
-      phone: phone || undefined,
-      website: website || undefined,
-      contactEmail: contactEmail || undefined,
-      avatarUrl: avatarBase64 || undefined,
-    });
+    try {
+      // Step 1：建立工廠（不含 avatar，避免 base64 暴露在 payload）
+      await createFactoryMut.mutateAsync({
+        name, industry, subIndustry: subIndustry.length > 0 ? subIndustry : undefined,
+        mfgModes, region, description, capitalLevel, address,
+        businessType,
+        foundedYear: foundedYear ? parseInt(foundedYear) : undefined,
+        ownerName: ownerName || undefined,
+        phone: phone || undefined,
+        website: website || undefined,
+        contactEmail: contactEmail || undefined,
+      });
+      // Step 2：工廠建立成功後才上傳頭像（uploadAvatar 需要工廠已存在）
+      if (avatarBase64) {
+        const mime = avatarBase64.match(/^data:(image\/[^;]+)/)?.[1] ?? "image/jpeg";
+        const safeMime = (["image/jpeg", "image/png", "image/webp"].includes(mime) ? mime : "image/jpeg") as "image/jpeg" | "image/png" | "image/webp";
+        try {
+          await uploadAvatarMut.mutateAsync({ base64: avatarBase64, mimeType: safeMime });
+        } catch {
+          // 頭像上傳失敗不阻斷流程，工廠已建立成功
+        }
+      }
+      toast.success(`${typeLabel}建立成功！請在後台完善資料後送出審核。`);
+      window.location.href = "/dashboard";
+    } catch {
+      toast.error("建立失敗，請稍後再試或聯繫客服");
+    }
   };
 
   useEffect(() => {
@@ -481,9 +492,9 @@ export default function FactoryRegister() {
                 type="submit"
                 className={`w-full ${businessType === "studio" ? "bg-purple-600 hover:bg-purple-700" : "bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600"} text-white border-0`}
                 size="lg"
-                disabled={createFactory.isPending}
+                disabled={createFactoryMut.isPending || uploadAvatarMut.isPending}
               >
-                {createFactory.isPending ? "建立中..." : `建立${typeLabel}`}
+                {createFactoryMut.isPending || uploadAvatarMut.isPending ? "建立中..." : `建立${typeLabel}`}
               </Button>
             </form>
           </CardContent>

@@ -4,6 +4,7 @@ import { sendNewInquiryEmail, sendFactoryApprovedEmail, sendFactorySubmittedEmai
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, protectedProcedure, adminProcedure, router } from "./_core/trpc";
+import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import * as db from "./db";
 import { notifyOwner } from "./_core/notification";
@@ -116,21 +117,25 @@ export const appRouter = router({
       capitalLevel: z.string(),
       address: z.string().min(1),
       foundedYear: z.number().min(1800).max(2100).optional().nullable(),
-      avatarUrl: z.string().optional().nullable(),
+      avatarUrl: z.string().regex(/^https?:\/\//, "avatarUrl 必須為 http/https URL").optional().nullable(),
       businessType: z.enum(["factory", "studio"]).default("factory"),
       ownerName: z.string().optional(),
       phone: z.string().optional(),
       website: z.string().optional(),
       contactEmail: z.string().email().optional().or(z.literal("")),
     })).mutation(async ({ ctx, input }) => {
-      // 管理員可以重複建立工廠（測試用），一般使用者只能建立一次
       if (ctx.user.role !== 'admin') {
         const existing = await db.getFactoryByOwnerId(ctx.user.id);
-        if (existing) throw new Error("您已經註冊過工廠");
+        if (existing) throw new TRPCError({ code: 'BAD_REQUEST', message: '您已經註冊過工廠' });
       }
-      const factoryId = await db.createFactory({ ...input, ownerId: ctx.user.id, status: 'draft' });
-      await db.setFactoryOwner(ctx.user.id, true);
-      return { id: factoryId };
+      try {
+        const factoryId = await db.createFactory({ ...input, ownerId: ctx.user.id, status: 'draft' });
+        await db.setFactoryOwner(ctx.user.id, true);
+        return { id: factoryId };
+      } catch (err: any) {
+        console.error('[factory.create] DB error:', err?.message);
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: '建立工廠失敗，請稍後再試' });
+      }
     }),
 
     update: protectedProcedure.input(z.object({
@@ -148,7 +153,7 @@ export const appRouter = router({
       website: z.string().optional(),
       contactEmail: z.string().optional(),
       businessType: z.enum(["factory", "studio"]).optional(),
-      avatarUrl: z.string().optional(),
+      avatarUrl: z.string().regex(/^https?:\/\//, "avatarUrl 必須為 http/https URL").optional(),
       address: z.string().optional(),
       operationStatus: z.enum(["normal", "busy", "full"]).optional(),
       weekdayHours: z.string().max(50).optional(),
@@ -157,11 +162,16 @@ export const appRouter = router({
     })).mutation(async ({ ctx, input }) => {
       const { id, ...data } = input;
       const factory = await db.getFactoryById(id);
-      if (!factory) throw new Error("工廠不存在");
+      if (!factory) throw new TRPCError({ code: 'NOT_FOUND', message: '工廠不存在' });
       const isOwner = factory.ownerId === ctx.user.id;
       const isCoMgr = !isOwner && await db.isActiveCoManager(id, ctx.user.id);
-      if (!isOwner && !isCoMgr) throw new Error("無權限修改此工廠");
-      await db.updateFactory(id, isOwner ? ctx.user.id : -1, data);
+      if (!isOwner && !isCoMgr) throw new TRPCError({ code: 'FORBIDDEN', message: '無權限修改此工廠' });
+      try {
+        await db.updateFactory(id, isOwner ? ctx.user.id : -1, data);
+      } catch (err: any) {
+        console.error('[factory.update] DB error:', err?.message);
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: '更新工廠失敗，請稍後再試' });
+      }
       return { success: true };
     }),
 

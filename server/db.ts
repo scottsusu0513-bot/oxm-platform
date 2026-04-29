@@ -110,11 +110,13 @@ export async function createFactory(data: Omit<InsertFactory, "id" | "createdAt"
     if (typeof v === "string" && v) return [v];
     return [];
   };
+  const rawAvatar = (data as any).avatarUrl as string | null | undefined;
   const normalizedData = {
     ...data,
     industry: toArray((data as any).industry),
     mfgModes: toArray((data as any).mfgModes),
     subIndustry: Array.isArray((data as any).subIndustry) ? (data as any).subIndustry : [],
+    avatarUrl: rawAvatar && /^https?:\/\//.test(rawAvatar) ? rawAvatar : null,
   };
 
   const result = await db.insert(factories).values(normalizedData as any);
