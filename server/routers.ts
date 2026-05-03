@@ -539,8 +539,17 @@ export const appRouter = router({
       if (!conv) throw new Error("對話不存在");
       const factory = await db.getFactoryById(conv.factoryId);
       if (conv.userId !== ctx.user.id && factory?.ownerId !== ctx.user.id && ctx.user.role !== 'admin') throw new Error("無權限");
-      await db.markMessagesAsRead(input.conversationId, ctx.user.id);
-      return db.getMessagesByConversation(input.conversationId, input.page);
+      try {
+        await db.markMessagesAsRead(input.conversationId, ctx.user.id);
+        return await db.getMessagesByConversation(input.conversationId, input.page);
+      } catch (error) {
+        console.error("[getMessages] DB query failed", {
+          conversationId: input.conversationId,
+          userId: ctx.user.id,
+          error,
+        });
+        throw error;
+      }
     }),
 
     // 取得對話的 metadata（工廠名稱、產品名稱，用於 ChatPage 預填）
