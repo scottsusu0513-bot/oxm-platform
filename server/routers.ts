@@ -8,7 +8,7 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import * as db from "./db";
 import { notifyOwner } from "./_core/notification";
-import { storagePut } from "./storage";
+import { storagePut, storagePresignedUrl } from "./storage";
 import { validateImageUpload } from "./_core/security";
 import { INDUSTRY_OPTIONS, TAIWAN_REGIONS, CAPITAL_OPTIONS } from "../shared/constants";
 import { nanoid } from "nanoid";
@@ -620,6 +620,129 @@ export const appRouter = router({
         } catch (e) { console.warn("通知發送失敗", e); }
       }
       return { success: true };
+    }),
+
+    // 查詢工廠可傳送的商品（僅工廠 owner 可呼叫）
+    getFactoryProducts: protectedProcedure.input(z.object({ conversationId: z.number() })).query(async ({ ctx, input }) => {
+      const conv = await db.getConversationById(input.conversationId);
+      if (!conv) throw new TRPCError({ code: "NOT_FOUND", message: "對話不存在" });
+      const factory = await db.getFactoryById(conv.factoryId);
+      if (factory?.ownerId !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN", message: "僅工廠擁有者可存取" });
+      return db.getProductsByFactoryId(factory.id);
+    }),
+
+    // 傳送商品附件訊息
+    sendProduct: protectedProcedure.input(z.object({
+      conversationId: z.number(),
+      productIds: z.array(z.number().int()).min(1).max(10),
+    })).mutation(async ({ ctx, input }) => {
+      const conv = await db.getConversationById(input.conversationId);
+      if (!conv) throw new TRPCError({ code: "NOT_FOUND", message: "對話不存在" });
+      const factory = await db.getFactoryById(conv.factoryId);
+      if (factory?.ownerId !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN", message: "僅工廠擁有者可傳送商品" });
+
+      const factoryProducts = await db.getProductsByFactoryId(factory.id);
+      const factoryProductMap = new Map(factoryProducts.map(p => [p.id, p]));
+      if (!input.productIds.every(id => factoryProductMap.has(id))) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "包含不屬於此工廠的商品" });
+      }
+
+      const snapshot = input.productIds.map(id => {
+        const p = factoryProductMap.get(id)!;
+        return {
+          id: p.id,
+          name: p.name,
+          imageUrl: ((p.images as string[] | null)?.[0]) ?? null,
+          description: p.description ? p.description.substring(0, 100) : null,
+          factoryId: factory.id,
+          detailUrl: `/factory/${factory.id}`,
+        };
+      });
+
+      await db.saveMessage(input.conversationId, ctx.user.id, "factory", "", "product", {
+        productIds: input.productIds,
+        snapshot,
+      });
+      return { success: true };
+    }),
+
+    // 上傳 PDF 型錄並傳送訊息
+    sendPdf: protectedProcedure.input(z.object({
+      conversationId: z.number(),
+      fileData: z.string().min(1),
+      fileName: z.string().min(1).max(255),
+      fileSize: z.number().int().min(1).max(10 * 1024 * 1024),
+      mimeType: z.literal("application/pdf"),
+    })).mutation(async ({ ctx, input }) => {
+      const conv = await db.getConversationById(input.conversationId);
+      if (!conv) throw new TRPCError({ code: "NOT_FOUND", message: "對話不存在" });
+      const factory = await db.getFactoryById(conv.factoryId);
+      if (factory?.ownerId !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN", message: "僅工廠擁有者可上傳型錄" });
+
+      // Strip path traversal and dangerous chars; allow spaces and CJK
+      let safeName = input.fileName
+        .replace(/\.\./g, "_")
+        .replace(/[/\\<>"'&]/g, "_")
+        .replace(/[\x00-\x1f\x7f]/g, "_")
+        .substring(0, 100)
+        .trim();
+      if (!safeName || safeName === ".pdf") safeName = "catalog.pdf";
+      if (!safeName.toLowerCase().endsWith(".pdf")) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "只允許上傳 PDF 檔案" });
+      }
+
+      const base64Data = input.fileData.replace(/^data:application\/pdf;base64,/, "");
+      const buffer = Buffer.from(base64Data, "base64");
+      if (buffer.length > 10 * 1024 * 1024) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "檔案大小不可超過 10MB" });
+      }
+      if (buffer[0] !== 0x25 || buffer[1] !== 0x50 || buffer[2] !== 0x44 || buffer[3] !== 0x46) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "檔案格式不正確，請上傳 PDF" });
+      }
+
+      const fileKey = `chat-pdfs/${factory.id}/${nanoid()}.pdf`;
+      const { url: fileUrl } = await storagePut(fileKey, buffer, "application/pdf");
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+
+      await db.saveMessage(input.conversationId, ctx.user.id, "factory", "", "pdf", {
+        fileUrl,
+        fileKey,
+        fileName: safeName,
+        fileSize: buffer.length,
+        expiresAt,
+      });
+      return { success: true };
+    }),
+
+    // 取得 PDF 下載 URL（需通過權限+過期驗證，回傳 5 分鐘有效的 presigned URL）
+    getPdfDownloadUrl: protectedProcedure.input(z.object({ messageId: z.number() })).mutation(async ({ ctx, input }) => {
+      const msg = await db.getMessageById(input.messageId);
+      if (!msg) throw new TRPCError({ code: "NOT_FOUND", message: "訊息不存在" });
+      if (msg.type !== "pdf") throw new TRPCError({ code: "BAD_REQUEST", message: "此訊息不是 PDF 附件" });
+
+      // 驗證對話存取權限（使用者本人 or 工廠 owner）
+      const conv = await db.getConversationById(msg.conversationId);
+      if (!conv) throw new TRPCError({ code: "NOT_FOUND", message: "對話不存在" });
+      const factory = await db.getFactoryById(conv.factoryId);
+      const isConvUser = conv.userId === ctx.user.id;
+      const isFactoryOwner = factory?.ownerId === ctx.user.id;
+      if (!isConvUser && !isFactoryOwner) throw new TRPCError({ code: "FORBIDDEN", message: "無權存取此檔案" });
+
+      const attachment = (msg.attachmentData ?? {}) as {
+        fileKey?: string; fileUrl?: string; expiresAt?: string; deleted?: boolean;
+      };
+      if (attachment.deleted) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "此型錄已被刪除" });
+      if (!attachment.expiresAt || new Date(attachment.expiresAt) < new Date()) {
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: "此型錄已逾期，無法下載" });
+      }
+
+      // 優先 presigned URL（5 分鐘），fallback 到 fileUrl
+      if (attachment.fileKey) {
+        const url = await storagePresignedUrl(attachment.fileKey, 300);
+        return { url };
+      }
+      if (attachment.fileUrl) return { url: attachment.fileUrl };
+      throw new TRPCError({ code: "NOT_FOUND", message: "找不到檔案" });
     }),
 
     unreadCount: protectedProcedure.query(async ({ ctx }) => {
