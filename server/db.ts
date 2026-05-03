@@ -636,7 +636,7 @@ export async function getAdminStats() {
 export async function getAdminFactories(page = 1, pageSize = 20, search?: string, status?: 'approved' | 'pending' | 'rejected') {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
-  
+
   const conditions: any[] = [];
   if (search) {
     conditions.push(
@@ -650,29 +650,33 @@ export async function getAdminFactories(page = 1, pageSize = 20, search?: string
   if (status) {
     conditions.push(eq(factories.status, status));
   }
-  
+
+  const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+
   let countQuery = db.select({ count: sql<number>`COUNT(*)` }).from(factories);
-  if (conditions.length > 0) {
-    countQuery = countQuery.where(and(...conditions)) as any;
+  if (whereClause) {
+    countQuery = countQuery.where(whereClause) as any;
   }
   const [countResult] = await countQuery;
   const total = Number(countResult?.count ?? 0);
-  
-  let itemsQuery = db.select().from(factories);
-  if (conditions.length > 0) {
-    itemsQuery = itemsQuery.where(and(...conditions)) as any;
+
+  let itemsQuery = db.select(adminFactorySelect).from(factories)
+    .leftJoin(users, eq(factories.ownerId, users.id));
+  if (whereClause) {
+    itemsQuery = itemsQuery.where(whereClause) as any;
   }
-  const items = await itemsQuery
+  const rows = await itemsQuery
     .orderBy(desc(factories.createdAt))
     .limit(pageSize).offset((page - 1) * pageSize);
-  
+
+  const items = rows.map(r => ({ ...r.factory, ownerAccountName: r.ownerAccountName, ownerAccountEmail: r.ownerAccountEmail }));
   return { items, total, page, pageSize };
 }
 
 export async function getAdminUsers(page = 1, pageSize = 20, search?: string) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
-  
+
   const conditions: any[] = [];
   if (search) {
     conditions.push(
@@ -682,22 +686,32 @@ export async function getAdminUsers(page = 1, pageSize = 20, search?: string) {
       )
     );
   }
-  
+
+  const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+
   let countQuery = db.select({ count: sql<number>`COUNT(*)` }).from(users);
-  if (conditions.length > 0) {
-    countQuery = countQuery.where(and(...conditions)) as any;
+  if (whereClause) {
+    countQuery = countQuery.where(whereClause) as any;
   }
   const [countResult] = await countQuery;
   const total = Number(countResult?.count ?? 0);
-  
-  let itemsQuery = db.select().from(users);
-  if (conditions.length > 0) {
-    itemsQuery = itemsQuery.where(and(...conditions)) as any;
+
+  const adminUserSelect = {
+    user: users,
+    factoryName: factories.name,
+    factoryId: factories.id,
+  };
+
+  let itemsQuery = db.select(adminUserSelect).from(users)
+    .leftJoin(factories, eq(factories.ownerId, users.id));
+  if (whereClause) {
+    itemsQuery = itemsQuery.where(whereClause) as any;
   }
-  const items = await itemsQuery
+  const rows = await itemsQuery
     .orderBy(desc(users.createdAt))
     .limit(pageSize).offset((page - 1) * pageSize);
-  
+
+  const items = rows.map(r => ({ ...r.user, factoryName: r.factoryName, factoryId: r.factoryId }));
   return { items, total, page, pageSize };
 }
 

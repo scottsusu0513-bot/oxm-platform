@@ -187,12 +187,13 @@ export default function FactoriesList() {
                             <span>{f.ownerName}</span>
                           </div>
                         )}
-                        {(f.ownerAccountName || f.ownerAccountEmail) && (
-                          <div className="flex items-center gap-1.5">
-                            <User className="h-3.5 w-3.5 text-blue-400 shrink-0" />
-                            <span className="text-blue-700">{f.ownerAccountName ?? ""}{f.ownerAccountEmail ? ` (${f.ownerAccountEmail})` : ""}</span>
-                          </div>
-                        )}
+                        <div className="flex items-center gap-1.5">
+                          <User className="h-3.5 w-3.5 text-blue-400 shrink-0" />
+                          {f.ownerAccountName || f.ownerAccountEmail
+                            ? <span className="text-blue-700">{f.ownerAccountName ?? ""}{f.ownerAccountEmail ? ` (${f.ownerAccountEmail})` : ""}</span>
+                            : <span className="text-gray-400">擁有者：無</span>
+                          }
+                        </div>
                         {(f.avgRating > 0) && (
                           <div className="flex items-center gap-1.5">
                             <Star className="h-3.5 w-3.5 text-yellow-400 shrink-0" />
@@ -229,10 +230,10 @@ export default function FactoriesList() {
                       )}
 
                       <div className="flex justify-between items-center text-xs text-gray-400 pt-2 border-t border-gray-100">
-                        <span>ID: {factory.id}</span>
-                        <span>
-                          {factory.submittedAt && <>送審: {new Date(factory.submittedAt).toLocaleDateString("zh-TW")}</>}
-                        </span>
+                        <span>ID: {factory.id} {factory.submittedAt && <>· 送審: {new Date(factory.submittedAt).toLocaleDateString("zh-TW")}</>}</span>
+                        <Button size="sm" variant="outline" onClick={() => setLocation(`/admin/factory-review?id=${factory.id}`)}>
+                          查看詳情
+                        </Button>
                       </div>
                     </div>
                   );

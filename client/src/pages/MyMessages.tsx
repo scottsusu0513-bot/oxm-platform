@@ -78,17 +78,18 @@ function UserConversationList({ conversations }: { conversations: any[] }) {
       {conversations.map(conv => (
         <div key={conv.id} className="flex items-center gap-2">
           <Link href={`/chat/${conv.id}`} className="flex-1">
-            <div className="flex items-center justify-between p-4 rounded-lg border hover:bg-muted/30 transition-colors cursor-pointer">
+            <div className="flex items-center justify-between p-4 rounded-lg border hover:bg-muted/30 transition-colors cursor-pointer min-h-[72px]">
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
                   <p className="font-medium">{conv.factoryName}</p>
                   {conv.productName && <Badge variant="outline" className="text-xs">{conv.productName}</Badge>}
                 </div>
-                {conv.lastMessage && (
-                  <p className="text-sm text-muted-foreground truncate mt-0.5">
-                    {conv.lastSenderRole === "user" ? "你：" : ""}{conv.lastMessage}
-                  </p>
-                )}
+                <p className="text-sm text-muted-foreground line-clamp-2 mt-0.5">
+                  {conv.lastMessage
+                    ? `${conv.lastSenderRole === "user" ? "你：" : ""}${conv.lastMessage}`
+                    : "（尚無訊息）"
+                  }
+                </p>
               </div>
               <div className="flex items-center gap-2 shrink-0">
                 <span className="text-xs text-muted-foreground">

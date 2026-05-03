@@ -613,34 +613,34 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
                         <p className="text-sm text-muted-foreground line-clamp-2 mb-3">
                           {factory.description || "暫無簡介"}
                         </p>
-                        <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
-                          <span className="flex items-center gap-1"><MapPin className="w-3 h-3" />{factory.region}</span>
-                          <span>資本額：{factory.capitalLevel}</span>
-                          {factory.foundedYear && <span>成立：{factory.foundedYear}年</span>}
+                        <div className="mt-2 pt-2 border-t border-border/50 grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                          <span className="flex items-center gap-1 truncate"><MapPin className="w-3 h-3 shrink-0" />{factory.region || "無"}</span>
+                          <span className="truncate">地址：{(factory as any).address || "無"}</span>
+                          <span>{factory.foundedYear ? `成立於 ${factory.foundedYear} 年` : "成立年份：無"}</span>
+                          <span className="truncate">負責人：{(factory as any).ownerName || "無"}</span>
+                          <span>電話：{(factory as any).phone || "無"}</span>
+                          <span className="truncate">官方網站：{(factory as any).website
+                            ? <a href={(factory as any).website} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline" onClick={e => e.stopPropagation()}>連結</a>
+                            : "無"
+                          }</span>
                           <span className="flex items-center gap-1">
-                            <Clock className="w-3 h-3" />
+                            <Clock className="w-3 h-3 shrink-0" />
                             {(() => {
                               const h = parseFloat((factory as any).avgResponseHours ?? "");
-                              if (isNaN(h)) return "回覆時間未知";
-                              if (h < 2) return "2hr 內回覆";
-                              if (h < 24) return "24hr 內回覆";
-                              return "回覆較慢";
+                              if (isNaN(h)) return "回覆時間：未知";
+                              if (h < 2) return "回覆：2hr 內";
+                              if (h < 24) return "回覆：24hr 內";
+                              return "回覆：較慢";
                             })()}
                           </span>
+                          <span className="truncate">
+                            {(factory as any).weekdayHours || (factory as any).weekendHours
+                              ? [(factory as any).weekdayHours ? `平日 ${(factory as any).weekdayHours}` : null, (factory as any).weekendHours ? `假日 ${(factory as any).weekendHours}` : null].filter(Boolean).join("／")
+                              : "營業時間：無"
+                            }
+                          </span>
+                          <span className="col-span-2 text-muted-foreground/70">資本額：{factory.capitalLevel || "無"}</span>
                         </div>
-                        {((factory as any).weekdayHours || (factory as any).weekendHours) && (
-                          <div className="mt-2 pt-2 border-t border-border/50 flex flex-wrap gap-3 text-xs text-muted-foreground">
-                            {(factory as any).weekdayHours && (
-                              <span>平日 {(factory as any).weekdayHours}</span>
-                            )}
-                            {(factory as any).weekendHours && (
-                              <span>假日 {(factory as any).weekendHours}</span>
-                            )}
-                            {(factory as any).businessNote && (
-                              <span className="text-muted-foreground/70">{(factory as any).businessNote}</span>
-                            )}
-                          </div>
-                        )}
                       </CardContent>
                     </Card>
                   </Link>

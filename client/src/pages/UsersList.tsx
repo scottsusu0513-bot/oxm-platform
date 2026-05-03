@@ -90,6 +90,7 @@ export default function UsersList() {
                       <th className="text-left py-3 px-4 font-semibold">ID</th>
                       <th className="text-left py-3 px-4 font-semibold">名稱</th>
                       <th className="text-left py-3 px-4 font-semibold">Email</th>
+                      <th className="text-left py-3 px-4 font-semibold">擁有工廠</th>
                       <th className="text-left py-3 px-4 font-semibold">角色</th>
                       <th className="text-left py-3 px-4 font-semibold">註冊時間</th>
                     </tr>
@@ -100,6 +101,12 @@ export default function UsersList() {
                         <td className="py-3 px-4">{u.id}</td>
                         <td className="py-3 px-4 font-medium">{u.name || "-"}</td>
                         <td className="py-3 px-4">{u.email || "-"}</td>
+                        <td className="py-3 px-4">
+                          {(u as any).factoryName
+                            ? <span className="text-orange-700 font-medium">{(u as any).factoryName}</span>
+                            : <span className="text-gray-400">無</span>
+                          }
+                        </td>
                         <td className="py-3 px-4">
                           <span className={`px-2 py-1 rounded text-xs font-semibold ${
                             u.role === "admin" ? "bg-red-100 text-red-800" : "bg-blue-100 text-blue-800"

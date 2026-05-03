@@ -370,7 +370,13 @@ function AdminDashboardContent() {
                           <p className="font-medium">{u.name ?? '未命名'}</p>
                           <p className="text-sm text-gray-500">{u.email}</p>
                         </div>
-                        <span className="text-xs text-gray-400">{u.role}</span>
+                        <div className="text-right">
+                          <p className="text-xs text-gray-400">{u.role}</p>
+                          {(u as any).factoryName
+                            ? <p className="text-xs text-orange-700 mt-0.5">{(u as any).factoryName}</p>
+                            : <p className="text-xs text-gray-300 mt-0.5">無工廠</p>
+                          }
+                        </div>
                       </div>
                     ))}
                   </div>
