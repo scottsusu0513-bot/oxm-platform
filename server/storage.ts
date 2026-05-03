@@ -1,4 +1,5 @@
-import { S3Client, PutObjectCommand, DeleteObjectCommand, HeadObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, DeleteObjectCommand, HeadObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 function getClient(): S3Client {
   return new S3Client({
@@ -57,6 +58,14 @@ export async function storageDelete(relKey: string): Promise<void> {
     console.error("[S3] delete failed:", err);
     throw err;
   }
+}
+
+/** 產生 S3 presigned URL（預設 5 分鐘有效）。env 未設定時直接 throw，不 fallback 公開 URL。 */
+export async function storagePresignedUrl(relKey: string, expiresInSeconds = 300): Promise<string> {
+  const bucket = process.env.AWS_S3_BUCKET;
+  if (!bucket) throw new Error("AWS_S3_BUCKET is not set — cannot generate secure download URL");
+  const command = new GetObjectCommand({ Bucket: bucket, Key: relKey });
+  return getSignedUrl(getClient(), command, { expiresIn: expiresInSeconds });
 }
 
 export async function storageGet(relKey: string): Promise<{ key: string; url: string }> {

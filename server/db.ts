@@ -308,6 +308,7 @@ export async function getMessagesByConversation(conversationId: number, page = 1
     isRead: messages.isRead,
     type: messages.type,
     invitationId: messages.invitationId,
+    attachmentData: messages.attachmentData,
     createdAt: messages.createdAt,
     invitationStatus: factoryCoManagerInvitations.status,
     invitationExpiresAt: factoryCoManagerInvitations.expiresAt,
@@ -318,6 +319,13 @@ export async function getMessagesByConversation(conversationId: number, page = 1
     .orderBy(asc(messages.createdAt))
     .limit(pageSize)
     .offset((page - 1) * pageSize);
+}
+
+export async function getMessageById(id: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(messages).where(eq(messages.id, id)).limit(1);
+  return result.length > 0 ? result[0] : undefined;
 }
 
 export async function markMessagesAsRead(conversationId: number, readerId: number) {
@@ -1174,10 +1182,17 @@ export async function getFavoritedFactoryIds(userId: number, factoryIds: number[
 
   return new Set(rows.map(r => r.factoryId));
 }
-export async function saveMessage(conversationId: number, senderId: number, senderRole: "user" | "factory", content: string) {
+export async function saveMessage(
+  conversationId: number,
+  senderId: number,
+  senderRole: "user" | "factory",
+  content: string,
+  type: "text" | "co_manager_invite" | "product" | "pdf" = "text",
+  attachmentData?: Record<string, any> | null,
+) {
   const db = await getDb();
   if (!db) return;
-  await db.insert(messages).values({ conversationId, senderId, senderRole, content });
+  await db.insert(messages).values({ conversationId, senderId, senderRole, content, type, attachmentData: attachmentData ?? null });
   await db.update(conversations).set({ lastMessageAt: new Date() }).where(eq(conversations.id, conversationId));
   if (senderRole === "factory") {
     const [conv] = await db.select({ factoryId: conversations.factoryId }).from(conversations).where(eq(conversations.id, conversationId)).limit(1);

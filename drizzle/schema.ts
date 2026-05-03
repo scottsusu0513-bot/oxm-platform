@@ -112,8 +112,9 @@ export const messages = mysqlTable("messages", {
   senderRole: mysqlEnum("senderRole", ["user", "factory"]).notNull(),
   content: text("content").notNull(),
   isRead: boolean("isRead").default(false).notNull(),
-  type: mysqlEnum("type", ["text", "co_manager_invite"]).default("text").notNull(),
+  type: mysqlEnum("type", ["text", "co_manager_invite", "product", "pdf"]).default("text").notNull(),
   invitationId: int("invitationId"),
+  attachmentData: json("attachmentData").$type<Record<string, any>>(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 
