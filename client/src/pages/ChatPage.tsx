@@ -270,7 +270,7 @@ export default function ChatPage() {
     { conversationId: conversationId! },
     { enabled: !!conversationId && isAuthenticated }
   );
-  const { data: msgs, isLoading: msgsLoading, isError: msgsError } = trpc.chat.getMessages.useQuery(
+  const { data: msgs, isLoading: msgsLoading, isError: msgsError, refetch: refetchMsgs } = trpc.chat.getMessages.useQuery(
     { conversationId: conversationId!, page: 1 },
     { enabled: !!conversationId && isAuthenticated, refetchInterval: 5000 }
   );
@@ -431,8 +431,9 @@ export default function ChatPage() {
                   {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-12 w-3/4" />)}
                 </div>
               ) : msgsError && !isNewChat ? (
-                <div className="text-center text-muted-foreground py-8 text-sm">
-                  訊息載入失敗，請重新整理頁面
+                <div className="text-center text-muted-foreground py-8 text-sm space-y-3">
+                  <p>訊息載入失敗</p>
+                  <Button variant="outline" size="sm" onClick={() => refetchMsgs()}>重新載入</Button>
                 </div>
               ) : isNewChat ? (
                 <div className="text-center text-muted-foreground py-12">
@@ -484,8 +485,10 @@ export default function ChatPage() {
                           attachmentData
                             ? <PdfMessageCard pdf={attachmentData as unknown as PdfAttachment} messageId={msg.id} isMine={isMine} />
                             : <p className="text-sm text-muted-foreground italic">（附件資料異常）</p>
-                        ) : (
+                        ) : (messageType === "text" || messageType === "co_manager_invite") ? (
                           <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                        ) : (
+                          <p className="text-sm text-muted-foreground italic">（此訊息類型暫不支援）</p>
                         )}
 
                         {canRespond && (
