@@ -10,6 +10,7 @@ import {
   favorites, factoryPhotos, reports, supportTickets, reportStatusHistory, ticketStatusHistory,
   announcements, pageViews,
   factoryCoManagerInvitations, factoryCoManagers,
+  inquiryBatches, inquiryBatchItems,
   type Factory, type InsertFactory, type Product, type InsertProduct, type Favorite, type InsertFavorite
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
@@ -1729,6 +1730,156 @@ export async function getCoManagedFactories(userId: number) {
       eq(factoryCoManagers.userId, userId),
       isNull(factoryCoManagers.removedAt)
     ));
+}
+
+// ===== 一鍵詢價 =====
+
+export async function createInquiryBatch(userId: number, title: string, message: string): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  const result = await db.insert(inquiryBatches).values({ userId, title, message });
+  return result[0].insertId as number;
+}
+
+export async function createInquiryBatchItem(batchId: number, factoryId: number, conversationId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  await db.insert(inquiryBatchItems).values({ batchId, factoryId, conversationId });
+}
+
+export async function getInquiryBatchesByUser(userId: number) {
+  const db = await getDb();
+  if (!db) return [];
+
+  const batches = await db.select().from(inquiryBatches)
+    .where(eq(inquiryBatches.userId, userId))
+    .orderBy(desc(inquiryBatches.createdAt));
+  if (batches.length === 0) return [];
+
+  const batchIds = batches.map(b => b.id);
+  const items = await db.select().from(inquiryBatchItems).where(inArray(inquiryBatchItems.batchId, batchIds));
+
+  const itemCountMap = new Map<number, number>();
+  const convIdsByBatch = new Map<number, number[]>();
+  for (const item of items) {
+    itemCountMap.set(item.batchId, (itemCountMap.get(item.batchId) ?? 0) + 1);
+    if (item.conversationId != null) {
+      const arr = convIdsByBatch.get(item.batchId) ?? [];
+      arr.push(item.conversationId);
+      convIdsByBatch.set(item.batchId, arr);
+    }
+  }
+
+  const allConvIds = items.map(i => i.conversationId).filter((id): id is number => id != null);
+  const lastMsgAtMap = new Map<number, Date>();
+  if (allConvIds.length > 0) {
+    const convRows = await db.select({ id: conversations.id, lastMessageAt: conversations.lastMessageAt })
+      .from(conversations).where(inArray(conversations.id, allConvIds));
+    for (const conv of convRows) lastMsgAtMap.set(conv.id, conv.lastMessageAt);
+  }
+
+  return batches.map(batch => {
+    const batchConvIds = convIdsByBatch.get(batch.id) ?? [];
+    let latestMessageAt: Date | null = null;
+    for (const cid of batchConvIds) {
+      const at = lastMsgAtMap.get(cid);
+      if (at && (!latestMessageAt || at > latestMessageAt)) latestMessageAt = at;
+    }
+    return {
+      id: batch.id,
+      title: batch.title,
+      message: batch.message,
+      createdAt: batch.createdAt,
+      itemCount: itemCountMap.get(batch.id) ?? 0,
+      latestMessageAt,
+    };
+  });
+}
+
+export async function getInquiryBatchDetail(batchId: number, userId: number) {
+  const db = await getDb();
+  if (!db) return null;
+
+  const [batch] = await db.select().from(inquiryBatches)
+    .where(and(eq(inquiryBatches.id, batchId), eq(inquiryBatches.userId, userId))).limit(1);
+  if (!batch) return null;
+
+  const items = await db.select().from(inquiryBatchItems).where(eq(inquiryBatchItems.batchId, batchId));
+  if (items.length === 0) return { ...batch, items: [] as any[] };
+
+  const factoryIds = items.map(i => i.factoryId);
+  const convIds = items.map(i => i.conversationId).filter((id): id is number => id != null);
+
+  const factoryList = await db.select({ id: factories.id, name: factories.name })
+    .from(factories).where(inArray(factories.id, factoryIds));
+  const factoryMap = new Map(factoryList.map(f => [f.id, f]));
+
+  const lastMsgMap = new Map<number, string>();
+  const lastMsgAtMap2 = new Map<number, Date>();
+  const unreadMap = new Map<number, number>();
+
+  if (convIds.length > 0) {
+    const lastMsgRows = await db.select({
+      conversationId: messages.conversationId,
+      content: messages.content,
+      createdAt: messages.createdAt,
+    }).from(messages).where(inArray(messages.conversationId, convIds)).orderBy(desc(messages.createdAt));
+    for (const row of lastMsgRows) {
+      if (!lastMsgMap.has(row.conversationId)) {
+        lastMsgMap.set(row.conversationId, row.content.substring(0, 60));
+        lastMsgAtMap2.set(row.conversationId, row.createdAt);
+      }
+    }
+
+    const unreadRows = await db.select({ conversationId: messages.conversationId })
+      .from(messages)
+      .where(and(
+        inArray(messages.conversationId, convIds),
+        sql`${messages.senderId} != ${userId}`,
+        eq(messages.isRead, false)
+      ));
+    for (const row of unreadRows) {
+      unreadMap.set(row.conversationId, (unreadMap.get(row.conversationId) ?? 0) + 1);
+    }
+  }
+
+  return {
+    id: batch.id,
+    title: batch.title,
+    message: batch.message,
+    createdAt: batch.createdAt,
+    items: items.map(item => ({
+      id: item.id,
+      factoryId: item.factoryId,
+      factoryName: factoryMap.get(item.factoryId)?.name ?? '未知工廠',
+      conversationId: item.conversationId,
+      lastMessage: item.conversationId ? (lastMsgMap.get(item.conversationId) ?? null) : null,
+      lastMessageAt: item.conversationId ? (lastMsgAtMap2.get(item.conversationId) ?? null) : null,
+      unreadCount: item.conversationId ? (unreadMap.get(item.conversationId) ?? 0) : 0,
+    })),
+  };
+}
+
+export async function updateInquiryBatchTitle(batchId: number, userId: number, title: string): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  await db.update(inquiryBatches).set({ title })
+    .where(and(eq(inquiryBatches.id, batchId), eq(inquiryBatches.userId, userId)));
+}
+
+export async function getInquiryBatchConversationIdsByUser(userId: number): Promise<Set<number>> {
+  const db = await getDb();
+  if (!db) return new Set();
+
+  const batches = await db.select({ id: inquiryBatches.id }).from(inquiryBatches)
+    .where(eq(inquiryBatches.userId, userId));
+  if (batches.length === 0) return new Set();
+
+  const batchIds = batches.map(b => b.id);
+  const items = await db.select({ conversationId: inquiryBatchItems.conversationId })
+    .from(inquiryBatchItems).where(inArray(inquiryBatchItems.batchId, batchIds));
+
+  return new Set(items.map(i => i.conversationId).filter((id): id is number => id != null));
 }
 
 export async function sendCoManagerInviteMessage(

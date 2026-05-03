@@ -282,3 +282,26 @@ export const factoryCoManagers = mysqlTable("factoryCoManagers", {
 }));
 
 export type FactoryCoManager = typeof factoryCoManagers.$inferSelect;
+
+// ===== 一鍵詢價批次 =====
+export const inquiryBatches = mysqlTable("inquiryBatches", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull().references(() => users.id, { onDelete: "cascade" }),
+  title: varchar("title", { length: 50 }).notNull(),
+  message: text("message").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type InquiryBatch = typeof inquiryBatches.$inferSelect;
+
+// ===== 一鍵詢價批次項目 =====
+export const inquiryBatchItems = mysqlTable("inquiryBatchItems", {
+  id: int("id").autoincrement().primaryKey(),
+  batchId: int("batchId").notNull().references(() => inquiryBatches.id, { onDelete: "cascade" }),
+  factoryId: int("factoryId").notNull().references(() => factories.id, { onDelete: "cascade" }),
+  conversationId: int("conversationId").references(() => conversations.id, { onDelete: "set null" }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type InquiryBatchItem = typeof inquiryBatchItems.$inferSelect;

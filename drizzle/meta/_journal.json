@@ -162,6 +162,13 @@
       "when": 1777100000000,
       "tag": "0021_message_attachments",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "5",
+      "when": 1777200000000,
+      "tag": "0022_inquiry_batches",
+      "breakpoints": true
     }
   ]
 }

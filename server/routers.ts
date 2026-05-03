@@ -516,10 +516,15 @@ export const appRouter = router({
       return existing.length > 0 ? existing[0] : null;
     }),
 
-    // 取得使用者的所有對話（含未讀計數與最後訊息）
+    // 取得使用者的一般對話（排除一鍵詢價批次建立的對話）
     myConversations: protectedProcedure.query(async ({ ctx }) => {
-  return db.getConversationsByUserWithDetails(ctx.user.id);
-}),
+      const [all, batchConvIds] = await Promise.all([
+        db.getConversationsByUserWithDetails(ctx.user.id),
+        db.getInquiryBatchConversationIdsByUser(ctx.user.id),
+      ]);
+      if (batchConvIds.size === 0) return all;
+      return all.filter(c => !batchConvIds.has(c.id));
+    }),
 
     // 取得工廠的所有對話（含未讀計數與最後訊息）
     factoryConversations: protectedProcedure.input(z.object({ factoryId: z.number() })).query(async ({ ctx, input }) => {
@@ -1135,6 +1140,77 @@ export const appRouter = router({
     }),
     delete: adminProcedure.input(z.object({ id: z.number() })).mutation(async ({ input }) => {
       await db.deleteAnnouncement(input.id);
+      return { success: true };
+    }),
+  }),
+
+  // ===== 一鍵詢價 =====
+  inquiryBatch: router({
+    createAndSend: protectedProcedure.input(z.object({
+      title: z.string().min(1).max(50),
+      message: z.string().min(1).max(2000),
+      factoryIds: z.array(z.number().int().positive()).min(1).max(20),
+    })).mutation(async ({ ctx, input }) => {
+      const uniqueIds = Array.from(new Set(input.factoryIds));
+
+      // 驗證每間工廠
+      const factoryList = await Promise.all(uniqueIds.map(id => db.getFactoryById(id)));
+      for (let i = 0; i < uniqueIds.length; i++) {
+        const f = factoryList[i];
+        if (!f) throw new TRPCError({ code: "BAD_REQUEST", message: `工廠 #${uniqueIds[i]} 不存在` });
+        if (f.status !== "approved") throw new TRPCError({ code: "BAD_REQUEST", message: `工廠「${f.name}」尚未上架` });
+        if (f.ownerId === ctx.user.id) throw new TRPCError({ code: "BAD_REQUEST", message: `不可對自己的工廠送一鍵詢價` });
+      }
+
+      // 建立批次，逐一建立 conversation 並送訊息
+      const batchId = await db.createInquiryBatch(ctx.user.id, input.title, input.message);
+      let successCount = 0;
+
+      for (let i = 0; i < uniqueIds.length; i++) {
+        const factoryId = uniqueIds[i];
+        const factory = factoryList[i]!;
+        try {
+          const conv = await db.getOrCreateConversation(ctx.user.id, factoryId);
+          await db.saveMessage(conv.id, ctx.user.id, "user", input.message);
+          await db.createInquiryBatchItem(batchId, factoryId, conv.id);
+          successCount++;
+
+          // 通知工廠（非同步，失敗不影響主流程）
+          if (factory.contactEmail) {
+            import("./email").then(({ sendNewInquiryEmail }) => {
+              sendNewInquiryEmail({
+                factoryName: factory.name,
+                factoryEmail: factory.contactEmail!,
+                userName: ctx.user.name ?? "匿名",
+                message: input.message,
+              }).catch(() => {});
+            }).catch(() => {});
+          }
+        } catch (err) {
+          console.error(`[inquiryBatch.createAndSend] factory #${factoryId} failed:`, err);
+        }
+      }
+
+      return { batchId, successCount };
+    }),
+
+    listMine: protectedProcedure.query(async ({ ctx }) => {
+      return db.getInquiryBatchesByUser(ctx.user.id);
+    }),
+
+    getDetail: protectedProcedure.input(z.object({
+      batchId: z.number().int().positive(),
+    })).query(async ({ ctx, input }) => {
+      const detail = await db.getInquiryBatchDetail(input.batchId, ctx.user.id);
+      if (!detail) throw new TRPCError({ code: "NOT_FOUND", message: "批次不存在或無權限" });
+      return detail;
+    }),
+
+    updateTitle: protectedProcedure.input(z.object({
+      batchId: z.number().int().positive(),
+      title: z.string().min(1).max(50),
+    })).mutation(async ({ ctx, input }) => {
+      await db.updateInquiryBatchTitle(input.batchId, ctx.user.id, input.title);
       return { success: true };
     }),
   }),

@@ -5,6 +5,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious } from "@/components/ui/carousel";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -13,10 +14,47 @@ import { INDUSTRIES, INDUSTRY_OPTIONS, TAIWAN_REGIONS } from "@shared/constants"
 import { trpc } from "@/lib/trpc";
 import { useLocation, Link } from "wouter";
 import { useState, useMemo, useEffect } from "react";
-import { Search as SearchIcon, Star, MapPin, Factory, ChevronLeft, ChevronRight, Megaphone, Heart, X, Wrench, ChevronDown, Clock } from "lucide-react";
+import { Search as SearchIcon, Star, MapPin, Factory, ChevronLeft, ChevronRight, Megaphone, Heart, X, Wrench, ChevronDown, Clock, ShoppingCart, Plus, Minus, Send } from "lucide-react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { getLoginUrl } from "@/const";
 import { toast } from "sonner";
+
+// ── 一鍵詢價購物車 hook ───────────────────────────────────────────────────
+type CartItem = { id: number; name: string };
+const CART_KEY = "oxm_inquiry_cart";
+
+function useInquiryCart() {
+  const [cart, setCart] = useState<CartItem[]>(() => {
+    try { return JSON.parse(localStorage.getItem(CART_KEY) ?? "[]"); } catch { return []; }
+  });
+
+  const save = (items: CartItem[]) => {
+    setCart(items);
+    localStorage.setItem(CART_KEY, JSON.stringify(items));
+  };
+
+  const add = (item: CartItem) => {
+    setCart(prev => {
+      if (prev.find(i => i.id === item.id)) return prev;
+      const next = [...prev, item];
+      localStorage.setItem(CART_KEY, JSON.stringify(next));
+      return next;
+    });
+  };
+
+  const remove = (id: number) => {
+    setCart(prev => {
+      const next = prev.filter(i => i.id !== id);
+      localStorage.setItem(CART_KEY, JSON.stringify(next));
+      return next;
+    });
+  };
+
+  const clear = () => save([]);
+  const has = (id: number) => cart.some(i => i.id === id);
+
+  return { cart, add, remove, clear, has };
+}
 
 
 
@@ -123,6 +161,33 @@ const { isAuthenticated } = useAuth();
   const [showHistory, setShowHistory] = useState(false);
   const [page, setPage] = useState(1);
   const [sortBy, setSortBy] = useState("rating");
+
+  const { cart, add: cartAdd, remove: cartRemove, clear: cartClear, has: cartHas } = useInquiryCart();
+  const [inquiryTitle, setInquiryTitle] = useState("");
+  const [inquiryMessage, setInquiryMessage] = useState("");
+  const [cartOpen, setCartOpen] = useState(false);
+
+  const createAndSendMut = trpc.inquiryBatch.createAndSend.useMutation({
+    onSuccess: (data, vars) => {
+      toast.success(`已成功送出一鍵詢價給 ${data.successCount} 間工廠`);
+      cartClear();
+      setInquiryTitle("");
+      setInquiryMessage("");
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const handleInquirySubmit = () => {
+    if (!isAuthenticated) { window.location.href = getLoginUrl(); return; }
+    if (cart.length === 0) { toast.error("請先加入工廠"); return; }
+    if (!inquiryTitle.trim()) { toast.error("請輸入詢價分類名稱"); return; }
+    if (!inquiryMessage.trim()) { toast.error("請輸入詢價內容"); return; }
+    createAndSendMut.mutate({
+      title: inquiryTitle.trim(),
+      message: inquiryMessage.trim(),
+      factoryIds: cart.map(i => i.id),
+    });
+  };
 
   const [searchHistory, setSearchHistory] = useState<string[]>(() => {
     try {
@@ -381,6 +446,73 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
                   <Button onClick={handleSearch} size="sm" className="flex-1"><SearchIcon className="w-3 h-3 mr-1" />搜尋</Button>
                   <Button variant="ghost" size="sm" onClick={clearFilters} className="flex-1">清除</Button>
                 </div>
+
+                {/* 一鍵詢價區塊 */}
+                <div className="mt-4 border-t pt-4">
+                  <button
+                    className="flex items-center justify-between w-full text-sm font-semibold mb-2"
+                    onClick={() => setCartOpen(v => !v)}
+                  >
+                    <span className="flex items-center gap-1.5">
+                      <ShoppingCart className="w-4 h-4 text-orange-500" />
+                      一鍵詢價
+                      {cart.length > 0 && (
+                        <span className="bg-orange-500 text-white text-xs rounded-full px-1.5 py-0.5 leading-none">{cart.length}</span>
+                      )}
+                    </span>
+                    <ChevronDown className={`w-3 h-3 transition-transform ${cartOpen ? "rotate-180" : ""}`} />
+                  </button>
+                  {!cartOpen && (
+                    <p className="text-xs text-muted-foreground">將多間工廠加入清單，一次送出同一則詢價訊息。</p>
+                  )}
+                  {cartOpen && (
+                    <div className="space-y-3">
+                      <p className="text-xs text-muted-foreground">已加入 {cart.length} 間工廠</p>
+                      {cart.length > 0 && (
+                        <div className="space-y-1 max-h-40 overflow-y-auto">
+                          {cart.map(item => (
+                            <div key={item.id} className="flex items-center justify-between text-xs bg-muted/40 rounded px-2 py-1.5">
+                              <span className="truncate flex-1 mr-1">{item.name}</span>
+                              <button onClick={() => cartRemove(item.id)} className="text-muted-foreground hover:text-destructive shrink-0">
+                                <X className="w-3 h-3" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <div>
+                        <label className="text-xs font-medium text-muted-foreground block mb-1">詢價分類名稱</label>
+                        <Input
+                          value={inquiryTitle}
+                          onChange={e => setInquiryTitle(e.target.value)}
+                          placeholder="例如：0503 詢問紡織"
+                          className="h-8 text-xs"
+                          maxLength={50}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-muted-foreground block mb-1">詢價內容</label>
+                        <Textarea
+                          value={inquiryMessage}
+                          onChange={e => setInquiryMessage(e.target.value)}
+                          placeholder="您好，我正在尋找合適的代工廠，想詢問貴公司是否能承接以下需求，請協助提供報價、MOQ、交期與合作方式，謝謝。"
+                          className="text-xs resize-none"
+                          rows={4}
+                          maxLength={2000}
+                        />
+                      </div>
+                      <Button
+                        size="sm"
+                        className="w-full"
+                        onClick={handleInquirySubmit}
+                        disabled={createAndSendMut.isPending || cart.length === 0}
+                      >
+                        <Send className="w-3 h-3 mr-1" />
+                        {createAndSendMut.isPending ? "送出中…" : "送出一鍵詢價"}
+                      </Button>
+                    </div>
+                  )}
+                </div>
               </CardContent>
             </Card>
           </div>
@@ -543,7 +675,8 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
             ) : (
               <div className="grid md:grid-cols-2 gap-4">
                 {sortedItems.map((factory) => (
-                  <Link key={factory.id} href={`/factory/${factory.id}`}>
+                  <div key={factory.id} className="relative">
+                  <Link href={`/factory/${factory.id}`}>
                     <Card className="hover:shadow-md transition-shadow cursor-pointer h-full overflow-hidden">
                       {/* 封面大圖 */}
                       <div className="relative h-36 bg-gradient-to-br from-orange-100 to-amber-50 overflow-hidden">
@@ -641,9 +774,34 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
                           </span>
                           <span className="col-span-2 text-muted-foreground/70">資本額：{factory.capitalLevel || "無"}</span>
                         </div>
+                        <div className="mt-3 pt-2 border-t border-border/30" onClick={e => e.preventDefault()}>
+                          <Button
+                            size="sm"
+                            variant={cartHas(factory.id) ? "default" : "outline"}
+                            className="w-full text-xs h-7"
+                            onClick={e => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              if (cartHas(factory.id)) {
+                                cartRemove(factory.id);
+                              } else {
+                                cartAdd({ id: factory.id, name: factory.name });
+                                setCartOpen(true);
+                                toast.success(`已加入一鍵詢價：${factory.name}`);
+                              }
+                            }}
+                          >
+                            {cartHas(factory.id) ? (
+                              <><Minus className="w-3 h-3 mr-1" />已加入一鍵詢價</>
+                            ) : (
+                              <><Plus className="w-3 h-3 mr-1" />加入一鍵詢價</>
+                            )}
+                          </Button>
+                        </div>
                       </CardContent>
                     </Card>
                   </Link>
+                  </div>
                 ))}
               </div>
             )}
