@@ -1,2 +1,1 @@
-ALTER TABLE `factories` ADD `rejectionreason` text;--> statement-breakpoint
-ALTER TABLE `factories` DROP COLUMN `rejectionReason`;
+-- rejectionreason/rejectionReason rename sequence; production already has rejectionReason; no-op migration

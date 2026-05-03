@@ -1,2 +1,1 @@
-ALTER TABLE `factories` ADD `submittedAt` timestamp;--> statement-breakpoint
-ALTER TABLE `factories` ADD `rejectionReason` text;
+-- submittedAt and rejectionReason already exist in production; no-op migration
