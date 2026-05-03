@@ -557,6 +557,7 @@ export const appRouter = router({
         factoryId: conv.factoryId,
         productId: conv.productId,
         userId: conv.userId,
+        factoryOwnerId: factory?.ownerId ?? null,
       };
     }),
 

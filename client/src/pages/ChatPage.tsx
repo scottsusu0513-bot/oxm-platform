@@ -270,7 +270,7 @@ export default function ChatPage() {
     { conversationId: conversationId! },
     { enabled: !!conversationId && isAuthenticated }
   );
-  const { data: msgs, isLoading: msgsLoading } = trpc.chat.getMessages.useQuery(
+  const { data: msgs, isLoading: msgsLoading, isError: msgsError } = trpc.chat.getMessages.useQuery(
     { conversationId: conversationId!, page: 1 },
     { enabled: !!conversationId && isAuthenticated, refetchInterval: 5000 }
   );
@@ -279,12 +279,7 @@ export default function ChatPage() {
     { enabled: isNewChat && !!factoryId && isAuthenticated }
   );
 
-  // 判斷是否為工廠 owner（用來顯示 "+" 附件按鈕）
-  const isFactoryOwner = !!meta && !!user && (() => {
-    // meta.factoryId 是對話所屬工廠；需比對 user 是否為該工廠 owner
-    // 這裡用 factoryConversations 的存取邏輯：getFactoryProducts 會在後端驗證，前端直接嘗試
-    return true; // 顯示 "+" 給所有登入者；後端會拒絕非 owner
-  })();
+  const isFactoryOwner = !!user && meta?.factoryOwnerId === user.id;
 
   useEffect(() => {
     if (existingConv) navigate(`/chat/${existingConv.id}`, { replace: true });
@@ -435,6 +430,10 @@ export default function ChatPage() {
                 <div className="space-y-3">
                   {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-12 w-3/4" />)}
                 </div>
+              ) : msgsError && !isNewChat ? (
+                <div className="text-center text-muted-foreground py-8 text-sm">
+                  訊息載入失敗，請重新整理頁面
+                </div>
               ) : isNewChat ? (
                 <div className="text-center text-muted-foreground py-12">
                   <p>與 {displayFactoryName} 開始對話</p>
@@ -448,10 +447,10 @@ export default function ChatPage() {
               ) : (
                 msgs?.map((msg) => {
                   const isMine = msg.senderId === user?.id;
-                  const msgType = (msg as any).type as string;
-                  const isInvite = msgType === "co_manager_invite";
-                  const isProduct = msgType === "product";
-                  const isPdf = msgType === "pdf";
+                  const messageType: string = (msg as any).type || "text";
+                  const isInvite = messageType === "co_manager_invite";
+                  const isProduct = messageType === "product";
+                  const isPdf = messageType === "pdf";
                   const invStatus = (msg as any).invitationStatus;
                   const invId = (msg as any).invitationId;
                   const attachmentData = (msg as any).attachmentData as Record<string, any> | null;
@@ -476,15 +475,15 @@ export default function ChatPage() {
                           {isPdf && <span className="text-xs opacity-70">PDF 型錄</span>}
                         </div>
 
-                        {/* 文字訊息或附件 */}
-                        {isProduct && attachmentData ? (
-                          <ProductMessageCard data={attachmentData} isMine={isMine} />
-                        ) : isPdf && attachmentData ? (
-                          <PdfMessageCard
-                            pdf={attachmentData as unknown as PdfAttachment}
-                            messageId={msg.id}
-                            isMine={isMine}
-                          />
+                        {/* 文字訊息或附件，type 預設 text，attachmentData 異常時顯示提示不崩潰 */}
+                        {isProduct ? (
+                          attachmentData
+                            ? <ProductMessageCard data={attachmentData} isMine={isMine} />
+                            : <p className="text-sm text-muted-foreground italic">（附件資料異常）</p>
+                        ) : isPdf ? (
+                          attachmentData
+                            ? <PdfMessageCard pdf={attachmentData as unknown as PdfAttachment} messageId={msg.id} isMine={isMine} />
+                            : <p className="text-sm text-muted-foreground italic">（附件資料異常）</p>
                         ) : (
                           <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
                         )}
@@ -513,8 +512,8 @@ export default function ChatPage() {
             {/* Input area */}
             <div className="border-t p-4">
               <div className="flex gap-2 items-center">
-                {/* "+" 附件按鈕（僅在對話存在時顯示） */}
-                {conversationId && (
+                {/* "+" 附件按鈕（僅工廠 owner 可見） */}
+                {conversationId && isFactoryOwner && (
                   <div className="relative shrink-0" ref={attachMenuRef}>
                     <Button
                       type="button"
@@ -582,8 +581,8 @@ export default function ChatPage() {
         </Card>
       </div>
 
-      {/* Product picker modal */}
-      {conversationId && (
+      {/* Product picker modal — 只有工廠 owner 才可開啟 */}
+      {conversationId && isFactoryOwner && (
         <ProductPickerModal
           conversationId={conversationId}
           open={productPickerOpen}
