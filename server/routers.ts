@@ -518,10 +518,13 @@ export const appRouter = router({
 
     // 取得使用者的一般對話（排除一鍵詢價批次建立的對話）
     myConversations: protectedProcedure.query(async ({ ctx }) => {
-      const [all, batchConvIds] = await Promise.all([
-        db.getConversationsByUserWithDetails(ctx.user.id),
-        db.getInquiryBatchConversationIdsByUser(ctx.user.id),
-      ]);
+      const all = await db.getConversationsByUserWithDetails(ctx.user.id);
+      let batchConvIds = new Set<number>();
+      try {
+        batchConvIds = await db.getInquiryBatchConversationIdsByUser(ctx.user.id);
+      } catch {
+        // inquiry 資料表尚未建立時不影響一般訊息
+      }
       if (batchConvIds.size === 0) return all;
       return all.filter(c => !batchConvIds.has(c.id));
     }),

@@ -1868,18 +1868,23 @@ export async function updateInquiryBatchTitle(batchId: number, userId: number, t
 }
 
 export async function getInquiryBatchConversationIdsByUser(userId: number): Promise<Set<number>> {
-  const db = await getDb();
-  if (!db) return new Set();
+  try {
+    const db = await getDb();
+    if (!db) return new Set();
 
-  const batches = await db.select({ id: inquiryBatches.id }).from(inquiryBatches)
-    .where(eq(inquiryBatches.userId, userId));
-  if (batches.length === 0) return new Set();
+    const batches = await db.select({ id: inquiryBatches.id }).from(inquiryBatches)
+      .where(eq(inquiryBatches.userId, userId));
+    if (batches.length === 0) return new Set();
 
-  const batchIds = batches.map(b => b.id);
-  const items = await db.select({ conversationId: inquiryBatchItems.conversationId })
-    .from(inquiryBatchItems).where(inArray(inquiryBatchItems.batchId, batchIds));
+    const batchIds = batches.map(b => b.id);
+    const items = await db.select({ conversationId: inquiryBatchItems.conversationId })
+      .from(inquiryBatchItems).where(inArray(inquiryBatchItems.batchId, batchIds));
 
-  return new Set(items.map(i => i.conversationId).filter((id): id is number => id != null));
+    return new Set(items.map(i => i.conversationId).filter((id): id is number => id != null));
+  } catch {
+    // 資料表尚未建立時 fallback，不影響一般訊息顯示
+    return new Set();
+  }
 }
 
 export async function sendCoManagerInviteMessage(
