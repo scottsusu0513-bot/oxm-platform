@@ -6,5 +6,4 @@ CREATE TABLE IF NOT EXISTS `productCategories` (
     `createdAt` timestamp NOT NULL DEFAULT NOW(),
     FOREIGN KEY (`factoryId`) REFERENCES `factories`(`id`) ON DELETE CASCADE
   );
-ALTER TABLE `products` ADD COLUMN `categoryId` int NULL;
-ALTER TABLE `products` ADD CONSTRAINT `fk_product_category` FOREIGN KEY (`categoryId`) REFERENCES `productCategories`(`id`) ON DELETE SET NULL;
+-- products.categoryId and fk_product_category already exist in production; ADD COLUMN and ADD CONSTRAINT removed

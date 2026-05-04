@@ -1,11 +1,7 @@
--- Phase 1: Co-manager feature
--- Add type and invitationId to messages table
-ALTER TABLE `messages`
-  ADD COLUMN `type` enum('text','co_manager_invite') NOT NULL DEFAULT 'text',
-  ADD COLUMN `invitationId` int;
+-- messages.type and messages.invitationId already exist in production; ADD COLUMN removed
 
 -- Factory co-manager invitations (history preserved, no unique constraint)
-CREATE TABLE `factoryCoManagerInvitations` (
+CREATE TABLE IF NOT EXISTS `factoryCoManagerInvitations` (
   `id` int AUTO_INCREMENT NOT NULL,
   `factoryId` int NOT NULL,
   `inviterUserId` int NOT NULL,
@@ -20,7 +16,7 @@ CREATE TABLE `factoryCoManagerInvitations` (
 );
 
 -- Factory co-managers (soft delete via removedAt)
-CREATE TABLE `factoryCoManagers` (
+CREATE TABLE IF NOT EXISTS `factoryCoManagers` (
   `id` int AUTO_INCREMENT NOT NULL,
   `factoryId` int NOT NULL,
   `userId` int NOT NULL,

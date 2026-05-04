@@ -1,4 +1,4 @@
-CREATE TABLE `pageViews` (
+CREATE TABLE IF NOT EXISTS `pageViews` (
 	`id` int AUTO_INCREMENT NOT NULL,
 	`visitorId` varchar(64) NOT NULL,
 	`date` varchar(10) NOT NULL,

@@ -1,4 +1,4 @@
-CREATE TABLE `reportStatusHistory` (
+CREATE TABLE IF NOT EXISTS `reportStatusHistory` (
 	`id` int AUTO_INCREMENT NOT NULL,
 	`reportId` int NOT NULL,
 	`status` enum('pending','received','reviewing','processing','resolved') NOT NULL,
@@ -7,7 +7,7 @@ CREATE TABLE `reportStatusHistory` (
 	CONSTRAINT `reportStatusHistory_id` PRIMARY KEY(`id`)
 );
 --> statement-breakpoint
-CREATE TABLE `reports` (
+CREATE TABLE IF NOT EXISTS `reports` (
 	`id` int AUTO_INCREMENT NOT NULL,
 	`factoryId` int NOT NULL,
 	`userId` int NOT NULL,
@@ -18,7 +18,7 @@ CREATE TABLE `reports` (
 	CONSTRAINT `reports_id` PRIMARY KEY(`id`)
 );
 --> statement-breakpoint
-CREATE TABLE `supportTickets` (
+CREATE TABLE IF NOT EXISTS `supportTickets` (
 	`id` int AUTO_INCREMENT NOT NULL,
 	`userId` int NOT NULL,
 	`type` varchar(50) NOT NULL,
@@ -31,7 +31,7 @@ CREATE TABLE `supportTickets` (
 	CONSTRAINT `supportTickets_id` PRIMARY KEY(`id`)
 );
 --> statement-breakpoint
-CREATE TABLE `ticketStatusHistory` (
+CREATE TABLE IF NOT EXISTS `ticketStatusHistory` (
 	`id` int AUTO_INCREMENT NOT NULL,
 	`ticketId` int NOT NULL,
 	`status` enum('pending','received','reviewing','processing','resolved') NOT NULL,
@@ -39,10 +39,6 @@ CREATE TABLE `ticketStatusHistory` (
 	`createdAt` timestamp NOT NULL DEFAULT (now()),
 	CONSTRAINT `ticketStatusHistory_id` PRIMARY KEY(`id`)
 );
---> statement-breakpoint
-ALTER TABLE `factories` ADD `subIndustry` json DEFAULT ('[]');--> statement-breakpoint
-ALTER TABLE `users` ADD `phone` varchar(30);--> statement-breakpoint
-ALTER TABLE `users` ADD `phoneVerified` boolean DEFAULT false NOT NULL;--> statement-breakpoint
-ALTER TABLE `users` ADD `notificationSettings` json;--> statement-breakpoint
-ALTER TABLE `users` ADD `deletedAt` timestamp;--> statement-breakpoint
-ALTER TABLE `supportTickets` ADD CONSTRAINT `supportTickets_userId_users_id_fk` FOREIGN KEY (`userId`) REFERENCES `users`(`id`) ON DELETE cascade ON UPDATE no action;
+-- factories.subIndustry, users.phone/phoneVerified/notificationSettings/deletedAt
+-- already exist in production (all in schema.ts, app running); ADD COLUMN removed
+-- supportTickets FK removed to avoid duplicate constraint if table already existed

@@ -1,4 +1,4 @@
-CREATE TABLE `announcements` (
+CREATE TABLE IF NOT EXISTS `announcements` (
 	`id` int AUTO_INCREMENT NOT NULL,
 	`title` varchar(200) NOT NULL,
 	`content` text NOT NULL,
@@ -9,7 +9,7 @@ CREATE TABLE `announcements` (
 	CONSTRAINT `announcements_id` PRIMARY KEY(`id`)
 );
 --> statement-breakpoint
-CREATE TABLE `searchCache` (
+CREATE TABLE IF NOT EXISTS `searchCache` (
 	`keyword` varchar(200) NOT NULL,
 	`enhanced` varchar(200) NOT NULL,
 	`createdAt` timestamp NOT NULL DEFAULT (now()),
