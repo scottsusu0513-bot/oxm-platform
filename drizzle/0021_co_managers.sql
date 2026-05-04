@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS `factoryCoManagerInvitations` (
   CONSTRAINT `factoryCoManagerInvitations_id` PRIMARY KEY(`id`),
   INDEX `idx_invitation_lookup` (`factoryId`, `inviteeUserId`, `status`)
 );
-
+--> statement-breakpoint
 -- Factory co-managers (soft delete via removedAt)
 CREATE TABLE IF NOT EXISTS `factoryCoManagers` (
   `id` int AUTO_INCREMENT NOT NULL,
