@@ -330,3 +330,15 @@ export const messageRecipients = mysqlTable("messageRecipients", {
 }));
 
 export type MessageRecipient = typeof messageRecipients.$inferSelect;
+
+export const messageReplies = mysqlTable("messageReplies", {
+  id: int("id").autoincrement().primaryKey(),
+  campaignId: int("campaignId").notNull().references(() => messageCampaigns.id, { onDelete: "cascade" }),
+  userId: int("userId").notNull().references(() => users.id, { onDelete: "cascade" }),
+  content: text("content").notNull(),
+  senderRole: mysqlEnum("senderRole", ["user", "admin"]).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => ({
+  threadIdx: index("idx_message_replies_thread").on(table.campaignId, table.userId),
+}));
+export type MessageReply = typeof messageReplies.$inferSelect;

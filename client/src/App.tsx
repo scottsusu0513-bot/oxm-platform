@@ -61,6 +61,7 @@ function Router() {
       <Route path="/admin/pending-factories" component={PendingFactoriesList} />
       <Route path="/admin/support" component={AdminSupportCenter} />
       <Route path="/admin/announcements" component={AdminAnnouncements} />
+      <Route path="/admin/messages/:campaignId" component={AdminMessages} />
       <Route path="/admin/messages" component={AdminMessages} />
       <Route path="/admin-message/:id" component={AdminMessageDetail} />
       <Route path="/announcements" component={Announcements} />

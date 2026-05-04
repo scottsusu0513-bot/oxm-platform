@@ -559,6 +559,27 @@ export const appRouter = router({
       return campaign;
     }),
 
+    getAdminMessageThread: protectedProcedure.input(z.object({ campaignId: z.number() })).query(async ({ ctx, input }) => {
+      const campaign = await db.getMessageCampaignById(input.campaignId, ctx.user.id);
+      if (!campaign) throw new TRPCError({ code: 'NOT_FOUND', message: '找不到此訊息' });
+      return db.getMessageThread(input.campaignId, ctx.user.id);
+    }),
+
+    replyToAdminMessage: protectedProcedure.input(z.object({
+      campaignId: z.number(),
+      content: z.string().min(1).max(2000),
+    })).mutation(async ({ ctx, input }) => {
+      const campaign = await db.getMessageCampaignById(input.campaignId, ctx.user.id);
+      if (!campaign) throw new TRPCError({ code: 'NOT_FOUND', message: '找不到此訊息' });
+      await db.createMessageReply({
+        campaignId: input.campaignId,
+        userId: ctx.user.id,
+        content: input.content,
+        senderRole: "user",
+      });
+      return { success: true };
+    }),
+
     // 取得工廠的所有對話（含未讀計數與最後訊息）
     factoryConversations: protectedProcedure.input(z.object({ factoryId: z.number() })).query(async ({ ctx, input }) => {
       const factory = await db.getFactoryById(input.factoryId);
@@ -1169,6 +1190,31 @@ export const appRouter = router({
         return { count: ids.length };
       }
       return { count: 1 };
+    }),
+
+    getCampaignReplyingUsers: adminProcedure.input(z.object({ campaignId: z.number() })).query(async ({ input }) => {
+      return db.getCampaignReplyingUsers(input.campaignId);
+    }),
+
+    getCampaignThread: adminProcedure.input(z.object({
+      campaignId: z.number(),
+      userId: z.number(),
+    })).query(async ({ input }) => {
+      return db.getMessageThread(input.campaignId, input.userId);
+    }),
+
+    replyToUser: adminProcedure.input(z.object({
+      campaignId: z.number(),
+      userId: z.number(),
+      content: z.string().min(1).max(2000),
+    })).mutation(async ({ input }) => {
+      await db.createMessageReply({
+        campaignId: input.campaignId,
+        userId: input.userId,
+        content: input.content,
+        senderRole: "admin",
+      });
+      return { success: true };
     }),
   }),
 

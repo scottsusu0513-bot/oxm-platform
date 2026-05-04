@@ -11,7 +11,7 @@ import {
   announcements, pageViews,
   factoryCoManagerInvitations, factoryCoManagers,
   inquiryBatches, inquiryBatchItems,
-  messageCampaigns, messageRecipients,
+  messageCampaigns, messageRecipients, messageReplies,
   type Factory, type InsertFactory, type Product, type InsertProduct, type Favorite, type InsertFavorite
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
@@ -2009,4 +2009,61 @@ export async function searchUsersForMessage(query: string, limit = 10) {
     .from(users)
     .where(and(isNull(users.deletedAt), or(like(users.name, pattern), like(users.email, pattern))))
     .limit(limit);
+}
+
+// ===== 站內信回覆 =====
+
+export async function createMessageReply(data: {
+  campaignId: number;
+  userId: number;
+  content: string;
+  senderRole: "user" | "admin";
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  const result = await db.insert(messageReplies).values(data);
+  return result[0].insertId;
+}
+
+export async function getMessageThread(campaignId: number, userId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(messageReplies)
+    .where(and(eq(messageReplies.campaignId, campaignId), eq(messageReplies.userId, userId)))
+    .orderBy(asc(messageReplies.createdAt));
+}
+
+export async function getCampaignReplyingUsers(campaignId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db
+    .select({
+      userId: messageReplies.userId,
+      userName: users.name,
+      userEmail: users.email,
+      latestReply: sql<string>`MAX(${messageReplies.createdAt})`,
+      replyCount: sql<number>`COUNT(*)`,
+    })
+    .from(messageReplies)
+    .innerJoin(users, eq(messageReplies.userId, users.id))
+    .where(eq(messageReplies.campaignId, campaignId))
+    .groupBy(messageReplies.userId, users.name, users.email)
+    .orderBy(desc(sql`MAX(${messageReplies.createdAt})`));
+  return rows;
+}
+
+export async function getCampaignReplyCounts(campaignIds: number[]): Promise<Record<number, number>> {
+  const db = await getDb();
+  if (!db || campaignIds.length === 0) return {};
+  const rows = await db
+    .select({
+      campaignId: messageReplies.campaignId,
+      count: sql<number>`COUNT(DISTINCT ${messageReplies.userId})`,
+    })
+    .from(messageReplies)
+    .where(inArray(messageReplies.campaignId, campaignIds))
+    .groupBy(messageReplies.campaignId);
+  return Object.fromEntries(rows.map(r => [r.campaignId, Number(r.count)]));
 }
