@@ -145,6 +145,14 @@ export async function updateFactory(id: number, ownerId: number, data: Partial<I
     await db.update(factories).set(normalized).where(and(eq(factories.id, id), eq(factories.ownerId, ownerId)));
   }
 }
+export async function getApprovedFactoriesForSitemap(): Promise<{ id: number; updatedAt: Date }[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select({ id: factories.id, updatedAt: factories.updatedAt })
+    .from(factories)
+    .where(eq(factories.status, 'approved'));
+}
+
 export async function getFactoryById(id: number) {
   const db = await getDb();
   if (!db) return undefined;

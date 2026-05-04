@@ -9,7 +9,8 @@ import { serveStatic, setupVite } from "./vite";
 import { setupSecurityHeaders, setupOriginCheck } from "./security";
 import { apiLimiter, loginLimiter, uploadLimiter, messageLimiter, submitReviewLimiter, adminLimiter, searchLimiter, reportLimiter } from "./rateLimit";
 import { COOKIE_NAME } from "@shared/const";
-import { getDb } from "../db";
+import { INDUSTRY_SLUGS } from "../../shared/constants";
+import { getDb, getApprovedFactoriesForSitemap } from "../db";
 
 async function startServer() {
   console.log("[boot] startServer called");
@@ -84,6 +85,78 @@ async function startServer() {
     res.setHeader("Set-Cookie", `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT${secure}`);
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
     res.json({ success: true });
+  });
+
+  // ── robots.txt ─────────────────────────────────────────────────────────
+  app.get("/robots.txt", (_req, res) => {
+    res.type("text/plain");
+    res.set("Cache-Control", "public, max-age=86400");
+    res.send(
+      "User-agent: *\n" +
+      "Allow: /\n" +
+      "\n" +
+      "Disallow: /admin\n" +
+      "Disallow: /admin/\n" +
+      "Disallow: /messages\n" +
+      "Disallow: /chat\n" +
+      "Disallow: /dashboard\n" +
+      "Disallow: /register-factory\n" +
+      "Disallow: /favorites\n" +
+      "Disallow: /member\n" +
+      "Disallow: /api\n" +
+      "Disallow: /api/trpc\n" +
+      "\n" +
+      "Sitemap: https://www.oxmmatch.com/sitemap.xml\n"
+    );
+  });
+
+  // ── sitemap.xml ─────────────────────────────────────────────────────────
+  app.get("/sitemap.xml", async (_req, res) => {
+    const BASE = "https://www.oxmmatch.com";
+    const today = new Date().toISOString().slice(0, 10);
+
+    const esc = (s: string) =>
+      s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+    const entry = (loc: string, priority: string, changefreq: string, lastmod = today) =>
+      `  <url>\n    <loc>${esc(loc)}</loc>\n    <lastmod>${lastmod}</lastmod>\n    <changefreq>${changefreq}</changefreq>\n    <priority>${priority}</priority>\n  </url>`;
+
+    const urls: string[] = [];
+
+    // 固定公開頁
+    urls.push(entry(`${BASE}/`, "1.0", "daily"));
+    urls.push(entry(`${BASE}/search`, "0.9", "daily"));
+    urls.push(entry(`${BASE}/announcements`, "0.6", "weekly"));
+    urls.push(entry(`${BASE}/privacy`, "0.3", "monthly"));
+    urls.push(entry(`${BASE}/terms`, "0.3", "monthly"));
+
+    // 產業頁（使用 slug）
+    for (const slug of Object.values(INDUSTRY_SLUGS)) {
+      urls.push(entry(`${BASE}/industry/${slug}`, "0.8", "weekly"));
+    }
+
+    // 已審核工廠頁
+    try {
+      const approved = await getApprovedFactoriesForSitemap();
+      for (const f of approved) {
+        const lastmod = f.updatedAt instanceof Date
+          ? f.updatedAt.toISOString().slice(0, 10)
+          : today;
+        urls.push(entry(`${BASE}/factory/${f.id}`, "0.7", "weekly", lastmod));
+      }
+    } catch {
+      // DB 暫時不可用時跳過工廠 URL，仍回傳靜態部分
+    }
+
+    const xml =
+      `<?xml version="1.0" encoding="UTF-8"?>\n` +
+      `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n` +
+      urls.join("\n") +
+      `\n</urlset>`;
+
+    res.set("Content-Type", "application/xml");
+    res.set("Cache-Control", "public, max-age=3600");
+    res.send(xml);
   });
 
   console.log("[boot] registering trpc");
