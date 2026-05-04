@@ -32,6 +32,8 @@ import MemberCenter from "./pages/MemberCenter";
 import AdminSupportCenter from "./pages/AdminSupportCenter";
 import Announcements from "./pages/Announcements";
 import AdminAnnouncements from "./pages/AdminAnnouncements";
+import AdminMessages from "./pages/AdminMessages";
+import AdminMessageDetail from "./pages/AdminMessageDetail";
 
 function Router() {
   return (
@@ -59,6 +61,8 @@ function Router() {
       <Route path="/admin/pending-factories" component={PendingFactoriesList} />
       <Route path="/admin/support" component={AdminSupportCenter} />
       <Route path="/admin/announcements" component={AdminAnnouncements} />
+      <Route path="/admin/messages" component={AdminMessages} />
+      <Route path="/admin-message/:id" component={AdminMessageDetail} />
       <Route path="/announcements" component={Announcements} />
       <Route path="/privacy" component={PrivacyPolicyPage} />
       <Route path="/terms" component={TermsPage} />

@@ -305,3 +305,28 @@ export const inquiryBatchItems = mysqlTable("inquiryBatchItems", {
 });
 
 export type InquiryBatchItem = typeof inquiryBatchItems.$inferSelect;
+
+// ===== 站內信活動表 =====
+export const messageCampaigns = mysqlTable("messageCampaigns", {
+  id: int("id").autoincrement().primaryKey(),
+  title: varchar("title", { length: 200 }).notNull(),
+  content: text("content").notNull(),
+  senderId: int("senderId").notNull().references(() => users.id, { onDelete: "cascade" }),
+  targetType: mysqlEnum("targetType", ["all_users", "all_factory_managers", "single"]).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type MessageCampaign = typeof messageCampaigns.$inferSelect;
+
+// ===== 站內信收件人表 =====
+export const messageRecipients = mysqlTable("messageRecipients", {
+  id: int("id").autoincrement().primaryKey(),
+  campaignId: int("campaignId").notNull().references(() => messageCampaigns.id, { onDelete: "cascade" }),
+  receiverId: int("receiverId").notNull().references(() => users.id, { onDelete: "cascade" }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => ({
+  campaignReceiverUq: uniqueIndex("mc_campaign_receiver_uq").on(table.campaignId, table.receiverId),
+}));
+
+export type MessageRecipient = typeof messageRecipients.$inferSelect;

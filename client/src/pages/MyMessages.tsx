@@ -36,48 +36,68 @@ function UserConversationList({ conversations }: { conversations: any[] }) {
 
   return (
     <div className="space-y-2">
-      {conversations.map(conv => (
-        <div key={conv.id} className="flex items-center gap-2">
-          <Link href={`/chat/${conv.id}`} className="flex-1">
-            <div className="flex items-center justify-between p-4 rounded-lg border hover:bg-muted/30 transition-colors cursor-pointer min-h-[72px]">
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <p className="font-medium">{conv.factoryName}</p>
-                  {conv.productName && <Badge variant="outline" className="text-xs">{conv.productName}</Badge>}
+      {conversations.map(conv => {
+        if (conv.isAdminMessage) {
+          return (
+            <Link key={conv.id} href={`/admin-message/${conv.adminCampaignId}`}>
+              <div className="flex items-center justify-between p-4 rounded-lg border border-orange-200 bg-orange-50/40 hover:bg-orange-50/70 transition-colors cursor-pointer min-h-[72px]">
+                <div className="flex-1 min-w-0">
+                  <p className="font-bold text-orange-500 text-sm">★ 平台管理員</p>
+                  <p className="font-medium truncate">{conv.title}</p>
+                  <p className="text-sm text-muted-foreground line-clamp-1 mt-0.5">{conv.lastMessage}</p>
                 </div>
-                <p className="text-sm text-muted-foreground line-clamp-2 mt-0.5">
-                  {conv.lastMessage
-                    ? `${conv.lastSenderRole === "user" ? "你：" : ""}${conv.lastMessage}`
-                    : "（尚無訊息）"
-                  }
-                </p>
-              </div>
-              <div className="flex items-center gap-2 shrink-0">
-                <span className="text-xs text-muted-foreground">
-                  {new Date(conv.lastMessageAt).toLocaleDateString("zh-TW")}
-                </span>
-                {conv.unreadCount > 0 && (
-                  <span className="bg-red-500 text-white text-xs font-bold rounded-full min-w-5 h-5 px-1 flex items-center justify-center">
-                    {conv.unreadCount}
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="text-xs text-muted-foreground">
+                    {new Date(conv.lastMessageAt).toLocaleDateString("zh-TW")}
                   </span>
-                )}
+                </div>
               </div>
-            </div>
-          </Link>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="text-muted-foreground hover:text-destructive shrink-0"
-            onClick={() => {
-              if (confirm("確定要刪除此對話嗎？所有訊息將會消失。")) {
-                deleteMut.mutate({ conversationId: conv.id });
-              }
-            }}
-          >
-            <Trash2 className="w-4 h-4" />
-          </Button>
-        </div>
-      ))}
+            </Link>
+          );
+        }
+        return (
+          <div key={conv.id} className="flex items-center gap-2">
+            <Link href={`/chat/${conv.id}`} className="flex-1">
+              <div className="flex items-center justify-between p-4 rounded-lg border hover:bg-muted/30 transition-colors cursor-pointer min-h-[72px]">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <p className="font-medium">{conv.factoryName}</p>
+                    {conv.productName && <Badge variant="outline" className="text-xs">{conv.productName}</Badge>}
+                  </div>
+                  <p className="text-sm text-muted-foreground line-clamp-2 mt-0.5">
+                    {conv.lastMessage
+                      ? `${conv.lastSenderRole === "user" ? "你：" : ""}${conv.lastMessage}`
+                      : "（尚無訊息）"
+                    }
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="text-xs text-muted-foreground">
+                    {new Date(conv.lastMessageAt).toLocaleDateString("zh-TW")}
+                  </span>
+                  {conv.unreadCount > 0 && (
+                    <span className="bg-red-500 text-white text-xs font-bold rounded-full min-w-5 h-5 px-1 flex items-center justify-center">
+                      {conv.unreadCount}
+                    </span>
+                  )}
+                </div>
+              </div>
+            </Link>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-muted-foreground hover:text-destructive shrink-0"
+              onClick={() => {
+                if (confirm("確定要刪除此對話嗎？所有訊息將會消失。")) {
+                  deleteMut.mutate({ conversationId: conv.id });
+                }
+              }}
+            >
+              <Trash2 className="w-4 h-4" />
+            </Button>
+          </div>
+        );
+      })}
     </div>
   );
 }

@@ -3,7 +3,7 @@ import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { AlertCircle, BarChart3, Users, Factory, Zap, MessageSquare, Star, ArrowLeft, ShieldCheck, Shield, HeadphonesIcon, Megaphone, Eye } from "lucide-react";
+import { AlertCircle, BarChart3, Users, Factory, Zap, MessageSquare, Star, ArrowLeft, ShieldCheck, Shield, HeadphonesIcon, Megaphone, Eye, Send } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
@@ -110,8 +110,8 @@ function AdminDashboardContent() {
           </Button>
         </div>
 
-        {/* 統計卡片 - 永遠顯示 */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
+        {/* 統計卡片 3×3 */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
           <Card className="cursor-pointer hover:shadow-lg transition-shadow" onClick={() => setLocation("/admin/users")}>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-gray-600 flex items-center gap-2">
@@ -189,57 +189,6 @@ function AdminDashboardContent() {
             </CardContent>
           </Card>
 
-          <Card className="col-span-1 md:col-span-2 lg:col-span-3">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-gray-600 flex items-center gap-2">
-                <Eye className="h-4 w-4" />全站不重複訪客數
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="flex gap-6 mb-4">
-                <div className="text-center">
-                  <div className="text-2xl font-bold">{viewStats?.today ?? 0}</div>
-                  <div className="text-xs text-gray-500">今日</div>
-                </div>
-                <div className="text-center">
-                  <div className="text-2xl font-bold">{viewStats?.yesterday ?? 0}</div>
-                  <div className="text-xs text-gray-500">昨日</div>
-                </div>
-                <div className="text-center">
-                  <div className="text-2xl font-bold">{viewStats?.last7Days ?? 0}</div>
-                  <div className="text-xs text-gray-500">近7天</div>
-                </div>
-              </div>
-              {viewStats?.todayHours && (
-                <div>
-                  <div className="text-xs text-gray-500 mb-1">今日每小時訪客</div>
-                  <div className="flex items-end gap-0.5 h-12">
-                    {viewStats.todayHours.map((count: number, hour: number) => {
-                      const max = Math.max(...viewStats.todayHours, 1);
-                      const height = Math.round((count / max) * 100);
-                      return (
-                        <div key={hour} className="flex-1 flex flex-col items-center group relative">
-                          <div
-                            className="w-full bg-orange-400 rounded-sm transition-all"
-                            style={{ height: `${height}%`, minHeight: count > 0 ? 2 : 0 }}
-                          />
-                          <div className="absolute -top-6 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-xs px-1 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none z-10">
-                            {hour}時: {count}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                  <div className="flex justify-between text-xs text-gray-400 mt-1">
-                    <span>0時</span>
-                    <span>12時</span>
-                    <span>23時</span>
-                  </div>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
           <Card className="cursor-pointer hover:shadow-lg transition-shadow" onClick={() => setLocation("/admin/announcements")}>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-gray-600 flex items-center gap-2">
@@ -250,7 +199,70 @@ function AdminDashboardContent() {
               <div className="text-2xl font-bold text-orange-500">→</div>
             </CardContent>
           </Card>
+
+          <Card className="cursor-pointer hover:shadow-lg transition-shadow" onClick={() => setLocation("/admin/messages")}>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-gray-600 flex items-center gap-2">
+                <Send className="h-4 w-4" />站內信
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold text-orange-500">→</div>
+            </CardContent>
+          </Card>
         </div>
+
+        {/* 訪客統計圖表 */}
+        <Card className="mb-8">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-gray-600 flex items-center gap-2">
+              <Eye className="h-4 w-4" />全站不重複訪客數
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex gap-6 mb-4">
+              <div className="text-center">
+                <div className="text-2xl font-bold">{viewStats?.today ?? 0}</div>
+                <div className="text-xs text-gray-500">今日</div>
+              </div>
+              <div className="text-center">
+                <div className="text-2xl font-bold">{viewStats?.yesterday ?? 0}</div>
+                <div className="text-xs text-gray-500">昨日</div>
+              </div>
+              <div className="text-center">
+                <div className="text-2xl font-bold">{viewStats?.last7Days ?? 0}</div>
+                <div className="text-xs text-gray-500">近7天</div>
+              </div>
+            </div>
+            {viewStats?.todayHours && (
+              <div>
+                <div className="text-xs text-gray-500 mb-1">今日每小時訪客</div>
+                <div className="flex items-end gap-0.5 h-12">
+                  {viewStats.todayHours.map((count: number, hour: number) => {
+                    const max = Math.max(...viewStats.todayHours, 1);
+                    const height = Math.round((count / max) * 100);
+                    return (
+                      <div key={hour} className="flex-1 flex flex-col items-center group relative">
+                        <div
+                          className="w-full bg-orange-400 rounded-sm transition-all"
+                          style={{ height: `${height}%`, minHeight: count > 0 ? 2 : 0 }}
+                        />
+                        <div className="absolute -top-6 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-xs px-1 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none z-10">
+                          {hour}時: {count}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="flex justify-between text-xs text-gray-400 mt-1">
+                  <span>0時</span>
+                  <span>12時</span>
+                  <span>23時</span>
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
         {/* Tab 懶載入 */}
         <Tabs value={activeTab} onValueChange={setActiveTab}>

@@ -516,7 +516,7 @@ export const appRouter = router({
       return existing.length > 0 ? existing[0] : null;
     }),
 
-    // 取得使用者的一般對話（排除一鍵詢價批次建立的對話）
+    // 取得使用者的一般對話（排除一鍵詢價批次建立的對話）+ 站內信
     myConversations: protectedProcedure.query(async ({ ctx }) => {
       const all = await db.getConversationsByUserWithDetails(ctx.user.id);
       let batchConvIds = new Set<number>();
@@ -525,8 +525,38 @@ export const appRouter = router({
       } catch {
         // inquiry 資料表尚未建立時不影響一般訊息
       }
-      if (batchConvIds.size === 0) return all;
-      return all.filter(c => !batchConvIds.has(c.id));
+      const filtered = batchConvIds.size === 0 ? all : all.filter(c => !batchConvIds.has(c.id));
+      const regularConvs = filtered.map(c => ({ ...c, isAdminMessage: false as const }));
+
+      let adminMsgs: any[] = [];
+      try {
+        const campaigns = await db.getAdminMessagesForUser(ctx.user.id);
+        adminMsgs = campaigns.map(c => ({
+          id: -c.campaignId,
+          isAdminMessage: true as const,
+          adminCampaignId: c.campaignId,
+          factoryName: "★ 平台管理員",
+          productName: null,
+          lastMessage: c.content.substring(0, 60),
+          lastSenderRole: "admin",
+          lastMessageAt: c.createdAt,
+          unreadCount: 0,
+          senderIsAdmin: true,
+          title: c.title,
+        }));
+      } catch {
+        // 站內信資料表尚未建立時不影響一般訊息
+      }
+
+      const merged = [...regularConvs, ...adminMsgs];
+      merged.sort((a, b) => new Date(b.lastMessageAt).getTime() - new Date(a.lastMessageAt).getTime());
+      return merged;
+    }),
+
+    getAdminMessage: protectedProcedure.input(z.object({ campaignId: z.number() })).query(async ({ ctx, input }) => {
+      const campaign = await db.getMessageCampaignById(input.campaignId, ctx.user.id);
+      if (!campaign) throw new TRPCError({ code: 'NOT_FOUND', message: '找不到此訊息' });
+      return campaign;
     }),
 
     // 取得工廠的所有對話（含未讀計數與最後訊息）
@@ -1088,6 +1118,57 @@ export const appRouter = router({
     }),
     getTicketHistory: adminProcedure.input(z.object({ id: z.number() })).query(async ({ input }) => {
       return db.getTicketHistory(input.id);
+    }),
+
+    getMessageCampaigns: adminProcedure.input(z.object({
+      page: z.number().int().min(1).default(1),
+      pageSize: z.number().int().min(1).max(50).default(20),
+    })).query(async ({ input }) => {
+      return db.getAdminMessageCampaigns(input.page, input.pageSize);
+    }),
+
+    createAdminMessage: adminProcedure.input(z.object({
+      title: z.string().min(1).max(200),
+      content: z.string().min(1),
+      targetType: z.enum(['all_users', 'all_factory_managers', 'single']),
+      receiverId: z.number().int().optional(),
+    })).mutation(async ({ ctx, input }) => {
+      const campaignId = await db.createMessageCampaign({
+        title: input.title,
+        content: input.content,
+        senderId: ctx.user!.id,
+        targetType: input.targetType,
+      });
+      let receiverIds: number[] = [];
+      if (input.targetType === 'all_users') {
+        receiverIds = await db.getAllActiveUserIds();
+      } else if (input.targetType === 'all_factory_managers') {
+        receiverIds = await db.getFactoryManagerIds();
+      } else if (input.targetType === 'single' && input.receiverId != null) {
+        receiverIds = [input.receiverId];
+      }
+      await db.createMessageRecipients(campaignId, receiverIds);
+      return { campaignId, recipientCount: receiverIds.length };
+    }),
+
+    searchMessageReceivers: adminProcedure.input(z.object({
+      query: z.string().min(1),
+    })).query(async ({ input }) => {
+      return db.searchUsersForMessage(input.query);
+    }),
+
+    previewMessageRecipientCount: adminProcedure.input(z.object({
+      targetType: z.enum(['all_users', 'all_factory_managers', 'single']),
+    })).query(async ({ input }) => {
+      if (input.targetType === 'all_users') {
+        const ids = await db.getAllActiveUserIds();
+        return { count: ids.length };
+      }
+      if (input.targetType === 'all_factory_managers') {
+        const ids = await db.getFactoryManagerIds();
+        return { count: ids.length };
+      }
+      return { count: 1 };
     }),
   }),
 

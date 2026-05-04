@@ -11,6 +11,7 @@ import {
   announcements, pageViews,
   factoryCoManagerInvitations, factoryCoManagers,
   inquiryBatches, inquiryBatchItems,
+  messageCampaigns, messageRecipients,
   type Factory, type InsertFactory, type Product, type InsertProduct, type Favorite, type InsertFavorite
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
@@ -1904,4 +1905,108 @@ export async function sendCoManagerInviteMessage(
   });
   await db.update(conversations).set({ lastMessageAt: new Date() }).where(eq(conversations.id, conversationId));
   return result[0].insertId;
+}
+
+// ===== 站內信 (Admin Messages) =====
+
+export async function createMessageCampaign(data: {
+  title: string;
+  content: string;
+  senderId: number;
+  targetType: "all_users" | "all_factory_managers" | "single";
+}): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  const result = await db.insert(messageCampaigns).values(data);
+  return result[0].insertId;
+}
+
+export async function createMessageRecipients(campaignId: number, receiverIds: number[]): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  if (receiverIds.length === 0) return;
+  for (let i = 0; i < receiverIds.length; i += 500) {
+    const batch = receiverIds.slice(i, i + 500);
+    await db.insert(messageRecipients)
+      .values(batch.map(receiverId => ({ campaignId, receiverId })))
+      .onDuplicateKeyUpdate({ set: { id: sql`id` } });
+  }
+}
+
+export async function getAllActiveUserIds(): Promise<number[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.select({ id: users.id }).from(users).where(isNull(users.deletedAt));
+  return rows.map(r => r.id);
+}
+
+export async function getFactoryManagerIds(): Promise<number[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const owners = await db.selectDistinct({ id: factories.ownerId }).from(factories);
+  const coMgrs = await db.selectDistinct({ id: factoryCoManagers.userId })
+    .from(factoryCoManagers)
+    .where(isNull(factoryCoManagers.removedAt));
+  const ids = new Set([...owners.map(r => r.id), ...coMgrs.map(r => r.id)]);
+  return Array.from(ids);
+}
+
+export async function getAdminMessagesForUser(userId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select({
+      campaignId: messageCampaigns.id,
+      title: messageCampaigns.title,
+      content: messageCampaigns.content,
+      createdAt: messageCampaigns.createdAt,
+    })
+    .from(messageRecipients)
+    .innerJoin(messageCampaigns, eq(messageRecipients.campaignId, messageCampaigns.id))
+    .where(eq(messageRecipients.receiverId, userId))
+    .orderBy(desc(messageCampaigns.createdAt));
+}
+
+export async function getMessageCampaignById(campaignId: number, userId: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const recipient = await db.select().from(messageRecipients)
+    .where(and(eq(messageRecipients.campaignId, campaignId), eq(messageRecipients.receiverId, userId)))
+    .limit(1);
+  if (recipient.length === 0) return null;
+  const rows = await db.select().from(messageCampaigns).where(eq(messageCampaigns.id, campaignId)).limit(1);
+  return rows[0] ?? null;
+}
+
+export async function getAdminMessageCampaigns(page = 1, pageSize = 20) {
+  const db = await getDb();
+  if (!db) return { items: [], total: 0 };
+  const offset = (page - 1) * pageSize;
+  const items = await db
+    .select({
+      id: messageCampaigns.id,
+      title: messageCampaigns.title,
+      targetType: messageCampaigns.targetType,
+      createdAt: messageCampaigns.createdAt,
+      recipientCount: sql<number>`COUNT(${messageRecipients.id})`,
+    })
+    .from(messageCampaigns)
+    .leftJoin(messageRecipients, eq(messageRecipients.campaignId, messageCampaigns.id))
+    .groupBy(messageCampaigns.id)
+    .orderBy(desc(messageCampaigns.createdAt))
+    .limit(pageSize)
+    .offset(offset);
+  const [countRow] = await db.select({ count: sql<number>`COUNT(*)` }).from(messageCampaigns);
+  return { items, total: Number(countRow?.count ?? 0) };
+}
+
+export async function searchUsersForMessage(query: string, limit = 10) {
+  const db = await getDb();
+  if (!db) return [];
+  const pattern = `%${query}%`;
+  return db
+    .select({ id: users.id, name: users.name, email: users.email })
+    .from(users)
+    .where(and(isNull(users.deletedAt), or(like(users.name, pattern), like(users.email, pattern))))
+    .limit(limit);
 }
