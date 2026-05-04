@@ -260,6 +260,8 @@ export default function ChatPage() {
   const [productPickerOpen, setProductPickerOpen] = useState(false);
   const attachMenuRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const isInitialScrollDone = useRef(false);
+  const scrollAfterSend = useRef(false);
   const utils = trpc.useUtils();
 
   const { data: existingConv } = trpc.chat.getExisting.useQuery(
@@ -312,6 +314,7 @@ export default function ChatPage() {
   const sendMut = trpc.chat.send.useMutation({
     onSuccess: () => {
       setMessage("");
+      scrollAfterSend.current = true;
       utils.chat.getMessages.invalidate({ conversationId: conversationId! });
       utils.chat.myConversations.invalidate();
       utils.chat.unreadCount.invalidate();
@@ -327,11 +330,36 @@ export default function ChatPage() {
     onError: (err) => toast.error(err.message),
   });
 
+  // 切換對話時重置 scroll 狀態
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    isInitialScrollDone.current = false;
+  }, [conversationId]);
+
+  useEffect(() => {
+    if (msgsLoading || !msgs) return;
+    const el = scrollRef.current;
+    if (!el) return;
+
+    if (!isInitialScrollDone.current) {
+      // 第一次載入：直接跳到最底
+      el.scrollTop = el.scrollHeight;
+      isInitialScrollDone.current = true;
+      return;
     }
-  }, [msgs]);
+
+    if (scrollAfterSend.current) {
+      // 使用者剛送出訊息：跳到最底
+      el.scrollTop = el.scrollHeight;
+      scrollAfterSend.current = false;
+      return;
+    }
+
+    // 自動 refetch：只有在距底部 120px 以內才跟著捲動
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (distanceFromBottom < 120) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [msgs, msgsLoading]);
 
   const handleSend = async () => {
     if (!message.trim() || isSending) return;
@@ -404,10 +432,10 @@ export default function ChatPage() {
   }
 
   return (
-    <div className="min-h-screen bg-background flex flex-col">
+    <div className="h-screen bg-background flex flex-col overflow-hidden">
       <Navbar />
 
-      <div className="container py-4 flex-1 flex flex-col max-w-3xl">
+      <div className="container py-4 flex-1 flex flex-col max-w-3xl overflow-hidden">
         <Button variant="ghost" size="sm" className="mb-3 self-start" onClick={() => navigate("/messages")}>
           <ArrowLeft className="w-4 h-4 mr-1" /> 返回訊息列表
         </Button>

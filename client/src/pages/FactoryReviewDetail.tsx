@@ -7,9 +7,12 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Building2, MapPin, AlertCircle, Image, Package, User } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Checkbox } from "@/components/ui/checkbox";
+import { ArrowLeft, Building2, MapPin, AlertCircle, Image, Package, User, ChevronDown, Pencil } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { INDUSTRY_OPTIONS } from "@shared/constants";
 
 export default function FactoryReviewDetail() {
   const { user, loading: authLoading } = useAuth();
@@ -17,6 +20,8 @@ export default function FactoryReviewDetail() {
   const factoryId = parseInt(new URLSearchParams(window.location.search).get("id") || "0");
   const [rejectionReason, setRejectionReason] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [industryEdit, setIndustryEdit] = useState<string[] | null>(null);
+  const [industryPopoverOpen, setIndustryPopoverOpen] = useState(false);
 
   const isAdmin = !authLoading && user?.role === "admin";
   const { data: factory, isLoading: factoryLoading } = trpc.admin.getFactoryDetail.useQuery(
@@ -33,6 +38,15 @@ export default function FactoryReviewDetail() {
   );
   const approveMutation = trpc.admin.approveFactory.useMutation();
   const rejectMutation = trpc.admin.rejectFactory.useMutation();
+  const updateIndustryMut = trpc.admin.updateFactoryIndustry.useMutation({
+    onSuccess: () => {
+      toast.success("產業分類已更新");
+      setIndustryEdit(null);
+      utils.admin.getFactoryDetail.invalidate({ id: factoryId });
+    },
+    onError: (err) => toast.error(err.message),
+  });
+  const utils = trpc.useUtils();
 
   if (authLoading) return <div className="flex items-center justify-center min-h-screen">載入中...</div>;
   if (!user || user.role !== "admin") {
@@ -137,7 +151,84 @@ export default function FactoryReviewDetail() {
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <Label className="text-gray-600">產業分類</Label>
-                    <p className="font-medium">{((factory as any).industry as string[] | null)?.join("、") ?? ""}</p>
+                    {industryEdit === null ? (
+                      <div className="flex items-center gap-2 mt-0.5">
+                        <div className="flex-1">
+                          {(() => {
+                            const current = (factory as any).industry as string[] | null;
+                            const values = Array.isArray(current) ? current : (current ? [current as string] : []);
+                            const hasOld = values.some(v => !(INDUSTRY_OPTIONS as readonly string[]).includes(v));
+                            return (
+                              <>
+                                <p className="font-medium">{values.join("、") || "—"}</p>
+                                {hasOld && (
+                                  <p className="text-xs text-amber-600 mt-0.5">
+                                    ⚠ 存在舊產業值：{values.filter(v => !(INDUSTRY_OPTIONS as readonly string[]).includes(v)).join("、")}
+                                  </p>
+                                )}
+                              </>
+                            );
+                          })()}
+                        </div>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 px-2 shrink-0"
+                          onClick={() => {
+                            const current = (factory as any).industry as string[] | null;
+                            const values = Array.isArray(current) ? current : (current ? [current as string] : []);
+                            const valid = values.filter(v => (INDUSTRY_OPTIONS as readonly string[]).includes(v));
+                            setIndustryEdit(valid);
+                          }}
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </Button>
+                      </div>
+                    ) : (
+                      <div className="mt-1 space-y-2">
+                        <Popover open={industryPopoverOpen} onOpenChange={setIndustryPopoverOpen}>
+                          <PopoverTrigger asChild>
+                            <Button type="button" variant="outline" size="sm" className="w-full justify-between font-normal">
+                              <span className="truncate text-sm">
+                                {industryEdit.length === 0 ? "請選擇產業" : industryEdit.join("、")}
+                              </span>
+                              <ChevronDown className="w-3 h-3 shrink-0 opacity-50 ml-1" />
+                            </Button>
+                          </PopoverTrigger>
+                          <PopoverContent className="w-56 p-2" align="start">
+                            <div className="space-y-1 max-h-60 overflow-y-auto">
+                              {(INDUSTRY_OPTIONS as readonly string[]).map(opt => (
+                                <label key={opt} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted cursor-pointer text-sm">
+                                  <Checkbox
+                                    checked={industryEdit.includes(opt)}
+                                    onCheckedChange={() => {
+                                      setIndustryEdit(prev =>
+                                        prev!.includes(opt) ? prev!.filter(i => i !== opt) : [...prev!, opt]
+                                      );
+                                    }}
+                                  />
+                                  {opt}
+                                </label>
+                              ))}
+                            </div>
+                          </PopoverContent>
+                        </Popover>
+                        <div className="flex gap-2">
+                          <Button
+                            size="sm"
+                            disabled={updateIndustryMut.isPending}
+                            onClick={() => {
+                              if (industryEdit.length === 0) { toast.error("請至少選擇一個產業分類"); return; }
+                              updateIndustryMut.mutate({ factoryId, industry: industryEdit });
+                            }}
+                          >
+                            {updateIndustryMut.isPending ? "儲存中…" : "儲存"}
+                          </Button>
+                          <Button size="sm" variant="ghost" onClick={() => setIndustryEdit(null)}>取消</Button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                   <div>
                     <Label className="text-gray-600">地區</Label>

@@ -1047,6 +1047,18 @@ export const appRouter = router({
       return { success: true };
     }),
 
+    updateFactoryIndustry: adminProcedure.input(z.object({
+      factoryId: z.number(),
+      industry: z.array(z.string()).min(1, "請至少選擇一個產業分類"),
+    })).mutation(async ({ input }) => {
+      const invalid = input.industry.filter(v => !(INDUSTRY_OPTIONS as readonly string[]).includes(v));
+      if (invalid.length > 0) throw new TRPCError({ code: 'BAD_REQUEST', message: `非合法產業值：${invalid.join('、')}` });
+      const factory = await db.getFactoryById(input.factoryId);
+      if (!factory) throw new TRPCError({ code: 'NOT_FOUND', message: '找不到工廠' });
+      await db.updateFactory(input.factoryId, -1, { industry: input.industry as any });
+      return { success: true };
+    }),
+
     getProducts: adminProcedure.input(z.object({
       page: z.number().int().min(1).default(1),
       pageSize: z.number().int().min(1).max(100).default(20),
