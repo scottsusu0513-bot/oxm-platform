@@ -2054,6 +2054,26 @@ export async function getCampaignReplyingUsers(campaignId: number) {
   return rows;
 }
 
+export async function getAdminMessageCampaignById(campaignId: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db
+    .select({
+      id: messageCampaigns.id,
+      title: messageCampaigns.title,
+      content: messageCampaigns.content,
+      targetType: messageCampaigns.targetType,
+      createdAt: messageCampaigns.createdAt,
+      recipientCount: sql<number>`COUNT(${messageRecipients.id})`,
+    })
+    .from(messageCampaigns)
+    .leftJoin(messageRecipients, eq(messageRecipients.campaignId, messageCampaigns.id))
+    .where(eq(messageCampaigns.id, campaignId))
+    .groupBy(messageCampaigns.id)
+    .limit(1);
+  return rows[0] ?? null;
+}
+
 export async function getCampaignReplyCounts(campaignIds: number[]): Promise<Record<number, number>> {
   const db = await getDb();
   if (!db || campaignIds.length === 0) return {};

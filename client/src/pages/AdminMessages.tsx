@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Send, Users, Search, Loader2, MessageSquare, ChevronRight } from "lucide-react";
+import { ArrowLeft, Send, Users, Search, Loader2, MessageSquare, ChevronRight, CheckCircle2, Clock } from "lucide-react";
 import { toast } from "sonner";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { AlertCircle } from "lucide-react";
@@ -206,13 +206,16 @@ function CampaignThreadView({ campaignId, setLocation }: { campaignId: number; s
   const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
   const [selectedUserName, setSelectedUserName] = useState("");
 
+  const campaignQuery = trpc.admin.getMessageCampaignDetail.useQuery({ campaignId });
   const usersQuery = trpc.admin.getCampaignReplyingUsers.useQuery({ campaignId }, { refetchInterval: 15000 });
+  const campaign = campaignQuery.data;
   const replyingUsers = usersQuery.data ?? [];
+  const hasReplies = replyingUsers.length > 0;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-orange-50 to-amber-50 p-4 md:p-8">
       <div className="max-w-5xl mx-auto">
-        <div className="flex items-center gap-3 mb-6">
+        <div className="flex items-center gap-3 mb-4">
           <Button variant="outline" size="sm" onClick={() => setLocation("/admin/messages")} className="gap-1">
             <ArrowLeft className="h-4 w-4" />返回
           </Button>
@@ -221,14 +224,58 @@ function CampaignThreadView({ campaignId, setLocation }: { campaignId: number; s
           </h1>
         </div>
 
+        {/* 站內信基本資訊 */}
+        {campaign && (
+          <Card className="mb-4 border-orange-200 bg-orange-50/40">
+            <CardContent className="p-4">
+              <div className="flex flex-wrap items-start gap-x-6 gap-y-2">
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs text-muted-foreground mb-0.5">標題</p>
+                  <p className="font-semibold">{campaign.title}</p>
+                </div>
+                <div className="flex gap-6 shrink-0 flex-wrap">
+                  <div>
+                    <p className="text-xs text-muted-foreground mb-0.5">發送對象</p>
+                    <Badge variant="outline" className="text-xs">{TARGET_LABELS[campaign.targetType] ?? campaign.targetType}</Badge>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground mb-0.5">收件人數</p>
+                    <p className="font-semibold flex items-center gap-1">
+                      <Users className="h-3.5 w-3.5 text-muted-foreground" />{Number(campaign.recipientCount)} 人
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground mb-0.5">發送時間</p>
+                    <p className="text-sm flex items-center gap-1">
+                      <Clock className="h-3.5 w-3.5 text-muted-foreground" />
+                      {new Date(campaign.createdAt).toLocaleString("zh-TW")}
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <div className="mt-2 flex items-center gap-1.5 text-xs text-green-600">
+                <CheckCircle2 className="h-3.5 w-3.5" />
+                站內信已成功發送
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           {/* 回覆用戶列表 */}
           <Card className="lg:col-span-1">
-            <CardHeader><CardTitle className="text-sm">已回覆用戶</CardTitle></CardHeader>
+            <CardHeader className="pb-2"><CardTitle className="text-sm">已回覆用戶</CardTitle></CardHeader>
             <CardContent className="p-0">
-              {usersQuery.isLoading && <div className="flex justify-center py-8"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>}
-              {!usersQuery.isLoading && replyingUsers.length === 0 && (
-                <p className="text-center text-muted-foreground text-sm py-8 px-4">尚無用戶回覆</p>
+              {usersQuery.isLoading && (
+                <div className="flex justify-center py-8"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
+              )}
+              {!usersQuery.isLoading && !hasReplies && campaign && (
+                <p className="text-center text-muted-foreground text-sm py-6 px-4 leading-relaxed">
+                  此站內信已成功發送給 <span className="font-semibold text-foreground">{Number(campaign.recipientCount)}</span> 位使用者，目前尚無用戶回覆。
+                </p>
+              )}
+              {!usersQuery.isLoading && !hasReplies && !campaign && (
+                <p className="text-center text-muted-foreground text-sm py-8 px-4">目前尚無用戶回覆。</p>
               )}
               <div className="divide-y">
                 {replyingUsers.map((u: any) => (
@@ -249,8 +296,16 @@ function CampaignThreadView({ campaignId, setLocation }: { campaignId: number; s
             {selectedUserId ? (
               <ThreadPanel campaignId={campaignId} userId={selectedUserId} userName={selectedUserName} />
             ) : (
-              <CardContent className="flex items-center justify-center h-64 text-muted-foreground text-sm">
-                點選左側用戶查看對話
+              <CardContent className="flex flex-col items-center justify-center h-64 text-center text-muted-foreground text-sm gap-2">
+                {hasReplies ? (
+                  <p>點選左側用戶查看對話</p>
+                ) : (
+                  <>
+                    <MessageSquare className="h-8 w-8 opacity-20" />
+                    <p>目前尚無對話。</p>
+                    <p className="text-xs">使用者回覆後，會顯示在左側列表。</p>
+                  </>
+                )}
               </CardContent>
             )}
           </Card>

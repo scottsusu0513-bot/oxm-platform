@@ -1192,6 +1192,12 @@ export const appRouter = router({
       return { count: 1 };
     }),
 
+    getMessageCampaignDetail: adminProcedure.input(z.object({ campaignId: z.number() })).query(async ({ input }) => {
+      const campaign = await db.getAdminMessageCampaignById(input.campaignId);
+      if (!campaign) throw new TRPCError({ code: 'NOT_FOUND', message: '找不到此站內信' });
+      return campaign;
+    }),
+
     getCampaignReplyingUsers: adminProcedure.input(z.object({ campaignId: z.number() })).query(async ({ input }) => {
       return db.getCampaignReplyingUsers(input.campaignId);
     }),
