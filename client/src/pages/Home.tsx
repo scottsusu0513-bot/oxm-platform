@@ -83,16 +83,17 @@ const BUSINESS_TYPE_TABS = [
 
 const INDUSTRY_ICONS: Record<string, any> = {
   "紡織": Shirt, "金屬加工": Wrench, "電子零件": Cpu,
-  "塑膠 / 橡膠": Box, "木工": TreePine, "包裝": Package,
+  "塑膠": Box, "橡膠 / 矽膠": Cog, "木工": TreePine, "包裝": Package,
   "食品": UtensilsCrossed, "化工製造": Heart, "生活用品": Lamp, "印刷": Layers,
 };
 
 const INDUSTRY_COLORS: Record<string, string> = {
   "紡織": "from-pink-500 to-rose-400", "金屬加工": "from-slate-500 to-zinc-400",
-  "電子零件": "from-blue-500 to-cyan-400", "塑膠 / 橡膠": "from-green-500 to-emerald-400",
-  "木工": "from-amber-600 to-yellow-500", "包裝": "from-purple-500 to-violet-400",
-  "食品": "from-orange-500 to-amber-400", "化工製造": "from-teal-500 to-green-400",
-  "生活用品": "from-indigo-500 to-blue-400", "印刷": "from-fuchsia-500 to-pink-400",
+  "電子零件": "from-blue-500 to-cyan-400", "塑膠": "from-green-500 to-emerald-400",
+  "橡膠 / 矽膠": "from-cyan-500 to-sky-400", "木工": "from-amber-600 to-yellow-500",
+  "包裝": "from-purple-500 to-violet-400", "食品": "from-orange-500 to-amber-400",
+  "化工製造": "from-teal-500 to-green-400", "生活用品": "from-indigo-500 to-blue-400",
+  "印刷": "from-fuchsia-500 to-pink-400",
 };
 
 function MultiSelect({ options, value, onChange, placeholder, disabled, withClear }: {
