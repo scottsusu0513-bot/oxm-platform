@@ -411,3 +411,51 @@ export async function sendTicketStatusUpdateEmail(params: {
     console.error('[Email] 寄信失敗:', error);
   }
 }
+
+// ===== 寄信給管理員：使用者回覆了站內信 =====
+export async function sendMessageReplyNotificationEmail(params: {
+  userName: string;
+  userEmail?: string;
+  campaignTitle: string;
+  replyContent: string;
+  campaignId: number;
+}) {
+  if (!isEmailEnabled()) {
+    console.log('[Email] 未設定 RESEND_API_KEY，跳過寄信');
+    return;
+  }
+  if (!ADMIN_EMAIL) {
+    console.warn('[Email] ADMIN_EMAIL is not set, skipping admin notification');
+    return;
+  }
+
+  try {
+    const resend = getResend();
+    if (!resend) return;
+    const appUrl = process.env.VITE_APP_URL ?? 'http://localhost:3000';
+    await resend.emails.send({
+      from: FROM_EMAIL,
+      to: ADMIN_EMAIL,
+      subject: `【OXM】站內信回覆：${params.campaignTitle}`,
+      html: `
+        <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #f97316;">使用者回覆了站內信</h2>
+          <p>站內信主題：<strong>${params.campaignTitle}</strong></p>
+          <p>回覆者：<strong>${params.userName}</strong>${params.userEmail ? `（${params.userEmail}）` : ''}</p>
+          <div style="background: #f5f5f5; padding: 16px; border-radius: 8px; margin: 16px 0;">
+            <p style="margin: 0; font-weight: bold;">回覆內容：</p>
+            <p style="margin: 8px 0 0;">${params.replyContent}</p>
+          </div>
+          <a href="${appUrl}/admin?tab=messages&campaignId=${params.campaignId}"
+            style="background: #f97316; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none; display: inline-block;">
+            前往查看對話
+          </a>
+          <p style="color: #999; font-size: 12px; margin-top: 24px;">此信件由 OXM 平台自動發送，請勿直接回覆。</p>
+        </div>
+      `,
+    });
+    console.log(`[Email] 已寄送站內信回覆通知給管理員`);
+  } catch (error) {
+    console.error('[Email] 寄信失敗:', error);
+  }
+}

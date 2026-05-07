@@ -1,6 +1,6 @@
 import { COOKIE_NAME } from "@shared/const";
 import { enhanceSearchKeyword } from './semantic-search';
-import { sendNewInquiryEmail, sendFactoryApprovedEmail, sendFactorySubmittedEmail, sendReportEmail, sendSupportTicketEmail, sendReviewReplyEmail, sendNewMessageNotificationEmail, sendReportStatusUpdateEmail, sendTicketStatusUpdateEmail } from './email';
+import { sendNewInquiryEmail, sendFactoryApprovedEmail, sendFactorySubmittedEmail, sendReportEmail, sendSupportTicketEmail, sendReviewReplyEmail, sendNewMessageNotificationEmail, sendReportStatusUpdateEmail, sendTicketStatusUpdateEmail, sendMessageReplyNotificationEmail } from './email';
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, protectedProcedure, adminProcedure, router } from "./_core/trpc";
@@ -576,6 +576,13 @@ export const appRouter = router({
         userId: ctx.user.id,
         content: input.content,
         senderRole: "user",
+      });
+      sendMessageReplyNotificationEmail({
+        userName: ctx.user.name ?? '使用者',
+        userEmail: ctx.user.email ?? undefined,
+        campaignTitle: campaign.title,
+        replyContent: input.content,
+        campaignId: input.campaignId,
       });
       return { success: true };
     }),
