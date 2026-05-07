@@ -11,7 +11,7 @@ import {
   Search, ArrowRight, Star, Shield, MessageCircle, Zap,
   Shirt, Wrench, Cpu, Box, TreePine, Package, UtensilsCrossed,
   Heart, Flower2, Lamp, Users, CheckCircle, Factory, Sparkles, Cog, Layers, ChevronDown,
-  Megaphone, Newspaper, Pin
+  Megaphone, Newspaper, Pin, Instagram, Facebook, AtSign
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { useState } from "react";
@@ -512,15 +512,45 @@ export default function Home() {
       <AnnouncementsSection navigate={navigate} />
 
       {/* Footer */}
-      <footer className="py-8 bg-gray-900 text-gray-400">
-        <div className="container text-center text-sm">
-          <div className="flex items-center justify-center gap-3 mb-2">
-            <Factory className="w-5 h-5 text-orange-400" />
-            <p className="font-bold text-white text-lg">OXM</p>
-            <Wrench className="w-5 h-5 text-purple-400" />
+      <footer className="py-10 bg-gray-900 text-gray-400">
+        <div className="container text-center text-sm space-y-6">
+          {/* Brand */}
+          <div>
+            <div className="flex items-center justify-center gap-3 mb-2">
+              <Factory className="w-5 h-5 text-orange-400" />
+              <p className="font-bold text-white text-lg">OXM</p>
+              <Wrench className="w-5 h-5 text-purple-400" />
+            </div>
+            <p>全台代工廠與設計工作室媒合平台</p>
           </div>
-          <p>全台代工廠與設計工作室媒合平台</p>
-          <p className="mt-2">&copy; {new Date().getFullYear()} OXM. All rights reserved.</p>
+
+          {/* Social */}
+          <div>
+            <p className="text-xs text-gray-500 mb-3 uppercase tracking-widest">追蹤 OXM</p>
+            <div className="flex items-center justify-center gap-5">
+              <a href="https://www.instagram.com/oxmmatch_tw/?hl=zh-tw" target="_blank" rel="noopener noreferrer"
+                className="text-gray-400 hover:text-orange-400 transition-colors" aria-label="Instagram">
+                <Instagram className="w-6 h-6" />
+              </a>
+              <a href="https://www.threads.com/@oxmmatch_tw" target="_blank" rel="noopener noreferrer"
+                className="text-gray-400 hover:text-purple-400 transition-colors" aria-label="Threads">
+                <AtSign className="w-6 h-6" />
+              </a>
+              <a href="https://www.facebook.com/profile.php?id=61564590907055" target="_blank" rel="noopener noreferrer"
+                className="text-gray-400 hover:text-orange-400 transition-colors" aria-label="Facebook">
+                <Facebook className="w-6 h-6" />
+              </a>
+            </div>
+          </div>
+
+          {/* Contact */}
+          <div>
+            <p className="text-xs text-gray-500 mb-1">聯絡信箱</p>
+            <p>scottsusu@oxmmatch.com</p>
+          </div>
+
+          {/* Copyright */}
+          <p className="text-xs text-gray-600">&copy; {new Date().getFullYear()} OXM. All rights reserved.</p>
         </div>
       </footer>
     </div>
