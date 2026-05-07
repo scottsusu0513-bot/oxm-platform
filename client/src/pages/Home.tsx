@@ -1,5 +1,6 @@
 import { Helmet } from "react-helmet-async";
 import Navbar from "@/components/Navbar";
+import FloatingAnnouncementButton from "@/components/FloatingAnnouncementButton";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -27,7 +28,7 @@ function AnnouncementsSection({ navigate }: { navigate: (path: string) => void }
   const { data: items = [] } = trpc.announcement.list.useQuery({ limit: 3 });
   if (items.length === 0) return null;
   return (
-    <section className="py-12 bg-white border-t border-border/50">
+    <section id="announcements" className="py-12 bg-white border-t border-border/50">
       <div className="container max-w-4xl">
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-2">
@@ -510,6 +511,8 @@ export default function Home() {
 
       {/* 平台公告 */}
       <AnnouncementsSection navigate={navigate} />
+
+      <FloatingAnnouncementButton />
 
       {/* Footer */}
       <footer className="py-10 bg-gray-900 text-gray-400">
