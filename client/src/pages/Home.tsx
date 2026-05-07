@@ -436,7 +436,7 @@ export default function Home() {
               { icon: Factory, num: "500+", label: "代工廠" },
               { icon: Sparkles, num: "300+", label: "設計工作室" },
               { icon: Star, num: "4.8", label: "平均評分" },
-              { icon: CheckCircle, num: "10", label: "產業類別" },
+              { icon: CheckCircle, num: "10+", label: "產業類別" },
             ].map(s => (
               <div key={s.label}>
                 <s.icon className="w-8 h-8 mx-auto mb-2 opacity-90" />
