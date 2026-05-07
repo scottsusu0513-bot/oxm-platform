@@ -89,11 +89,22 @@ export default function FactoryDashboard() {
   );
 
   const utils = trpc.useUtils();
-  const [reviewTabDismissed, setReviewTabDismissed] = useState(false);
-  const unrepliedCount = myReviews?.items.filter(r => !r.reply).length ?? 0;
-  const showReviewBadge = unrepliedCount > 0 && !reviewTabDismissed;
 
-  const handleReviewTabClick = () => setReviewTabDismissed(true);
+  const REVIEW_SEEN_KEY = 'oxm_reviews_seen';
+  const [reviewSeenAt, setReviewSeenAt] = useState<number>(() => {
+    try { return parseInt(localStorage.getItem(REVIEW_SEEN_KEY) ?? '0', 10); } catch { return 0; }
+  });
+  const unseenReviewCount = myReviews?.items.filter(r =>
+    new Date(r.createdAt as any).getTime() > reviewSeenAt
+  ).length ?? 0;
+  const showReviewBadge = unseenReviewCount > 0;
+
+  const handleReviewTabClick = () => {
+    const now = Date.now();
+    try { localStorage.setItem(REVIEW_SEEN_KEY, now.toString()); } catch {}
+    setReviewSeenAt(now);
+    window.dispatchEvent(new CustomEvent('oxm-reviews-viewed'));
+  };
 
   useEffect(() => {
     if (!loading && !isAuthenticated) navigate("/");
@@ -223,7 +234,7 @@ export default function FactoryDashboard() {
               <Star className="w-4 h-4 mr-1" />客戶評價
               {showReviewBadge && (
                 <span className="ml-1 bg-red-500 text-white text-xs rounded-full min-w-5 h-5 px-1 flex items-center justify-center">
-                  {unrepliedCount}
+                  {unseenReviewCount}
                 </span>
               )}
             </TabsTrigger>

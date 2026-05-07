@@ -876,11 +876,14 @@ export const appRouter = router({
       await db.deleteReview(input.id, ctx.user.id);
       return { success: true };
     }),
-    unreadCount: protectedProcedure.query(async ({ ctx }) => {
-      const factory = await db.getFactoryByOwnerId(ctx.user.id);
-      if (!factory) return { count: 0 };
-      return db.countUnrepliedReviews(factory.id);
-    }),
+    unreadCount: protectedProcedure
+      .input(z.object({ since: z.number().optional() }).optional())
+      .query(async ({ ctx, input }) => {
+        const factory = await db.getFactoryByOwnerId(ctx.user.id);
+        if (!factory) return { count: 0 };
+        const since = input?.since ? new Date(input.since) : undefined;
+        return db.countNewReviewsSince(factory.id, since);
+      }),
 
     reply: protectedProcedure.input(z.object({
       reviewId: z.number(),

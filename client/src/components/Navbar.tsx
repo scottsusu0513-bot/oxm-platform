@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
 import { Link, useLocation } from "wouter";
 import { Factory, MessageCircle, User, LogOut, LayoutDashboard, Menu, X, UserPlus, Search, Settings, Heart, UserCircle, ChevronDown, FileText, ScrollText } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import {
   DropdownMenu,
@@ -23,8 +23,18 @@ export default function Navbar() {
     enabled: isAuthenticated && user?.role === 'admin',
     refetchInterval: 120000,
   });
+  const [reviewSeenAt, setReviewSeenAt] = useState<number>(() => {
+    try { return parseInt(localStorage.getItem('oxm_reviews_seen') ?? '0', 10); } catch { return 0; }
+  });
+  useEffect(() => {
+    const handler = () => {
+      try { setReviewSeenAt(parseInt(localStorage.getItem('oxm_reviews_seen') ?? '0', 10)); } catch {}
+    };
+    window.addEventListener('oxm-reviews-viewed', handler);
+    return () => window.removeEventListener('oxm-reviews-viewed', handler);
+  }, []);
   const reviewUnreadQuery = trpc.review.unreadCount.useQuery(
-    undefined,
+    { since: reviewSeenAt > 0 ? reviewSeenAt : undefined },
     { enabled: isAuthenticated && !!user?.isFactoryOwner, refetchInterval: 60000 }
   );
   const reviewUnread = reviewUnreadQuery.data?.count ?? 0;

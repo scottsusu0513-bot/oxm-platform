@@ -1,4 +1,4 @@
-import { eq, and, like, desc, asc, sql, inArray, or, isNull } from "drizzle-orm";
+import { eq, and, like, desc, asc, sql, inArray, or, isNull, gt } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
 import {
@@ -431,6 +431,17 @@ export async function updateReview(id: number, userId: number, data: { rating: n
     await recalcFactoryRating(review[0].factoryId);
   }
 }
+export async function countNewReviewsSince(factoryId: number, since?: Date): Promise<{ count: number }> {
+  const db = await getDb();
+  if (!db) return { count: 0 };
+  const conditions = [eq(reviews.factoryId, factoryId)];
+  if (since) conditions.push(gt(reviews.createdAt, since));
+  const [result] = await db.select({ count: sql<number>`COUNT(*)` })
+    .from(reviews)
+    .where(and(...conditions));
+  return { count: Number(result?.count ?? 0) };
+}
+
 export async function countUnrepliedReviews(factoryId: number) {
   const db = await getDb();
   if (!db) return { count: 0 };
