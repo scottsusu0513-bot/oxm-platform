@@ -9,7 +9,7 @@ import { serveStatic, setupVite } from "./vite";
 import { setupSecurityHeaders, setupOriginCheck } from "./security";
 import { apiLimiter, loginLimiter, uploadLimiter, messageLimiter, submitReviewLimiter, adminLimiter, searchLimiter, reportLimiter } from "./rateLimit";
 import { COOKIE_NAME } from "@shared/const";
-import { INDUSTRY_SLUGS } from "../../shared/constants";
+import { INDUSTRY_SLUGS, PHASE1_SUB_INDUSTRY_PAGES } from "../../shared/constants";
 import { getDb, getApprovedFactoriesForSitemap } from "../db";
 
 async function startServer() {
@@ -130,9 +130,14 @@ async function startServer() {
     urls.push(entry(`${BASE}/privacy`, "0.3", "monthly"));
     urls.push(entry(`${BASE}/terms`, "0.3", "monthly"));
 
-    // 產業頁（使用 slug）
+    // 主產業頁
     for (const slug of Object.values(INDUSTRY_SLUGS)) {
       urls.push(entry(`${BASE}/industry/${slug}`, "0.8", "weekly"));
+    }
+
+    // 子產業頁（Phase 1）
+    for (const { industrySlug, subSlug } of PHASE1_SUB_INDUSTRY_PAGES) {
+      urls.push(entry(`${BASE}/industry/${industrySlug}/${subSlug}`, "0.7", "weekly"));
     }
 
     // 已審核工廠頁

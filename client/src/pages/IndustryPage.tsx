@@ -6,23 +6,35 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { trpc } from "@/lib/trpc";
 import { useRoute, useLocation, Link } from "wouter";
-import { INDUSTRY_SLUG_TO_NAMES, INDUSTRY_SLUG_TO_NAME, INDUSTRY_SEO_CONTENT, INDUSTRY_SLUGS } from "@shared/constants";
+import { INDUSTRY_SLUG_TO_NAMES, INDUSTRY_SLUG_TO_NAME, INDUSTRY_SEO_CONTENT, INDUSTRY_SLUGS, SUB_INDUSTRY_SLUG_TO_NAME, SUB_INDUSTRY_SEO_CONTENT } from "@shared/constants";
 import { ChevronLeft, Factory, Wrench, Star, MapPin, Search } from "lucide-react";
 
 export default function IndustryPage() {
-  const [, params] = useRoute("/industry/:slug");
+  const [, baseParams] = useRoute("/industry/:slug");
+  const [, subParams]  = useRoute("/industry/:slug/:sub");
   const [, navigate] = useLocation();
-  const slug = params?.slug ?? "";
-  const industryNames = INDUSTRY_SLUG_TO_NAMES[slug] ?? [];
-  const industryName = INDUSTRY_SLUG_TO_NAME[slug] ?? "";
-  const seoContent = industryName ? INDUSTRY_SEO_CONTENT[industryName] : null;
+
+  const slug            = subParams?.slug ?? baseParams?.slug ?? "";
+  const subSlug         = subParams?.sub ?? "";
+  const fullKey         = subSlug ? `${slug}/${subSlug}` : "";
+
+  const industryNames   = INDUSTRY_SLUG_TO_NAMES[slug] ?? [];
+  const industryName    = INDUSTRY_SLUG_TO_NAME[slug] ?? "";
+  const subIndustryName = fullKey ? (SUB_INDUSTRY_SLUG_TO_NAME[fullKey] ?? "") : "";
+  const subSeoContent   = fullKey ? (SUB_INDUSTRY_SEO_CONTENT[fullKey] ?? null) : null;
+  const seoContent      = subSeoContent ?? (industryName ? INDUSTRY_SEO_CONTENT[industryName] : null);
+  const displayName     = subIndustryName || industryName;
 
   const { data, isLoading } = trpc.factory.search.useQuery(
-    { industry: industryName ? [industryName] : undefined, page: 1, pageSize: 20, sortBy: "rating" },
+    {
+      industry:    industryName ? [industryName] : undefined,
+      subIndustry: subIndustryName ? [subIndustryName] : undefined,
+      page: 1, pageSize: 20, sortBy: "rating",
+    },
     { enabled: !!industryName }
   );
 
-  if (industryNames.length === 0) {
+  if (industryNames.length === 0 || (subSlug && !subIndustryName)) {
     return (
       <div className="min-h-screen bg-background">
         <Navbar />
@@ -35,31 +47,34 @@ export default function IndustryPage() {
   }
 
   const factories = data?.items ?? [];
-  const total = data?.total ?? 0;
+  const total     = data?.total ?? 0;
+
+  const canonicalUrl = subSlug
+    ? `https://www.oxmmatch.com/industry/${slug}/${subSlug}`
+    : `https://www.oxmmatch.com/industry/${slug}`;
+  const pageTitle = subSeoContent?.title
+    ?? `${industryName}代工｜台灣OEM ODM工廠推薦｜OXM`;
+  const pageDesc  = subSeoContent?.description
+    ?? `尋找台灣${industryName}代工廠，OEM / ODM 皆可配合，收錄 ${total} 間廠商，快速詢價、直接聯繫。`;
 
   return (
     <div className="min-h-screen bg-background">
       <Helmet>
-        <title>{`${industryName}代工｜台灣OEM ODM工廠推薦｜OXM`}</title>
-        <meta
-          name="description"
-          content={`尋找台灣${industryName}代工廠，OEM / ODM 皆可配合，收錄 ${total} 間廠商，快速詢價、直接聯繫。`}
-        />
-        <link rel="canonical" href={`https://www.oxmmatch.com/industry/${slug}`} />
-        {/* Open Graph */}
+        <title>{pageTitle}</title>
+        <meta name="description" content={pageDesc} />
+        <link rel="canonical" href={canonicalUrl} />
         <meta property="og:type" content="website" />
         <meta property="og:site_name" content="OXM" />
-        <meta property="og:url" content={`https://www.oxmmatch.com/industry/${slug}`} />
-        <meta property="og:title" content={`${industryName}代工｜台灣OEM ODM工廠推薦｜OXM`} />
-        <meta property="og:description" content={`尋找台灣${industryName}代工廠，OEM / ODM 皆可配合，收錄 ${total} 間廠商，快速詢價、直接聯繫。`} />
+        <meta property="og:url" content={canonicalUrl} />
+        <meta property="og:title" content={pageTitle} />
+        <meta property="og:description" content={pageDesc} />
         <meta property="og:image" content="https://www.oxmmatch.com/og-image.png" />
         <meta property="og:image:width" content="1200" />
         <meta property="og:image:height" content="630" />
         <meta property="og:image:alt" content="OXM 台灣 OEM / ODM 工廠媒合平台" />
-        {/* Twitter Card */}
         <meta name="twitter:card" content="summary_large_image" />
-        <meta name="twitter:title" content={`${industryName}代工｜台灣OEM ODM工廠推薦｜OXM`} />
-        <meta name="twitter:description" content={`尋找台灣${industryName}代工廠，OEM / ODM 皆可配合，收錄 ${total} 間廠商，快速詢價、直接聯繫。`} />
+        <meta name="twitter:title" content={pageTitle} />
+        <meta name="twitter:description" content={pageDesc} />
         <meta name="twitter:image" content="https://www.oxmmatch.com/og-image.png" />
         <meta name="twitter:image:alt" content="OXM 台灣 OEM / ODM 工廠媒合平台" />
       </Helmet>
@@ -73,9 +88,18 @@ export default function IndustryPage() {
 
         {/* 頁首 */}
         <div className="mb-8">
-          <h1 className="text-3xl font-extrabold text-foreground mb-2">{industryName}代工廠</h1>
+          {subSlug && (
+            <div className="flex items-center gap-1 text-sm text-muted-foreground mb-2">
+              <Link href={`/industry/${slug}`} className="hover:text-foreground transition-colors">
+                {industryName}
+              </Link>
+              <span>/</span>
+              <span className="text-foreground font-medium">{subIndustryName}</span>
+            </div>
+          )}
+          <h1 className="text-3xl font-extrabold text-foreground mb-2">{displayName}代工廠</h1>
           <p className="text-muted-foreground">
-            台灣{industryName}代工廠列表，共 {total} 間，支援 OEM / ODM 服務
+            台灣{displayName}代工廠列表，共 {total} 間，支援 OEM / ODM 服務
           </p>
           <div className="mt-4 flex flex-wrap gap-2">
             {Object.entries(INDUSTRY_SLUGS).slice(0, 10).map(([name, s]) => (

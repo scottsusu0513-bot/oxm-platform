@@ -40,6 +40,7 @@ function Router() {
     <Switch>
       <Route path="/" component={Home} />
       <Route path="/search" component={Search} />
+      <Route path="/industry/:slug/:sub" component={IndustryPage} />
       <Route path="/industry/:slug" component={IndustryPage} />
       <Route path="/factory/:id" component={FactoryDetail} />
       <Route path="/register-factory" component={FactoryRegister} />
