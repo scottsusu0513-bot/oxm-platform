@@ -185,22 +185,22 @@ export default function Home() {
           <Layers className="w-16 h-16 text-purple-400" />
         </div>
 
-        {/* 測試招募貼紙 — desktop */}
-        <div className="hidden lg:block absolute right-8 top-20 rotate-[2deg] z-10 select-none pointer-events-none">
-          <div className="relative bg-[#fdf9f2] border border-orange-200/80 rounded-2xl px-4 py-3.5 shadow-[0_4px_20px_rgba(0,0,0,0.07)] w-[172px]">
-            <div className="absolute -top-3 left-1/2 -translate-x-1/2 w-10 h-3 rounded-sm bg-amber-200/60 shadow-sm" />
-            <div className="flex items-center gap-1.5 mb-2">
-              <span className="w-1.5 h-1.5 rounded-full bg-orange-400 shrink-0" />
-              <span className="text-[10px] font-bold text-orange-500 tracking-widest uppercase">Beta</span>
-            </div>
-            <p className="text-sm font-bold text-stone-800 leading-snug mb-2">第一階段測試招募中</p>
-            <p className="text-[11px] text-stone-500 leading-relaxed">工廠與設計工作室免費上架</p>
-            <p className="text-[11px] text-stone-400 mt-1">專注做好產品，曝光交給 OXM</p>
-          </div>
-        </div>
-
         <div className="container relative">
-          <div className="max-w-3xl mx-auto text-center mb-10">
+          <div className="max-w-3xl mx-auto text-center mb-10 relative">
+            {/* 測試招募貼紙 — desktop */}
+            <div className="hidden lg:block absolute top-14 right-0 rotate-[2deg] z-10 select-none pointer-events-none">
+              <div className="relative bg-[#fdf9f2] border border-orange-200/80 rounded-2xl px-4 py-3.5 shadow-[0_4px_20px_rgba(0,0,0,0.07)] w-[172px] text-left">
+                <div className="absolute -top-3 left-1/2 -translate-x-1/2 w-10 h-3 rounded-sm bg-amber-200/60 shadow-sm" />
+                <div className="flex items-center gap-1.5 mb-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-orange-400 shrink-0" />
+                  <span className="text-[10px] font-bold text-orange-500 tracking-widest uppercase">Beta</span>
+                </div>
+                <p className="text-sm font-bold text-stone-800 leading-snug mb-2">第一階段測試招募中</p>
+                <p className="text-[11px] text-stone-500 leading-relaxed">工廠與設計工作室免費上架</p>
+                <p className="text-[11px] text-stone-400 mt-1">專注做好產品，曝光交給 OXM</p>
+              </div>
+            </div>
+
             <h1 className="sr-only">台灣代工廠搜尋平台</h1>
             <div className="inline-flex items-center gap-2 bg-gradient-to-r from-orange-100 to-purple-100 text-orange-700 px-4 py-1.5 rounded-full text-sm font-medium mb-6">
               <Zap className="w-4 h-4" />
