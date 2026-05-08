@@ -45,6 +45,17 @@ export default function IndustryPage() {
           name="description"
           content={`尋找台灣${industryName}代工廠，OEM / ODM 皆可配合，收錄 ${total} 間廠商，快速詢價、直接聯繫。`}
         />
+        <link rel="canonical" href={`https://www.oxmmatch.com/industry/${slug}`} />
+        {/* Open Graph */}
+        <meta property="og:type" content="website" />
+        <meta property="og:site_name" content="OXM" />
+        <meta property="og:url" content={`https://www.oxmmatch.com/industry/${slug}`} />
+        <meta property="og:title" content={`${industryName}代工｜台灣OEM ODM工廠推薦｜OXM`} />
+        <meta property="og:description" content={`尋找台灣${industryName}代工廠，OEM / ODM 皆可配合，收錄 ${total} 間廠商，快速詢價、直接聯繫。`} />
+        {/* Twitter Card */}
+        <meta name="twitter:card" content="summary_large_image" />
+        <meta name="twitter:title" content={`${industryName}代工｜台灣OEM ODM工廠推薦｜OXM`} />
+        <meta name="twitter:description" content={`尋找台灣${industryName}代工廠，OEM / ODM 皆可配合，收錄 ${total} 間廠商，快速詢價、直接聯繫。`} />
       </Helmet>
 
       <Navbar />
