@@ -201,9 +201,9 @@ export default function Home() {
               <span className="text-orange-500 font-semibold">工廠</span>
               與
               <span className="text-purple-500 font-semibold">設計工作室</span>
-              ，讓企業、品牌、創業者與一般消費者
+              ，讓企業、品牌與創業者
               <br className="hidden md:block" />
-              都能更快找到適合的 OEM / ODM 合作對象
+              以及一般消費者都能更快找到適合的 OEM / ODM 合作對象
             </p>
           </div>
 
