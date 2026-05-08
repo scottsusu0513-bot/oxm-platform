@@ -478,7 +478,7 @@ export default function Home() {
       </section>
 
       {/* 找代工指南 */}
-      <section className="py-16 bg-gray-50">
+      <section id="guides" className="py-16 bg-gray-50">
         <div className="container">
           <div className="flex items-end justify-between mb-8">
             <div>

@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { Megaphone, BookOpen } from "lucide-react";
 
@@ -20,7 +19,6 @@ const btnBase = `relative flex items-center gap-2 px-4 py-2.5
 export default function FloatingAnnouncementButton() {
   const { data: items = [] } = trpc.announcement.list.useQuery({ limit: 20 });
   const [lastViewed, setLastViewedState] = useState<number>(getLastViewed);
-  const [, navigate] = useLocation();
 
   const hasNew = items.some(item => {
     const t = item.createdAt instanceof Date
@@ -40,7 +38,7 @@ export default function FloatingAnnouncementButton() {
     <div className="fixed bottom-6 right-5 z-40 flex flex-col items-end gap-2">
       {/* 找代工指南 */}
       <button
-        onClick={() => navigate("/blog")}
+        onClick={() => document.getElementById("guides")?.scrollIntoView({ behavior: "smooth" })}
         aria-label="找代工指南"
         className={`${btnBase} bg-gradient-to-r from-purple-500 to-violet-500`}
       >
