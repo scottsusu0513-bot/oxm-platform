@@ -52,10 +52,16 @@ export default function IndustryPage() {
         <meta property="og:url" content={`https://www.oxmmatch.com/industry/${slug}`} />
         <meta property="og:title" content={`${industryName}代工｜台灣OEM ODM工廠推薦｜OXM`} />
         <meta property="og:description" content={`尋找台灣${industryName}代工廠，OEM / ODM 皆可配合，收錄 ${total} 間廠商，快速詢價、直接聯繫。`} />
+        <meta property="og:image" content="https://www.oxmmatch.com/og-image.png" />
+        <meta property="og:image:width" content="1200" />
+        <meta property="og:image:height" content="630" />
+        <meta property="og:image:alt" content="OXM 台灣 OEM / ODM 工廠媒合平台" />
         {/* Twitter Card */}
         <meta name="twitter:card" content="summary_large_image" />
         <meta name="twitter:title" content={`${industryName}代工｜台灣OEM ODM工廠推薦｜OXM`} />
         <meta name="twitter:description" content={`尋找台灣${industryName}代工廠，OEM / ODM 皆可配合，收錄 ${total} 間廠商，快速詢價、直接聯繫。`} />
+        <meta name="twitter:image" content="https://www.oxmmatch.com/og-image.png" />
+        <meta name="twitter:image:alt" content="OXM 台灣 OEM / ODM 工廠媒合平台" />
       </Helmet>
 
       <Navbar />
