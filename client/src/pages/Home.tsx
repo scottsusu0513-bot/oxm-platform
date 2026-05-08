@@ -193,15 +193,15 @@ export default function Home() {
               全台最大代工媒合平台
             </div>
             <p className="text-4xl md:text-6xl font-extrabold text-foreground mb-5 leading-tight tracking-tight">
-              用最低價格<br />
-              找到<span className="bg-gradient-to-r from-orange-500 via-amber-500 to-purple-500 bg-clip-text text-transparent">最優質夥伴</span>
+              找到適合你的<br />
+              <span className="bg-gradient-to-r from-orange-500 via-amber-500 to-purple-500 bg-clip-text text-transparent">台灣代工資源</span>
             </p>
             <p className="text-lg md:text-xl text-muted-foreground mb-8 max-w-xl mx-auto">
-              一鍵搜尋全台
-              <span className="text-orange-500 font-semibold">代工廠</span>
+              整合全台
+              <span className="text-orange-500 font-semibold">工廠</span>
               與
               <span className="text-purple-500 font-semibold">設計工作室</span>
-              ，直接聯繫、即時報價、安心合作。
+              ，讓企業、品牌、創業者與一般消費者，都能更快找到適合的 OEM / ODM 合作對象。
             </p>
           </div>
 
