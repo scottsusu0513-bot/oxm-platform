@@ -2,7 +2,7 @@ import { getLoginUrl } from "@/const";
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
 import { Link, useLocation } from "wouter";
-import { Factory, MessageCircle, User, LogOut, LayoutDashboard, Menu, X, UserPlus, Search, Settings, Heart, UserCircle, ChevronDown, FileText, ScrollText, BookOpen } from "lucide-react";
+import { Factory, MessageCircle, User, LogOut, LayoutDashboard, Menu, X, UserPlus, Search, Settings, Heart, UserCircle, ChevronDown, FileText, ScrollText } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import {
@@ -68,12 +68,6 @@ export default function Navbar() {
             <Button variant={location.startsWith("/search") ? "secondary" : "ghost"} size="sm">
               <Search className="w-4 h-4 mr-1" />
               搜尋工廠
-            </Button>
-          </Link>
-          <Link href="/blog">
-            <Button variant={location.startsWith("/blog") ? "secondary" : "ghost"} size="sm">
-              <BookOpen className="w-4 h-4 mr-1" />
-              找代工指南
             </Button>
           </Link>
           {isAuthenticated && (
@@ -204,9 +198,6 @@ export default function Navbar() {
         <div className="md:hidden border-t border-border bg-white p-4 space-y-2">
           <Link href="/search" onClick={() => setMobileOpen(false)}>
             <Button variant="ghost" className="w-full justify-start"><Search className="w-4 h-4 mr-2" />搜尋工廠</Button>
-          </Link>
-          <Link href="/blog" onClick={() => setMobileOpen(false)}>
-            <Button variant="ghost" className="w-full justify-start"><BookOpen className="w-4 h-4 mr-2" />找代工指南</Button>
           </Link>
           {isAuthenticated && (
             <>
