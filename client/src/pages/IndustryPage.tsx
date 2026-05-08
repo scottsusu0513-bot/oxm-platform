@@ -77,6 +77,32 @@ export default function IndustryPage() {
         <meta name="twitter:description" content={pageDesc} />
         <meta name="twitter:image" content="https://www.oxmmatch.com/og-image.png" />
         <meta name="twitter:image:alt" content="OXM 台灣 OEM / ODM 工廠媒合平台" />
+        <script type="application/ld+json">{JSON.stringify({
+          "@context": "https://schema.org",
+          "@type": "CollectionPage",
+          "name": pageTitle,
+          "description": pageDesc,
+          "url": canonicalUrl,
+          "isPartOf": {
+            "@type": "WebSite",
+            "name": "OXM",
+            "url": "https://www.oxmmatch.com",
+            "description": "台灣 OEM / ODM 工廠媒合平台"
+          },
+          ...(factories.length > 0 && {
+            "mainEntity": {
+              "@type": "ItemList",
+              "name": `${displayName}代工廠列表`,
+              "numberOfItems": total,
+              "itemListElement": factories.map((f, i) => ({
+                "@type": "ListItem",
+                "position": i + 1,
+                "url": `https://www.oxmmatch.com/factory/${f.id}`,
+                "name": f.name,
+              }))
+            }
+          })
+        })}</script>
       </Helmet>
 
       <Navbar />
