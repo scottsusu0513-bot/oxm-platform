@@ -130,6 +130,12 @@ async function startServer() {
     urls.push(entry(`${BASE}/privacy`, "0.3", "monthly"));
     urls.push(entry(`${BASE}/terms`, "0.3", "monthly"));
 
+    // Blog / 找代工指南
+    urls.push(entry(`${BASE}/blog`, "0.7", "weekly"));
+    urls.push(entry(`${BASE}/blog/oem-vs-odm`, "0.6", "weekly"));
+    urls.push(entry(`${BASE}/blog/what-is-moq`, "0.6", "weekly"));
+    urls.push(entry(`${BASE}/blog/first-time-factory-guide`, "0.6", "weekly"));
+
     // 主產業頁
     for (const slug of Object.values(INDUSTRY_SLUGS)) {
       urls.push(entry(`${BASE}/industry/${slug}`, "0.8", "weekly"));

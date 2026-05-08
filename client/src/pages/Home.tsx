@@ -16,7 +16,8 @@ import {
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { useState } from "react";
-import { useLocation } from "wouter";
+import { useLocation, Link } from "wouter";
+import { allPosts } from "@/lib/blog";
 
 const ANNOUNCEMENT_TYPE_CONFIG: Record<string, { label: string; className: string; Icon: any }> = {
   update:      { label: "版本更新", className: "bg-blue-100 text-blue-700",  Icon: Zap },
@@ -476,8 +477,48 @@ export default function Home() {
         </div>
       </section>
 
-      {/* CTA */}
+      {/* 找代工指南 */}
       <section className="py-16 bg-gray-50">
+        <div className="container">
+          <div className="flex items-end justify-between mb-8">
+            <div>
+              <h2 className="text-3xl font-bold mb-2">找代工指南</h2>
+              <p className="text-muted-foreground">第一次找 OEM / ODM 工廠？從這裡開始</p>
+            </div>
+            <Link href="/blog">
+              <Button variant="ghost" className="text-orange-500 hover:text-orange-600 gap-1 hidden sm:flex">
+                查看更多指南 <ArrowRight className="w-4 h-4" />
+              </Button>
+            </Link>
+          </div>
+          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
+            {allPosts.slice(0, 3).map((post) => (
+              <Link key={post.slug} href={`/blog/${post.slug}`}>
+                <Card className="hover:shadow-md transition-shadow cursor-pointer h-full border-0 shadow-sm hover:-translate-y-0.5 transition-transform">
+                  <CardContent className="p-6">
+                    <p className="text-xs text-muted-foreground mb-2">{post.date}</p>
+                    <h3 className="font-bold text-base mb-2 leading-snug hover:text-orange-500 transition-colors">{post.title}</h3>
+                    <p className="text-sm text-muted-foreground line-clamp-2 leading-relaxed">{post.description}</p>
+                    <div className="flex items-center gap-1 mt-4 text-sm text-orange-500 font-medium">
+                      閱讀全文 <ArrowRight className="w-3.5 h-3.5" />
+                    </div>
+                  </CardContent>
+                </Card>
+              </Link>
+            ))}
+          </div>
+          <div className="text-center sm:hidden">
+            <Link href="/blog">
+              <Button variant="outline" className="border-orange-300 text-orange-600 hover:bg-orange-50 gap-1">
+                查看更多指南 <ArrowRight className="w-4 h-4" />
+              </Button>
+            </Link>
+          </div>
+        </div>
+      </section>
+
+      {/* CTA */}
+      <section className="py-16 bg-white">
         <div className="container text-center">
           <h2 className="text-3xl font-bold mb-4">準備好開始了嗎？</h2>
           <p className="text-muted-foreground mb-8 max-w-lg mx-auto">

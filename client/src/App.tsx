@@ -34,6 +34,8 @@ import Announcements from "./pages/Announcements";
 import AdminAnnouncements from "./pages/AdminAnnouncements";
 import AdminMessages from "./pages/AdminMessages";
 import AdminMessageDetail from "./pages/AdminMessageDetail";
+import BlogList from "./pages/BlogList";
+import BlogPost from "./pages/BlogPost";
 
 function Router() {
   return (
@@ -65,6 +67,8 @@ function Router() {
       <Route path="/admin/messages/:campaignId" component={AdminMessages} />
       <Route path="/admin/messages" component={AdminMessages} />
       <Route path="/admin-message/:id" component={AdminMessageDetail} />
+      <Route path="/blog/:slug" component={BlogPost} />
+      <Route path="/blog" component={BlogList} />
       <Route path="/announcements" component={Announcements} />
       <Route path="/privacy" component={PrivacyPolicyPage} />
       <Route path="/terms" component={TermsPage} />

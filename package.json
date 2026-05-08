@@ -80,6 +80,7 @@
     "react-dom": "^19.2.1",
     "react-helmet-async": "^3.0.0",
     "react-hook-form": "^7.64.0",
+    "react-markdown": "^10.1.0",
     "react-resizable-panels": "^3.0.6",
     "recharts": "^2.15.2",
     "resend": "^6.11.0",
