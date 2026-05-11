@@ -226,7 +226,7 @@ const { isAuthenticated } = useAuth();
     businessType: businessType && businessType !== "all" ? businessType : undefined,
     sortBy: sortBy as "rating" | "reviews" | "response" | "newest" | undefined,
     page,
-    pageSize: 20,
+    pageSize: window.matchMedia("(max-width: 768px)").matches ? 12 : 20,
   }), [mfgMode, industry, subIndustry, region, keyword, businessType, sortBy, page]);
 
   const appliedFilters = useMemo(() => {
