@@ -218,18 +218,37 @@ export default function FactoryDetail() {
   })();
   const factoryIndustry = factoryIndustryArr.join("、");
   const factoryRegion = factory.region ?? "";
-  const moq = (factory as any).minOrderQuantity;
-  const mfgMode = (factory as any).mfgMode;
-  const descBase = factory.description
-    ? factory.description.slice(0, 100)
-    : `${factoryIndustry}代工廠，位於${factoryRegion}，提供優質 OEM / ODM 服務。`;
-  const metaDesc = `${factory.name}｜${factoryRegion}${factoryIndustry}代工廠${mfgMode ? `，${mfgMode}` : ""}${moq ? `，最低訂購量 ${moq}` : ""}。${descBase}`;
+  const factorySubIndustryArr: string[] = Array.isArray((factory as any).subIndustry) ? (factory as any).subIndustry : [];
+  const factoryMfgModes: string[] = Array.isArray((factory as any).mfgModes) ? (factory as any).mfgModes : [];
+  const subIndustryText = factorySubIndustryArr.slice(0, 2).join("、");
+  const canonicalUrl = `https://www.oxmmatch.com/factory/${factory.id}`;
+  const metaTitle = `${factory.name}｜${subIndustryText || factoryIndustry}代工廠介紹｜OXM`;
+  const metaDesc = [
+    factory.name,
+    factoryRegion ? `位於${factoryRegion}` : "",
+    factoryIndustry ? `${factoryIndustry}代工廠` : "",
+    subIndustryText ? `主營${subIndustryText}` : "",
+    factoryMfgModes.length ? `提供 ${factoryMfgModes.join(" / ")} 服務` : "",
+    factory.description ? factory.description.slice(0, 60) : "",
+    "OXM 台灣 OEM / ODM 工廠媒合平台",
+  ].filter(Boolean).join("，");
+  const jsonLd = JSON.stringify({
+    "@context": "https://schema.org",
+    "@type": "LocalBusiness",
+    name: factory.name,
+    url: canonicalUrl,
+    description: factory.description || `${factoryIndustry}代工廠，位於${factoryRegion}`,
+    areaServed: factoryRegion,
+    knowsAbout: [...factoryIndustryArr, ...factorySubIndustryArr],
+  });
 
   return (
     <div className="min-h-screen bg-background">
       <Helmet>
-        <title>{`${factory.name}｜${factoryIndustry}代工｜OXM`}</title>
+        <title>{metaTitle}</title>
         <meta name="description" content={metaDesc} />
+        <link rel="canonical" href={canonicalUrl} />
+        <script type="application/ld+json">{jsonLd}</script>
       </Helmet>
       <Navbar />
 
