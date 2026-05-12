@@ -463,7 +463,10 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
                     <ChevronDown className={`w-3 h-3 transition-transform ${cartOpen ? "rotate-180" : ""}`} />
                   </button>
                   {!cartOpen && (
-                    <p className="text-xs text-muted-foreground">將多間工廠加入清單，一次送出同一則詢價訊息。</p>
+                    <>
+                      <p className="text-xs text-muted-foreground">將多間工廠加入清單，一次送出同一則詢價訊息。</p>
+                      <p className="text-xs text-muted-foreground/70 leading-relaxed">實際報價、規格、付款、交期與售後服務，請與工廠確認；若發現資料不實或交易異常，可向 OXM 通報。</p>
+                    </>
                   )}
                   {cartOpen && (
                     <div className="space-y-3">
@@ -501,6 +504,7 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
                           maxLength={2000}
                         />
                       </div>
+                      <p className="text-xs text-muted-foreground/70 leading-relaxed">實際報價、規格、付款與交期，請與工廠確認；若發現異常可向 OXM 通報。</p>
                       <Button
                         size="sm"
                         className="w-full"
