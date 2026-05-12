@@ -321,7 +321,7 @@ export default function FactoryDetail() {
                   ))}
                   <Badge variant="outline">{factory.capitalLevel}</Badge>
                 </div>
-                <p className="text-muted-foreground mb-4">{factory.description || "暫無簡介"}</p>
+                <p className="text-muted-foreground mb-4 whitespace-pre-line">{factory.description || "暫無簡介"}</p>
 
                 <div className="grid sm:grid-cols-2 gap-3 text-sm">
                   <div className="flex items-center gap-2"><MapPin className="w-4 h-4 text-muted-foreground" /><span>{factory.region}</span></div>
