@@ -160,8 +160,8 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-background">
       <Helmet>
-        <title>台灣代工廠搜尋平台｜OEM ODM 工廠推薦｜OXM</title>
-        <meta name="description" content="收錄台灣各地代工廠，包含塑膠射出、金屬加工、紡織、食品等，快速找到適合的 OEM / ODM 廠商。" />
+        <title>OXM｜台灣傳統產業資源媒合平台｜工廠、設備與供應鏈服務</title>
+        <meta name="description" content="OXM 整合台灣傳統產業商家與供應鏈資源，協助使用者快速找到工廠、OEM/ODM 代工、工業設備、材料、包裝印刷與產業服務，讓找廠商、找資源、送詢價更有效率。" />
       </Helmet>
       <Navbar />
 
@@ -201,14 +201,14 @@ export default function Home() {
               </div>
             </div>
 
-            <h1 className="sr-only">台灣代工廠搜尋平台</h1>
+            <h1 className="sr-only">台灣傳統產業資源媒合平台</h1>
             <div className="inline-flex items-center gap-2 bg-gradient-to-r from-orange-100 to-purple-100 text-orange-700 px-4 py-1.5 rounded-full text-sm font-medium mb-6">
               <Zap className="w-4 h-4" />
-              全台最大代工媒合平台
+              台灣傳產資源媒合平台
             </div>
             <p className="text-4xl md:text-6xl font-extrabold text-foreground mb-5 leading-tight tracking-tight">
               找到適合你的<br />
-              <span className="bg-gradient-to-r from-orange-500 via-amber-500 to-purple-500 bg-clip-text text-transparent">台灣代工資源</span>
+              <span className="bg-gradient-to-r from-orange-500 via-amber-500 to-purple-500 bg-clip-text text-transparent">台灣傳產資源</span>
             </p>
 
             {/* 測試招募貼紙 — mobile */}
@@ -227,13 +227,13 @@ export default function Home() {
             </div>
 
             <p className="text-lg md:text-xl text-muted-foreground mb-8 max-w-xl mx-auto">
-              整合全台
-              <span className="text-orange-500 font-semibold">工廠</span>
-              與
-              <span className="text-purple-500 font-semibold">設計工作室</span>
-              ，讓企業、品牌與創業者
+              整合全台工廠、OEM/ODM 代工、
+              <span className="text-orange-500 font-semibold">設備商</span>
+              、材料商與
+              <span className="text-purple-500 font-semibold">產業服務</span>
+              ，讓品牌、企業、採購者與一般使用者
               <br className="hidden md:block" />
-              以及一般消費者都能更快找到適合的 OEM / ODM 合作對象
+              都能更快找到合適的合作對象
             </p>
           </div>
 

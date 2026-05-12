@@ -491,11 +491,11 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
 
   const seoIndustry = industry.length > 0 ? industry[0] : null;
   const pageTitle = seoIndustry
-    ? `${seoIndustry}代工｜台灣OEM ODM工廠推薦｜OXM`
-    : "搜尋台灣代工廠｜OEM ODM 工廠媒合｜OXM";
+    ? `${seoIndustry}｜台灣傳產供應商與工廠資源｜OXM`
+    : "搜尋台灣傳產廠商與資源｜OXM";
   const pageDesc = seoIndustry
-    ? `尋找台灣${seoIndustry}代工廠，OEM / ODM 皆可配合，快速詢價、直接聯繫廠商。`
-    : "搜尋全台代工廠與工作室，可依產業、地區、資本額篩選，快速找到合適的 OEM / ODM 廠商。";
+    ? `在 OXM 尋找台灣${seoIndustry}相關廠商與供應鏈資源，包含工廠、OEM/ODM 代工、材料、設備與產業服務，快速比較並送出詢價。`
+    : "在 OXM 搜尋全台傳統產業廠商，涵蓋工廠、OEM/ODM 代工、工業設備、材料商、包裝印刷與設計工作室，可依產業、地區篩選，快速找到合適的合作對象。";
 
   return (
     <div className="min-h-screen bg-background">

@@ -33,7 +33,7 @@ export default function TermsPage() {
     <div className="min-h-screen bg-background">
       <Helmet>
         <title>OXM｜服務條款</title>
-        <meta name="description" content="OXM 台灣 OEM/ODM 工廠媒合平台服務條款，說明平台性質、帳號使用規範、交易責任、智慧財產權、隱私保護等相關規定。" />
+        <meta name="description" content="OXM 台灣傳統產業資源媒合平台服務條款，說明平台性質、帳號使用規範、交易責任、智慧財產權、隱私保護等相關規定。" />
       </Helmet>
 
       <Navbar />
@@ -48,7 +48,7 @@ export default function TermsPage() {
           <p className="text-sm text-muted-foreground mb-6">最後更新：2026 年</p>
 
           <p className="text-muted-foreground leading-relaxed mb-4 text-sm">
-            歡迎您使用 OXM 台灣 OEM / ODM 工廠媒合平台（以下簡稱「本平台」或「OXM」）。當您註冊、瀏覽、刊登資料、發送詢價、使用站內訊息或使用本平台其他服務時，即表示您已閱讀、理解並同意遵守以下服務條款。
+            歡迎您使用 OXM 台灣傳統產業資源媒合平台（以下簡稱「本平台」或「OXM」）。當您註冊、瀏覽、刊登資料、發送詢價、使用站內訊息或使用本平台其他服務時，即表示您已閱讀、理解並同意遵守以下服務條款。
           </p>
           <p className="text-muted-foreground leading-relaxed mb-4 text-sm">
             OXM 致力於打造一個更透明、更便利的工廠資訊查找與合作媒合平台，協助需求方更快找到合適的工廠、供應商或合作對象，也協助工廠提升曝光與取得合作機會。

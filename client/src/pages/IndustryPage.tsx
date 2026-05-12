@@ -53,9 +53,9 @@ export default function IndustryPage() {
     ? `https://www.oxmmatch.com/industry/${slug}/${subSlug}`
     : `https://www.oxmmatch.com/industry/${slug}`;
   const pageTitle = subSeoContent?.title
-    ?? `${industryName}代工｜台灣OEM ODM工廠推薦｜OXM`;
+    ?? `${industryName}｜台灣傳產供應商與工廠資源｜OXM`;
   const pageDesc  = subSeoContent?.description
-    ?? `尋找台灣${industryName}代工廠，OEM / ODM 皆可配合，收錄 ${total} 間廠商，快速詢價、直接聯繫。`;
+    ?? `在 OXM 尋找台灣${industryName}相關廠商與供應鏈資源，包含工廠、OEM/ODM 代工、材料、設備、加工與產業服務，協助品牌、企業與採購者快速比較並送出詢價。`;
 
   return (
     <div className="min-h-screen bg-background">
@@ -71,12 +71,12 @@ export default function IndustryPage() {
         <meta property="og:image" content="https://www.oxmmatch.com/og-image.png" />
         <meta property="og:image:width" content="1200" />
         <meta property="og:image:height" content="630" />
-        <meta property="og:image:alt" content="OXM 台灣 OEM / ODM 工廠媒合平台" />
+        <meta property="og:image:alt" content="OXM 台灣傳統產業資源媒合平台" />
         <meta name="twitter:card" content="summary_large_image" />
         <meta name="twitter:title" content={pageTitle} />
         <meta name="twitter:description" content={pageDesc} />
         <meta name="twitter:image" content="https://www.oxmmatch.com/og-image.png" />
-        <meta name="twitter:image:alt" content="OXM 台灣 OEM / ODM 工廠媒合平台" />
+        <meta name="twitter:image:alt" content="OXM 台灣傳統產業資源媒合平台" />
         <script type="application/ld+json">{JSON.stringify({
           "@context": "https://schema.org",
           "@type": "CollectionPage",
@@ -87,7 +87,7 @@ export default function IndustryPage() {
             "@type": "WebSite",
             "name": "OXM",
             "url": "https://www.oxmmatch.com",
-            "description": "台灣 OEM / ODM 工廠媒合平台"
+            "description": "台灣傳統產業資源媒合平台"
           },
           ...(factories.length > 0 && {
             "mainEntity": {

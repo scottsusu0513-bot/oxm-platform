@@ -230,7 +230,7 @@ export default function FactoryDetail() {
     subIndustryText ? `主營${subIndustryText}` : "",
     factoryMfgModes.length ? `提供 ${factoryMfgModes.join(" / ")} 服務` : "",
     factory.description ? factory.description.slice(0, 60) : "",
-    "OXM 台灣 OEM / ODM 工廠媒合平台",
+    "OXM 台灣傳統產業資源媒合平台",
   ].filter(Boolean).join("，");
   const jsonLd = JSON.stringify({
     "@context": "https://schema.org",

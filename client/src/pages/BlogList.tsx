@@ -40,7 +40,7 @@ export default function BlogList() {
             "@type": "WebSite",
             "name": "OXM",
             "url": BASE,
-            "description": "台灣 OEM / ODM 工廠媒合平台",
+            "description": "台灣傳統產業資源媒合平台",
           },
           "mainEntity": {
             "@type": "ItemList",

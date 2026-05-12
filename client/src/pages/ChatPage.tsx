@@ -292,9 +292,9 @@ export default function ChatPage() {
       const name = factoryData.name ?? "工廠";
       const product = factoryData.products?.find((p: any) => p.id === productId);
       if (product) {
-        setMessage(`${name}你好，我對您的「${product.name}」產品有興趣，希望你可以提供不同訂購數量之間的報價，謝謝！`);
+        setMessage(`${name}您好，我對您的「${product.name}」產品有興趣，希望您可以提供不同訂購數量之間的報價，謝謝！`);
       } else {
-        setMessage(`${name}你好，我想詢問貴工廠的代工服務，期待您的回覆！`);
+        setMessage(`${name}您好，我想詢問貴工廠的商品、服務或合作方式，期待您的回覆！`);
       }
     }
   }, [isNewChat, factoryData, existingConv, productId]);
