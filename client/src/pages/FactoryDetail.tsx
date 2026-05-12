@@ -261,7 +261,19 @@ export default function FactoryDetail() {
         <Card className="mb-6">
           <CardContent className="p-6">
             <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
-              <div className="flex-1">
+              {/* Avatar + info */}
+              <div className="flex flex-col sm:flex-row gap-4 flex-1 min-w-0">
+                {/* Logo */}
+                <div className="w-32 h-32 mx-auto sm:mx-0 sm:w-36 sm:h-36 shrink-0 rounded-2xl bg-orange-50/30 border flex items-center justify-center p-4 overflow-hidden">
+                  {(factory as any).avatarUrl ? (
+                    <img src={(factory as any).avatarUrl} alt={factory.name} className="w-full h-full object-contain" loading="lazy" />
+                  ) : (
+                    (factory as any).businessType === "studio"
+                      ? <Wrench className="w-16 h-16 text-purple-200" />
+                      : <FactoryIcon className="w-16 h-16 text-orange-200" />
+                  )}
+                </div>
+                <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-3 mb-3 flex-wrap">
                   <h1 className="text-2xl font-bold">{factory.name}</h1>
                   {(factory as any).businessType === "studio" ? (
@@ -349,6 +361,7 @@ export default function FactoryDetail() {
                       </div>
                     </div>
                   )}
+                </div>
                 </div>
               </div>
 
