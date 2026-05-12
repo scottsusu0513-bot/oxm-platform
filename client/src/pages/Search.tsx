@@ -147,6 +147,188 @@ function FavButton({ factoryId, initialIsFav, onToggle }: {
   );
 }
 
+// ── 圖片比例 hook ─────────────────────────────────────────────────────────
+function useImageAspectRatio(url: string | null | undefined): number | null {
+  const [ratio, setRatio] = useState<number | null>(null);
+  useEffect(() => {
+    if (!url) { setRatio(null); return; }
+    const img = new window.Image();
+    img.onload = () => {
+      if (img.naturalHeight > 0) setRatio(img.naturalWidth / img.naturalHeight);
+    };
+    img.onerror = () => setRatio(null);
+    img.src = url;
+  }, [url]);
+  return ratio;
+}
+
+// ── 搜尋結果卡片（需要 hook，不能放在 map 裡）────────────────────────────
+type FactoryCardProps = {
+  factory: any;
+  getFavState: (id: number) => boolean;
+  handleFavToggle: (id: number, newState: boolean) => void;
+  cartHas: (id: number) => boolean;
+  cartAdd: (item: CartItem) => void;
+  cartRemove: (id: number) => void;
+  setCartOpen: (open: boolean) => void;
+};
+
+function FactoryCard({ factory, getFavState, handleFavToggle, cartHas, cartAdd, cartRemove, setCartOpen }: FactoryCardProps) {
+  const avatarUrl = factory.avatarUrl as string | null | undefined;
+  const ratio = useImageAspectRatio(avatarUrl);
+  const isWide = avatarUrl && ratio !== null && ratio >= 2.2;
+
+  return (
+    <div className="relative">
+      <Link href={`/factory/${factory.id}`}>
+        <Card className="hover:shadow-md transition-shadow cursor-pointer h-full overflow-hidden">
+          {isWide ? (
+            /* Wide layout: image banner on top */
+            <>
+              <div className="relative h-28 bg-orange-50/40 flex items-center justify-center p-3 overflow-hidden">
+                <img src={avatarUrl!} alt={factory.name} className="w-full h-full object-contain" loading="lazy" />
+                <div className="absolute top-2 right-2" onClick={(e) => e.preventDefault()}>
+                  <FavButton factoryId={factory.id} initialIsFav={getFavState(factory.id)} onToggle={handleFavToggle} />
+                </div>
+              </div>
+              <CardContent className="p-4 flex flex-col min-w-0">
+                <FactoryCardContent factory={factory} cartHas={cartHas} cartAdd={cartAdd} cartRemove={cartRemove} setCartOpen={setCartOpen} />
+              </CardContent>
+            </>
+          ) : (
+            /* Compact layout: left image / right content on desktop */
+            <div className="flex flex-col md:flex-row h-full">
+              <div className="relative h-36 md:h-auto md:w-40 shrink-0 bg-orange-50/40 flex items-center justify-center p-4 overflow-hidden">
+                {avatarUrl ? (
+                  <img src={avatarUrl} alt={factory.name} className="w-full h-full object-contain" loading="lazy" />
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center">
+                    {factory.businessType === "studio"
+                      ? <Wrench className="w-14 h-14 text-purple-200" />
+                      : <Factory className="w-14 h-14 text-orange-200" />}
+                  </div>
+                )}
+                <div className="absolute top-2 right-2" onClick={(e) => e.preventDefault()}>
+                  <FavButton factoryId={factory.id} initialIsFav={getFavState(factory.id)} onToggle={handleFavToggle} />
+                </div>
+              </div>
+              <div className="flex-1 p-4 flex flex-col min-w-0">
+                <FactoryCardContent factory={factory} cartHas={cartHas} cartAdd={cartAdd} cartRemove={cartRemove} setCartOpen={setCartOpen} />
+              </div>
+            </div>
+          )}
+        </Card>
+      </Link>
+    </div>
+  );
+}
+
+function FactoryCardContent({ factory, cartHas, cartAdd, cartRemove, setCartOpen }: Omit<FactoryCardProps, "getFavState" | "handleFavToggle">) {
+  return (
+    <>
+      <div className="flex items-start justify-between mb-3">
+        <div className="flex-1">
+          <div className="flex items-center gap-2 mb-1 flex-wrap">
+            <h3 className="font-semibold text-lg">{factory.name}</h3>
+            {factory.certified && (
+              <span className="inline-flex items-center gap-1 text-xs text-blue-700 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded-full shrink-0">
+                ✓ 認證工廠
+              </span>
+            )}
+            {factory.operationStatus === "busy" && (
+              <span className="inline-flex items-center gap-1 text-xs text-yellow-700 bg-yellow-50 border border-yellow-200 px-2 py-0.5 rounded-full shrink-0">
+                <span className="w-1.5 h-1.5 rounded-full bg-yellow-500" />產線繁忙
+              </span>
+            )}
+            {factory.operationStatus === "full" && (
+              <span className="inline-flex items-center gap-1 text-xs text-red-700 bg-red-50 border border-red-200 px-2 py-0.5 rounded-full shrink-0">
+                <span className="w-1.5 h-1.5 rounded-full bg-red-500" />產線滿載
+              </span>
+            )}
+            {(!factory.operationStatus || factory.operationStatus === "normal") && (
+              <span className="inline-flex items-center gap-1 text-xs text-green-700 bg-green-50 border border-green-200 px-2 py-0.5 rounded-full shrink-0">
+                <span className="w-1.5 h-1.5 rounded-full bg-green-500" />接單中
+              </span>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-1">
+            <BusinessTypeBadge businessType={factory.businessType} />
+            {(factory.industry as string[] | null)?.map((ind: string) => (
+              <Badge key={ind}>{ind}</Badge>
+            ))}
+            {(factory.subIndustry as string[] | null)?.map((s: string) => (
+              <Badge key={s} variant="outline" className="text-xs">{s}</Badge>
+            ))}
+            {(factory.mfgModes as string[]).map((m: string) => (
+              <Badge key={m} variant="secondary">{m}</Badge>
+            ))}
+          </div>
+        </div>
+        <div className="flex items-center gap-1 text-yellow-500 shrink-0">
+          <Star className="w-4 h-4 fill-current" />
+          <span className="font-medium text-sm">{Number(factory.avgRating).toFixed(1)}</span>
+          <span className="text-xs text-muted-foreground">({factory.reviewCount})</span>
+        </div>
+      </div>
+      <p className="text-sm text-muted-foreground line-clamp-2 mb-3">
+        {factory.description || "暫無簡介"}
+      </p>
+      <div className="mt-2 pt-2 border-t border-border/50 grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-muted-foreground">
+        <span className="flex items-center gap-1 truncate"><MapPin className="w-3 h-3 shrink-0" />{factory.region || "無"}</span>
+        <span className="truncate">地址：{factory.address || "無"}</span>
+        <span>{factory.foundedYear ? `成立於 ${factory.foundedYear} 年` : "成立年份：無"}</span>
+        <span className="truncate">負責人：{factory.ownerName || "無"}</span>
+        <span>電話：{factory.phone || "無"}</span>
+        <span className="truncate">官方網站：{factory.website
+          ? <a href={factory.website} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline" onClick={e => e.stopPropagation()}>連結</a>
+          : "無"
+        }</span>
+        <span className="flex items-center gap-1">
+          <Clock className="w-3 h-3 shrink-0" />
+          {(() => {
+            const h = parseFloat(factory.avgResponseHours ?? "");
+            if (isNaN(h)) return "回覆時間：未知";
+            if (h < 2) return "回覆：2hr 內";
+            if (h < 24) return "回覆：24hr 內";
+            return "回覆：較慢";
+          })()}
+        </span>
+        <span className="truncate">
+          {factory.weekdayHours || factory.weekendHours
+            ? [factory.weekdayHours ? `平日 ${factory.weekdayHours}` : null, factory.weekendHours ? `假日 ${factory.weekendHours}` : null].filter(Boolean).join("／")
+            : "營業時間：無"
+          }
+        </span>
+        <span className="col-span-2 text-muted-foreground/70">資本額：{factory.capitalLevel || "無"}</span>
+      </div>
+      <div className="mt-3 pt-2 border-t border-border/30" onClick={e => e.preventDefault()}>
+        <Button
+          size="sm"
+          variant={cartHas(factory.id) ? "default" : "outline"}
+          className="w-full text-xs h-7"
+          onClick={e => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (cartHas(factory.id)) {
+              cartRemove(factory.id);
+            } else {
+              cartAdd({ id: factory.id, name: factory.name });
+              setCartOpen(true);
+              toast.success(`已加入一鍵詢價：${factory.name}`);
+            }
+          }}
+        >
+          {cartHas(factory.id) ? (
+            <><Minus className="w-3 h-3 mr-1" />已加入一鍵詢價</>
+          ) : (
+            <><Plus className="w-3 h-3 mr-1" />加入一鍵詢價</>
+          )}
+        </Button>
+      </div>
+    </>
+  );
+}
+
 export default function Search() {
   const [location, navigate] = useLocation();
 const params = new URLSearchParams(window.location.search);
@@ -679,136 +861,16 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
             ) : (
               <div className="grid md:grid-cols-2 gap-4">
                 {sortedItems.map((factory) => (
-                  <div key={factory.id} className="relative">
-                  <Link href={`/factory/${factory.id}`}>
-                    <Card className="hover:shadow-md transition-shadow cursor-pointer h-full overflow-hidden">
-                      <div className="flex flex-col md:flex-row h-full">
-                      {/* 圖片區 */}
-                      <div className="relative h-36 md:h-auto md:w-40 shrink-0 bg-orange-50/40 flex items-center justify-center p-4 overflow-hidden">
-                        {(factory as any).avatarUrl ? (
-                          <img
-                            src={(factory as any).avatarUrl}
-                            alt={factory.name}
-                            className="w-full h-full object-contain"
-                            loading="lazy"
-                          />
-                        ) : (
-                          <div className="w-full h-full flex items-center justify-center">
-                            {(factory as any).businessType === "studio"
-                              ? <Wrench className="w-14 h-14 text-purple-200" />
-                              : <Factory className="w-14 h-14 text-orange-200" />}
-                          </div>
-                        )}
-                        <div className="absolute top-2 right-2" onClick={(e) => e.preventDefault()}>
-                          <FavButton factoryId={factory.id} initialIsFav={getFavState(factory.id)} onToggle={handleFavToggle} />
-                        </div>
-                      </div>
-                      {/* 內容區 */}
-                      <div className="flex-1 p-4 flex flex-col min-w-0">
-                        <div className="flex items-start justify-between mb-3">
-                          <div className="flex-1">
-                            <div className="flex items-center gap-2 mb-1 flex-wrap">
-                              <h3 className="font-semibold text-lg">{factory.name}</h3>
-                              {(factory as any).certified && (
-                                <span className="inline-flex items-center gap-1 text-xs text-blue-700 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded-full shrink-0">
-                                  ✓ 認證工廠
-                                </span>
-                              )}
-                              {(factory as any).operationStatus === "busy" && (
-                                <span className="inline-flex items-center gap-1 text-xs text-yellow-700 bg-yellow-50 border border-yellow-200 px-2 py-0.5 rounded-full shrink-0">
-                                  <span className="w-1.5 h-1.5 rounded-full bg-yellow-500" />產線繁忙
-                                </span>
-                              )}
-                              {(factory as any).operationStatus === "full" && (
-                                <span className="inline-flex items-center gap-1 text-xs text-red-700 bg-red-50 border border-red-200 px-2 py-0.5 rounded-full shrink-0">
-                                  <span className="w-1.5 h-1.5 rounded-full bg-red-500" />產線滿載
-                                </span>
-                              )}
-                              {(!(factory as any).operationStatus || (factory as any).operationStatus === "normal") && (
-                                <span className="inline-flex items-center gap-1 text-xs text-green-700 bg-green-50 border border-green-200 px-2 py-0.5 rounded-full shrink-0">
-                                  <span className="w-1.5 h-1.5 rounded-full bg-green-500" />接單中
-                                </span>
-                              )}
-                            </div>
-                            <div className="flex flex-wrap gap-1">
-                              <BusinessTypeBadge businessType={(factory as any).businessType} />
-                              {((factory as any).industry as string[] | null)?.map(ind => (
-                                <Badge key={ind}>{ind}</Badge>
-                              ))}
-                              {((factory as any).subIndustry as string[] | null)?.map(s => (
-                                <Badge key={s} variant="outline" className="text-xs">{s}</Badge>
-                              ))}
-                              {(factory.mfgModes as string[]).map(m => (
-                                <Badge key={m} variant="secondary">{m}</Badge>
-                              ))}
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-1 text-yellow-500 shrink-0">
-                            <Star className="w-4 h-4 fill-current" />
-                            <span className="font-medium text-sm">{Number(factory.avgRating).toFixed(1)}</span>
-                            <span className="text-xs text-muted-foreground">({factory.reviewCount})</span>
-                          </div>
-                        </div>
-                        <p className="text-sm text-muted-foreground line-clamp-2 mb-3">
-                          {factory.description || "暫無簡介"}
-                        </p>
-                        <div className="mt-2 pt-2 border-t border-border/50 grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                          <span className="flex items-center gap-1 truncate"><MapPin className="w-3 h-3 shrink-0" />{factory.region || "無"}</span>
-                          <span className="truncate">地址：{(factory as any).address || "無"}</span>
-                          <span>{factory.foundedYear ? `成立於 ${factory.foundedYear} 年` : "成立年份：無"}</span>
-                          <span className="truncate">負責人：{(factory as any).ownerName || "無"}</span>
-                          <span>電話：{(factory as any).phone || "無"}</span>
-                          <span className="truncate">官方網站：{(factory as any).website
-                            ? <a href={(factory as any).website} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline" onClick={e => e.stopPropagation()}>連結</a>
-                            : "無"
-                          }</span>
-                          <span className="flex items-center gap-1">
-                            <Clock className="w-3 h-3 shrink-0" />
-                            {(() => {
-                              const h = parseFloat((factory as any).avgResponseHours ?? "");
-                              if (isNaN(h)) return "回覆時間：未知";
-                              if (h < 2) return "回覆：2hr 內";
-                              if (h < 24) return "回覆：24hr 內";
-                              return "回覆：較慢";
-                            })()}
-                          </span>
-                          <span className="truncate">
-                            {(factory as any).weekdayHours || (factory as any).weekendHours
-                              ? [(factory as any).weekdayHours ? `平日 ${(factory as any).weekdayHours}` : null, (factory as any).weekendHours ? `假日 ${(factory as any).weekendHours}` : null].filter(Boolean).join("／")
-                              : "營業時間：無"
-                            }
-                          </span>
-                          <span className="col-span-2 text-muted-foreground/70">資本額：{factory.capitalLevel || "無"}</span>
-                        </div>
-                        <div className="mt-3 pt-2 border-t border-border/30" onClick={e => e.preventDefault()}>
-                          <Button
-                            size="sm"
-                            variant={cartHas(factory.id) ? "default" : "outline"}
-                            className="w-full text-xs h-7"
-                            onClick={e => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              if (cartHas(factory.id)) {
-                                cartRemove(factory.id);
-                              } else {
-                                cartAdd({ id: factory.id, name: factory.name });
-                                setCartOpen(true);
-                                toast.success(`已加入一鍵詢價：${factory.name}`);
-                              }
-                            }}
-                          >
-                            {cartHas(factory.id) ? (
-                              <><Minus className="w-3 h-3 mr-1" />已加入一鍵詢價</>
-                            ) : (
-                              <><Plus className="w-3 h-3 mr-1" />加入一鍵詢價</>
-                            )}
-                          </Button>
-                        </div>
-                      </div>
-                      </div>
-                    </Card>
-                  </Link>
-                  </div>
+                  <FactoryCard
+                    key={factory.id}
+                    factory={factory}
+                    getFavState={getFavState}
+                    handleFavToggle={handleFavToggle}
+                    cartHas={cartHas}
+                    cartAdd={cartAdd}
+                    cartRemove={cartRemove}
+                    setCartOpen={setCartOpen}
+                  />
                 ))}
               </div>
             )}
