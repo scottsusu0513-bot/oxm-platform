@@ -1220,6 +1220,10 @@ export const appRouter = router({
       return campaign;
     }),
 
+    getCampaignAllRecipients: adminProcedure.input(z.object({ campaignId: z.number() })).query(async ({ input }) => {
+      return db.getCampaignAllRecipients(input.campaignId);
+    }),
+
     getCampaignReplyingUsers: adminProcedure.input(z.object({ campaignId: z.number() })).query(async ({ input }) => {
       return db.getCampaignReplyingUsers(input.campaignId);
     }),

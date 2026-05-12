@@ -207,10 +207,9 @@ function CampaignThreadView({ campaignId, setLocation }: { campaignId: number; s
   const [selectedUserName, setSelectedUserName] = useState("");
 
   const campaignQuery = trpc.admin.getMessageCampaignDetail.useQuery({ campaignId });
-  const usersQuery = trpc.admin.getCampaignReplyingUsers.useQuery({ campaignId }, { refetchInterval: 15000 });
+  const usersQuery = trpc.admin.getCampaignAllRecipients.useQuery({ campaignId }, { refetchInterval: 15000 });
   const campaign = campaignQuery.data;
-  const replyingUsers = usersQuery.data ?? [];
-  const hasReplies = replyingUsers.length > 0;
+  const allRecipients = usersQuery.data ?? [];
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-orange-50 to-amber-50 p-4 md:p-8">
@@ -262,29 +261,23 @@ function CampaignThreadView({ campaignId, setLocation }: { campaignId: number; s
         )}
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          {/* 回覆用戶列表 */}
+          {/* 收件人列表 */}
           <Card className="lg:col-span-1">
-            <CardHeader className="pb-2"><CardTitle className="text-sm">已回覆用戶</CardTitle></CardHeader>
+            <CardHeader className="pb-2"><CardTitle className="text-sm">收件人</CardTitle></CardHeader>
             <CardContent className="p-0">
               {usersQuery.isLoading && (
                 <div className="flex justify-center py-8"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
               )}
-              {!usersQuery.isLoading && !hasReplies && campaign && (
-                <p className="text-center text-muted-foreground text-sm py-6 px-4 leading-relaxed">
-                  此站內信已成功發送給 <span className="font-semibold text-foreground">{Number(campaign.recipientCount)}</span> 位使用者，目前尚無用戶回覆。
-                </p>
-              )}
-              {!usersQuery.isLoading && !hasReplies && !campaign && (
-                <p className="text-center text-muted-foreground text-sm py-8 px-4">目前尚無用戶回覆。</p>
+              {!usersQuery.isLoading && allRecipients.length === 0 && (
+                <p className="text-center text-muted-foreground text-sm py-8 px-4">尚無收件人資料。</p>
               )}
               <div className="divide-y">
-                {replyingUsers.map((u: any) => (
+                {allRecipients.map((u: any) => (
                   <button key={u.userId}
                     className={`w-full text-left px-4 py-3 hover:bg-muted/30 transition-colors ${selectedUserId === u.userId ? "bg-orange-50 border-l-2 border-orange-400" : ""}`}
                     onClick={() => { setSelectedUserId(u.userId); setSelectedUserName(u.userName ?? u.userEmail ?? "用戶"); }}>
                     <p className="font-medium text-sm truncate">{u.userName ?? "未命名"}</p>
                     <p className="text-xs text-muted-foreground truncate">{u.userEmail}</p>
-                    <p className="text-xs text-muted-foreground mt-0.5">{new Date(u.latestReply).toLocaleDateString("zh-TW")}</p>
                   </button>
                 ))}
               </div>
@@ -293,19 +286,12 @@ function CampaignThreadView({ campaignId, setLocation }: { campaignId: number; s
 
           {/* 對話串 */}
           <Card className="lg:col-span-2 flex flex-col">
-            {selectedUserId ? (
-              <ThreadPanel campaignId={campaignId} userId={selectedUserId} userName={selectedUserName} />
+            {selectedUserId && campaign ? (
+              <ThreadPanel campaignId={campaignId} userId={selectedUserId} userName={selectedUserName} campaign={campaign} />
             ) : (
               <CardContent className="flex flex-col items-center justify-center h-64 text-center text-muted-foreground text-sm gap-2">
-                {hasReplies ? (
-                  <p>點選左側用戶查看對話</p>
-                ) : (
-                  <>
-                    <MessageSquare className="h-8 w-8 opacity-20" />
-                    <p>目前尚無對話。</p>
-                    <p className="text-xs">使用者回覆後，會顯示在左側列表。</p>
-                  </>
-                )}
+                <MessageSquare className="h-8 w-8 opacity-20" />
+                <p>點選左側收件人查看內容</p>
               </CardContent>
             )}
           </Card>
@@ -316,7 +302,9 @@ function CampaignThreadView({ campaignId, setLocation }: { campaignId: number; s
 }
 
 // ── 對話串面板（管理員用）────────────────────────────────────────────────────
-function ThreadPanel({ campaignId, userId, userName }: { campaignId: number; userId: number; userName: string }) {
+type CampaignInfo = { title: string; content: string; createdAt: string | Date };
+
+function ThreadPanel({ campaignId, userId, userName, campaign }: { campaignId: number; userId: number; userName: string; campaign: CampaignInfo }) {
   const [replyText, setReplyText] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
   const utils = trpc.useUtils();
@@ -342,9 +330,21 @@ function ThreadPanel({ campaignId, userId, userName }: { campaignId: number; use
         <CardTitle className="text-sm font-semibold">{userName} 的對話</CardTitle>
       </CardHeader>
       <CardContent className="flex-1 overflow-y-auto p-4 space-y-3 max-h-[420px]">
-        {threadQuery.isLoading && <div className="flex justify-center py-8"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>}
+        {/* 原始站內信內容 */}
+        <div className="flex justify-start">
+          <div className="max-w-[85%] rounded-2xl px-4 py-2.5 text-sm bg-orange-50 border border-orange-200">
+            <p className="text-xs font-bold text-orange-500 mb-1">★ 平台管理員（原始站內信）</p>
+            <p className="font-medium mb-1">{campaign.title}</p>
+            <p className="whitespace-pre-wrap">{campaign.content}</p>
+            <p className="text-xs mt-1 text-muted-foreground">
+              {new Date(campaign.createdAt).toLocaleString("zh-TW")}
+            </p>
+          </div>
+        </div>
+
+        {threadQuery.isLoading && <div className="flex justify-center py-4"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>}
         {!threadQuery.isLoading && thread.length === 0 && (
-          <p className="text-center text-muted-foreground text-sm py-8">尚無訊息</p>
+          <p className="text-center text-muted-foreground text-sm py-4">目前沒有後續訊息</p>
         )}
         {thread.map((msg: any) => {
           const isAdmin = msg.senderRole === "admin";

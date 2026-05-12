@@ -2054,6 +2054,30 @@ export async function getMessageThread(campaignId: number, userId: number) {
     .orderBy(asc(messageReplies.createdAt));
 }
 
+export async function getCampaignAllRecipients(campaignId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select({
+      userId: messageRecipients.receiverId,
+      userName: users.name,
+      userEmail: users.email,
+      latestReplyAt: sql<string | null>`MAX(${messageReplies.createdAt})`,
+    })
+    .from(messageRecipients)
+    .innerJoin(users, eq(messageRecipients.receiverId, users.id))
+    .leftJoin(
+      messageReplies,
+      and(
+        eq(messageReplies.campaignId, messageRecipients.campaignId),
+        eq(messageReplies.userId, messageRecipients.receiverId),
+      ),
+    )
+    .where(eq(messageRecipients.campaignId, campaignId))
+    .groupBy(messageRecipients.receiverId, users.name, users.email)
+    .orderBy(users.name);
+}
+
 export async function getCampaignReplyingUsers(campaignId: number) {
   const db = await getDb();
   if (!db) return [];
