@@ -128,7 +128,7 @@ export default function IndustryPage() {
             台灣{displayName}代工廠列表，共 {total} 間，支援 OEM / ODM 服務
           </p>
           <div className="mt-4 flex flex-wrap gap-2">
-            {Object.entries(INDUSTRY_SLUGS).slice(0, 10).map(([name, s]) => (
+            {Object.entries(INDUSTRY_SLUGS).map(([name, s]) => (
               <Link key={s} href={`/industry/${s}`}>
                 <Badge
                   variant={name === industryName ? "default" : "outline"}
