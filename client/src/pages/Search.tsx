@@ -682,13 +682,14 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
                   <div key={factory.id} className="relative">
                   <Link href={`/factory/${factory.id}`}>
                     <Card className="hover:shadow-md transition-shadow cursor-pointer h-full overflow-hidden">
-                      {/* 封面大圖 */}
-                      <div className="relative h-36 bg-gradient-to-br from-orange-100 to-amber-50 overflow-hidden">
+                      <div className="flex flex-col md:flex-row h-full">
+                      {/* 圖片區 */}
+                      <div className="relative h-36 md:h-auto md:w-40 shrink-0 bg-orange-50/40 flex items-center justify-center p-4 overflow-hidden">
                         {(factory as any).avatarUrl ? (
                           <img
                             src={(factory as any).avatarUrl}
                             alt={factory.name}
-                            className="w-full h-full object-cover"
+                            className="w-full h-full object-contain"
                             loading="lazy"
                           />
                         ) : (
@@ -702,7 +703,8 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
                           <FavButton factoryId={factory.id} initialIsFav={getFavState(factory.id)} onToggle={handleFavToggle} />
                         </div>
                       </div>
-                      <CardContent className="p-4">
+                      {/* 內容區 */}
+                      <div className="flex-1 p-4 flex flex-col min-w-0">
                         <div className="flex items-start justify-between mb-3">
                           <div className="flex-1">
                             <div className="flex items-center gap-2 mb-1 flex-wrap">
@@ -802,7 +804,8 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
                             )}
                           </Button>
                         </div>
-                      </CardContent>
+                      </div>
+                      </div>
                     </Card>
                   </Link>
                   </div>

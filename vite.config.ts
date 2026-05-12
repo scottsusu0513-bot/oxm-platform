@@ -150,9 +150,16 @@ function vitePluginManusDebugCollector(): Plugin {
   };
 }
 
-const plugins = [react(), tailwindcss(), jsxLocPlugin(), vitePluginManusRuntime(), vitePluginManusDebugCollector()];
+export default defineConfig(({ command }) => {
+const isDev = command === 'serve';
+const plugins = [
+  react(),
+  tailwindcss(),
+  jsxLocPlugin(),
+  ...(isDev ? [vitePluginManusDebugCollector()] : []),
+];
 
-export default defineConfig({
+return {
   plugins,
   resolve: {
     alias: {
@@ -167,6 +174,16 @@ export default defineConfig({
   build: {
     outDir: path.resolve(import.meta.dirname, "dist/public"),
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'vendor-react': ['react', 'react-dom', 'wouter'],
+          'vendor-ui': ['@radix-ui/react-dialog', '@radix-ui/react-dropdown-menu', '@radix-ui/react-select', '@radix-ui/react-popover', '@radix-ui/react-checkbox', '@radix-ui/react-tabs', '@radix-ui/react-avatar', '@radix-ui/react-label', '@radix-ui/react-slot'],
+          'vendor-query': ['@tanstack/react-query'],
+          'vendor-trpc': ['@trpc/client', '@trpc/react-query', '@trpc/server'],
+        },
+      },
+    },
   },
   server: {
     host: true,
@@ -184,4 +201,5 @@ export default defineConfig({
       deny: ["**/.*"],
     },
   },
+};
 });
