@@ -297,6 +297,7 @@ export default function FactoryReviewDetail() {
                           src={photo.url}
                           alt={photo.caption ?? ""}
                           className="w-full h-40 object-cover rounded-md border"
+                          loading="lazy"
                         />
                         {photo.caption && (
                           <p className="text-xs text-muted-foreground truncate">{photo.caption}</p>
@@ -346,7 +347,7 @@ export default function FactoryReviewDetail() {
                         {(product.images as string[] | null)?.length ? (
                           <div className="flex gap-2 mt-3 flex-wrap">
                             {(product.images as string[]).slice(0, 4).map((url, i) => (
-                              <img key={i} src={url} alt="" className="w-16 h-16 object-cover rounded border" />
+                              <img key={i} src={url} alt="" className="w-16 h-16 object-cover rounded border" loading="lazy" />
                             ))}
                           </div>
                         ) : null}

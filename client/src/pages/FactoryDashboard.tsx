@@ -11,6 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
+import { compressImage } from "@/lib/compressImage";
 import { INDUSTRIES, INDUSTRY_OPTIONS, TAIWAN_REGIONS, CAPITAL_OPTIONS, MFG_MODE_OPTIONS } from "@shared/constants";
 import { useState, useEffect, useRef } from "react";
 import { useLocation, Link } from "wouter";
@@ -138,7 +139,7 @@ export default function FactoryDashboard() {
           <div className="flex items-center gap-4">
             {/* 大頭貼 */}
             {factory.avatarUrl && (
-              <img src={factory.avatarUrl} alt={factory.name} className="w-16 h-16 rounded-full object-cover border-2 border-border shrink-0" />
+              <img src={factory.avatarUrl} alt={factory.name} className="w-16 h-16 rounded-full object-cover border-2 border-border shrink-0" loading="lazy" />
             )}
             {!factory.avatarUrl && (
               <div className="w-16 h-16 rounded-full bg-orange-100 flex items-center justify-center border-2 border-border shrink-0">
@@ -337,29 +338,25 @@ function FactoryInfoForm({ factory, isOwner = true }: { factory: any; isOwner?: 
     setFoundedYear(cleaned);
   };
 
-  const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     if (file.size > 5 * 1024 * 1024) { toast.error("圖片大小不能超過 5MB"); return; }
-    const reader = new FileReader();
-    reader.onload = async (ev) => {
-      const base64 = ev.target?.result as string;
+    setAvatarUploading(true);
+    try {
+      const base64 = await compressImage(file);
       setAvatarPreview(base64);
-      setAvatarUploading(true);
-      try {
-        const { url } = await uploadAvatarMut.mutateAsync({ base64, mimeType: (file.type || "image/jpeg") as "image/jpeg" | "image/png" | "image/webp" });
-        setAvatarUrl(url);
-        setAvatarPreview(url);
-        await utils.factory.getMine.invalidate();
-      } catch {
-        toast.error("圖片上傳失敗，請重試");
-        setAvatarPreview(null);
-        setAvatarUrl(null);
-      } finally {
-        setAvatarUploading(false);
-      }
-    };
-    reader.readAsDataURL(file);
+      const { url } = await uploadAvatarMut.mutateAsync({ base64, mimeType: "image/jpeg" });
+      setAvatarUrl(url);
+      setAvatarPreview(url);
+      await utils.factory.getMine.invalidate();
+    } catch {
+      toast.error("圖片上傳失敗，請重試");
+      setAvatarPreview(null);
+      setAvatarUrl(null);
+    } finally {
+      setAvatarUploading(false);
+    }
   };
 
   const handleSave = () => {
@@ -687,17 +684,11 @@ function PhotoManager({ factoryId }: { factoryId: number }) {
     const toUpload = files.slice(0, remaining);
     setUploading(true);
     for (const file of toUpload) {
-      if (file.size > 10 * 1024 * 1024) { toast.error(`${file.name} 超過 10MB 限制`); continue; }
-      await new Promise<void>((resolve) => {
-        const reader = new FileReader();
-        reader.onload = async (ev) => {
-          try {
-            await uploadMut.mutateAsync({ base64: ev.target?.result as string, mimeType: (file.type || "image/jpeg") as "image/jpeg" | "image/png" | "image/webp" });
-          } catch {}
-          resolve();
-        };
-        reader.readAsDataURL(file);
-      });
+      if (file.size > 5 * 1024 * 1024) { toast.error(`${file.name} 超過 5MB，請選擇較小的圖片`); continue; }
+      try {
+        const base64 = await compressImage(file);
+        await uploadMut.mutateAsync({ base64, mimeType: "image/jpeg" });
+      } catch {}
     }
     setUploading(false);
     e.target.value = "";
@@ -708,7 +699,7 @@ function PhotoManager({ factoryId }: { factoryId: number }) {
       <CardHeader className="flex flex-row items-center justify-between">
         <div>
           <CardTitle>工廠照片集</CardTitle>
-          <CardDescription>上傳工廠環境、設備、生產線照片，最多 20 張，每張上限 10MB</CardDescription>
+          <CardDescription>上傳工廠環境、設備、生產線照片，最多 20 張，每張上限 5MB</CardDescription>
         </div>
         {photos.length < 20 && (
           <Button size="sm" disabled={uploading} onClick={() => fileInputRef.current?.click()}>
@@ -730,7 +721,7 @@ function PhotoManager({ factoryId }: { factoryId: number }) {
             {photos.map((photo) => (
               <div key={photo.id} className="group relative">
                 <div className="aspect-square rounded-lg overflow-hidden bg-muted border">
-                  <img src={photo.url} alt={photo.caption ?? ""} className="w-full h-full object-cover" />
+                  <img src={photo.url} alt={photo.caption ?? ""} className="w-full h-full object-cover" loading="lazy" />
                 </div>
                 <button
                   onClick={() => deleteMut.mutate({ photoId: photo.id })}
@@ -991,8 +982,8 @@ function ProductForm({ factoryId, product, categories = [], onDone }: { factoryI
     try {
       for (const file of Array.from(files)) {
         if (file.size > 5 * 1024 * 1024) { toast.error(`${file.name} 超過 5MB 限制`); continue; }
-        const base64 = await fileToBase64(file);
-        const result = await uploadMut.mutateAsync({ factoryId, base64, mimeType: (file.type || "image/jpeg") as "image/jpeg" | "image/png" | "image/webp" });
+        const base64 = await compressImage(file);
+        const result = await uploadMut.mutateAsync({ factoryId, base64, mimeType: "image/jpeg" });
         setImages(prev => [...prev, result.url]);
       }
     } catch { toast.error("圖片上傳失敗"); }
@@ -1411,12 +1402,3 @@ function CoManagerPanel({ factoryId }: { factoryId: number }) {
   );
 }
 
-// ===== Helper =====
-function fileToBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => { const result = reader.result as string; resolve(result.split(",")[1]); };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}

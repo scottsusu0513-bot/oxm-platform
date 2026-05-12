@@ -389,7 +389,7 @@ export default function FactoryDetail() {
                     className="aspect-square rounded-lg overflow-hidden bg-muted cursor-pointer hover:opacity-90 transition-opacity"
                     onClick={() => setLightboxIndex(idx)}
                   >
-                    <img src={photo.url} alt={photo.caption ?? ""} className="w-full h-full object-cover" />
+                    <img src={photo.url} alt={photo.caption ?? ""} className="w-full h-full object-cover" loading="lazy" />
                   </div>
                 ))}
               </div>
