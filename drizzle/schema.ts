@@ -342,3 +342,19 @@ export const messageReplies = mysqlTable("messageReplies", {
   threadIdx: index("idx_message_replies_thread").on(table.campaignId, table.userId),
 }));
 export type MessageReply = typeof messageReplies.$inferSelect;
+
+// ===== OAuth State 表（DB-based CSRF 防護，取代 cookie 方案）=====
+export const oauthStates = mysqlTable("oauthStates", {
+  id: int("id").autoincrement().primaryKey(),
+  state: varchar("state", { length: 128 }).notNull().unique(),
+  redirectTo: varchar("redirectTo", { length: 512 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  expiresAt: timestamp("expiresAt").notNull(),
+  usedAt: timestamp("usedAt"),
+  userAgent: text("userAgent"),
+  ip: varchar("ip", { length: 64 }),
+}, (table) => ({
+  stateIdx: uniqueIndex("oauth_state_uq").on(table.state),
+}));
+
+export type OauthState = typeof oauthStates.$inferSelect;

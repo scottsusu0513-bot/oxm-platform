@@ -12,6 +12,7 @@ import {
   factoryCoManagerInvitations, factoryCoManagers,
   inquiryBatches, inquiryBatchItems,
   messageCampaigns, messageRecipients, messageReplies,
+  oauthStates,
   type Factory, type InsertFactory, type Product, type InsertProduct, type Favorite, type InsertFavorite
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
@@ -2129,4 +2130,60 @@ export async function getCampaignReplyCounts(campaignIds: number[]): Promise<Rec
     .where(inArray(messageReplies.campaignId, campaignIds))
     .groupBy(messageReplies.campaignId);
   return Object.fromEntries(rows.map(r => [r.campaignId, Number(r.count)]));
+}
+
+// ===== OAuth State (DB-based CSRF) =====
+
+export async function createOauthState(params: {
+  state: string;
+  redirectTo?: string;
+  userAgent?: string;
+  ip?: string;
+}): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + 10 * 60 * 1000);
+  await db.insert(oauthStates).values({
+    state: params.state,
+    redirectTo: params.redirectTo ?? null,
+    createdAt: now,
+    expiresAt,
+    usedAt: null,
+    userAgent: params.userAgent ?? null,
+    ip: params.ip ?? null,
+  });
+}
+
+export async function consumeOauthState(state: string): Promise<{ valid: boolean; redirectTo?: string | null }> {
+  const db = await getDb();
+  if (!db) return { valid: false };
+  const now = new Date();
+
+  const rows = await db
+    .select()
+    .from(oauthStates)
+    .where(eq(oauthStates.state, state))
+    .limit(1);
+
+  const row = rows[0];
+  if (!row) return { valid: false };
+  if (row.usedAt !== null) return { valid: false };
+  if (row.expiresAt < now) return { valid: false };
+
+  await db
+    .update(oauthStates)
+    .set({ usedAt: now })
+    .where(eq(oauthStates.state, state));
+
+  return { valid: true, redirectTo: row.redirectTo };
+}
+
+export async function purgeExpiredOauthStates(): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  await db
+    .delete(oauthStates)
+    .where(sql`${oauthStates.expiresAt} < ${cutoff} OR (${oauthStates.usedAt} IS NOT NULL AND ${oauthStates.createdAt} < ${cutoff})`);
 }

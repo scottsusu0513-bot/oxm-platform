@@ -13,34 +13,31 @@ function getQueryParam(req: Request, key: string): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-function getCookieValue(req: Request, name: string): string | undefined {
-  const header = req.headers.cookie ?? "";
-  const match = header.split(";").map(s => s.trim()).find(s => s.startsWith(`${name}=`));
-  return match ? decodeURIComponent(match.slice(name.length + 1)) : undefined;
-}
-
 function getStateCookieOptions(isProd: boolean): CookieOptions {
   return {
     httpOnly: true,
     secure: isProd,
-    // SameSite=None;Secure required for Android WebView:
-    // Google→callback is a cross-site redirect; Lax cookies are dropped by
-    // some WebView versions, making the server unable to read the nonce.
     sameSite: isProd ? "none" : "lax",
     path: "/",
     maxAge: 10 * 60 * 1000,
   };
 }
 
+function getClientIp(req: Request): string {
+  const forwarded = req.headers["x-forwarded-for"];
+  if (typeof forwarded === "string") return forwarded.split(",")[0].trim();
+  return req.ip ?? "";
+}
+
 export function registerOAuthRoutes(app: Express) {
-  app.get("/api/oauth/google", (req: Request, res: Response) => {
+  app.get("/api/oauth/google", async (req: Request, res: Response) => {
     const isProd = process.env.NODE_ENV === "production";
     const baseUrl = process.env.OAUTH_SERVER_URL || `${req.protocol}://${req.get("host")}`;
     const redirectUri = `${baseUrl}/api/oauth/callback`;
-    const nonce = randomBytes(16).toString("hex");
-    const state = Buffer.from(JSON.stringify({ redirectUri, nonce })).toString("base64url");
 
-    const cookieOpts = getStateCookieOptions(isProd);
+    // 產生 state：64 hex chars（32 bytes）
+    const state = randomBytes(32).toString("hex");
+
     console.log("[OAuth/init] NODE_ENV:", process.env.NODE_ENV);
     console.log("[OAuth/init] isProd:", isProd);
     console.log("[OAuth/init] protocol:", req.protocol);
@@ -49,11 +46,30 @@ export function registerOAuthRoutes(app: Express) {
     console.log("[OAuth/init] origin:", req.headers.origin);
     console.log("[OAuth/init] referer:", req.headers.referer);
     console.log("[OAuth/init] cookie header present:", !!req.headers.cookie);
-    console.log("[OAuth/init] nonce (first 8):", nonce.slice(0, 8));
+    console.log("[OAuth/init] state (first 8):", state.slice(0, 8));
     console.log("[OAuth/init] redirectUri:", redirectUri);
-    console.log("[OAuth/init] cookie options:", { sameSite: cookieOpts.sameSite, secure: cookieOpts.secure, path: cookieOpts.path });
 
-    res.cookie(OAUTH_STATE_COOKIE, nonce, cookieOpts);
+    // 1. 寫入 DB（主要驗證機制）
+    try {
+      await db.createOauthState({
+        state,
+        redirectTo: "/",
+        userAgent: req.headers["user-agent"],
+        ip: getClientIp(req),
+      });
+      // 順手清理過期資料
+      db.purgeExpiredOauthStates().catch(() => {});
+    } catch (err) {
+      console.error("[OAuth/init] Failed to write state to DB:", err);
+      res.status(500).json({ error: "OAuth init failed" });
+      return;
+    }
+
+    // 2. 同時設 cookie 作為 web fallback（不影響 APP 流程）
+    const cookieOpts = getStateCookieOptions(isProd);
+    console.log("[OAuth/init] cookie options:", { sameSite: cookieOpts.sameSite, secure: cookieOpts.secure, path: cookieOpts.path });
+    res.cookie(OAUTH_STATE_COOKIE, state, cookieOpts);
+
     res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${new URLSearchParams({
       client_id: ENV.googleClientId,
       redirect_uri: redirectUri,
@@ -77,31 +93,31 @@ export function registerOAuthRoutes(app: Express) {
     console.log("[OAuth/callback] referer:", req.headers.referer);
     console.log("[OAuth/callback] cookie header present:", !!req.headers.cookie);
     console.log("[OAuth/callback] state param present:", !!stateParam);
+    console.log("[OAuth/callback] state (first 8):", stateParam?.slice(0, 8));
     console.log("[OAuth/callback] code present:", !!code);
 
-    if (!code) {
-      res.status(400).json({ error: "code is required" });
+    if (!code || !stateParam) {
+      res.status(400).json({ error: "code and state are required" });
       return;
     }
 
+    // 主要驗證：DB lookup（cookie-free，相容 Android WebView）
+    let dbResult: { valid: boolean; redirectTo?: string | null };
     try {
-      const { nonce } = JSON.parse(Buffer.from(stateParam ?? "", "base64url").toString());
-      const cookieNonce = getCookieValue(req, OAUTH_STATE_COOKIE);
-      console.log("[OAuth/callback] state nonce (first 8):", nonce?.slice(0, 8));
-      console.log("[OAuth/callback] cookie nonce (first 8):", cookieNonce ? cookieNonce.slice(0, 8) : "(missing)");
-      console.log("[OAuth/callback] nonce match:", nonce === cookieNonce);
-      if (!cookieNonce || cookieNonce !== nonce) {
-        console.warn("[OAuth/callback] INVALID STATE — cookie nonce missing or mismatch");
-        res.status(400).json({ error: "Invalid OAuth state" });
-        return;
-      }
-    } catch {
-      console.warn("[OAuth/callback] INVALID STATE — failed to parse state param");
+      dbResult = await db.consumeOauthState(stateParam);
+      console.log("[OAuth/callback] DB state valid:", dbResult.valid);
+    } catch (err) {
+      console.error("[OAuth/callback] DB state lookup failed:", err);
+      dbResult = { valid: false };
+    }
+
+    if (!dbResult.valid) {
+      console.warn("[OAuth/callback] INVALID STATE — DB validation failed");
       res.status(400).json({ error: "Invalid OAuth state" });
       return;
     }
 
-    // Clear with same options so browser actually removes the cookie
+    // 清除 cookie（給 web 版用的，APP 不影響）
     const { maxAge: _omit, ...clearOpts } = getStateCookieOptions(isProd);
     res.clearCookie(OAUTH_STATE_COOKIE, clearOpts);
 
@@ -157,7 +173,7 @@ export function registerOAuthRoutes(app: Express) {
 
       const cookieOptions = getSessionCookieOptions(req);
       res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: THIRTY_DAYS_MS });
-      res.redirect(302, "/");
+      res.redirect(302, dbResult.redirectTo || "/");
     } catch (error) {
       console.error("[OAuth] Callback failed", error);
       res.status(500).json({ error: "OAuth callback failed" });
