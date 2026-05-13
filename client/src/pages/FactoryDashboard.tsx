@@ -219,28 +219,40 @@ export default function FactoryDashboard() {
         )}
 
         <Tabs defaultValue="info">
-          <TabsList className="h-auto flex-wrap w-full mb-4">
-            <TabsTrigger value="info"><Settings className="w-4 h-4 mr-1" />基本資料</TabsTrigger>
-            <TabsTrigger value="photos"><Images className="w-4 h-4 mr-1" />照片集</TabsTrigger>
-            <TabsTrigger value="products"><Package className="w-4 h-4 mr-1" />產品管理</TabsTrigger>
-            <TabsTrigger value="messages">
-              <MessageCircle className="w-4 h-4 mr-1" />客戶詢問
+          <TabsList className="h-auto flex flex-wrap w-full mb-4 gap-y-1">
+            <TabsTrigger value="info" className="basis-1/3 sm:basis-auto flex-1 min-w-0 text-xs sm:text-sm py-2 gap-1">
+              <Settings className="w-3 h-3 sm:w-4 sm:h-4 shrink-0" />
+              <span>基本資料</span>
+            </TabsTrigger>
+            <TabsTrigger value="photos" className="basis-1/3 sm:basis-auto flex-1 min-w-0 text-xs sm:text-sm py-2 gap-1">
+              <Images className="w-3 h-3 sm:w-4 sm:h-4 shrink-0" />
+              <span>照片集</span>
+            </TabsTrigger>
+            <TabsTrigger value="products" className="basis-1/3 sm:basis-auto flex-1 min-w-0 text-xs sm:text-sm py-2 gap-1">
+              <Package className="w-3 h-3 sm:w-4 sm:h-4 shrink-0" />
+              <span>產品管理</span>
+            </TabsTrigger>
+            <TabsTrigger value="messages" className="basis-1/3 sm:basis-auto flex-1 min-w-0 text-xs sm:text-sm py-2 gap-1">
+              <MessageCircle className="w-3 h-3 sm:w-4 sm:h-4 shrink-0" />
+              <span>客戶詢問</span>
               {convs && convs.some(c => c.unreadCount > 0) && (
-                <span className="ml-1 bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
+                <span className="ml-1 bg-red-500 text-white text-xs rounded-full w-4 h-4 sm:w-5 sm:h-5 flex items-center justify-center shrink-0">
                   {convs.reduce((sum, c) => sum + c.unreadCount, 0)}
                 </span>
               )}
             </TabsTrigger>
-            <TabsTrigger value="reviews" onClick={handleReviewTabClick}>
-              <Star className="w-4 h-4 mr-1" />客戶評價
+            <TabsTrigger value="reviews" onClick={handleReviewTabClick} className="basis-1/3 sm:basis-auto flex-1 min-w-0 text-xs sm:text-sm py-2 gap-1">
+              <Star className="w-3 h-3 sm:w-4 sm:h-4 shrink-0" />
+              <span>客戶評價</span>
               {showReviewBadge && (
-                <span className="ml-1 bg-red-500 text-white text-xs rounded-full min-w-5 h-5 px-1 flex items-center justify-center">
+                <span className="ml-1 bg-red-500 text-white text-xs rounded-full min-w-4 sm:min-w-5 h-4 sm:h-5 px-1 flex items-center justify-center shrink-0">
                   {unseenReviewCount}
                 </span>
               )}
             </TabsTrigger>
-            <TabsTrigger value="ads">
-              <Megaphone className="w-4 h-4 mr-1" />廣告曝光
+            <TabsTrigger value="ads" className="basis-1/3 sm:basis-auto flex-1 min-w-0 text-xs sm:text-sm py-2 gap-1">
+              <Megaphone className="w-3 h-3 sm:w-4 sm:h-4 shrink-0" />
+              <span>廣告曝光</span>
             </TabsTrigger>
           </TabsList>
 
@@ -1301,10 +1313,10 @@ function CoManagerPanel({ factoryId }: { factoryId: number }) {
   const activeCount = data?.coManagers.length ?? 0;
 
   return (
-    <Card className="mt-6">
+    <Card className="mt-6 overflow-hidden">
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
-          <Users className="w-4 h-4" />共同管理者
+          <Users className="w-4 h-4 shrink-0" />共同管理者
         </CardTitle>
         <CardDescription className="text-xs">
           可邀請最多 6 位次管理者共同編輯工廠後台。次管理者無法刪除工廠或管理其他管理者。
@@ -1313,17 +1325,18 @@ function CoManagerPanel({ factoryId }: { factoryId: number }) {
       <CardContent className="space-y-4">
         <div>
           <Label className="text-sm font-medium mb-1.5 block">邀請次管理者</Label>
-          <div className="flex gap-2">
+          <div className="flex flex-col sm:flex-row gap-2">
             <input
               type="email"
               placeholder="輸入對方在 OXM 註冊的 Gmail..."
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && email.trim() && inviteMut.mutate({ email: email.trim() })}
-              className="flex-1 h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              className="flex-1 min-w-0 h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             />
             <Button
               size="sm"
+              className="w-full sm:w-auto shrink-0"
               onClick={() => inviteMut.mutate({ email: email.trim() })}
               disabled={!email.trim() || inviteMut.isPending || activeCount >= 6}
             >
@@ -1340,35 +1353,37 @@ function CoManagerPanel({ factoryId }: { factoryId: number }) {
             <Label className="text-sm font-medium mb-2 block">目前次管理者</Label>
             <div className="space-y-2">
               {data!.coManagers.map((cm) => (
-                <div key={cm.id} className="flex items-center justify-between p-2.5 rounded-lg border bg-muted/30">
-                  <div>
-                    <p className="text-sm font-medium">{cm.name ?? "未知用戶"}</p>
-                    <p className="text-xs text-muted-foreground">{cm.email}</p>
+                <div key={cm.id} className="flex items-center gap-2 p-2.5 rounded-lg border bg-muted/30 min-w-0">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium truncate">{cm.name ?? "未知用戶"}</p>
+                    <p className="text-xs text-muted-foreground break-all">{cm.email}</p>
                   </div>
-                  <AlertDialog>
-                    <AlertDialogTrigger asChild>
-                      <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive hover:bg-destructive/10">
-                        <UserMinus className="w-4 h-4" />
-                      </Button>
-                    </AlertDialogTrigger>
-                    <AlertDialogContent>
-                      <AlertDialogHeader>
-                        <AlertDialogTitle>確認移除次管理者</AlertDialogTitle>
-                        <AlertDialogDescription>
-                          確定要移除 {cm.name ?? cm.email} 的次管理者權限？對方將無法繼續存取此工廠後台。
-                        </AlertDialogDescription>
-                      </AlertDialogHeader>
-                      <AlertDialogFooter>
-                        <AlertDialogCancel>取消</AlertDialogCancel>
-                        <AlertDialogAction
-                          className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                          onClick={() => removeMut.mutate({ userId: cm.userId })}
-                        >
-                          確認移除
-                        </AlertDialogAction>
-                      </AlertDialogFooter>
-                    </AlertDialogContent>
-                  </AlertDialog>
+                  <div className="shrink-0">
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive hover:bg-destructive/10">
+                          <UserMinus className="w-4 h-4" />
+                        </Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>確認移除次管理者</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            確定要移除 {cm.name ?? cm.email} 的次管理者權限？對方將無法繼續存取此工廠後台。
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>取消</AlertDialogCancel>
+                          <AlertDialogAction
+                            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                            onClick={() => removeMut.mutate({ userId: cm.userId })}
+                          >
+                            確認移除
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                  </div>
                 </div>
               ))}
             </div>
@@ -1380,14 +1395,14 @@ function CoManagerPanel({ factoryId }: { factoryId: number }) {
             <Label className="text-sm font-medium mb-2 block text-muted-foreground">待確認邀請</Label>
             <div className="space-y-2">
               {data!.pending.map((inv) => (
-                <div key={inv.id} className="flex items-center justify-between p-2.5 rounded-lg border border-dashed">
-                  <div>
-                    <p className="text-sm">{inv.name ?? inv.email}</p>
+                <div key={inv.id} className="flex items-center gap-2 p-2.5 rounded-lg border border-dashed min-w-0">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm break-all">{inv.name ?? inv.email}</p>
                     <p className="text-xs text-muted-foreground">
                       截止：{new Date(inv.expiresAt).toLocaleDateString("zh-TW")}
                     </p>
                   </div>
-                  <Badge variant="secondary" className="text-xs">等待回覆</Badge>
+                  <Badge variant="secondary" className="text-xs shrink-0">等待回覆</Badge>
                 </div>
               ))}
             </div>

@@ -240,29 +240,29 @@ export default function Home() {
 
           {/* Mode Tabs + Search */}
           <div className="max-w-4xl mx-auto">
-            <div className="flex justify-center gap-3 mb-6">
- {[
-  { label: "工廠", value: "factory", icon: <Factory className="w-4 h-4" /> },
-  { label: "工作室", value: "studio", icon: <Wrench className="w-4 h-4" /> },
-  { label: "我都要", value: "", icon: null },
-].map((tab) => (
-  <button
-    key={tab.value}
-    className={`flex items-center gap-2 px-6 py-3 rounded-xl text-base font-semibold transition-all ${
-      businessType === tab.value
-        ? tab.value === "factory"
-          ? "bg-gradient-to-r from-orange-500 to-amber-500 text-white shadow-lg shadow-orange-200"
-          : tab.value === "studio"
-          ? "bg-gradient-to-r from-purple-500 to-violet-500 text-white shadow-lg shadow-purple-200"
-          : "bg-gradient-to-r from-amber-400 to-purple-500 text-white shadow-lg"
-        : "bg-white text-foreground border border-border hover:border-orange-300 hover:shadow-sm"
-    }`}
-    onClick={() => setBusinessType(tab.value)}
-  >
-    {tab.icon}{tab.label}
-  </button>
-))}
-</div>
+            <div className="grid grid-cols-3 gap-2 mb-6 w-full">
+              {[
+                { label: "工廠", value: "factory", icon: <Factory className="w-4 h-4 shrink-0" /> },
+                { label: "工作室", value: "studio", icon: <Wrench className="w-4 h-4 shrink-0" /> },
+                { label: "我都要", value: "", icon: null },
+              ].map((tab) => (
+                <button
+                  key={tab.value}
+                  className={`flex items-center justify-center gap-1.5 px-2 py-2.5 sm:px-6 sm:py-3 rounded-xl text-sm sm:text-base font-semibold transition-all whitespace-nowrap w-full ${
+                    businessType === tab.value
+                      ? tab.value === "factory"
+                        ? "bg-gradient-to-r from-orange-500 to-amber-500 text-white shadow-lg shadow-orange-200"
+                        : tab.value === "studio"
+                        ? "bg-gradient-to-r from-purple-500 to-violet-500 text-white shadow-lg shadow-purple-200"
+                        : "bg-gradient-to-r from-amber-400 to-purple-500 text-white shadow-lg"
+                      : "bg-white text-foreground border border-border hover:border-orange-300 hover:shadow-sm"
+                  }`}
+                  onClick={() => setBusinessType(tab.value)}
+                >
+                  {tab.icon}{tab.label}
+                </button>
+              ))}
+            </div>
 
             <Card className="shadow-xl border-0 bg-white/80 backdrop-blur">
               <CardContent className="p-6">
@@ -365,10 +365,10 @@ export default function Home() {
       </section>
 
       {/* 代工廠 vs 工作室 介紹區（純展示，不可點擊）*/}
-      <section className="py-16 bg-white">
+      <section className="py-8 md:py-16 bg-white">
         <div className="container">
-          <div className="text-center mb-10">
-            <h2 className="text-3xl font-bold mb-3">
+          <div className="text-center mb-6 md:mb-10">
+            <h2 className="text-2xl sm:text-3xl font-bold mb-3">
               <span className="text-orange-500">代工廠</span>
               <span className="text-muted-foreground mx-2">&</span>
               <span className="text-purple-500">工作室</span>
@@ -379,10 +379,10 @@ export default function Home() {
           <div className="grid md:grid-cols-2 gap-6 max-w-4xl mx-auto">
             {/* 代工廠 */}
             <Card className="border-2 border-orange-100 shadow-sm">
-              <CardContent className="p-8">
-                <div className="flex items-center gap-4 mb-4">
-                  <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-orange-500 to-amber-400 flex items-center justify-center shadow-lg">
-                    <Factory className="w-8 h-8 text-white" />
+              <CardContent className="p-4 sm:p-8">
+                <div className="flex items-center gap-3 sm:gap-4 mb-4">
+                  <div className="w-12 h-12 sm:w-16 sm:h-16 rounded-xl sm:rounded-2xl bg-gradient-to-br from-orange-500 to-amber-400 flex items-center justify-center shadow-lg shrink-0">
+                    <Factory className="w-6 h-6 sm:w-8 sm:h-8 text-white" />
                   </div>
                   <div>
                     <h3 className="text-xl font-bold text-orange-500">代工廠</h3>
@@ -405,10 +405,10 @@ export default function Home() {
 
             {/* 工作室 */}
             <Card className="border-2 border-purple-100 shadow-sm">
-              <CardContent className="p-8">
-                <div className="flex items-center gap-4 mb-4">
-                  <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-purple-500 to-violet-400 flex items-center justify-center shadow-lg">
-                    <Wrench className="w-8 h-8 text-white" />
+              <CardContent className="p-4 sm:p-8">
+                <div className="flex items-center gap-3 sm:gap-4 mb-4">
+                  <div className="w-12 h-12 sm:w-16 sm:h-16 rounded-xl sm:rounded-2xl bg-gradient-to-br from-purple-500 to-violet-400 flex items-center justify-center shadow-lg shrink-0">
+                    <Wrench className="w-6 h-6 sm:w-8 sm:h-8 text-white" />
                   </div>
                   <div>
                     <h3 className="text-xl font-bold text-purple-500">設計工作室</h3>
@@ -433,13 +433,13 @@ export default function Home() {
       </section>
 
       {/* Industry Grid */}
-      <section className="py-16 bg-gray-50">
+      <section className="py-8 md:py-16 bg-gray-50">
         <div className="container">
-          <div className="text-center mb-10">
-            <h2 className="text-3xl font-bold mb-3">熱門產業分類</h2>
-            <p className="text-muted-foreground">涵蓋十大產業，快速找到您需要的合作夥伴</p>
+          <div className="text-center mb-6 md:mb-10">
+            <h2 className="text-2xl sm:text-3xl font-bold mb-3">熱門產業分類</h2>
+            <p className="text-muted-foreground text-sm sm:text-base">涵蓋十大產業，快速找到您需要的合作夥伴</p>
           </div>
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-4">
+          <div className="grid grid-cols-3 sm:grid-cols-3 md:grid-cols-5 gap-3">
             {INDUSTRY_OPTIONS.map((ind) => {
               const Icon = INDUSTRY_ICONS[ind] || Box;
               const colorClass = INDUSTRY_COLORS[ind] || "from-gray-500 to-gray-400";
@@ -449,11 +449,11 @@ export default function Home() {
                   className="hover:shadow-lg transition-all cursor-pointer group border-0 shadow-sm hover:-translate-y-1"
                   onClick={() => navigate(`/search?industry=${encodeURIComponent(ind)}`)}
                 >
-                  <CardContent className="p-5 text-center">
-                    <div className={`w-14 h-14 mx-auto mb-3 rounded-2xl bg-gradient-to-br ${colorClass} flex items-center justify-center shadow-sm group-hover:scale-110 transition-transform`}>
-                      <Icon className="w-7 h-7 text-white" />
+                  <CardContent className="p-3 sm:p-5 text-center">
+                    <div className={`w-10 h-10 sm:w-14 sm:h-14 mx-auto mb-2 sm:mb-3 rounded-xl sm:rounded-2xl bg-gradient-to-br ${colorClass} flex items-center justify-center shadow-sm group-hover:scale-110 transition-transform`}>
+                      <Icon className="w-5 h-5 sm:w-7 sm:h-7 text-white" />
                     </div>
-                    <p className="font-semibold text-sm">{ind}</p>
+                    <p className="font-semibold text-xs sm:text-sm leading-tight">{ind}</p>
                   </CardContent>
                 </Card>
               );
@@ -483,13 +483,13 @@ export default function Home() {
       </section>
 
       {/* Features */}
-      <section className="py-16 bg-white">
+      <section className="py-8 md:py-16 bg-white">
         <div className="container">
-          <div className="text-center mb-10">
-            <h2 className="text-3xl font-bold mb-3">為什麼選擇 OXM？</h2>
-            <p className="text-muted-foreground">最完整的代工媒合服務，工廠與工作室都在這裡</p>
+          <div className="text-center mb-6 md:mb-10">
+            <h2 className="text-2xl sm:text-3xl font-bold mb-3">為什麼選擇 OXM？</h2>
+            <p className="text-muted-foreground text-sm sm:text-base">最完整的代工媒合服務，工廠與工作室都在這裡</p>
           </div>
-          <div className="grid md:grid-cols-4 gap-6">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-6">
             {[
               { icon: Search, title: "精準搜尋", desc: "依產業、地區、資本額等多維度篩選，快速鎖定目標夥伴", color: "text-blue-500 bg-blue-50" },
               { icon: MessageCircle, title: "即時詢問", desc: "直接與工廠或工作室業主線上溝通，即時取得報價", color: "text-green-500 bg-green-50" },
@@ -497,12 +497,12 @@ export default function Home() {
               { icon: Shield, title: "資訊透明", desc: "完整資料、產品規格、價格區間一目了然", color: "text-purple-500 bg-purple-50" },
             ].map((feat) => (
               <Card key={feat.title} className="border-0 shadow-sm hover:shadow-md transition-shadow">
-                <CardContent className="p-6 text-center">
-                  <div className={`w-14 h-14 mx-auto mb-4 rounded-2xl ${feat.color} flex items-center justify-center`}>
-                    <feat.icon className="w-7 h-7" />
+                <CardContent className="p-4 sm:p-6 text-center">
+                  <div className={`w-10 h-10 sm:w-14 sm:h-14 mx-auto mb-3 sm:mb-4 rounded-xl sm:rounded-2xl ${feat.color} flex items-center justify-center`}>
+                    <feat.icon className="w-5 h-5 sm:w-7 sm:h-7" />
                   </div>
-                  <h3 className="font-bold mb-2 text-lg">{feat.title}</h3>
-                  <p className="text-sm text-muted-foreground leading-relaxed">{feat.desc}</p>
+                  <h3 className="font-bold mb-1 sm:mb-2 text-sm sm:text-lg">{feat.title}</h3>
+                  <p className="text-xs sm:text-sm text-muted-foreground leading-relaxed">{feat.desc}</p>
                 </CardContent>
               </Card>
             ))}
@@ -511,11 +511,11 @@ export default function Home() {
       </section>
 
       {/* 找代工指南 */}
-      <section id="guides" className="py-16 bg-gray-50">
+      <section id="guides" className="py-8 md:py-16 bg-gray-50">
         <div className="container">
-          <div className="flex items-end justify-between mb-8">
+          <div className="flex items-end justify-between mb-6 md:mb-8">
             <div>
-              <h2 className="text-3xl font-bold mb-2">找代工指南</h2>
+              <h2 className="text-2xl sm:text-3xl font-bold mb-2">找代工指南</h2>
               <p className="text-muted-foreground">第一次找 OEM / ODM 工廠？從這裡開始</p>
             </div>
             <Link href="/blog">
@@ -551,9 +551,9 @@ export default function Home() {
       </section>
 
       {/* CTA */}
-      <section className="py-16 bg-white">
+      <section className="py-8 md:py-16 bg-white">
         <div className="container text-center">
-          <h2 className="text-3xl font-bold mb-4">準備好開始了嗎？</h2>
+          <h2 className="text-2xl sm:text-3xl font-bold mb-4">準備好開始了嗎？</h2>
           <p className="text-muted-foreground mb-8 max-w-lg mx-auto">
             不論你是尋找合作夥伴的品牌商，還是想要曝光的
             <span className="text-orange-500 font-medium">工廠</span>

@@ -168,7 +168,7 @@ export default function Navbar() {
             </div>
           ) : (
             <div className="flex items-center gap-2">
-              <Button variant="outline" size="sm" onClick={() => performLogin()}>
+              <Button type="button" variant="outline" size="sm" onClick={(e) => { e.preventDefault(); void performLogin(); }}>
                 <UserPlus className="w-4 h-4 mr-1" />
                 註冊用戶
               </Button>
@@ -178,7 +178,7 @@ export default function Navbar() {
                   註冊工廠
                 </Button>
               </Link>
-              <Button size="sm" className="bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white border-0" onClick={() => performLogin()}>登入</Button>
+              <Button type="button" size="sm" className="bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white border-0" onClick={(e) => { e.preventDefault(); void performLogin(); }}>登入</Button>
             </div>
           )}
         </div>
@@ -248,11 +248,11 @@ export default function Navbar() {
           )}
           {!isAuthenticated && (
             <div className="space-y-2">
-              <Button variant="outline" className="w-full justify-start" onClick={() => { performLogin(); setMobileOpen(false); }}><UserPlus className="w-4 h-4 mr-2" />註冊用戶</Button>
+              <Button type="button" variant="outline" className="w-full justify-start" onClick={(e) => { e.preventDefault(); setMobileOpen(false); void performLogin(); }}><UserPlus className="w-4 h-4 mr-2" />註冊用戶</Button>
               <Link href="/register-factory" onClick={() => setMobileOpen(false)}>
                 <Button variant="outline" className="w-full justify-start"><Factory className="w-4 h-4 mr-2" />註冊工廠</Button>
               </Link>
-              <Button className="w-full bg-gradient-to-r from-orange-500 to-amber-500 text-white border-0" onClick={() => { performLogin(); setMobileOpen(false); }}>登入</Button>
+              <Button type="button" className="w-full bg-gradient-to-r from-orange-500 to-amber-500 text-white border-0" onClick={(e) => { e.preventDefault(); setMobileOpen(false); void performLogin(); }}>登入</Button>
               <p className="text-xs text-muted-foreground text-center pt-1">
                 手機請使用 Chrome 或 Safari 登入
               </p>
