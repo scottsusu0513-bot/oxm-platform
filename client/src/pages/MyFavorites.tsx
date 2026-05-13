@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+﻿import { useState, useMemo, useEffect } from "react";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -7,7 +7,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
-import { getLoginUrl } from "@/const";
+import { performLogin } from "@/const";
 import Navbar from "@/components/Navbar";
 import { Star, MapPin, ArrowLeft, Heart, Trash2, Factory, Wrench, Clock, X } from "lucide-react";
 import { toast } from "sonner";
@@ -158,7 +158,7 @@ export default function MyFavorites() {
         <Navbar />
         <div className="container py-16 text-center">
           <p className="text-muted-foreground mb-4">請先登入以查看收藏列表</p>
-          <Button onClick={() => window.location.href = getLoginUrl()}>登入</Button>
+          <Button onClick={() => performLogin()}>登入</Button>
         </div>
       </div>
     );
@@ -280,3 +280,4 @@ export default function MyFavorites() {
     </div>
   );
 }
+

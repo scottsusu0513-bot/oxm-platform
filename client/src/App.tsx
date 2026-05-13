@@ -56,18 +56,28 @@ function AppDeepLinkHandler() {
       const { App: CapApp } = await import("@capacitor/app");
       const { Browser } = await import("@capacitor/browser");
 
+      console.log("[AppDeepLinkHandler] mounted, listening for appUrlOpen");
+
       const handle = await CapApp.addListener("appUrlOpen", async ({ url }) => {
+        console.log("[AppDeepLinkHandler] appUrlOpen:", url.slice(0, 60));
+
         if (!url.startsWith("oxm://oauth/callback")) return;
 
         let ticket: string | null = null;
         try {
           ticket = new URL(url).searchParams.get("ticket");
         } catch {
+          console.warn("[AppDeepLinkHandler] failed to parse url");
           return;
         }
-        if (!ticket) return;
+        if (!ticket) {
+          console.warn("[AppDeepLinkHandler] no ticket in url");
+          return;
+        }
 
+        console.log("[AppDeepLinkHandler] ticket parsed (first 8):", ticket.slice(0, 8));
         await Browser.close();
+        console.log("[AppDeepLinkHandler] Browser.close called");
 
         try {
           const res = await fetch("/api/oauth/app-complete", {
@@ -76,13 +86,18 @@ function AppDeepLinkHandler() {
             credentials: "include",
             body: JSON.stringify({ ticket }),
           });
+          console.log("[AppDeepLinkHandler] app-complete status:", res.status);
           if (res.ok) {
+            console.log("[AppDeepLinkHandler] success — refetching auth.me");
             await utils.auth.me.invalidate();
             window.location.href = "/";
           } else {
+            const body = await res.json().catch(() => ({}));
+            console.warn("[AppDeepLinkHandler] app-complete failed:", body);
             toast.error("登入失敗，請重試");
           }
-        } catch {
+        } catch (err) {
+          console.error("[AppDeepLinkHandler] fetch error:", err);
           toast.error("網路錯誤，請重試");
         }
       });

@@ -16,7 +16,7 @@ import { useLocation, Link } from "wouter";
 import { useState, useMemo, useEffect } from "react";
 import { Search as SearchIcon, Star, MapPin, Factory, ChevronLeft, ChevronRight, Megaphone, Heart, X, Wrench, ChevronDown, Clock, ShoppingCart, Plus, Minus, Send } from "lucide-react";
 import { useAuth } from "@/_core/hooks/useAuth";
-import { getLoginUrl } from "@/const";
+import { performLogin } from "@/const";
 import { toast } from "sonner";
 
 // ── 一鍵詢價購物車 hook ───────────────────────────────────────────────────
@@ -136,7 +136,7 @@ function FavButton({ factoryId, initialIsFav, onToggle }: {
 
   const handleToggleFav = (e: React.MouseEvent) => {
     e.preventDefault();
-    if (!isAuthenticated) { window.location.href = getLoginUrl(); return; }
+    if (!isAuthenticated) { performLogin(); return; }
     toggleFav.mutate({ factoryId });
   };
 
@@ -360,7 +360,7 @@ const { isAuthenticated } = useAuth();
   });
 
   const handleInquirySubmit = () => {
-    if (!isAuthenticated) { window.location.href = getLoginUrl(); return; }
+    if (!isAuthenticated) { performLogin(); return; }
     if (cart.length === 0) { toast.error("請先加入工廠"); return; }
     if (!inquiryTitle.trim()) { toast.error("請輸入詢價分類名稱"); return; }
     if (!inquiryMessage.trim()) { toast.error("請輸入詢價內容"); return; }

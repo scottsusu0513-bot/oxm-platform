@@ -9,7 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
-import { getLoginUrl } from "@/const";
+import { performLogin } from "@/const";
 import { useRoute, useLocation } from "wouter";
 import { useState, useEffect } from "react";
 import { toast } from "sonner";
@@ -165,7 +165,7 @@ export default function FactoryDetail() {
   };
 
   const handleChat = (productId?: number, productName?: string) => {
-    if (!isAuthenticated) { window.location.href = getLoginUrl(); return; }
+    if (!isAuthenticated) { performLogin(); return; }
     const params = new URLSearchParams();
     params.set("factoryId", String(factoryId));
     if (productId) params.set("productId", String(productId));
@@ -182,7 +182,7 @@ export default function FactoryDetail() {
   });
 
   const handleToggleFav = () => {
-    if (!isAuthenticated) { window.location.href = getLoginUrl(); return; }
+    if (!isAuthenticated) { performLogin(); return; }
     toggleFav.mutate({ factoryId });
   };
 
@@ -569,7 +569,7 @@ export default function FactoryDetail() {
             {!isAuthenticated && (
               <div className="mb-6 p-4 rounded-lg bg-muted/30 text-center">
                 <p className="text-muted-foreground mb-2">登入後即可留下評價</p>
-                <a href={getLoginUrl()}><Button size="sm">登入</Button></a>
+                <Button size="sm" onClick={() => performLogin()}>登入</Button>
               </div>
             )}
 

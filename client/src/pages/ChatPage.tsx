@@ -1,4 +1,4 @@
-import Navbar from "@/components/Navbar";
+﻿import Navbar from "@/components/Navbar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useAuth } from "@/_core/hooks/useAuth";
-import { getLoginUrl } from "@/const";
+import { performLogin } from "@/const";
 import { trpc } from "@/lib/trpc";
 import { useRoute, useLocation, useSearch } from "wouter";
 import { useState, useRef, useEffect, useCallback } from "react";
@@ -425,7 +425,7 @@ export default function ChatPage() {
         <Navbar />
         <div className="container py-16 text-center">
           <p className="text-muted-foreground mb-4">請先登入以查看訊息</p>
-          <a href={getLoginUrl()}><Button>登入</Button></a>
+          <Button onClick={() => performLogin()}>登入</Button>
         </div>
       </div>
     );
@@ -657,3 +657,4 @@ function InviteResponseButtons({ invitationId, onResponded }: { invitationId: nu
     </div>
   );
 }
+

@@ -1,9 +1,9 @@
-import Navbar from "@/components/Navbar";
+﻿import Navbar from "@/components/Navbar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/_core/hooks/useAuth";
-import { getLoginUrl } from "@/const";
+import { performLogin } from "@/const";
 import { trpc } from "@/lib/trpc";
 import { Link, useLocation } from "wouter";
 import { Star, ArrowLeft, MessageCircle } from "lucide-react";
@@ -24,7 +24,7 @@ export default function MyReviews() {
         <div className="container py-16 text-center">
           <Star className="w-16 h-16 mx-auto mb-4 text-muted-foreground" />
           <p className="text-muted-foreground mb-4">請先登入以查看您的評價</p>
-          <a href={getLoginUrl()}><Button>登入</Button></a>
+          <Button onClick={() => performLogin()}>登入</Button>
         </div>
       </div>
     );
@@ -89,3 +89,4 @@ export default function MyReviews() {
     </div>
   );
 }
+

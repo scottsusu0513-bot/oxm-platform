@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+﻿import { useState, useRef, useEffect } from "react";
 import { useLocation, useParams } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
@@ -8,7 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent } from "@/components/ui/card";
 import { ArrowLeft, Loader2, Send } from "lucide-react";
 import { toast } from "sonner";
-import { getLoginUrl } from "@/const";
+import { performLogin } from "@/const";
 
 export default function AdminMessageDetail() {
   const { id } = useParams<{ id: string }>();
@@ -52,7 +52,7 @@ export default function AdminMessageDetail() {
         <Navbar />
         <div className="container py-16 text-center">
           <p className="text-muted-foreground mb-4">請先登入以查看此訊息</p>
-          <a href={getLoginUrl()}><Button>登入</Button></a>
+          <Button onClick={() => performLogin()}>登入</Button>
         </div>
       </div>
     );
@@ -155,3 +155,4 @@ export default function AdminMessageDetail() {
     </div>
   );
 }
+

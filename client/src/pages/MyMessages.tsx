@@ -1,4 +1,4 @@
-import Navbar from "@/components/Navbar";
+﻿import Navbar from "@/components/Navbar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
 import { Link, useLocation } from "wouter";
-import { getLoginUrl } from "@/const";
+import { performLogin } from "@/const";
 import { useState } from "react";
 import { MessageCircle, ArrowLeft, Trash2, Inbox, ShoppingCart, ChevronDown, ChevronRight, Pencil, Check, X } from "lucide-react";
 import { toast } from "sonner";
@@ -252,7 +252,7 @@ export default function MyMessages() {
           <MessageCircle className="w-16 h-16 mx-auto mb-4 text-muted-foreground" />
           <h2 className="text-xl font-semibold mb-2">請先登入</h2>
           <p className="text-muted-foreground mb-4">登入後即可查看您的訊息</p>
-          <a href={getLoginUrl()}><Button>登入</Button></a>
+          <Button onClick={() => performLogin()}>登入</Button>
         </div>
       </div>
     );
@@ -299,3 +299,4 @@ export default function MyMessages() {
     </div>
   );
 }
+

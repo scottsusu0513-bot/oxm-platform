@@ -174,24 +174,29 @@ export function registerOAuthRoutes(app: Express) {
 
       // ── APP flow: issue one-time ticket, deep link back to APP ──────────
       if (dbResult.source === "app") {
+        console.log("[OAuth/callback] app flow detected");
         const dbUser = await db.getUserByOpenId(openId);
         if (!dbUser) {
+          console.error("[OAuth/callback] user not found after upsert, openId:", openId.slice(0, 12));
           res.status(500).json({ error: "User not found after upsert" });
           return;
         }
         const ticket = randomBytes(32).toString("hex");
-        console.log("[OAuth/callback] APP flow — creating ticket (first 8):", ticket.slice(0, 8));
+        console.log("[OAuth/callback] app login ticket created (first 8):", ticket.slice(0, 8));
         await db.createAppLoginTicket({
           ticket,
           userId: dbUser.id,
           userAgent: req.headers["user-agent"],
           ip: getClientIp(req),
         });
-        res.redirect(302, `oxm://oauth/callback?ticket=${ticket}`);
+        const deepLink = `oxm://oauth/callback?ticket=${ticket}`;
+        console.log("[OAuth/callback] redirecting to oxm://oauth/callback");
+        res.redirect(302, deepLink);
         return;
       }
 
       // ── Web flow: set cookie, redirect to site ───────────────────────────
+      console.log("[OAuth/callback] web flow — setting session cookie");
       await setSessionCookieForUser(req, res, openId, userInfo.name || "");
       res.redirect(302, dbResult.redirectTo || "/");
     } catch (error) {
