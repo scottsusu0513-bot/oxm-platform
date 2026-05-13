@@ -348,6 +348,7 @@ export const oauthStates = mysqlTable("oauthStates", {
   id: int("id").autoincrement().primaryKey(),
   state: varchar("state", { length: 128 }).notNull().unique(),
   redirectTo: varchar("redirectTo", { length: 512 }),
+  source: varchar("source", { length: 32 }), // "app" | "web" | null
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   expiresAt: timestamp("expiresAt").notNull(),
   usedAt: timestamp("usedAt"),
@@ -358,3 +359,19 @@ export const oauthStates = mysqlTable("oauthStates", {
 }));
 
 export type OauthState = typeof oauthStates.$inferSelect;
+
+// ===== App Login Ticket 表（mobile OAuth 一次性登入票，2 分鐘有效）=====
+export const appLoginTickets = mysqlTable("appLoginTickets", {
+  id: int("id").autoincrement().primaryKey(),
+  ticket: varchar("ticket", { length: 128 }).notNull().unique(),
+  userId: int("userId").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  expiresAt: timestamp("expiresAt").notNull(),
+  usedAt: timestamp("usedAt"),
+  userAgent: text("userAgent"),
+  ip: varchar("ip", { length: 64 }),
+}, (table) => ({
+  ticketIdx: uniqueIndex("app_login_ticket_uq").on(table.ticket),
+}));
+
+export type AppLoginTicket = typeof appLoginTickets.$inferSelect;

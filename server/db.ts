@@ -12,7 +12,7 @@ import {
   factoryCoManagerInvitations, factoryCoManagers,
   inquiryBatches, inquiryBatchItems,
   messageCampaigns, messageRecipients, messageReplies,
-  oauthStates,
+  oauthStates, appLoginTickets,
   type Factory, type InsertFactory, type Product, type InsertProduct, type Favorite, type InsertFavorite
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
@@ -2137,6 +2137,7 @@ export async function getCampaignReplyCounts(campaignIds: number[]): Promise<Rec
 export async function createOauthState(params: {
   state: string;
   redirectTo?: string;
+  source?: string;
   userAgent?: string;
   ip?: string;
 }): Promise<void> {
@@ -2147,6 +2148,7 @@ export async function createOauthState(params: {
   await db.insert(oauthStates).values({
     state: params.state,
     redirectTo: params.redirectTo ?? null,
+    source: params.source ?? null,
     createdAt: now,
     expiresAt,
     usedAt: null,
@@ -2155,7 +2157,7 @@ export async function createOauthState(params: {
   });
 }
 
-export async function consumeOauthState(state: string): Promise<{ valid: boolean; redirectTo?: string | null }> {
+export async function consumeOauthState(state: string): Promise<{ valid: boolean; redirectTo?: string | null; source?: string | null }> {
   const db = await getDb();
   if (!db) return { valid: false };
   const now = new Date();
@@ -2176,7 +2178,52 @@ export async function consumeOauthState(state: string): Promise<{ valid: boolean
     .set({ usedAt: now })
     .where(eq(oauthStates.state, state));
 
-  return { valid: true, redirectTo: row.redirectTo };
+  return { valid: true, redirectTo: row.redirectTo, source: row.source };
+}
+
+export async function createAppLoginTicket(params: {
+  ticket: string;
+  userId: number;
+  userAgent?: string;
+  ip?: string;
+}): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + 2 * 60 * 1000); // 2 分鐘有效
+  await db.insert(appLoginTickets).values({
+    ticket: params.ticket,
+    userId: params.userId,
+    createdAt: now,
+    expiresAt,
+    usedAt: null,
+    userAgent: params.userAgent ?? null,
+    ip: params.ip ?? null,
+  });
+}
+
+export async function consumeAppLoginTicket(ticket: string): Promise<{ valid: boolean; userId?: number }> {
+  const db = await getDb();
+  if (!db) return { valid: false };
+  const now = new Date();
+
+  const rows = await db
+    .select()
+    .from(appLoginTickets)
+    .where(eq(appLoginTickets.ticket, ticket))
+    .limit(1);
+
+  const row = rows[0];
+  if (!row) return { valid: false };
+  if (row.usedAt !== null) return { valid: false };
+  if (row.expiresAt < now) return { valid: false };
+
+  await db
+    .update(appLoginTickets)
+    .set({ usedAt: now })
+    .where(eq(appLoginTickets.ticket, ticket));
+
+  return { valid: true, userId: row.userId };
 }
 
 export async function purgeExpiredOauthStates(): Promise<void> {

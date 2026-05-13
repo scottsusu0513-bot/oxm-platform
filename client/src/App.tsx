@@ -6,6 +6,7 @@ import { lazy, Suspense, useEffect } from "react";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { HelmetProvider } from "react-helmet-async";
+import { toast } from "sonner";
 
 // ── 公開頁面 ──────────────────────────────────────────────────────────────
 const Home                  = lazy(() => import("./pages/Home"));
@@ -40,6 +41,60 @@ const AdminSupportCenter    = lazy(() => import("./pages/AdminSupportCenter"));
 const AdminAnnouncements    = lazy(() => import("./pages/AdminAnnouncements"));
 const AdminMessages         = lazy(() => import("./pages/AdminMessages"));
 const AdminMessageDetail    = lazy(() => import("./pages/AdminMessageDetail"));
+
+// Handles oxm://oauth/callback?ticket=... deep links on Android
+function AppDeepLinkHandler() {
+  const utils = trpc.useUtils();
+
+  useEffect(() => {
+    let cleanup: (() => void) | undefined;
+
+    (async () => {
+      const { Capacitor } = await import("@capacitor/core");
+      if (!Capacitor.isNativePlatform()) return;
+
+      const { App: CapApp } = await import("@capacitor/app");
+      const { Browser } = await import("@capacitor/browser");
+
+      const handle = await CapApp.addListener("appUrlOpen", async ({ url }) => {
+        if (!url.startsWith("oxm://oauth/callback")) return;
+
+        let ticket: string | null = null;
+        try {
+          ticket = new URL(url).searchParams.get("ticket");
+        } catch {
+          return;
+        }
+        if (!ticket) return;
+
+        await Browser.close();
+
+        try {
+          const res = await fetch("/api/oauth/app-complete", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({ ticket }),
+          });
+          if (res.ok) {
+            await utils.auth.me.invalidate();
+            window.location.href = "/";
+          } else {
+            toast.error("登入失敗，請重試");
+          }
+        } catch {
+          toast.error("網路錯誤，請重試");
+        }
+      });
+
+      cleanup = () => { handle.remove(); };
+    })();
+
+    return () => { cleanup?.(); };
+  }, [utils]);
+
+  return null;
+}
 
 function PageFallback() {
   return (
@@ -132,6 +187,7 @@ function App() {
           <TooltipProvider>
             <Toaster />
             <PageViewTracker />
+            <AppDeepLinkHandler />
             <Router />
           </TooltipProvider>
         </ThemeProvider>
