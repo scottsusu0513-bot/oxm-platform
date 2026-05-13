@@ -26,11 +26,22 @@ export function registerOAuthRoutes(app: Express) {
     const nonce = randomBytes(16).toString("hex");
     const state = Buffer.from(JSON.stringify({ redirectUri, nonce })).toString("base64url");
 
-    // 把 nonce 存進 httpOnly cookie，callback 時驗證
+    const isProd = process.env.NODE_ENV === "production";
+    console.log("[OAuth/init] origin:", req.headers.origin);
+    console.log("[OAuth/init] referer:", req.headers.referer);
+    console.log("[OAuth/init] protocol:", req.protocol);
+    console.log("[OAuth/init] hostname:", req.hostname);
+    console.log("[OAuth/init] cookie header present:", !!req.headers.cookie);
+    console.log("[OAuth/init] nonce generated:", nonce.slice(0, 8) + "...");
+    console.log("[OAuth/init] redirectUri:", redirectUri);
+
+    // SameSite=None;Secure is required for Android WebView cross-site redirect:
+    // when Google redirects back to the callback, WebView treats it as cross-site
+    // and drops SameSite=Lax cookies, breaking state validation.
     res.cookie(OAUTH_STATE_COOKIE, nonce, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
+      secure: isProd,
+      sameSite: isProd ? "none" : "lax",
       maxAge: 10 * 60 * 1000, // 10 分鐘內完成登入
     });
 
@@ -51,6 +62,14 @@ export function registerOAuthRoutes(app: Express) {
     const code = getQueryParam(req, "code");
     const stateParam = getQueryParam(req, "state");
 
+    console.log("[OAuth/callback] origin:", req.headers.origin);
+    console.log("[OAuth/callback] referer:", req.headers.referer);
+    console.log("[OAuth/callback] protocol:", req.protocol);
+    console.log("[OAuth/callback] hostname:", req.hostname);
+    console.log("[OAuth/callback] cookie header:", req.headers.cookie ?? "(none)");
+    console.log("[OAuth/callback] state param present:", !!stateParam);
+    console.log("[OAuth/callback] code present:", !!code);
+
     if (!code) {
       res.status(400).json({ error: "code is required" });
       return;
@@ -60,11 +79,16 @@ export function registerOAuthRoutes(app: Express) {
     try {
       const { nonce } = JSON.parse(Buffer.from(stateParam ?? "", "base64url").toString());
       const cookieNonce = getCookieValue(req, OAUTH_STATE_COOKIE);
+      console.log("[OAuth/callback] nonce from state:", nonce?.slice(0, 8) + "...");
+      console.log("[OAuth/callback] nonce from cookie:", cookieNonce ? cookieNonce.slice(0, 8) + "..." : "(missing)");
+      console.log("[OAuth/callback] nonce match:", nonce === cookieNonce);
       if (!cookieNonce || cookieNonce !== nonce) {
+        console.warn("[OAuth/callback] INVALID STATE — cookie nonce missing or mismatch");
         res.status(400).json({ error: "Invalid OAuth state" });
         return;
       }
     } catch {
+      console.warn("[OAuth/callback] INVALID STATE — failed to parse state param");
       res.status(400).json({ error: "Invalid OAuth state" });
       return;
     }
