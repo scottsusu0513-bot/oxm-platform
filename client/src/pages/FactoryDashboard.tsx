@@ -398,11 +398,11 @@ function FactoryInfoForm({ factory, isOwner = true }: { factory: any; isOwner?: 
           {isLocked ? "審核中，資料暫時無法修改" : "修改您的工廠資訊，完善後送出審核"}
         </CardDescription>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="space-y-6">
 
         {/* 大頭貼 */}
         {!isLocked && (
-          <div>
+          <div className="space-y-1.5">
             <Label>工廠大頭貼</Label>
             <div className="mt-2 flex items-center gap-4">
               <div
@@ -439,11 +439,10 @@ function FactoryInfoForm({ factory, isOwner = true }: { factory: any; isOwner?: 
           </div>
         )}
 
-        <div className="grid sm:grid-cols-2 gap-4">
-          {/* 業務類型顯示 */}
-        <div>
+        {/* 業務類型顯示（全寬） */}
+        <div className="space-y-1.5">
           <Label>業務類型</Label>
-          <div className="mt-2 flex items-center gap-2">
+          <div className="flex items-center gap-2">
             {factory.businessType === "studio" ? (
               <div className="flex items-center gap-2 px-4 py-2 rounded-lg bg-purple-50 border border-purple-200 w-fit">
                 <Wrench className="w-4 h-4 text-purple-600" />
@@ -458,12 +457,17 @@ function FactoryInfoForm({ factory, isOwner = true }: { factory: any; isOwner?: 
             <span className="text-xs text-muted-foreground">（申請後無法更改）</span>
           </div>
         </div>
-          <div><Label>工廠名稱</Label><Input disabled={isLocked} value={name} onChange={e => setName(e.target.value)} /></div>
-          <div>
+
+        <div className="grid sm:grid-cols-2 gap-4">
+          <div className="space-y-1.5">
+            <Label>工廠名稱</Label>
+            <Input disabled={isLocked} value={name} onChange={e => setName(e.target.value)} />
+          </div>
+          <div className="space-y-1.5">
             <Label>主產業（可複選）</Label>
             <Popover>
               <PopoverTrigger asChild>
-                <Button type="button" variant="outline" className="w-full justify-between font-normal mt-1" disabled={isLocked}>
+                <Button type="button" variant="outline" className="w-full justify-between font-normal" disabled={isLocked}>
                   <span className="truncate text-sm">{industry.length === 0 ? "選擇主產業" : industry.join("、")}</span>
                   <ChevronDown className="w-3 h-3 shrink-0 opacity-50 ml-1" />
                 </Button>
@@ -504,11 +508,11 @@ function FactoryInfoForm({ factory, isOwner = true }: { factory: any; isOwner?: 
           if (groups.length === 0) return null;
           const label = subIndustry.length === 0 ? "選擇子產業（可複選）" : subIndustry.join("、");
           return (
-            <div>
+            <div className="space-y-1.5">
               <Label>子產業（可複選）</Label>
               <Popover>
                 <PopoverTrigger asChild>
-                  <Button type="button" variant="outline" className="w-full justify-between font-normal mt-1">
+                  <Button type="button" variant="outline" className="w-full justify-between font-normal">
                     <span className="truncate text-sm">{label}</span>
                     <ChevronDown className="w-3 h-3 shrink-0 opacity-50 ml-1" />
                   </Button>
@@ -542,9 +546,9 @@ function FactoryInfoForm({ factory, isOwner = true }: { factory: any; isOwner?: 
           );
         })()}
 
-        <div>
+        <div className="space-y-1.5">
           <Label>代工模式</Label>
-          <div className="flex gap-4 mt-2">
+          <div className="flex flex-wrap gap-4">
             {MFG_MODE_OPTIONS.map(mode => (
               <label key={mode} className={`flex items-center gap-2 ${isLocked ? "opacity-50" : "cursor-pointer"}`}>
                 <Checkbox disabled={isLocked} checked={mfgModes.includes(mode)} onCheckedChange={() => toggleMode(mode)} />
@@ -555,14 +559,14 @@ function FactoryInfoForm({ factory, isOwner = true }: { factory: any; isOwner?: 
         </div>
 
         <div className="grid sm:grid-cols-2 gap-4">
-          <div>
+          <div className="space-y-1.5">
             <Label>地區</Label>
             <Select disabled={isLocked} value={region} onValueChange={setRegion}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>{TAIWAN_REGIONS.map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}</SelectContent>
             </Select>
           </div>
-          <div>
+          <div className="space-y-1.5">
             <Label>資本額</Label>
             <Select disabled={isLocked} value={capitalLevel} onValueChange={setCapitalLevel}>
               <SelectTrigger><SelectValue /></SelectTrigger>
@@ -571,27 +575,45 @@ function FactoryInfoForm({ factory, isOwner = true }: { factory: any; isOwner?: 
           </div>
         </div>
 
-        <div><Label>工廠簡介</Label><Textarea disabled={isLocked} value={description} onChange={e => setDescription(e.target.value)} rows={4} /></div>
+        <div className="space-y-1.5">
+          <Label>工廠簡介</Label>
+          <Textarea disabled={isLocked} value={description} onChange={e => setDescription(e.target.value)} rows={4} />
+        </div>
 
         <div className="grid sm:grid-cols-2 gap-4">
-          <div>
+          <div className="space-y-1.5">
             <Label>成立年份</Label>
             <Input disabled={isLocked} inputMode="numeric" value={foundedYear} onChange={e => handleYearChange(e.target.value)} placeholder="西元（例：2010）" maxLength={4} />
           </div>
-          <div><Label>負責人</Label><Input disabled={isLocked} value={ownerName} onChange={e => setOwnerName(e.target.value)} /></div>
+          <div className="space-y-1.5">
+            <Label>負責人</Label>
+            <Input disabled={isLocked} value={ownerName} onChange={e => setOwnerName(e.target.value)} />
+          </div>
         </div>
 
         <div className="grid sm:grid-cols-2 gap-4">
-          <div><Label>聯絡電話</Label><Input disabled={isLocked} value={phone} onChange={e => setPhone(e.target.value)} /></div>
-          <div><Label>聯絡信箱</Label><Input disabled={isLocked} type="email" value={contactEmail} onChange={e => setContactEmail(e.target.value)} /></div>
+          <div className="space-y-1.5">
+            <Label>聯絡電話</Label>
+            <Input disabled={isLocked} value={phone} onChange={e => setPhone(e.target.value)} />
+          </div>
+          <div className="space-y-1.5">
+            <Label>聯絡信箱</Label>
+            <Input disabled={isLocked} type="email" value={contactEmail} onChange={e => setContactEmail(e.target.value)} />
+          </div>
         </div>
 
-        <div><Label>官方網站</Label><Input disabled={isLocked} value={website} onChange={e => setWebsite(e.target.value)} /></div>
-        <div><Label>公廠地址 *</Label><Input disabled={isLocked} value={address} onChange={e => setAddress(e.target.value)} placeholder="例：台北市中山區民權路 100 號" /></div>
+        <div className="space-y-1.5">
+          <Label>官方網站</Label>
+          <Input disabled={isLocked} value={website} onChange={e => setWebsite(e.target.value)} />
+        </div>
+        <div className="space-y-1.5">
+          <Label>公廠地址 *</Label>
+          <Input disabled={isLocked} value={address} onChange={e => setAddress(e.target.value)} placeholder="例：台北市中山區民權路 100 號" />
+        </div>
 
-        <div>
+        <div className="space-y-1.5">
           <Label>營業狀態</Label>
-          <div className="flex flex-wrap gap-2 mt-2">
+          <div className="flex flex-wrap gap-2">
             {OPERATION_STATUS_OPTIONS.map(opt => (
               <button
                 key={opt.value}
@@ -610,9 +632,9 @@ function FactoryInfoForm({ factory, isOwner = true }: { factory: any; isOwner?: 
           </div>
         </div>
 
-        <div>
+        <div className="space-y-2">
           <Label>營業時間</Label>
-          <div className="grid sm:grid-cols-2 gap-3 mt-2">
+          <div className="grid sm:grid-cols-2 gap-3">
             <div>
               <p className="text-xs text-muted-foreground mb-1">平日</p>
               <Input disabled={isLocked} value={weekdayHours} onChange={e => setWeekdayHours(e.target.value)} placeholder="例：09:00–18:00" />
@@ -708,13 +730,13 @@ function PhotoManager({ factoryId }: { factoryId: number }) {
 
   return (
     <Card>
-      <CardHeader className="flex flex-row items-center justify-between">
+      <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
           <CardTitle>工廠照片集</CardTitle>
           <CardDescription>上傳工廠環境、設備、生產線照片，最多 20 張，每張上限 5MB</CardDescription>
         </div>
         {photos.length < 20 && (
-          <Button size="sm" disabled={uploading} onClick={() => fileInputRef.current?.click()}>
+          <Button size="sm" disabled={uploading} className="self-start sm:self-auto shrink-0" onClick={() => fileInputRef.current?.click()}>
             <ImagePlus className="w-4 h-4 mr-1" />{uploading ? "上傳中..." : "新增照片"}
           </Button>
         )}
@@ -729,7 +751,7 @@ function PhotoManager({ factoryId }: { factoryId: number }) {
             <p className="text-xs mt-1">支援 JPG、PNG、WEBP</p>
           </div>
         ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
             {photos.map((photo) => (
               <div key={photo.id} className="group relative">
                 <div className="aspect-square rounded-lg overflow-hidden bg-muted border">
@@ -742,22 +764,22 @@ function PhotoManager({ factoryId }: { factoryId: number }) {
                   <X className="w-3 h-3" />
                 </button>
                 {editCaptionId === photo.id ? (
-                  <div className="mt-1 flex gap-1">
+                  <div className="mt-2 flex gap-1.5 items-center">
                     <Input
                       value={captionDraft}
                       onChange={e => setCaptionDraft(e.target.value)}
-                      className="h-7 text-xs"
+                      className="h-8 text-xs flex-1"
                       placeholder="照片說明"
                       maxLength={200}
                       onKeyDown={e => { if (e.key === "Enter") captionMut.mutate({ photoId: photo.id, caption: captionDraft }); if (e.key === "Escape") setEditCaptionId(null); }}
                     />
-                    <Button size="sm" className="h-7 px-2" onClick={() => captionMut.mutate({ photoId: photo.id, caption: captionDraft })}>
+                    <Button size="sm" className="h-8 px-2 shrink-0" onClick={() => captionMut.mutate({ photoId: photo.id, caption: captionDraft })}>
                       <Save className="w-3 h-3" />
                     </Button>
                   </div>
                 ) : (
                   <p
-                    className="mt-1 text-xs text-muted-foreground truncate cursor-pointer hover:text-foreground"
+                    className="mt-2 text-xs text-muted-foreground truncate cursor-pointer hover:text-foreground"
                     onClick={() => { setEditCaptionId(photo.id); setCaptionDraft(photo.caption ?? ""); }}
                   >
                     {photo.caption || <span className="italic opacity-50">點擊加說明</span>}
