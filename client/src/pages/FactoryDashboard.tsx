@@ -395,16 +395,16 @@ function FactoryInfoForm({ factory, isOwner = true }: { factory: any; isOwner?: 
       <CardHeader>
         <CardTitle>基本資料</CardTitle>
         <CardDescription>
-          {isLocked ? "審核中，資料暫時無法修改" : "修改您的工廠資訊，完善後送出審核"}
+          {isLocked ? "審核中，資料暫時無法修改" : "這些資料會顯示在您的工廠公開頁面，請確保資訊正確"}
         </CardDescription>
       </CardHeader>
-      <CardContent className="space-y-6">
+      <CardContent className="divide-y divide-border">
 
-        {/* 大頭貼 */}
+        {/* ── 大頭貼 ── */}
         {!isLocked && (
-          <div className="space-y-1.5">
+          <div className="py-6 space-y-2">
             <Label>工廠大頭貼</Label>
-            <div className="mt-2 flex items-center gap-4">
+            <div className="flex items-center gap-4">
               <div
                 className="w-20 h-20 rounded-full border-2 border-dashed border-border flex items-center justify-center overflow-hidden cursor-pointer hover:border-orange-400 transition-colors bg-muted relative"
                 onClick={() => !avatarUploading && avatarInputRef.current?.click()}
@@ -439,226 +439,242 @@ function FactoryInfoForm({ factory, isOwner = true }: { factory: any; isOwner?: 
           </div>
         )}
 
-        {/* 業務類型顯示（全寬） */}
-        <div className="space-y-1.5">
-          <Label>業務類型</Label>
-          <div className="flex items-center gap-2">
-            {factory.businessType === "studio" ? (
-              <div className="flex items-center gap-2 px-4 py-2 rounded-lg bg-purple-50 border border-purple-200 w-fit">
-                <Wrench className="w-4 h-4 text-purple-600" />
-                <span className="font-medium text-purple-700">工作室</span>
-              </div>
-            ) : (
-              <div className="flex items-center gap-2 px-4 py-2 rounded-lg bg-orange-50 border border-orange-200 w-fit">
-                <Factory className="w-4 h-4 text-orange-600" />
-                <span className="font-medium text-orange-700">代工廠</span>
-              </div>
-            )}
-            <span className="text-xs text-muted-foreground">（申請後無法更改）</span>
-          </div>
-        </div>
+        {/* ── 基本資訊 ── */}
+        <div className="py-6 space-y-5">
+          <p className="text-sm font-semibold text-foreground">基本資訊</p>
 
-        <div className="grid sm:grid-cols-2 gap-4">
-          <div className="space-y-1.5">
-            <Label>工廠名稱</Label>
-            <Input disabled={isLocked} value={name} onChange={e => setName(e.target.value)} />
-          </div>
-          <div className="space-y-1.5">
-            <Label>主產業（可複選）</Label>
-            <Popover>
-              <PopoverTrigger asChild>
-                <Button type="button" variant="outline" className="w-full justify-between font-normal" disabled={isLocked}>
-                  <span className="truncate text-sm">{industry.length === 0 ? "選擇主產業" : industry.join("、")}</span>
-                  <ChevronDown className="w-3 h-3 shrink-0 opacity-50 ml-1" />
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent className="w-72 p-2" align="start">
-                <div className="max-h-60 overflow-y-auto space-y-1">
-                  {INDUSTRY_OPTIONS.map(opt => (
-                    <label key={opt} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted cursor-pointer text-sm">
-                      <Checkbox
-                        checked={industry.includes(opt)}
-                        onCheckedChange={() => {
-                          setIndustry(prev => {
-                            const next = prev.includes(opt) ? prev.filter(i => i !== opt) : [...prev, opt];
-                            // 移除不再屬於任何已選主產業的子產業
-                            const validSubs = new Set(
-                              INDUSTRIES.filter(i => next.includes(i.name)).flatMap(i => i.sub)
-                            );
-                            setSubIndustry(s => s.filter(sub => validSubs.has(sub as any)));
-                            return next;
-                          });
-                        }}
-                      />
-                      {opt}
-                    </label>
-                  ))}
+          <div className="space-y-2">
+            <Label>業務類型</Label>
+            <div className="flex items-center gap-2">
+              {factory.businessType === "studio" ? (
+                <div className="flex items-center gap-2 px-4 py-2 rounded-lg bg-purple-50 border border-purple-200 w-fit">
+                  <Wrench className="w-4 h-4 text-purple-600" />
+                  <span className="font-medium text-purple-700">工作室</span>
                 </div>
-              </PopoverContent>
-            </Popover>
+              ) : (
+                <div className="flex items-center gap-2 px-4 py-2 rounded-lg bg-orange-50 border border-orange-200 w-fit">
+                  <Factory className="w-4 h-4 text-orange-600" />
+                  <span className="font-medium text-orange-700">代工廠</span>
+                </div>
+              )}
+              <span className="text-xs text-muted-foreground">（申請後無法更改）</span>
+            </div>
           </div>
-        </div>
 
-        {/* 子產業（選擇主產業後出現） */}
-        {industry.length > 0 && (() => {
-          const groups = industry
-            .map(ind => ({ name: ind, found: INDUSTRIES.find(i => i.name === ind) }))
-            .filter(({ found }) => found && found.sub.length > 0)
-            .map(({ name, found }) => ({ name, subs: found!.sub as unknown as string[] }));
-          if (groups.length === 0) return null;
-          const label = subIndustry.length === 0 ? "選擇子產業（可複選）" : subIndustry.join("、");
-          return (
-            <div className="space-y-1.5">
-              <Label>子產業（可複選）</Label>
+          <div className="grid sm:grid-cols-2 gap-5">
+            <div className="space-y-2">
+              <Label>工廠名稱</Label>
+              <Input disabled={isLocked} value={name} onChange={e => setName(e.target.value)} />
+            </div>
+            <div className="space-y-2">
+              <Label>主產業（可複選）</Label>
               <Popover>
                 <PopoverTrigger asChild>
-                  <Button type="button" variant="outline" className="w-full justify-between font-normal">
-                    <span className="truncate text-sm">{label}</span>
+                  <Button type="button" variant="outline" className="w-full justify-between font-normal" disabled={isLocked}>
+                    <span className="truncate text-sm">{industry.length === 0 ? "選擇主產業" : industry.join("、")}</span>
                     <ChevronDown className="w-3 h-3 shrink-0 opacity-50 ml-1" />
                   </Button>
                 </PopoverTrigger>
                 <PopoverContent className="w-72 p-2" align="start">
-                  <div className="max-h-60 overflow-y-auto">
-                    {groups.map(group => (
-                      <div key={group.name}>
-                        <div className="px-2 py-1 mt-1 mb-0.5 text-xs font-semibold text-muted-foreground bg-muted rounded select-none">
-                          {group.name}
-                        </div>
-                        <div className="space-y-0.5">
-                          {group.subs.map(opt => (
-                            <label key={opt} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted cursor-pointer text-sm">
-                              <Checkbox
-                                checked={subIndustry.includes(opt)}
-                                onCheckedChange={() => setSubIndustry(prev =>
-                                  prev.includes(opt) ? prev.filter(s => s !== opt) : [...prev, opt]
-                                )}
-                              />
-                              {opt}
-                            </label>
-                          ))}
-                        </div>
-                      </div>
+                  <div className="max-h-60 overflow-y-auto space-y-1">
+                    {INDUSTRY_OPTIONS.map(opt => (
+                      <label key={opt} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted cursor-pointer text-sm">
+                        <Checkbox
+                          checked={industry.includes(opt)}
+                          onCheckedChange={() => {
+                            setIndustry(prev => {
+                              const next = prev.includes(opt) ? prev.filter(i => i !== opt) : [...prev, opt];
+                              // 移除不再屬於任何已選主產業的子產業
+                              const validSubs = new Set(
+                                INDUSTRIES.filter(i => next.includes(i.name)).flatMap(i => i.sub)
+                              );
+                              setSubIndustry(s => s.filter(sub => validSubs.has(sub as any)));
+                              return next;
+                            });
+                          }}
+                        />
+                        {opt}
+                      </label>
                     ))}
                   </div>
                 </PopoverContent>
               </Popover>
             </div>
-          );
-        })()}
-
-        <div className="space-y-1.5">
-          <Label>代工模式</Label>
-          <div className="flex flex-wrap gap-4">
-            {MFG_MODE_OPTIONS.map(mode => (
-              <label key={mode} className={`flex items-center gap-2 ${isLocked ? "opacity-50" : "cursor-pointer"}`}>
-                <Checkbox disabled={isLocked} checked={mfgModes.includes(mode)} onCheckedChange={() => toggleMode(mode)} />
-                <span className="text-sm">{mode}</span>
-              </label>
-            ))}
           </div>
-        </div>
 
-        <div className="grid sm:grid-cols-2 gap-4">
-          <div className="space-y-1.5">
-            <Label>地區</Label>
-            <Select disabled={isLocked} value={region} onValueChange={setRegion}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>{TAIWAN_REGIONS.map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}</SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-1.5">
-            <Label>資本額</Label>
-            <Select disabled={isLocked} value={capitalLevel} onValueChange={setCapitalLevel}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>{CAPITAL_OPTIONS.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
-            </Select>
-          </div>
-        </div>
+          {/* 子產業（選擇主產業後出現） */}
+          {industry.length > 0 && (() => {
+            const groups = industry
+              .map(ind => ({ name: ind, found: INDUSTRIES.find(i => i.name === ind) }))
+              .filter(({ found }) => found && found.sub.length > 0)
+              .map(({ name, found }) => ({ name, subs: found!.sub as unknown as string[] }));
+            if (groups.length === 0) return null;
+            const label = subIndustry.length === 0 ? "選擇子產業（可複選）" : subIndustry.join("、");
+            return (
+              <div className="space-y-2">
+                <Label>子產業（可複選）</Label>
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button type="button" variant="outline" className="w-full justify-between font-normal">
+                      <span className="truncate text-sm">{label}</span>
+                      <ChevronDown className="w-3 h-3 shrink-0 opacity-50 ml-1" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-72 p-2" align="start">
+                    <div className="max-h-60 overflow-y-auto">
+                      {groups.map(group => (
+                        <div key={group.name}>
+                          <div className="px-2 py-1 mt-1 mb-0.5 text-xs font-semibold text-muted-foreground bg-muted rounded select-none">
+                            {group.name}
+                          </div>
+                          <div className="space-y-0.5">
+                            {group.subs.map(opt => (
+                              <label key={opt} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted cursor-pointer text-sm">
+                                <Checkbox
+                                  checked={subIndustry.includes(opt)}
+                                  onCheckedChange={() => setSubIndustry(prev =>
+                                    prev.includes(opt) ? prev.filter(s => s !== opt) : [...prev, opt]
+                                  )}
+                                />
+                                {opt}
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </PopoverContent>
+                </Popover>
+              </div>
+            );
+          })()}
 
-        <div className="space-y-1.5">
-          <Label>工廠簡介</Label>
-          <Textarea disabled={isLocked} value={description} onChange={e => setDescription(e.target.value)} rows={4} />
-        </div>
-
-        <div className="grid sm:grid-cols-2 gap-4">
-          <div className="space-y-1.5">
-            <Label>成立年份</Label>
-            <Input disabled={isLocked} inputMode="numeric" value={foundedYear} onChange={e => handleYearChange(e.target.value)} placeholder="西元（例：2010）" maxLength={4} />
-          </div>
-          <div className="space-y-1.5">
-            <Label>負責人</Label>
-            <Input disabled={isLocked} value={ownerName} onChange={e => setOwnerName(e.target.value)} />
-          </div>
-        </div>
-
-        <div className="grid sm:grid-cols-2 gap-4">
-          <div className="space-y-1.5">
-            <Label>聯絡電話</Label>
-            <Input disabled={isLocked} value={phone} onChange={e => setPhone(e.target.value)} />
-          </div>
-          <div className="space-y-1.5">
-            <Label>聯絡信箱</Label>
-            <Input disabled={isLocked} type="email" value={contactEmail} onChange={e => setContactEmail(e.target.value)} />
-          </div>
-        </div>
-
-        <div className="space-y-1.5">
-          <Label>官方網站</Label>
-          <Input disabled={isLocked} value={website} onChange={e => setWebsite(e.target.value)} />
-        </div>
-        <div className="space-y-1.5">
-          <Label>公廠地址 *</Label>
-          <Input disabled={isLocked} value={address} onChange={e => setAddress(e.target.value)} placeholder="例：台北市中山區民權路 100 號" />
-        </div>
-
-        <div className="space-y-1.5">
-          <Label>營業狀態</Label>
-          <div className="flex flex-wrap gap-2">
-            {OPERATION_STATUS_OPTIONS.map(opt => (
-              <button
-                key={opt.value}
-                type="button"
-                onClick={() => setOperationStatus(opt.value)}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border transition-all ${
-                  operationStatus === opt.value
-                    ? "border-current shadow-sm bg-white ring-2 ring-offset-1 " + (opt.value === "normal" ? "ring-green-500 text-green-700" : opt.value === "busy" ? "ring-yellow-500 text-yellow-700" : "ring-red-500 text-red-700")
-                    : "border-border text-muted-foreground hover:border-muted-foreground"
-                }`}
-              >
-                <span className={`w-2 h-2 rounded-full ${opt.dot}`} />
-                {opt.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="space-y-2">
-          <Label>營業時間</Label>
-          <div className="grid sm:grid-cols-2 gap-3">
-            <div>
-              <p className="text-xs text-muted-foreground mb-1">平日</p>
-              <Input disabled={isLocked} value={weekdayHours} onChange={e => setWeekdayHours(e.target.value)} placeholder="例：09:00–18:00" />
-            </div>
-            <div>
-              <p className="text-xs text-muted-foreground mb-1">假日</p>
-              <Input disabled={isLocked} value={weekendHours} onChange={e => setWeekendHours(e.target.value)} placeholder="例：休息 / 10:00–15:00" />
+          <div className="space-y-2">
+            <Label>代工模式</Label>
+            <div className="flex flex-wrap gap-4">
+              {MFG_MODE_OPTIONS.map(mode => (
+                <label key={mode} className={`flex items-center gap-2 ${isLocked ? "opacity-50" : "cursor-pointer"}`}>
+                  <Checkbox disabled={isLocked} checked={mfgModes.includes(mode)} onCheckedChange={() => toggleMode(mode)} />
+                  <span className="text-sm">{mode}</span>
+                </label>
+              ))}
             </div>
           </div>
-          <div className="mt-2">
-            <p className="text-xs text-muted-foreground mb-1">備註</p>
-            <Input disabled={isLocked} value={businessNote} onChange={e => setBusinessNote(e.target.value)} placeholder="例：農曆年休七天" />
+        </div>
+
+        {/* ── 地點與規模 ── */}
+        <div className="py-6 space-y-5">
+          <p className="text-sm font-semibold text-foreground">地點與規模</p>
+          <div className="grid sm:grid-cols-2 gap-5">
+            <div className="space-y-2">
+              <Label>地區</Label>
+              <Select disabled={isLocked} value={region} onValueChange={setRegion}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>{TAIWAN_REGIONS.map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>資本額</Label>
+              <Select disabled={isLocked} value={capitalLevel} onValueChange={setCapitalLevel}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>{CAPITAL_OPTIONS.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+          </div>
+          <div className="grid sm:grid-cols-2 gap-5">
+            <div className="space-y-2">
+              <Label>成立年份</Label>
+              <Input disabled={isLocked} inputMode="numeric" value={foundedYear} onChange={e => handleYearChange(e.target.value)} placeholder="西元（例：2010）" maxLength={4} />
+            </div>
+            <div className="space-y-2">
+              <Label>負責人</Label>
+              <Input disabled={isLocked} value={ownerName} onChange={e => setOwnerName(e.target.value)} />
+            </div>
           </div>
         </div>
 
+        {/* ── 工廠簡介 ── */}
+        <div className="py-6 space-y-5">
+          <p className="text-sm font-semibold text-foreground">工廠簡介</p>
+          <div className="space-y-2">
+            <Label>工廠簡介</Label>
+            <p className="text-xs text-muted-foreground">簡述核心優勢、產能及服務範圍，會顯示在工廠公開頁面</p>
+            <Textarea disabled={isLocked} value={description} onChange={e => setDescription(e.target.value)} rows={5} />
+          </div>
+        </div>
+
+        {/* ── 聯絡資訊 ── */}
+        <div className="py-6 space-y-5">
+          <p className="text-sm font-semibold text-foreground">聯絡資訊</p>
+          <div className="grid sm:grid-cols-2 gap-5">
+            <div className="space-y-2">
+              <Label>聯絡電話</Label>
+              <Input disabled={isLocked} value={phone} onChange={e => setPhone(e.target.value)} />
+            </div>
+            <div className="space-y-2">
+              <Label>聯絡信箱</Label>
+              <Input disabled={isLocked} type="email" value={contactEmail} onChange={e => setContactEmail(e.target.value)} />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <Label>官方網站</Label>
+            <Input disabled={isLocked} value={website} onChange={e => setWebsite(e.target.value)} />
+          </div>
+          <div className="space-y-2">
+            <Label>公廠地址 *</Label>
+            <Input disabled={isLocked} value={address} onChange={e => setAddress(e.target.value)} placeholder="例：台北市中山區民權路 100 號" />
+          </div>
+        </div>
+
+        {/* ── 營業資訊 ── */}
+        <div className="py-6 space-y-5">
+          <p className="text-sm font-semibold text-foreground">營業資訊</p>
+          <div className="space-y-2">
+            <Label>營業狀態</Label>
+            <div className="flex flex-wrap gap-2">
+              {OPERATION_STATUS_OPTIONS.map(opt => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => setOperationStatus(opt.value)}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border transition-all ${
+                    operationStatus === opt.value
+                      ? "border-current shadow-sm bg-white ring-2 ring-offset-1 " + (opt.value === "normal" ? "ring-green-500 text-green-700" : opt.value === "busy" ? "ring-yellow-500 text-yellow-700" : "ring-red-500 text-red-700")
+                      : "border-border text-muted-foreground hover:border-muted-foreground"
+                  }`}
+                >
+                  <span className={`w-2 h-2 rounded-full ${opt.dot}`} />
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="space-y-2">
+            <Label>營業時間</Label>
+            <div className="grid sm:grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <p className="text-xs text-muted-foreground">平日</p>
+                <Input disabled={isLocked} value={weekdayHours} onChange={e => setWeekdayHours(e.target.value)} placeholder="例：09:00–18:00" />
+              </div>
+              <div className="space-y-1.5">
+                <p className="text-xs text-muted-foreground">假日</p>
+                <Input disabled={isLocked} value={weekendHours} onChange={e => setWeekendHours(e.target.value)} placeholder="例：休息 / 10:00–15:00" />
+              </div>
+            </div>
+            <div className="space-y-1.5 mt-1">
+              <p className="text-xs text-muted-foreground">備註</p>
+              <Input disabled={isLocked} value={businessNote} onChange={e => setBusinessNote(e.target.value)} placeholder="例：農曆年休七天" />
+            </div>
+          </div>
+        </div>
+
+        {/* ── 儲存按鈕 ── */}
         {!isLocked && (
-          <div className="flex gap-3 pt-2">
-            <Button onClick={handleSave} disabled={updateFactory.isPending} variant="outline">
-              <Save className="w-4 h-4 mr-1" />{updateFactory.isPending ? "儲存中..." : "儲存變更"}
-            </Button>
+          <div className="pt-6 pb-2 flex items-center justify-end gap-3">
             {isOwner && (factory.status === 'draft' || factory.status === 'rejected') && (
               <AlertDialog>
                 <AlertDialogTrigger asChild>
-                  <Button className="bg-blue-600 hover:bg-blue-700 text-white">
+                  <Button variant="outline" className="border-blue-300 text-blue-600 hover:bg-blue-50">
                     <Send className="w-4 h-4 mr-1" />送出審核
                   </Button>
                 </AlertDialogTrigger>
@@ -682,6 +698,13 @@ function FactoryInfoForm({ factory, isOwner = true }: { factory: any; isOwner?: 
                 </AlertDialogContent>
               </AlertDialog>
             )}
+            <Button
+              onClick={handleSave}
+              disabled={updateFactory.isPending}
+              className="bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white border-0"
+            >
+              <Save className="w-4 h-4 mr-1" />{updateFactory.isPending ? "儲存中..." : "儲存變更"}
+            </Button>
           </div>
         )}
       </CardContent>
