@@ -10,6 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious } from "@/components/ui/carousel";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { INDUSTRIES, INDUSTRY_OPTIONS, TAIWAN_REGIONS } from "@shared/constants";
 import { trpc } from "@/lib/trpc";
 import { useLocation, Link } from "wouter";
@@ -305,7 +306,7 @@ function FactoryCardContent({ factory, cartHas, cartAdd, cartRemove, setCartOpen
         <Button
           size="sm"
           variant={cartHas(factory.id) ? "default" : "outline"}
-          className="w-full text-xs h-7"
+          className="w-full text-sm h-9"
           onClick={e => {
             e.preventDefault();
             e.stopPropagation();
@@ -319,9 +320,9 @@ function FactoryCardContent({ factory, cartHas, cartAdd, cartRemove, setCartOpen
           }}
         >
           {cartHas(factory.id) ? (
-            <><Minus className="w-3 h-3 mr-1" />已加入一鍵詢價</>
+            <><Minus className="w-3.5 h-3.5 mr-1" />已加入詢價</>
           ) : (
-            <><Plus className="w-3 h-3 mr-1" />加入一鍵詢價</>
+            <><Plus className="w-3.5 h-3.5 mr-1" />加入一鍵詢價</>
           )}
         </Button>
       </div>
@@ -348,6 +349,7 @@ const { isAuthenticated } = useAuth();
   const [inquiryTitle, setInquiryTitle] = useState("");
   const [inquiryMessage, setInquiryMessage] = useState("");
   const [cartOpen, setCartOpen] = useState(false);
+  const [mobileCartOpen, setMobileCartOpen] = useState(false);
 
   const createAndSendMut = trpc.inquiryBatch.createAndSend.useMutation({
     onSuccess: (data, vars) => {
@@ -504,7 +506,7 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
         <meta name="description" content={pageDesc} />
       </Helmet>
       <Navbar />
-      <div className="container py-6">
+      <div className={`container py-6 ${cart.length > 0 ? "pb-20 lg:pb-6" : ""}`}>
         <Button variant="outline" onClick={() => navigate("/")} className="mb-4 flex items-center gap-2">
           <ChevronLeft className="h-4 w-4" />返回首頁
         </Button>
@@ -892,6 +894,83 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
           </div>
         </div>
       </div>
+
+      {/* 手機版底部一鍵詢價 bar（lg 以上隱藏） */}
+      {cart.length > 0 && (
+        <div className="fixed bottom-0 left-0 right-0 z-50 px-4 py-3 bg-white border-t shadow-lg lg:hidden">
+          <Button
+            className="w-full h-11 text-sm font-semibold bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white border-0"
+            onClick={() => {
+              if (!isAuthenticated) { performLogin(); return; }
+              setMobileCartOpen(true);
+            }}
+          >
+            <ShoppingCart className="w-4 h-4 mr-2" />
+            已選 {cart.length} 間・前往詢價
+          </Button>
+        </div>
+      )}
+
+      {/* 手機版一鍵詢價 Dialog */}
+      <Dialog open={mobileCartOpen} onOpenChange={setMobileCartOpen}>
+        <DialogContent className="max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <ShoppingCart className="w-4 h-4 text-orange-500" />
+              一鍵詢價（已選 {cart.length} 間）
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 pt-2">
+            {cart.length > 0 && (
+              <div className="space-y-1 max-h-36 overflow-y-auto">
+                {cart.map(item => (
+                  <div key={item.id} className="flex items-center justify-between text-sm bg-muted/40 rounded px-3 py-1.5">
+                    <span className="truncate flex-1 mr-2">{item.name}</span>
+                    <button onClick={() => cartRemove(item.id)} className="text-muted-foreground hover:text-destructive shrink-0">
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div>
+              <label className="text-xs font-medium text-muted-foreground block mb-1">詢價分類名稱</label>
+              <Input
+                value={inquiryTitle}
+                onChange={e => setInquiryTitle(e.target.value)}
+                placeholder="例如：0503 詢問紡織"
+                className="h-9 text-sm"
+                maxLength={50}
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground block mb-1">詢價內容</label>
+              <Textarea
+                value={inquiryMessage}
+                onChange={e => setInquiryMessage(e.target.value)}
+                placeholder="您好，我正在尋找合適的代工廠，想詢問貴公司是否能承接以下需求，請協助提供報價、MOQ、交期與合作方式，謝謝。"
+                className="text-sm resize-none"
+                rows={5}
+                maxLength={2000}
+              />
+            </div>
+            <p className="text-xs text-muted-foreground/70 leading-relaxed">
+              實際報價、規格、付款與交期，請與工廠確認；若發現異常可向 OXM 通報。
+            </p>
+            <Button
+              className="w-full"
+              onClick={() => {
+                handleInquirySubmit();
+                if (!createAndSendMut.isPending) setMobileCartOpen(false);
+              }}
+              disabled={createAndSendMut.isPending || cart.length === 0}
+            >
+              <Send className="w-4 h-4 mr-2" />
+              {createAndSendMut.isPending ? "送出中…" : "送出一鍵詢價"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
