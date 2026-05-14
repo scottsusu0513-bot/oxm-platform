@@ -113,7 +113,7 @@ function MultiSelect({ options, value, onChange, placeholder, disabled, withClea
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <Button variant="outline" disabled={disabled} className="h-12 w-full justify-between text-base font-normal truncate">
+        <Button variant="outline" disabled={disabled} className="h-10 md:h-12 w-full justify-between text-sm md:text-base font-normal truncate">
           <span className="truncate">{label}</span>
           <ChevronDown className="w-4 h-4 shrink-0 opacity-50 ml-1" />
         </Button>
@@ -167,7 +167,7 @@ export default function Home() {
       <Navbar />
 
       {/* Hero Section */}
-      <section className="relative overflow-hidden py-16 md:py-24">
+      <section className="relative overflow-hidden py-8 md:py-24">
         <div className="absolute inset-0 bg-gradient-to-br from-orange-50 via-amber-50/50 to-purple-50/40" />
         <div className="absolute top-0 right-0 w-96 h-96 bg-gradient-to-bl from-orange-200/30 to-transparent rounded-full blur-3xl" />
         <div className="absolute bottom-0 left-0 w-72 h-72 bg-gradient-to-tr from-purple-200/25 to-transparent rounded-full blur-3xl" />
@@ -187,7 +187,7 @@ export default function Home() {
         </div>
 
         <div className="container relative">
-          <div className="max-w-3xl mx-auto text-center mb-10 relative">
+          <div className="max-w-3xl mx-auto text-center mb-4 md:mb-10 relative">
             {/* 測試招募貼紙 — desktop */}
             <div className="hidden lg:block absolute top-14 right-0 rotate-[2deg] z-10 select-none pointer-events-none">
               <div className="relative bg-[#fdf9f2] border border-orange-200/80 rounded-2xl px-4 py-3.5 shadow-[0_4px_20px_rgba(0,0,0,0.07)] w-[172px] text-left">
@@ -203,17 +203,17 @@ export default function Home() {
             </div>
 
             <h1 className="sr-only">台灣傳統產業資源媒合平台</h1>
-            <div className="inline-flex items-center gap-2 bg-gradient-to-r from-orange-100 to-purple-100 text-orange-700 px-4 py-1.5 rounded-full text-sm font-medium mb-6">
-              <Zap className="w-4 h-4" />
+            <div className="inline-flex items-center gap-2 bg-gradient-to-r from-orange-100 to-purple-100 text-orange-700 px-3 py-1 rounded-full text-xs md:text-sm font-medium mb-3 md:mb-6">
+              <Zap className="w-3 h-3 md:w-4 md:h-4" />
               台灣傳產資源媒合平台
             </div>
-            <p className="text-4xl md:text-6xl font-extrabold text-foreground mb-5 leading-tight tracking-tight">
+            <p className="text-3xl md:text-6xl font-extrabold text-foreground mb-3 md:mb-5 leading-tight tracking-tight">
               找到適合你的<br />
               <span className="bg-gradient-to-r from-orange-500 via-amber-500 to-purple-500 bg-clip-text text-transparent">台灣傳產資源</span>
             </p>
 
             {/* 測試招募貼紙 — mobile */}
-            <div className="lg:hidden flex justify-center mb-5 select-none">
+            <div className="lg:hidden flex justify-center mb-2 select-none">
               <div className="relative bg-[#fdf9f2] border border-orange-200/80 rounded-xl px-4 py-2.5 shadow-sm rotate-[-1deg]">
                 <div className="absolute -top-2.5 left-1/2 -translate-x-1/2 w-8 h-2.5 rounded-sm bg-amber-200/60" />
                 <div className="flex items-center justify-center gap-1.5 mb-1">
@@ -227,7 +227,7 @@ export default function Home() {
               </div>
             </div>
 
-            <p className="text-lg md:text-xl text-muted-foreground mb-8 max-w-xl mx-auto">
+            <p className="text-xs md:text-xl text-muted-foreground mb-4 md:mb-8 max-w-xl mx-auto">
               整合全台工廠、OEM/ODM 代工、
               <span className="text-orange-500 font-semibold">設備商</span>
               、材料商與
@@ -240,7 +240,7 @@ export default function Home() {
 
           {/* Mode Tabs + Search */}
           <div className="max-w-4xl mx-auto">
-            <div className="grid grid-cols-3 gap-2 mb-6 w-full">
+            <div className="grid grid-cols-3 gap-1.5 mb-2 md:mb-6 w-full">
               {[
                 { label: "工廠", value: "factory", icon: <Factory className="w-4 h-4 shrink-0" /> },
                 { label: "工作室", value: "studio", icon: <Wrench className="w-4 h-4 shrink-0" /> },
@@ -248,7 +248,7 @@ export default function Home() {
               ].map((tab) => (
                 <button
                   key={tab.value}
-                  className={`flex items-center justify-center gap-1.5 px-2 py-2.5 sm:px-6 sm:py-3 rounded-xl text-sm sm:text-base font-semibold transition-all whitespace-nowrap w-full ${
+                  className={`flex items-center justify-center gap-1.5 px-2 py-2 sm:px-6 sm:py-3 rounded-lg sm:rounded-xl text-sm sm:text-base font-semibold transition-all whitespace-nowrap w-full ${
                     businessType === tab.value
                       ? tab.value === "factory"
                         ? "bg-gradient-to-r from-orange-500 to-amber-500 text-white shadow-lg shadow-orange-200"
@@ -265,12 +265,12 @@ export default function Home() {
             </div>
 
             <Card className="shadow-xl border-0 bg-white/80 backdrop-blur">
-              <CardContent className="p-6">
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+              <CardContent className="p-3 md:p-6">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 md:gap-4 mb-2 md:mb-4">
                   {/* 代工模式 */}
                   <Popover>
                     <PopoverTrigger asChild>
-                      <Button variant="outline" className="h-12 w-full justify-between text-base font-normal truncate">
+                      <Button variant="outline" className="h-10 md:h-12 w-full justify-between text-sm md:text-base font-normal truncate">
                         <span className="truncate">
                           {activeMode === "" ? "代工模式" : activeMode === "ODM" ? "ODM 設計代工" : "OEM 製造代工"}
                         </span>
@@ -290,7 +290,7 @@ export default function Home() {
                   {/* 選擇產業 */}
                   <Popover>
                     <PopoverTrigger asChild>
-                      <Button variant="outline" className="h-12 w-full justify-between text-base font-normal truncate">
+                      <Button variant="outline" className="h-10 md:h-12 w-full justify-between text-sm md:text-base font-normal truncate">
                         <span className="truncate flex items-center gap-2">
                           {industry ? (
                             <>
@@ -340,9 +340,9 @@ export default function Home() {
                   />
                 </div>
 
-                <div className="mb-4">
+                <div className="mb-2 md:mb-4">
                   <Input
-                    className="w-full h-12 text-base"
+                    className="w-full h-10 md:h-12 text-sm md:text-base"
                     placeholder="輸入關鍵字搜尋代工廠或工作室..."
                     value={keyword}
                     onChange={(e) => setKeyword(e.target.value)}
@@ -351,11 +351,10 @@ export default function Home() {
                 </div>
 
                 <Button
-                  className="w-full h-12 text-base font-semibold bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white border-0 shadow-lg shadow-orange-200/50"
-                  size="lg"
+                  className="w-full h-10 md:h-12 text-sm md:text-base font-semibold bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white border-0 shadow-lg shadow-orange-200/50"
                   onClick={handleSearch}
                 >
-                  <Search className="w-5 h-5 mr-2" />
+                  <Search className="w-4 h-4 md:w-5 md:h-5 mr-2" />
                   搜尋代工廠 & 工作室
                 </Button>
               </CardContent>
