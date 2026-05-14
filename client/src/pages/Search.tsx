@@ -708,12 +708,13 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
           {/* 主要內容 */}
           <div className="lg:col-span-3">
             {/* 手機篩選欄 */}
-            <Card className="mb-6 lg:hidden">
-              <CardContent className="p-4">
-                <div className="flex flex-wrap gap-3 items-end">
+            <Card className="mb-3 lg:hidden">
+              <CardContent className="p-3">
+                <div className="flex flex-wrap gap-2 items-end">
                   <div className="flex gap-1">
                     {[{ l: "全部", v: "all" }, { l: "代工廠", v: "factory" }, { l: "工作室", v: "studio" }].map(t => (
                       <Button key={t.v} size="sm" variant={businessType === t.v ? "default" : "outline"}
+                        className="h-8 text-xs px-2"
                         onClick={() => { setBusinessType(t.v); setPage(1); }}>
                         {t.l}
                       </Button>
@@ -722,6 +723,7 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
                   <div className="flex gap-1">
                     {[{ l: "ODM", v: "ODM" }, { l: "OEM", v: "OEM" }, { l: "全部", v: "" }].map(m => (
                       <Button key={m.v} size="sm" variant={mfgMode === m.v ? "default" : "outline"}
+                        className="h-8 text-xs px-2"
                         onClick={() => { setMfgMode(m.v); setPage(1); }}>{m.l}
                       </Button>
                     ))}
@@ -731,7 +733,7 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
                     value={industry}
                     onChange={(val) => { setIndustry(val); setSubIndustry([]); setPage(1); }}
                     placeholder="主產業"
-                    className="w-[130px]"
+                    className="w-[120px] h-8 text-xs"
                     withClear
                   />
                   {industry.length > 0 && (() => {
@@ -746,7 +748,7 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
                         value={subIndustry}
                         onChange={(val) => { setSubIndustry(val); setPage(1); }}
                         placeholder="子產業"
-                        className="w-[130px]"
+                        className="w-[120px] h-8 text-xs"
                       />
                     );
                   })()}
@@ -755,19 +757,19 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
                     value={region}
                     onChange={(val) => { setRegion(val); setPage(1); }}
                     placeholder="地區"
-                    className="w-[130px]"
+                    className="w-[120px] h-8 text-xs"
                     withClear
                   />
                   <Input placeholder="關鍵字..." value={keyword} onChange={e => setKeyword(e.target.value)}
-                    onKeyDown={e => e.key === "Enter" && handleSearch()} className="w-[160px]" />
-                  <Button onClick={handleSearch}><SearchIcon className="w-4 h-4 mr-1" />搜尋</Button>
-                  <Button variant="ghost" size="sm" onClick={clearFilters}>清除</Button>
+                    onKeyDown={e => e.key === "Enter" && handleSearch()} className="w-[140px] h-8 text-xs" />
+                  <Button size="sm" className="h-8 text-xs px-3" onClick={handleSearch}><SearchIcon className="w-3.5 h-3.5 mr-1" />搜尋</Button>
+                  <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={clearFilters}>清除</Button>
                 </div>
               </CardContent>
             </Card>
 
             {/* 手機版一鍵詢價送出入口（lg 以上隱藏，一律顯示） */}
-            <div className="lg:hidden mb-4 rounded-xl border border-orange-200 bg-orange-50/70 p-3 shadow-sm">
+            <div className="lg:hidden mb-3 rounded-xl border border-orange-200 bg-orange-50/70 p-3 shadow-sm">
               <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
                   <div className="flex items-center gap-1.5 text-sm font-semibold text-orange-900">
@@ -800,10 +802,10 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
 
             {/* 已套用條件 */}
             {appliedFilters.length > 0 && (
-              <div className="mb-4 flex flex-wrap gap-2 items-center">
-                <span className="text-sm text-muted-foreground">已套用：</span>
+              <div className="mb-2 flex flex-wrap gap-1.5 items-center">
+                <span className="text-xs text-muted-foreground">已套用：</span>
                 {appliedFilters.map((filter) => (
-                  <Badge key={filter.key} variant="secondary" className="flex items-center gap-1 px-3 py-1">
+                  <Badge key={filter.key} variant="secondary" className="flex items-center gap-1 px-2 py-0.5">
                     <span className="text-xs">{filter.label}: {filter.value}</span>
                     <button onClick={() => removeFilter(filter.key)} className="ml-1 hover:opacity-70">
                       <X className="w-3 h-3" />
