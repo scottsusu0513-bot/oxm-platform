@@ -628,6 +628,8 @@ export const appRouter = router({
       if (!conv) return null;
       const factory = await db.getFactoryById(conv.factoryId);
       const product = conv.productId ? await db.getProductById(conv.productId) : null;
+      const isFactoryOwner = factory?.ownerId === ctx.user.id;
+      const isCoMgr = !isFactoryOwner && !!factory && await db.isActiveCoManager(factory.id, ctx.user.id);
       return {
         factoryName: factory?.name ?? "未知工廠",
         productName: product?.name ?? null,
@@ -635,6 +637,7 @@ export const appRouter = router({
         productId: conv.productId,
         userId: conv.userId,
         factoryOwnerId: factory?.ownerId ?? null,
+        isCoMgr,
       };
     }),
 
@@ -701,13 +704,15 @@ export const appRouter = router({
       return { success: true };
     }),
 
-    // 查詢工廠可傳送的商品（僅工廠 owner 可呼叫）
+    // 查詢工廠可傳送的商品（工廠 owner 或 co-manager 可呼叫）
     getFactoryProducts: protectedProcedure.input(z.object({ conversationId: z.number() })).query(async ({ ctx, input }) => {
       const conv = await db.getConversationById(input.conversationId);
       if (!conv) throw new TRPCError({ code: "NOT_FOUND", message: "對話不存在" });
       const factory = await db.getFactoryById(conv.factoryId);
-      if (factory?.ownerId !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN", message: "僅工廠擁有者可存取" });
-      return db.getProductsByFactoryId(factory.id);
+      const isFactoryOwner = factory?.ownerId === ctx.user.id;
+      const isCoMgr = !isFactoryOwner && !!factory && await db.isActiveCoManager(factory.id, ctx.user.id);
+      if (!isFactoryOwner && !isCoMgr) throw new TRPCError({ code: "FORBIDDEN", message: "僅工廠管理者可存取" });
+      return db.getProductsByFactoryId(factory!.id);
     }),
 
     // 傳送商品附件訊息
@@ -718,7 +723,9 @@ export const appRouter = router({
       const conv = await db.getConversationById(input.conversationId);
       if (!conv) throw new TRPCError({ code: "NOT_FOUND", message: "對話不存在" });
       const factory = await db.getFactoryById(conv.factoryId);
-      if (factory?.ownerId !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN", message: "僅工廠擁有者可傳送商品" });
+      const isFactoryOwnerSP = factory?.ownerId === ctx.user.id;
+      const isCoMgrSP = !isFactoryOwnerSP && !!factory && await db.isActiveCoManager(factory.id, ctx.user.id);
+      if (!isFactoryOwnerSP && !isCoMgrSP) throw new TRPCError({ code: "FORBIDDEN", message: "僅工廠管理者可傳送商品" });
 
       const factoryProducts = await db.getProductsByFactoryId(factory.id);
       const factoryProductMap = new Map(factoryProducts.map(p => [p.id, p]));
@@ -756,7 +763,9 @@ export const appRouter = router({
       const conv = await db.getConversationById(input.conversationId);
       if (!conv) throw new TRPCError({ code: "NOT_FOUND", message: "對話不存在" });
       const factory = await db.getFactoryById(conv.factoryId);
-      if (factory?.ownerId !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN", message: "僅工廠擁有者可上傳型錄" });
+      const isFactoryOwnerPdf = factory?.ownerId === ctx.user.id;
+      const isCoMgrPdf = !isFactoryOwnerPdf && !!factory && await db.isActiveCoManager(factory.id, ctx.user.id);
+      if (!isFactoryOwnerPdf && !isCoMgrPdf) throw new TRPCError({ code: "FORBIDDEN", message: "僅工廠管理者可上傳型錄" });
 
       // Strip path traversal and dangerous chars; allow spaces and CJK
       let safeName = input.fileName

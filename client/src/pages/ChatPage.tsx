@@ -282,6 +282,8 @@ export default function ChatPage() {
   );
 
   const isFactoryOwner = !!user && meta?.factoryOwnerId === user.id;
+  const isCoMgr = !!meta?.isCoMgr;
+  const isFactorySide = isFactoryOwner || isCoMgr;
 
   useEffect(() => {
     if (existingConv) navigate(`/chat/${existingConv.id}`, { replace: true });
@@ -475,7 +477,9 @@ export default function ChatPage() {
                 </div>
               ) : (
                 msgs?.map((msg) => {
-                  const isMine = msg.senderId === user?.id;
+                  const isMine = isFactorySide
+                    ? msg.senderRole === "factory"
+                    : msg.senderId === user?.id;
                   const messageType: string = (msg as any).type || "text";
                   const isInvite = messageType === "co_manager_invite";
                   const isProduct = messageType === "product";
@@ -543,8 +547,8 @@ export default function ChatPage() {
             {/* Input area */}
             <div className="border-t p-4">
               <div className="flex gap-2 items-center">
-                {/* "+" 附件按鈕（僅工廠 owner 可見） */}
-                {conversationId && isFactoryOwner && (
+                {/* "+" 附件按鈕（工廠 owner 與 co-manager 可見） */}
+                {conversationId && isFactorySide && (
                   <div className="relative shrink-0" ref={attachMenuRef}>
                     <Button
                       type="button"
@@ -612,8 +616,8 @@ export default function ChatPage() {
         </Card>
       </div>
 
-      {/* Product picker modal — 只有工廠 owner 才可開啟 */}
-      {conversationId && isFactoryOwner && (
+      {/* Product picker modal — 工廠 owner 與 co-manager 可開啟 */}
+      {conversationId && isFactorySide && (
         <ProductPickerModal
           conversationId={conversationId}
           open={productPickerOpen}
