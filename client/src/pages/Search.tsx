@@ -766,6 +766,38 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
               </CardContent>
             </Card>
 
+            {/* 手機版一鍵詢價送出入口（lg 以上隱藏，一律顯示） */}
+            <div className="lg:hidden mb-4 rounded-xl border border-orange-200 bg-orange-50/70 p-3 shadow-sm">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5 text-sm font-semibold text-orange-900">
+                    <ShoppingCart className="w-4 h-4 text-orange-500 shrink-0" />
+                    一鍵詢價
+                    {cart.length > 0 && (
+                      <span className="bg-orange-500 text-white text-xs rounded-full px-1.5 py-0.5 leading-none">{cart.length}</span>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {cart.length === 0
+                      ? "從下方工廠卡片加入後，可一次送出詢價"
+                      : `已選 ${cart.length} 間，點右側按鈕送出`}
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  className="shrink-0 h-9 text-sm"
+                  disabled={cart.length === 0}
+                  onClick={() => {
+                    if (!isAuthenticated) { performLogin(); return; }
+                    setMobileCartOpen(true);
+                  }}
+                >
+                  {cart.length === 0 ? "請先加入" : "送出詢價"}
+                </Button>
+              </div>
+            </div>
+
             {/* 已套用條件 */}
             {appliedFilters.length > 0 && (
               <div className="mb-4 flex flex-wrap gap-2 items-center">
