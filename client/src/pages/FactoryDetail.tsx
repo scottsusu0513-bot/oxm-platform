@@ -15,7 +15,7 @@ import { useState, useEffect } from "react";
 import { toast } from "sonner";
 import {
   Star, MapPin, Phone, Globe, Calendar, Building2, DollarSign,
-  MessageCircle, Package, Check, X, ArrowLeft, Send, Heart, Wrench, Factory as FactoryIcon, Flag, Clock, ChevronLeft, ChevronRight, Images
+  MessageCircle, Package, Check, X, ArrowLeft, Send, Heart, Wrench, Factory as FactoryIcon, Flag, Clock, ChevronLeft, ChevronRight, Images, CheckCircle
 } from "lucide-react";
 
 function ProductImageCarousel({ images }: { images: string[] }) {
@@ -580,36 +580,72 @@ export default function FactoryDetail() {
               <p className="text-center text-muted-foreground py-6">尚無評價</p>
             ) : (
               <div className="space-y-4">
-                {reviewData?.items.map((review: any) => (
-                  <div key={review.id} className={`p-4 rounded-lg border ${review.userId === user?.id ? "border-primary/30 bg-primary/5" : ""}`}>
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium text-sm">
-                          {review.userName ?? "匿名使用者"}
-                          {review.userId === user?.id && (
-                            <span className="ml-1 text-xs text-primary">（我的評價）</span>
-                          )}
-                        </span>
-                        <div className="flex gap-0.5">
-                          {[1, 2, 3, 4, 5].map(s => (
-                            <Star key={s} className={`w-3.5 h-3.5 ${review.rating >= s ? "text-yellow-500 fill-yellow-500" : "text-muted-foreground/20"}`} />
-                          ))}
-                        </div>
-                      </div>
-                      <span className="text-xs text-muted-foreground">
-                        {new Date(review.createdAt).toLocaleDateString("zh-TW")}
-                      </span>
-                    </div>
-                    {review.comment && <p className="text-sm text-muted-foreground">{review.comment}</p>}
-                    {/* 工廠回覆 */}
-                    {review.reply && (
-                      <div className="mt-2 pl-3 border-l-2 border-orange-200">
-                        <p className="text-xs text-orange-700 font-medium mb-0.5">工廠回覆 {review.repliedAt ? `· ${new Date(review.repliedAt).toLocaleDateString("zh-TW")}` : ""}</p>
-                        <p className="text-sm text-muted-foreground">{review.reply}</p>
-                      </div>
-                    )}
+                {/* 已完成合作評價數量統計 */}
+                {(reviewData?.items.filter((r: any) => r.reviewType === "verified_order").length ?? 0) > 0 && (
+                  <div className="flex items-center gap-1.5 text-sm text-orange-600 font-medium pb-1">
+                    <CheckCircle className="w-4 h-4" />
+                    已完成合作評價：{reviewData!.items.filter((r: any) => r.reviewType === "verified_order").length} 則
                   </div>
-                ))}
+                )}
+                {reviewData?.items.map((review: any) => {
+                  const isVerified = review.reviewType === "verified_order";
+                  return (
+                    <div key={review.id} className={`p-4 rounded-lg border ${
+                      isVerified
+                        ? "bg-amber-50 border-orange-200"
+                        : review.userId === user?.id
+                          ? "border-primary/30 bg-primary/5"
+                          : "border-border bg-white"
+                    }`}>
+                      <div className="flex items-start justify-between mb-2 gap-2 flex-wrap">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          {isVerified ? (
+                            <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-semibold bg-orange-100 text-orange-700 border border-orange-200">
+                              <CheckCircle className="w-3 h-3" />已完成合作
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center text-xs px-2 py-0.5 rounded-full font-medium bg-gray-100 text-gray-600 border border-gray-200">
+                              一般評價
+                            </span>
+                          )}
+                          <span className={`font-medium text-sm ${isVerified ? "text-foreground" : "text-foreground"}`}>
+                            {review.userName ?? "匿名使用者"}
+                            {review.userId === user?.id && (
+                              <span className="ml-1 text-xs text-primary">（我的評價）</span>
+                            )}
+                          </span>
+                          <div className="flex gap-0.5">
+                            {[1, 2, 3, 4, 5].map(s => (
+                              <Star key={s} className={`w-3.5 h-3.5 ${review.rating >= s ? "text-yellow-500 fill-yellow-500" : "text-muted-foreground/20"}`} />
+                            ))}
+                          </div>
+                        </div>
+                        <span className="text-xs text-muted-foreground shrink-0">
+                          {new Date(review.createdAt).toLocaleDateString("zh-TW")}
+                        </span>
+                      </div>
+
+                      {/* 已完成合作評價：顯示合作項目 */}
+                      {isVerified && review.projectName && (
+                        <p className={`text-xs mb-1.5 font-medium ${isVerified ? "text-orange-700" : "text-muted-foreground"}`}>
+                          合作項目：{review.projectName}
+                        </p>
+                      )}
+
+                      {review.comment && (
+                        <p className="text-sm text-muted-foreground">{review.comment}</p>
+                      )}
+
+                      {/* 工廠回覆 */}
+                      {review.reply && (
+                        <div className="mt-2 pl-3 border-l-2 border-orange-200">
+                          <p className="text-xs text-orange-700 font-medium mb-0.5">工廠回覆 {review.repliedAt ? `· ${new Date(review.repliedAt).toLocaleDateString("zh-TW")}` : ""}</p>
+                          <p className="text-sm text-muted-foreground">{review.reply}</p>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </CardContent>

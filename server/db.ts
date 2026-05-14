@@ -12,7 +12,7 @@ import {
   factoryCoManagerInvitations, factoryCoManagers,
   inquiryBatches, inquiryBatchItems,
   messageCampaigns, messageRecipients, messageReplies,
-  oauthStates, appLoginTickets,
+  oauthStates, appLoginTickets, collaborationOrders,
   type Factory, type InsertFactory, type Product, type InsertProduct, type Favorite, type InsertFavorite
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
@@ -465,8 +465,13 @@ export async function getReviewsByFactory(factoryId: number, page = 1, pageSize 
     userId: reviews.userId,
     userName: users.name,
     reply: reviews.reply,
-      repliedAt: reviews.repliedAt,
-  }).from(reviews).leftJoin(users, eq(reviews.userId, users.id))
+    repliedAt: reviews.repliedAt,
+    reviewType: reviews.reviewType,
+    collaborationOrderId: reviews.collaborationOrderId,
+    projectName: collaborationOrders.projectName,
+  }).from(reviews)
+    .leftJoin(users, eq(reviews.userId, users.id))
+    .leftJoin(collaborationOrders, eq(reviews.collaborationOrderId, collaborationOrders.id))
     .where(eq(reviews.factoryId, factoryId))
     .orderBy(desc(reviews.createdAt)).limit(pageSize).offset((page - 1) * pageSize);
   return { items, total };
@@ -1209,7 +1214,7 @@ export async function saveMessage(
   senderId: number,
   senderRole: "user" | "factory",
   content: string,
-  type: "text" | "co_manager_invite" | "product" | "pdf" = "text",
+  type: "text" | "co_manager_invite" | "product" | "pdf" | "collaboration_order" = "text",
   attachmentData?: Record<string, any> | null,
 ) {
   const db = await getDb();
@@ -2233,4 +2238,137 @@ export async function purgeExpiredOauthStates(): Promise<void> {
   await db
     .delete(oauthStates)
     .where(sql`${oauthStates.expiresAt} < ${cutoff} OR (${oauthStates.usedAt} IS NOT NULL AND ${oauthStates.createdAt} < ${cutoff})`);
+}
+
+// ===== 合作確認單 =====
+
+export type CreateCollaborationOrderData = {
+  conversationId: number;
+  factoryId: number;
+  buyerUserId: number;
+  createdByUserId: number;
+  productId?: number | null;
+  projectName: string;
+  description: string;
+  depositDueDate?: string | null;
+  productionStartDate?: string | null;
+  expectedCompletionDate?: string | null;
+  expectedShipmentDate?: string | null;
+  finalPaymentDueDate?: string | null;
+  note?: string | null;
+};
+
+export async function createCollaborationOrder(data: CreateCollaborationOrderData): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  const result = await db.insert(collaborationOrders).values({
+    conversationId: data.conversationId,
+    factoryId: data.factoryId,
+    buyerUserId: data.buyerUserId,
+    createdByUserId: data.createdByUserId,
+    productId: data.productId ?? null,
+    projectName: data.projectName,
+    description: data.description,
+    depositDueDate: data.depositDueDate ?? null,
+    productionStartDate: data.productionStartDate ?? null,
+    expectedCompletionDate: data.expectedCompletionDate ?? null,
+    expectedShipmentDate: data.expectedShipmentDate ?? null,
+    finalPaymentDueDate: data.finalPaymentDueDate ?? null,
+    note: data.note ?? null,
+  });
+  return (result as any).insertId as number;
+}
+
+export async function getCollaborationOrderById(id: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select().from(collaborationOrders).where(eq(collaborationOrders.id, id)).limit(1);
+  return rows[0] ?? null;
+}
+
+export async function respondCollaborationOrder(id: number, action: "accepted" | "rejected"): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  const now = new Date();
+  if (action === "accepted") {
+    await db.update(collaborationOrders).set({ status: "accepted", acceptedAt: now }).where(eq(collaborationOrders.id, id));
+  } else {
+    await db.update(collaborationOrders).set({ status: "rejected", rejectedAt: now }).where(eq(collaborationOrders.id, id));
+  }
+}
+
+export async function updateCollaborationOrderStatus(
+  id: number,
+  status: "in_progress" | "shipped" | "completed" | "cancelled"
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  const now = new Date();
+  const extra: Record<string, any> = {};
+  if (status === "completed") extra.completedAt = now;
+  if (status === "cancelled") extra.cancelledAt = now;
+  await db.update(collaborationOrders).set({ status, ...extra }).where(eq(collaborationOrders.id, id));
+}
+
+export async function listFactoryCollaborationOrders(factoryId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select({
+    id: collaborationOrders.id,
+    conversationId: collaborationOrders.conversationId,
+    productId: collaborationOrders.productId,
+    projectName: collaborationOrders.projectName,
+    description: collaborationOrders.description,
+    depositDueDate: collaborationOrders.depositDueDate,
+    productionStartDate: collaborationOrders.productionStartDate,
+    expectedCompletionDate: collaborationOrders.expectedCompletionDate,
+    expectedShipmentDate: collaborationOrders.expectedShipmentDate,
+    finalPaymentDueDate: collaborationOrders.finalPaymentDueDate,
+    note: collaborationOrders.note,
+    status: collaborationOrders.status,
+    acceptedAt: collaborationOrders.acceptedAt,
+    rejectedAt: collaborationOrders.rejectedAt,
+    completedAt: collaborationOrders.completedAt,
+    cancelledAt: collaborationOrders.cancelledAt,
+    createdAt: collaborationOrders.createdAt,
+    buyerUserId: collaborationOrders.buyerUserId,
+    buyerName: users.name,
+    productName: products.name,
+  }).from(collaborationOrders)
+    .leftJoin(users, eq(collaborationOrders.buyerUserId, users.id))
+    .leftJoin(products, eq(collaborationOrders.productId, products.id))
+    .where(eq(collaborationOrders.factoryId, factoryId))
+    .orderBy(desc(collaborationOrders.createdAt));
+}
+
+export async function getCollaborationOrdersForConversation(conversationId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(collaborationOrders)
+    .where(eq(collaborationOrders.conversationId, conversationId))
+    .orderBy(desc(collaborationOrders.createdAt));
+}
+
+export async function createVerifiedOrderReview(data: {
+  factoryId: number;
+  userId: number;
+  collaborationOrderId: number;
+  rating: number;
+  comment?: string;
+}): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  // 檢查是否已有此訂單的評價
+  const existing = await db.select().from(reviews)
+    .where(eq(reviews.collaborationOrderId, data.collaborationOrderId)).limit(1);
+  if (existing.length > 0) throw new Error("此合作確認單已留過評價");
+  await db.insert(reviews).values({
+    factoryId: data.factoryId,
+    userId: data.userId,
+    rating: data.rating,
+    comment: data.comment ?? null,
+    collaborationOrderId: data.collaborationOrderId,
+    reviewType: "verified_order",
+  });
+  await recalcFactoryRating(data.factoryId);
 }

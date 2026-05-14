@@ -869,6 +869,153 @@ export const appRouter = router({
     }),
   }),
 
+  // ===== 合作確認單 =====
+  collaborationOrder: router({
+    create: protectedProcedure.input(z.object({
+      conversationId: z.number(),
+      productId: z.number().nullable().optional(),
+      projectName: z.string().min(1).max(200),
+      description: z.string().min(1),
+      depositDueDate: z.string().max(10).nullable().optional(),
+      productionStartDate: z.string().max(10).nullable().optional(),
+      expectedCompletionDate: z.string().max(10).nullable().optional(),
+      expectedShipmentDate: z.string().max(10).nullable().optional(),
+      finalPaymentDueDate: z.string().max(10).nullable().optional(),
+      note: z.string().max(2000).nullable().optional(),
+    })).mutation(async ({ ctx, input }) => {
+      const db_ = await getDb();
+      if (!db_) throw new Error("DB not available");
+      const [conv] = await db_.select().from(conversations).where(eq(conversations.id, input.conversationId)).limit(1);
+      if (!conv) throw new TRPCError({ code: "NOT_FOUND", message: "找不到對話" });
+      const factory = await db.getFactoryById(conv.factoryId);
+      if (!factory) throw new TRPCError({ code: "NOT_FOUND", message: "找不到工廠" });
+      const isOwner = factory.ownerId === ctx.user.id;
+      const isCoMgr = !isOwner && await db.isActiveCoManager(factory.id, ctx.user.id);
+      if (!isOwner && !isCoMgr) throw new TRPCError({ code: "FORBIDDEN", message: "僅工廠管理者可建立合作確認單" });
+      // 若帶 productId，確認屬於同一工廠
+      if (input.productId) {
+        const prod = await db.getProductById(input.productId);
+        if (!prod || prod.factoryId !== factory.id) throw new TRPCError({ code: "BAD_REQUEST", message: "指定商品不屬於此工廠" });
+      }
+      const orderId = await db.createCollaborationOrder({
+        conversationId: input.conversationId,
+        factoryId: factory.id,
+        buyerUserId: conv.userId,
+        createdByUserId: ctx.user.id,
+        productId: input.productId ?? null,
+        projectName: input.projectName,
+        description: input.description,
+        depositDueDate: input.depositDueDate ?? null,
+        productionStartDate: input.productionStartDate ?? null,
+        expectedCompletionDate: input.expectedCompletionDate ?? null,
+        expectedShipmentDate: input.expectedShipmentDate ?? null,
+        finalPaymentDueDate: input.finalPaymentDueDate ?? null,
+        note: input.note ?? null,
+      });
+      await db.saveMessage(input.conversationId, ctx.user.id, "factory", "合作確認單", "collaboration_order", {
+        orderId,
+        projectName: input.projectName,
+        description: input.description,
+        depositDueDate: input.depositDueDate ?? null,
+        productionStartDate: input.productionStartDate ?? null,
+        expectedCompletionDate: input.expectedCompletionDate ?? null,
+        expectedShipmentDate: input.expectedShipmentDate ?? null,
+        finalPaymentDueDate: input.finalPaymentDueDate ?? null,
+        note: input.note ?? null,
+      });
+      return { orderId };
+    }),
+
+    respond: protectedProcedure.input(z.object({
+      orderId: z.number(),
+      action: z.enum(["accepted", "rejected"]),
+    })).mutation(async ({ ctx, input }) => {
+      const order = await db.getCollaborationOrderById(input.orderId);
+      if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "找不到合作確認單" });
+      if (order.buyerUserId !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN", message: "僅需求方可回應" });
+      if (order.status !== "pending") throw new TRPCError({ code: "BAD_REQUEST", message: "此合作確認單已不是待回應狀態" });
+      await db.respondCollaborationOrder(order.id, input.action);
+      const sysMsg = input.action === "accepted"
+        ? "需求方已同意合作確認單，本筆合作已成立"
+        : "需求方已拒絕此合作確認單";
+      const db_ = await getDb();
+      if (db_) {
+        const [conv] = await db_.select({ userId: conversations.userId }).from(conversations).where(eq(conversations.id, order.conversationId)).limit(1);
+        if (conv) await db.saveMessage(order.conversationId, conv.userId, "user", sysMsg, "text");
+      }
+      return { success: true };
+    }),
+
+    updateStatus: protectedProcedure.input(z.object({
+      orderId: z.number(),
+      status: z.enum(["in_progress", "shipped", "completed", "cancelled"]),
+    })).mutation(async ({ ctx, input }) => {
+      const order = await db.getCollaborationOrderById(input.orderId);
+      if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "找不到合作確認單" });
+      const factory = await db.getFactoryById(order.factoryId);
+      if (!factory) throw new TRPCError({ code: "NOT_FOUND", message: "找不到工廠" });
+      const isOwner = factory.ownerId === ctx.user.id;
+      const isCoMgr = !isOwner && await db.isActiveCoManager(factory.id, ctx.user.id);
+      if (!isOwner && !isCoMgr) throw new TRPCError({ code: "FORBIDDEN", message: "無權限" });
+      const allowedFrom: Record<string, string[]> = {
+        in_progress: ["accepted"],
+        shipped: ["in_progress"],
+        completed: ["shipped"],
+        cancelled: ["accepted", "in_progress", "shipped"],
+      };
+      if (!allowedFrom[input.status]?.includes(order.status)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: `無法從「${order.status}」改為「${input.status}」` });
+      }
+      await db.updateCollaborationOrderStatus(order.id, input.status);
+      return { success: true };
+    }),
+
+    listForFactory: protectedProcedure.input(z.object({
+      factoryId: z.number(),
+    })).query(async ({ ctx, input }) => {
+      const factory = await db.getFactoryById(input.factoryId);
+      if (!factory) throw new TRPCError({ code: "NOT_FOUND", message: "找不到工廠" });
+      const isOwner = factory.ownerId === ctx.user.id;
+      const isCoMgr = !isOwner && await db.isActiveCoManager(factory.id, ctx.user.id);
+      if (!isOwner && !isCoMgr) throw new TRPCError({ code: "FORBIDDEN", message: "無權限" });
+      return db.listFactoryCollaborationOrders(input.factoryId);
+    }),
+
+    getForConversation: protectedProcedure.input(z.object({
+      conversationId: z.number(),
+    })).query(async ({ ctx, input }) => {
+      const db_ = await getDb();
+      if (!db_) return [];
+      const [conv] = await db_.select().from(conversations).where(eq(conversations.id, input.conversationId)).limit(1);
+      if (!conv) return [];
+      const factory = await db.getFactoryById(conv.factoryId);
+      const isOwner = factory?.ownerId === ctx.user.id;
+      const isCoMgr = !isOwner && !!factory && await db.isActiveCoManager(factory.id, ctx.user.id);
+      const isBuyer = conv.userId === ctx.user.id;
+      if (!isOwner && !isCoMgr && !isBuyer) return [];
+      return db.getCollaborationOrdersForConversation(input.conversationId);
+    }),
+
+    createVerifiedReview: protectedProcedure.input(z.object({
+      collaborationOrderId: z.number(),
+      rating: z.number().min(1).max(5),
+      comment: z.string().max(1000).optional(),
+    })).mutation(async ({ ctx, input }) => {
+      const order = await db.getCollaborationOrderById(input.collaborationOrderId);
+      if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "找不到合作確認單" });
+      if (order.buyerUserId !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN", message: "僅該合作需求方可留下評價" });
+      if (order.status !== "completed") throw new TRPCError({ code: "BAD_REQUEST", message: "合作尚未完成" });
+      await db.createVerifiedOrderReview({
+        factoryId: order.factoryId,
+        userId: ctx.user.id,
+        collaborationOrderId: order.id,
+        rating: input.rating,
+        comment: input.comment,
+      });
+      return { success: true };
+    }),
+  }),
+
   // ===== 評價 =====
   review: router({
     getByFactory: publicProcedure.input(z.object({

@@ -17,7 +17,7 @@ import { useState, useEffect, useRef } from "react";
 import { useLocation, Link } from "wouter";
 import { toast } from "sonner";
 import {
-  Factory, Package, MessageCircle, Settings, Plus, Pencil, Trash2, Save, Star, AlertTriangle, ImagePlus, X, ArrowLeft, Camera, Send, CheckCircle, Clock, XCircle, Wrench, Images, ChevronDown, Megaphone, Users, UserMinus
+  Factory, Package, MessageCircle, Settings, Plus, Pencil, Trash2, Save, Star, AlertTriangle, ImagePlus, X, ArrowLeft, Camera, Send, CheckCircle, Clock, XCircle, Wrench, Images, ChevronDown, Megaphone, Users, UserMinus, ClipboardList
 } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
@@ -254,6 +254,10 @@ export default function FactoryDashboard() {
               <Megaphone className="w-3.5 h-3.5 shrink-0" />
               廣告曝光
             </TabsTrigger>
+            <TabsTrigger value="orders" className="gap-1.5 text-xs sm:text-sm">
+              <ClipboardList className="w-3.5 h-3.5 shrink-0" />
+              合作紀錄
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="info">
@@ -279,6 +283,9 @@ export default function FactoryDashboard() {
                 <p className="text-sm mt-1">此功能預計於平台穩定上線後開放，敬請期待。</p>
               </div>
             </div>
+          </TabsContent>
+          <TabsContent value="orders">
+            <CollaborationOrdersTab factoryId={factory.id} />
           </TabsContent>
         </Tabs>
 
@@ -1462,3 +1469,128 @@ function CoManagerPanel({ factoryId }: { factoryId: number }) {
   );
 }
 
+// ===== 合作紀錄 Tab =====
+const ORDER_STATUS_LABEL: Record<string, string> = {
+  pending: "待需求方同意",
+  accepted: "已成立",
+  rejected: "已拒絕",
+  in_progress: "製作中",
+  shipped: "已出貨",
+  completed: "已完成",
+  cancelled: "已取消",
+};
+
+const STATUS_BADGE_CLASS: Record<string, string> = {
+  pending: "bg-yellow-100 text-yellow-800",
+  accepted: "bg-green-100 text-green-800",
+  rejected: "bg-red-100 text-red-800",
+  in_progress: "bg-blue-100 text-blue-800",
+  shipped: "bg-purple-100 text-purple-800",
+  completed: "bg-orange-100 text-orange-800",
+  cancelled: "bg-gray-100 text-gray-600",
+};
+
+function CollaborationOrdersTab({ factoryId }: { factoryId: number }) {
+  const utils = trpc.useUtils();
+  const { data: orders = [], isLoading } = trpc.collaborationOrder.listForFactory.useQuery({ factoryId });
+
+  const updateMut = trpc.collaborationOrder.updateStatus.useMutation({
+    onSuccess: () => {
+      toast.success("狀態已更新");
+      utils.collaborationOrder.listForFactory.invalidate({ factoryId });
+    },
+    onError: e => toast.error(e.message),
+  });
+
+  if (isLoading) {
+    return <div className="py-12 text-center text-muted-foreground text-sm">載入中…</div>;
+  }
+
+  if (orders.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 text-center text-muted-foreground gap-3">
+        <ClipboardList className="w-12 h-12 opacity-30" />
+        <div>
+          <p className="text-lg font-medium text-foreground">尚無合作紀錄</p>
+          <p className="text-sm mt-1">透過對話中的「建立合作確認單」功能與需求方確認合作內容。</p>
+        </div>
+      </div>
+    );
+  }
+
+  function nextStatuses(status: string): { value: string; label: string }[] {
+    const map: Record<string, string[]> = {
+      accepted: ["in_progress", "cancelled"],
+      in_progress: ["shipped", "cancelled"],
+      shipped: ["completed", "cancelled"],
+    };
+    return (map[status] ?? []).map(s => ({ value: s, label: ORDER_STATUS_LABEL[s] }));
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <ClipboardList className="w-4 h-4 text-orange-500" />
+          合作紀錄
+        </CardTitle>
+        <CardDescription>管理所有合作確認單的進度與狀態</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {orders.map(order => {
+          const nexts = nextStatuses(order.status);
+          return (
+            <div key={order.id} className="rounded-lg border p-4 space-y-3">
+              <div className="flex flex-wrap items-start gap-2 justify-between">
+                <div>
+                  <p className="font-medium">{order.projectName}</p>
+                  {order.productName && (
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      綁定商品：{order.productName}
+                    </p>
+                  )}
+                  {!order.productId && (
+                    <p className="text-xs text-muted-foreground mt-0.5">手動輸入</p>
+                  )}
+                </div>
+                <span className={`text-xs px-2 py-0.5 rounded-full font-medium shrink-0 ${STATUS_BADGE_CLASS[order.status] ?? STATUS_BADGE_CLASS.pending}`}>
+                  {ORDER_STATUS_LABEL[order.status] ?? order.status}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                <span>需求方：{order.buyerName ?? "—"}</span>
+                {order.depositDueDate && <span>首款日：{order.depositDueDate}</span>}
+                {order.productionStartDate && <span>製作開始：{order.productionStartDate}</span>}
+                {order.expectedShipmentDate && <span>預計出貨：{order.expectedShipmentDate}</span>}
+                {order.finalPaymentDueDate && <span>尾款日：{order.finalPaymentDueDate}</span>}
+                <span>建立：{new Date(order.createdAt).toLocaleDateString("zh-TW")}</span>
+              </div>
+
+              {nexts.length > 0 && (
+                <div className="flex flex-wrap gap-2 pt-1">
+                  {nexts.map(n => (
+                    <Button
+                      key={n.value}
+                      size="sm"
+                      variant={n.value === "cancelled" ? "outline" : "default"}
+                      className={n.value === "cancelled" ? "text-destructive border-destructive hover:bg-destructive/5" : "bg-orange-500 hover:bg-orange-600 text-white"}
+                      disabled={updateMut.isPending}
+                      onClick={() => updateMut.mutate({ orderId: order.id, status: n.value as any })}
+                    >
+                      {n.label}
+                    </Button>
+                  ))}
+                </div>
+              )}
+
+              <Link href={`/chat/${order.conversationId}`} className="text-xs text-blue-600 hover:underline">
+                查看對話 →
+              </Link>
+            </div>
+          );
+        })}
+      </CardContent>
+    </Card>
+  );
+}

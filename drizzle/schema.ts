@@ -1,4 +1,4 @@
-import { int, mysqlEnum, mysqlTable, text, timestamp, varchar, boolean, decimal, json, uniqueIndex, index } from "drizzle-orm/mysql-core";
+import { int, mysqlEnum, mysqlTable, text, timestamp, varchar, boolean, decimal, json, uniqueIndex, index, date } from "drizzle-orm/mysql-core";
 
 // ===== 使用者表 =====
 export const users = mysqlTable("users", {
@@ -112,7 +112,7 @@ export const messages = mysqlTable("messages", {
   senderRole: mysqlEnum("senderRole", ["user", "factory"]).notNull(),
   content: text("content").notNull(),
   isRead: boolean("isRead").default(false).notNull(),
-  type: mysqlEnum("type", ["text", "co_manager_invite", "product", "pdf"]).default("text").notNull(),
+  type: mysqlEnum("type", ["text", "co_manager_invite", "product", "pdf", "collaboration_order"]).default("text").notNull(),
   invitationId: int("invitationId"),
   attachmentData: json("attachmentData").$type<Record<string, any>>(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
@@ -131,9 +131,38 @@ export const reviews = mysqlTable("reviews", {
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   reply: text("reply"),
   repliedAt: timestamp("repliedAt"),
+  collaborationOrderId: int("collaborationOrderId"),
+  reviewType: mysqlEnum("reviewType", ["general", "verified_order"]).default("general").notNull(),
 });
 
 export type Review = typeof reviews.$inferSelect;
+
+// ===== 合作確認單表 =====
+export const collaborationOrders = mysqlTable("collaborationOrders", {
+  id: int("id").autoincrement().primaryKey(),
+  conversationId: int("conversationId").notNull().references(() => conversations.id, { onDelete: "cascade" }),
+  factoryId: int("factoryId").notNull().references(() => factories.id, { onDelete: "cascade" }),
+  buyerUserId: int("buyerUserId").notNull().references(() => users.id, { onDelete: "cascade" }),
+  createdByUserId: int("createdByUserId").notNull().references(() => users.id, { onDelete: "cascade" }),
+  productId: int("productId").references(() => products.id, { onDelete: "set null" }),
+  projectName: varchar("projectName", { length: 200 }).notNull(),
+  description: text("description").notNull(),
+  depositDueDate: varchar("depositDueDate", { length: 10 }),
+  productionStartDate: varchar("productionStartDate", { length: 10 }),
+  expectedCompletionDate: varchar("expectedCompletionDate", { length: 10 }),
+  expectedShipmentDate: varchar("expectedShipmentDate", { length: 10 }),
+  finalPaymentDueDate: varchar("finalPaymentDueDate", { length: 10 }),
+  note: text("note"),
+  status: mysqlEnum("status", ["pending", "accepted", "rejected", "in_progress", "shipped", "completed", "cancelled"]).default("pending").notNull(),
+  acceptedAt: timestamp("acceptedAt"),
+  rejectedAt: timestamp("rejectedAt"),
+  completedAt: timestamp("completedAt"),
+  cancelledAt: timestamp("cancelledAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type CollaborationOrder = typeof collaborationOrders.$inferSelect;
 
 // ===== 廣告置頂表 =====
 export const advertisements = mysqlTable("advertisements", {
