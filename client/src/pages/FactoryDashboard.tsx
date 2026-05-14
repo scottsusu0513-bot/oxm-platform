@@ -861,23 +861,23 @@ function CategoryManager({ factoryId }: { factoryId: number }) {
                   className="text-sm bg-transparent outline-none w-24"
                   value={editName}
                   onChange={e => setEditName(e.target.value)}
-                  onKeyDown={e => { if (e.key === "Enter") updateMut.mutate({ id: cat.id, name: editName }); if (e.key === "Escape") setEditId(null); }}
+                  onKeyDown={e => { if (e.key === "Enter") updateMut.mutate({ id: cat.id, name: editName, factoryId }); if (e.key === "Escape") setEditId(null); }}
                   autoFocus
                 />
-                <button onClick={() => updateMut.mutate({ id: cat.id, name: editName })} className="text-primary hover:text-primary/80"><Save className="w-3 h-3" /></button>
+                <button onClick={() => updateMut.mutate({ id: cat.id, name: editName, factoryId })} className="text-primary hover:text-primary/80"><Save className="w-3 h-3" /></button>
                 <button onClick={() => setEditId(null)} className="text-muted-foreground hover:text-foreground"><X className="w-3 h-3" /></button>
               </>
             ) : (
               <>
                 <span className="text-sm">{cat.name}</span>
                 <button onClick={() => { setEditId(cat.id); setEditName(cat.name); }} className="text-muted-foreground hover:text-foreground ml-1"><Pencil className="w-3 h-3" /></button>
-                <button onClick={() => deleteMut.mutate({ id: cat.id })} className="text-muted-foreground hover:text-destructive"><X className="w-3 h-3" /></button>
+                <button onClick={() => deleteMut.mutate({ id: cat.id, factoryId })} className="text-muted-foreground hover:text-destructive"><X className="w-3 h-3" /></button>
               </>
             )}
           </div>
         ))}
         {categories.length < 20 && (
-          <form onSubmit={e => { e.preventDefault(); if (newName.trim()) createMut.mutate({ name: newName }); }} className="flex items-center gap-1">
+          <form onSubmit={e => { e.preventDefault(); if (newName.trim()) createMut.mutate({ name: newName, factoryId }); }} className="flex items-center gap-1">
             <input
               className="text-sm border rounded-full px-3 py-1 w-28 outline-none focus:ring-1 focus:ring-primary"
               placeholder="新增分類..."

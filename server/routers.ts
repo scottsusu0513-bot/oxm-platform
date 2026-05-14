@@ -16,6 +16,16 @@ import { factories, conversations, reviews, reports } from "../drizzle/schema";
 import { desc, eq, and, sql } from "drizzle-orm";
 import { getDb } from "./db";
 
+async function assertFactoryManager(factoryId: number, userId: number) {
+  const factory = await db.getFactoryById(factoryId);
+  if (!factory) throw new TRPCError({ code: "NOT_FOUND", message: "找不到工廠" });
+  if (factory.ownerId !== userId) {
+    const isCoMgr = await db.isActiveCoManager(factory.id, userId);
+    if (!isCoMgr) throw new TRPCError({ code: "FORBIDDEN", message: "無權限操作此工廠" });
+  }
+  return factory;
+}
+
 export const appRouter = router({
   system: systemRouter,
 
@@ -380,23 +390,30 @@ export const appRouter = router({
       return db.getCategoriesByFactoryId(input.factoryId);
     }),
 
-    create: protectedProcedure.input(z.object({ name: z.string().min(1).max(100) })).mutation(async ({ ctx, input }) => {
-      const factory = await db.getFactoryByOwnerId(ctx.user.id);
-      if (!factory) throw new Error("找不到工廠");
+    create: protectedProcedure.input(z.object({
+      name: z.string().min(1).max(100),
+      factoryId: z.number(),
+    })).mutation(async ({ ctx, input }) => {
+      const factory = await assertFactoryManager(input.factoryId, ctx.user.id);
       const id = await db.createCategory(factory.id, input.name.trim());
       return { id };
     }),
 
-    update: protectedProcedure.input(z.object({ id: z.number(), name: z.string().min(1).max(100) })).mutation(async ({ ctx, input }) => {
-      const factory = await db.getFactoryByOwnerId(ctx.user.id);
-      if (!factory) throw new Error("找不到工廠");
+    update: protectedProcedure.input(z.object({
+      id: z.number(),
+      name: z.string().min(1).max(100),
+      factoryId: z.number(),
+    })).mutation(async ({ ctx, input }) => {
+      const factory = await assertFactoryManager(input.factoryId, ctx.user.id);
       await db.updateCategory(input.id, factory.id, input.name.trim());
       return { success: true };
     }),
 
-    delete: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-      const factory = await db.getFactoryByOwnerId(ctx.user.id);
-      if (!factory) throw new Error("找不到工廠");
+    delete: protectedProcedure.input(z.object({
+      id: z.number(),
+      factoryId: z.number(),
+    })).mutation(async ({ ctx, input }) => {
+      const factory = await assertFactoryManager(input.factoryId, ctx.user.id);
       await db.deleteCategory(input.id, factory.id);
       return { success: true };
     }),
@@ -404,9 +421,9 @@ export const appRouter = router({
     assignProduct: protectedProcedure.input(z.object({
       productId: z.number(),
       categoryId: z.number().nullable(),
+      factoryId: z.number(),
     })).mutation(async ({ ctx, input }) => {
-      const factory = await db.getFactoryByOwnerId(ctx.user.id);
-      if (!factory) throw new Error("找不到工廠");
+      const factory = await assertFactoryManager(input.factoryId, ctx.user.id);
       await db.updateProductCategory(input.productId, factory.id, input.categoryId);
       return { success: true };
     }),
@@ -434,8 +451,7 @@ export const appRouter = router({
       description: z.string().optional(),
       images: z.array(z.string()).max(3).optional(),
     })).mutation(async ({ ctx, input }) => {
-      const factory = await db.getFactoryById(input.factoryId);
-      if (!factory || factory.ownerId !== ctx.user.id) throw new Error("無權限操作此工廠");
+      await assertFactoryManager(input.factoryId, ctx.user.id);
       const id = await db.createProduct(input);
       return { id };
     }),
@@ -453,8 +469,7 @@ export const appRouter = router({
       description: z.string().optional(),
       images: z.array(z.string()).max(3).optional(),
     })).mutation(async ({ ctx, input }) => {
-      const factory = await db.getFactoryById(input.factoryId);
-      if (!factory || factory.ownerId !== ctx.user.id) throw new Error("無權限操作此工廠");
+      await assertFactoryManager(input.factoryId, ctx.user.id);
       const { id, factoryId, ...data } = input;
       await db.updateProduct(id, factoryId, data);
       return { success: true };
@@ -464,8 +479,7 @@ export const appRouter = router({
       id: z.number(),
       factoryId: z.number(),
     })).mutation(async ({ ctx, input }) => {
-      const factory = await db.getFactoryById(input.factoryId);
-      if (!factory || factory.ownerId !== ctx.user.id) throw new Error("無權限操作此工廠");
+      await assertFactoryManager(input.factoryId, ctx.user.id);
       await db.deleteProduct(input.id, input.factoryId);
       return { success: true };
     }),
@@ -476,8 +490,7 @@ export const appRouter = router({
       base64: z.string().max(10 * 1024 * 1024),
       mimeType: z.enum(["image/jpeg", "image/png", "image/webp"]).default("image/jpeg"),
     })).mutation(async ({ ctx, input }) => {
-      const factory = await db.getFactoryById(input.factoryId);
-      if (!factory || factory.ownerId !== ctx.user.id) throw new Error("無權限");
+      const factory = await assertFactoryManager(input.factoryId, ctx.user.id);
       const base64Data = input.base64.includes(",") ? input.base64.split(",")[1] : input.base64;
       const buffer = Buffer.from(base64Data, "base64");
       const validation = await validateImageUpload(buffer);
