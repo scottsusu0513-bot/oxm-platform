@@ -248,6 +248,7 @@ const ORDER_STATUS_LABEL: Record<string, string> = {
   shipped: "已出貨",
   completed: "已完成",
   cancelled: "已取消",
+  cancel_requested: "取消申請中",
 };
 
 function CollaborationOrderDialog({
@@ -430,6 +431,73 @@ function CollaborationOrderDialog({
   );
 }
 
+// ── 取消合作申請卡片 ────────────────────────────────────────────────────
+function CancelRequestCard({
+  data,
+  conversationId,
+  currentUserId,
+  onActed,
+}: {
+  data: Record<string, any>;
+  conversationId: number;
+  currentUserId?: number;
+  onActed: () => void;
+}) {
+  const orderId: number = data?.orderId;
+  const { data: orders, refetch } = trpc.collaborationOrder.getForConversation.useQuery(
+    { conversationId },
+    { enabled: !!conversationId }
+  );
+  const order = orders?.find(o => o.id === orderId);
+  const status = order?.status ?? "cancel_requested";
+
+  const respondCancelMut = trpc.collaborationOrder.respondCancel.useMutation({
+    onSuccess: (_, vars) => {
+      toast.success(vars.action === "accept" ? "已同意取消" : "已拒絕取消");
+      refetch();
+      onActed();
+    },
+    onError: e => toast.error(e.message),
+  });
+
+  const isRequester = currentUserId === data?.requestedByUserId;
+  const isResolved = status !== "cancel_requested";
+
+  return (
+    <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 text-sm w-72 sm:w-96 space-y-3">
+      <div className="flex items-center gap-2 font-semibold text-gray-700">
+        <XCircle className="w-4 h-4 text-red-500" />
+        取消合作申請
+      </div>
+      <div className="space-y-1 text-foreground">
+        <p><span className="text-muted-foreground text-xs">合作項目：</span>{data.projectName}</p>
+        <p><span className="text-muted-foreground text-xs">申請方：</span>{data.requestedByRole === "factory" ? "工廠方" : "需求方"}</p>
+        <p><span className="text-muted-foreground text-xs">取消原因：</span>{data.reason}</p>
+      </div>
+      {isResolved ? (
+        <p className={`text-xs text-center font-medium ${status === "cancelled" ? "text-gray-500" : "text-green-600"}`}>
+          {status === "cancelled" ? "已同意取消，合作確認單已取消" : "已拒絕取消，合作確認單維持原狀態"}
+        </p>
+      ) : isRequester ? (
+        <p className="text-xs text-muted-foreground text-center">等待對方回覆取消申請</p>
+      ) : (
+        <div className="flex gap-2 pt-1">
+          <Button size="sm" variant="outline" className="flex-1 text-destructive border-destructive hover:bg-destructive/5"
+            disabled={respondCancelMut.isPending}
+            onClick={() => respondCancelMut.mutate({ orderId, action: "accept" })}>
+            同意取消
+          </Button>
+          <Button size="sm" className="flex-1 bg-orange-500 hover:bg-orange-600 text-white"
+            disabled={respondCancelMut.isPending}
+            onClick={() => respondCancelMut.mutate({ orderId, action: "reject" })}>
+            拒絕取消
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── 合作確認單訊息卡片 ────────────────────────────────────────────────────
 function CollaborationOrderCard({
   data,
@@ -446,8 +514,11 @@ function CollaborationOrderCard({
   currentUserId?: number;
   onActed: () => void;
 }) {
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const [cancelReason, setCancelReason] = useState("");
+
   const orderId: number = data?.orderId;
-  const { data: orders } = trpc.collaborationOrder.getForConversation.useQuery(
+  const { data: orders, refetch } = trpc.collaborationOrder.getForConversation.useQuery(
     { conversationId },
     { enabled: !!conversationId }
   );
@@ -456,6 +527,18 @@ function CollaborationOrderCard({
   const respondMut = trpc.collaborationOrder.respond.useMutation({
     onSuccess: (_, vars) => {
       toast.success(vars.action === "accepted" ? "已同意合作確認單" : "已拒絕合作確認單");
+      refetch();
+      onActed();
+    },
+    onError: e => toast.error(e.message),
+  });
+
+  const requestCancelMut = trpc.collaborationOrder.requestCancel.useMutation({
+    onSuccess: () => {
+      toast.success("取消申請已送出");
+      setCancelOpen(false);
+      setCancelReason("");
+      refetch();
       onActed();
     },
     onError: e => toast.error(e.message),
@@ -472,9 +555,11 @@ function CollaborationOrderCard({
     shipped: "bg-purple-100 text-purple-800",
     completed: "bg-orange-100 text-orange-800",
     cancelled: "bg-gray-100 text-gray-600",
+    cancel_requested: "bg-red-100 text-red-700",
   };
 
   const isBuyer = currentUserId === buyerId;
+  const canRequestCancel = ["pending", "accepted", "in_progress", "shipped"].includes(status);
 
   function fmt(d?: string | null) {
     if (!d) return "—";
@@ -482,57 +567,110 @@ function CollaborationOrderCard({
   }
 
   return (
-    <div className="rounded-xl border border-orange-200 bg-orange-50 p-4 text-sm w-72 sm:w-96 space-y-3">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2 font-semibold text-orange-700">
-          <ClipboardList className="w-4 h-4" />
-          合作確認單
+    <>
+      <div className="rounded-xl border border-orange-200 bg-orange-50 p-4 text-sm w-72 sm:w-96 space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2 font-semibold text-orange-700">
+            <ClipboardList className="w-4 h-4" />
+            合作確認單
+          </div>
+          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${statusColor[status] ?? statusColor.pending}`}>
+            {statusLabel}
+          </span>
         </div>
-        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${statusColor[status] ?? statusColor.pending}`}>
-          {statusLabel}
-        </span>
-      </div>
 
-      <div className="space-y-1.5 text-foreground">
-        <p><span className="text-muted-foreground text-xs">合作項目：</span>{data.projectName ?? order?.projectName}</p>
-        <p className="text-xs text-muted-foreground whitespace-pre-wrap line-clamp-3">{data.description ?? order?.description}</p>
-        {data.depositDueDate && <p><span className="text-muted-foreground text-xs">首款付款日：</span>{fmt(data.depositDueDate)}</p>}
-        {(data.productionStartDate || data.expectedCompletionDate) && (
-          <p><span className="text-muted-foreground text-xs">製作期間：</span>{fmt(data.productionStartDate)} — {fmt(data.expectedCompletionDate)}</p>
+        <div className="space-y-1.5 text-foreground">
+          <p><span className="text-muted-foreground text-xs">合作項目：</span>{data.projectName ?? order?.projectName}</p>
+          <p className="text-xs text-muted-foreground whitespace-pre-wrap line-clamp-3">{data.description ?? order?.description}</p>
+          {data.depositDueDate && <p><span className="text-muted-foreground text-xs">首款付款日：</span>{fmt(data.depositDueDate)}</p>}
+          {(data.productionStartDate || data.expectedCompletionDate) && (
+            <p><span className="text-muted-foreground text-xs">製作期間：</span>{fmt(data.productionStartDate)} — {fmt(data.expectedCompletionDate)}</p>
+          )}
+          {data.expectedShipmentDate && <p><span className="text-muted-foreground text-xs">預計出貨日：</span>{fmt(data.expectedShipmentDate)}</p>}
+          {data.finalPaymentDueDate && <p><span className="text-muted-foreground text-xs">尾款結款日：</span>{fmt(data.finalPaymentDueDate)}</p>}
+          {data.note && <p><span className="text-muted-foreground text-xs">備註：</span>{data.note}</p>}
+        </div>
+
+        {/* 操作按鈕區 */}
+        {status === "pending" && isBuyer && !isFactorySide && (
+          <div className="flex gap-2 pt-1">
+            <Button size="sm" className="flex-1 bg-orange-500 hover:bg-orange-600 text-white"
+              disabled={respondMut.isPending}
+              onClick={() => respondMut.mutate({ orderId, action: "accepted" })}>
+              <CheckCircle className="w-3.5 h-3.5 mr-1" />同意合作內容
+            </Button>
+            <Button size="sm" variant="outline" className="flex-1"
+              disabled={respondMut.isPending}
+              onClick={() => respondMut.mutate({ orderId, action: "rejected" })}>
+              <XCircle className="w-3.5 h-3.5 mr-1" />拒絕
+            </Button>
+          </div>
         )}
-        {data.expectedShipmentDate && <p><span className="text-muted-foreground text-xs">預計出貨日：</span>{fmt(data.expectedShipmentDate)}</p>}
-        {data.finalPaymentDueDate && <p><span className="text-muted-foreground text-xs">尾款結款日：</span>{fmt(data.finalPaymentDueDate)}</p>}
-        {data.note && <p><span className="text-muted-foreground text-xs">備註：</span>{data.note}</p>}
+        {status === "pending" && isFactorySide && (
+          <p className="text-xs text-muted-foreground text-center pt-1">等待需求方同意</p>
+        )}
+
+        {/* 取消申請中提示 */}
+        {status === "cancel_requested" && (
+          <p className="text-xs text-red-600 text-center font-medium pt-1">取消申請進行中，請至聊天室回覆</p>
+        )}
+
+        {/* 已完成合作後，需求方可留評價入口 */}
+        {status === "completed" && isBuyer && !isFactorySide && orderId && (
+          <VerifiedReviewButton orderId={orderId} factoryId={order?.factoryId} onDone={onActed} />
+        )}
+
+        {/* 申請取消按鈕 */}
+        {canRequestCancel && orderId && (
+          <div className="pt-1">
+            <Button size="sm" variant="outline" className="w-full text-xs text-muted-foreground border-dashed"
+              onClick={() => setCancelOpen(true)}>
+              申請取消合作
+            </Button>
+          </div>
+        )}
+
+        <p className="text-xs text-muted-foreground leading-relaxed border-t border-orange-200 pt-2">
+          此合作確認單僅作為雙方於 OXM 平台內確認合作內容之紀錄，實際付款、合約、交付與售後責任由雙方自行協議。
+        </p>
       </div>
 
-      {/* 操作按鈕區 */}
-      {status === "pending" && isBuyer && !isFactorySide && (
-        <div className="flex gap-2 pt-1">
-          <Button size="sm" className="flex-1 bg-orange-500 hover:bg-orange-600 text-white"
-            disabled={respondMut.isPending}
-            onClick={() => respondMut.mutate({ orderId, action: "accepted" })}>
-            <CheckCircle className="w-3.5 h-3.5 mr-1" />同意合作內容
-          </Button>
-          <Button size="sm" variant="outline" className="flex-1"
-            disabled={respondMut.isPending}
-            onClick={() => respondMut.mutate({ orderId, action: "rejected" })}>
-            <XCircle className="w-3.5 h-3.5 mr-1" />拒絕
-          </Button>
-        </div>
-      )}
-      {status === "pending" && isFactorySide && (
-        <p className="text-xs text-muted-foreground text-center pt-1">等待需求方同意</p>
-      )}
-
-      {/* 已完成合作後，需求方可留評價入口 */}
-      {status === "completed" && isBuyer && !isFactorySide && orderId && (
-        <VerifiedReviewButton orderId={orderId} factoryId={order?.factoryId} onDone={onActed} />
-      )}
-
-      <p className="text-xs text-muted-foreground leading-relaxed border-t border-orange-200 pt-2">
-        此合作確認單僅作為雙方於 OXM 平台內確認合作內容之紀錄，實際付款、合約、交付與售後責任由雙方自行協議。
-      </p>
-    </div>
+      {/* 申請取消 Dialog */}
+      <Dialog open={cancelOpen} onOpenChange={setCancelOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>申請取消合作</DialogTitle>
+            <DialogDescription>送出後對方需在聊天室同意或拒絕取消申請</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <Label className="text-sm">合作項目</Label>
+              <p className="text-sm text-muted-foreground mt-0.5">{data.projectName ?? order?.projectName}</p>
+            </div>
+            <div>
+              <Label className="text-sm">取消原因 *</Label>
+              <Textarea
+                className="mt-1"
+                placeholder="請說明申請取消的原因…"
+                value={cancelReason}
+                onChange={e => setCancelReason(e.target.value)}
+                rows={3}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setCancelOpen(false); setCancelReason(""); }}>取消</Button>
+            <Button
+              className="bg-red-500 hover:bg-red-600 text-white"
+              disabled={!cancelReason.trim() || requestCancelMut.isPending}
+              onClick={() => requestCancelMut.mutate({ orderId, reason: cancelReason.trim() })}
+            >
+              送出取消申請
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 
@@ -842,10 +980,17 @@ export default function ChatPage() {
 
                   return (
                     <div key={msg.id} className={`flex ${isMine ? "justify-end" : "justify-start"}`}>
-                      {/* 合作確認單：不套用氣泡樣式，直接渲染卡片 */}
+                      {/* 合作確認單 / 取消申請：不套用氣泡樣式，直接渲染卡片 */}
                       {isOrder ? (
                         <div className="max-w-[85%]">
-                          {attachmentData ? (
+                          {attachmentData?.subType === "cancel_request" ? (
+                            <CancelRequestCard
+                              data={attachmentData}
+                              conversationId={conversationId!}
+                              currentUserId={user?.id}
+                              onActed={invalidateMessages}
+                            />
+                          ) : attachmentData ? (
                             <CollaborationOrderCard
                               data={attachmentData}
                               conversationId={conversationId!}

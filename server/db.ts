@@ -2297,16 +2297,55 @@ export async function respondCollaborationOrder(id: number, action: "accepted" |
   }
 }
 
+export async function requestCancelCollaborationOrder(
+  id: number,
+  requestedByUserId: number,
+  reason: string,
+  fromStatus: string
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  await db.update(collaborationOrders).set({
+    status: "cancel_requested",
+    cancelRequestedByUserId: requestedByUserId,
+    cancelRequestedAt: new Date(),
+    cancelRequestReason: reason,
+    cancelRequestedFromStatus: fromStatus,
+  }).where(eq(collaborationOrders.id, id));
+}
+
+export async function respondCancelCollaborationOrder(
+  id: number,
+  action: "accept" | "reject"
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  const [order] = await db.select().from(collaborationOrders).where(eq(collaborationOrders.id, id)).limit(1);
+  if (!order) throw new Error("找不到合作確認單");
+  const now = new Date();
+  if (action === "accept") {
+    await db.update(collaborationOrders).set({ status: "cancelled", cancelledAt: now }).where(eq(collaborationOrders.id, id));
+  } else {
+    const restored = (order.cancelRequestedFromStatus ?? "accepted") as any;
+    await db.update(collaborationOrders).set({
+      status: restored,
+      cancelRequestedByUserId: null,
+      cancelRequestedAt: null,
+      cancelRequestReason: null,
+      cancelRequestedFromStatus: null,
+    }).where(eq(collaborationOrders.id, id));
+  }
+}
+
 export async function updateCollaborationOrderStatus(
   id: number,
-  status: "in_progress" | "shipped" | "completed" | "cancelled"
+  status: "in_progress" | "shipped" | "completed"
 ): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
   const now = new Date();
   const extra: Record<string, any> = {};
   if (status === "completed") extra.completedAt = now;
-  if (status === "cancelled") extra.cancelledAt = now;
   await db.update(collaborationOrders).set({ status, ...extra }).where(eq(collaborationOrders.id, id));
 }
 
@@ -2330,6 +2369,10 @@ export async function listFactoryCollaborationOrders(factoryId: number) {
     rejectedAt: collaborationOrders.rejectedAt,
     completedAt: collaborationOrders.completedAt,
     cancelledAt: collaborationOrders.cancelledAt,
+    cancelRequestedByUserId: collaborationOrders.cancelRequestedByUserId,
+    cancelRequestedAt: collaborationOrders.cancelRequestedAt,
+    cancelRequestReason: collaborationOrders.cancelRequestReason,
+    cancelRequestedFromStatus: collaborationOrders.cancelRequestedFromStatus,
     createdAt: collaborationOrders.createdAt,
     buyerUserId: collaborationOrders.buyerUserId,
     buyerName: users.name,

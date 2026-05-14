@@ -948,10 +948,14 @@ export const appRouter = router({
 
     updateStatus: protectedProcedure.input(z.object({
       orderId: z.number(),
-      status: z.enum(["in_progress", "shipped", "completed", "cancelled"]),
+      status: z.enum(["in_progress", "shipped", "completed"]),
     })).mutation(async ({ ctx, input }) => {
       const order = await db.getCollaborationOrderById(input.orderId);
       if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "找不到合作確認單" });
+      if (order.status === "cancelled" || order.status === "cancel_requested") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "此合作確認單已取消或正在取消申請中" });
+      }
+      if (order.status === "completed") throw new TRPCError({ code: "BAD_REQUEST", message: "已完成的合作確認單不可再更新" });
       const factory = await db.getFactoryById(order.factoryId);
       if (!factory) throw new TRPCError({ code: "NOT_FOUND", message: "找不到工廠" });
       const isOwner = factory.ownerId === ctx.user.id;
@@ -961,12 +965,72 @@ export const appRouter = router({
         in_progress: ["accepted"],
         shipped: ["in_progress"],
         completed: ["shipped"],
-        cancelled: ["accepted", "in_progress", "shipped"],
       };
       if (!allowedFrom[input.status]?.includes(order.status)) {
         throw new TRPCError({ code: "BAD_REQUEST", message: `無法從「${order.status}」改為「${input.status}」` });
       }
       await db.updateCollaborationOrderStatus(order.id, input.status);
+      return { success: true };
+    }),
+
+    requestCancel: protectedProcedure.input(z.object({
+      orderId: z.number(),
+      reason: z.string().min(1).max(500),
+    })).mutation(async ({ ctx, input }) => {
+      const order = await db.getCollaborationOrderById(input.orderId);
+      if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "找不到合作確認單" });
+      const allowedStatuses = ["pending", "accepted", "in_progress", "shipped"];
+      if (!allowedStatuses.includes(order.status)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "此狀態不可申請取消" });
+      }
+      const factory = await db.getFactoryById(order.factoryId);
+      if (!factory) throw new TRPCError({ code: "NOT_FOUND", message: "找不到工廠" });
+      const isOwner = factory.ownerId === ctx.user.id;
+      const isCoMgr = !isOwner && await db.isActiveCoManager(factory.id, ctx.user.id);
+      const isBuyer = order.buyerUserId === ctx.user.id;
+      if (!isOwner && !isCoMgr && !isBuyer) throw new TRPCError({ code: "FORBIDDEN", message: "無權限" });
+      await db.requestCancelCollaborationOrder(order.id, ctx.user.id, input.reason, order.status);
+      const isFactorySide = isOwner || isCoMgr;
+      const db_ = await getDb();
+      if (db_) {
+        const [conv] = await db_.select({ userId: conversations.userId }).from(conversations).where(eq(conversations.id, order.conversationId)).limit(1);
+        const senderId = conv?.userId ?? ctx.user.id;
+        const senderRole = isFactorySide ? "factory" : "user";
+        await db.saveMessage(order.conversationId, senderId, senderRole, "取消合作申請", "collaboration_order", {
+          subType: "cancel_request",
+          orderId: order.id,
+          projectName: order.projectName,
+          reason: input.reason,
+          requestedByUserId: ctx.user.id,
+          requestedByRole: isFactorySide ? "factory" : "buyer",
+        });
+      }
+      return { success: true };
+    }),
+
+    respondCancel: protectedProcedure.input(z.object({
+      orderId: z.number(),
+      action: z.enum(["accept", "reject"]),
+    })).mutation(async ({ ctx, input }) => {
+      const order = await db.getCollaborationOrderById(input.orderId);
+      if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "找不到合作確認單" });
+      if (order.status !== "cancel_requested") throw new TRPCError({ code: "BAD_REQUEST", message: "此合作確認單不在取消申請狀態" });
+      if (order.cancelRequestedByUserId === ctx.user.id) throw new TRPCError({ code: "FORBIDDEN", message: "不能回應自己提出的取消申請" });
+      const factory = await db.getFactoryById(order.factoryId);
+      if (!factory) throw new TRPCError({ code: "NOT_FOUND", message: "找不到工廠" });
+      const isOwner = factory.ownerId === ctx.user.id;
+      const isCoMgr = !isOwner && await db.isActiveCoManager(factory.id, ctx.user.id);
+      const isBuyer = order.buyerUserId === ctx.user.id;
+      if (!isOwner && !isCoMgr && !isBuyer) throw new TRPCError({ code: "FORBIDDEN", message: "無權限" });
+      await db.respondCancelCollaborationOrder(order.id, input.action);
+      const sysMsg = input.action === "accept"
+        ? "對方已同意取消，合作確認單已取消"
+        : "對方已拒絕取消，合作確認單維持原狀態";
+      const db_ = await getDb();
+      if (db_) {
+        const [conv] = await db_.select({ userId: conversations.userId }).from(conversations).where(eq(conversations.id, order.conversationId)).limit(1);
+        if (conv) await db.saveMessage(order.conversationId, conv.userId, "user", sysMsg, "text");
+      }
       return { success: true };
     }),
 

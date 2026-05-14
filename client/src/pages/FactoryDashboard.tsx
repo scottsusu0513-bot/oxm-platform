@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 // 千分位格式化
 function formatNumber(val: string): string {
@@ -1478,6 +1479,7 @@ const ORDER_STATUS_LABEL: Record<string, string> = {
   shipped: "已出貨",
   completed: "已完成",
   cancelled: "已取消",
+  cancel_requested: "取消申請中",
 };
 
 const STATUS_BADGE_CLASS: Record<string, string> = {
@@ -1488,15 +1490,28 @@ const STATUS_BADGE_CLASS: Record<string, string> = {
   shipped: "bg-purple-100 text-purple-800",
   completed: "bg-orange-100 text-orange-800",
   cancelled: "bg-gray-100 text-gray-600",
+  cancel_requested: "bg-red-100 text-red-700",
 };
 
 function CollaborationOrdersTab({ factoryId }: { factoryId: number }) {
   const utils = trpc.useUtils();
   const { data: orders = [], isLoading } = trpc.collaborationOrder.listForFactory.useQuery({ factoryId });
+  const [cancelTarget, setCancelTarget] = useState<number | null>(null);
+  const [cancelReason, setCancelReason] = useState("");
 
   const updateMut = trpc.collaborationOrder.updateStatus.useMutation({
     onSuccess: () => {
       toast.success("狀態已更新");
+      utils.collaborationOrder.listForFactory.invalidate({ factoryId });
+    },
+    onError: e => toast.error(e.message),
+  });
+
+  const requestCancelMut = trpc.collaborationOrder.requestCancel.useMutation({
+    onSuccess: () => {
+      toast.success("取消申請已送出，等待需求方回覆");
+      setCancelTarget(null);
+      setCancelReason("");
       utils.collaborationOrder.listForFactory.invalidate({ factoryId });
     },
     onError: e => toast.error(e.message),
@@ -1520,77 +1535,137 @@ function CollaborationOrdersTab({ factoryId }: { factoryId: number }) {
 
   function nextStatuses(status: string): { value: string; label: string }[] {
     const map: Record<string, string[]> = {
-      accepted: ["in_progress", "cancelled"],
-      in_progress: ["shipped", "cancelled"],
-      shipped: ["completed", "cancelled"],
+      accepted: ["in_progress"],
+      in_progress: ["shipped"],
+      shipped: ["completed"],
     };
     return (map[status] ?? []).map(s => ({ value: s, label: ORDER_STATUS_LABEL[s] }));
   }
 
+  const cancelTargetOrder = orders.find(o => o.id === cancelTarget);
+
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-base">
-          <ClipboardList className="w-4 h-4 text-orange-500" />
-          合作紀錄
-        </CardTitle>
-        <CardDescription>管理所有合作確認單的進度與狀態</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {orders.map(order => {
-          const nexts = nextStatuses(order.status);
-          return (
-            <div key={order.id} className="rounded-lg border p-4 space-y-3">
-              <div className="flex flex-wrap items-start gap-2 justify-between">
-                <div>
-                  <p className="font-medium">{order.projectName}</p>
-                  {order.productName && (
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      綁定商品：{order.productName}
-                    </p>
-                  )}
-                  {!order.productId && (
-                    <p className="text-xs text-muted-foreground mt-0.5">手動輸入</p>
-                  )}
+    <>
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <ClipboardList className="w-4 h-4 text-orange-500" />
+            合作紀錄
+          </CardTitle>
+          <CardDescription>管理所有合作確認單的進度與狀態</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {orders.map(order => {
+            const nexts = nextStatuses(order.status);
+            const canCancel = ["pending", "accepted", "in_progress", "shipped"].includes(order.status);
+            return (
+              <div key={order.id} className="rounded-lg border p-4 space-y-3">
+                <div className="flex flex-wrap items-start gap-2 justify-between">
+                  <div>
+                    <p className="font-medium">{order.projectName}</p>
+                    {order.productName && (
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        綁定商品：{order.productName}
+                      </p>
+                    )}
+                    {!order.productId && (
+                      <p className="text-xs text-muted-foreground mt-0.5">手動輸入</p>
+                    )}
+                  </div>
+                  <span className={`text-xs px-2 py-0.5 rounded-full font-medium shrink-0 ${STATUS_BADGE_CLASS[order.status] ?? STATUS_BADGE_CLASS.pending}`}>
+                    {ORDER_STATUS_LABEL[order.status] ?? order.status}
+                  </span>
                 </div>
-                <span className={`text-xs px-2 py-0.5 rounded-full font-medium shrink-0 ${STATUS_BADGE_CLASS[order.status] ?? STATUS_BADGE_CLASS.pending}`}>
-                  {ORDER_STATUS_LABEL[order.status] ?? order.status}
-                </span>
-              </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                <span>需求方：{order.buyerName ?? "—"}</span>
-                {order.depositDueDate && <span>首款日：{order.depositDueDate}</span>}
-                {order.productionStartDate && <span>製作開始：{order.productionStartDate}</span>}
-                {order.expectedShipmentDate && <span>預計出貨：{order.expectedShipmentDate}</span>}
-                {order.finalPaymentDueDate && <span>尾款日：{order.finalPaymentDueDate}</span>}
-                <span>建立：{new Date(order.createdAt).toLocaleDateString("zh-TW")}</span>
-              </div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                  <span>需求方：{order.buyerName ?? "—"}</span>
+                  {order.depositDueDate && <span>首款日：{order.depositDueDate}</span>}
+                  {order.productionStartDate && <span>製作開始：{order.productionStartDate}</span>}
+                  {order.expectedShipmentDate && <span>預計出貨：{order.expectedShipmentDate}</span>}
+                  {order.finalPaymentDueDate && <span>尾款日：{order.finalPaymentDueDate}</span>}
+                  <span>建立：{new Date(order.createdAt).toLocaleDateString("zh-TW")}</span>
+                </div>
 
-              {nexts.length > 0 && (
+                {order.status === "cancel_requested" && order.cancelRequestReason && (
+                  <p className="text-xs text-red-600 bg-red-50 rounded px-2 py-1">
+                    取消原因：{order.cancelRequestReason}
+                  </p>
+                )}
+
                 <div className="flex flex-wrap gap-2 pt-1">
                   {nexts.map(n => (
                     <Button
                       key={n.value}
                       size="sm"
-                      variant={n.value === "cancelled" ? "outline" : "default"}
-                      className={n.value === "cancelled" ? "text-destructive border-destructive hover:bg-destructive/5" : "bg-orange-500 hover:bg-orange-600 text-white"}
+                      className="bg-orange-500 hover:bg-orange-600 text-white"
                       disabled={updateMut.isPending}
                       onClick={() => updateMut.mutate({ orderId: order.id, status: n.value as any })}
                     >
                       {n.label}
                     </Button>
                   ))}
+                  {canCancel && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-destructive border-destructive hover:bg-destructive/5"
+                      onClick={() => setCancelTarget(order.id)}
+                    >
+                      申請取消
+                    </Button>
+                  )}
                 </div>
-              )}
 
-              <Link href={`/chat/${order.conversationId}`} className="text-xs text-blue-600 hover:underline">
-                查看對話 →
-              </Link>
+                <Link href={`/chat/${order.conversationId}`} className="text-xs text-blue-600 hover:underline">
+                  查看對話 →
+                </Link>
+              </div>
+            );
+          })}
+        </CardContent>
+      </Card>
+
+      {/* 申請取消 Dialog */}
+      <Dialog open={cancelTarget !== null} onOpenChange={open => { if (!open) { setCancelTarget(null); setCancelReason(""); } }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>申請取消合作</DialogTitle>
+            <DialogDescription>送出後需求方需在聊天室同意或拒絕取消申請</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            {cancelTargetOrder && (
+              <div>
+                <Label className="text-sm">合作項目</Label>
+                <p className="text-sm text-muted-foreground mt-0.5">{cancelTargetOrder.projectName}</p>
+              </div>
+            )}
+            <div>
+              <Label className="text-sm">取消原因 *</Label>
+              <Textarea
+                className="mt-1"
+                placeholder="請說明申請取消的原因…"
+                value={cancelReason}
+                onChange={e => setCancelReason(e.target.value)}
+                rows={3}
+              />
             </div>
-          );
-        })}
-      </CardContent>
-    </Card>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setCancelTarget(null); setCancelReason(""); }}>關閉</Button>
+            <Button
+              className="bg-red-500 hover:bg-red-600 text-white"
+              disabled={!cancelReason.trim() || requestCancelMut.isPending || cancelTarget === null}
+              onClick={() => {
+                if (cancelTarget !== null) {
+                  requestCancelMut.mutate({ orderId: cancelTarget, reason: cancelReason.trim() });
+                }
+              }}
+            >
+              送出取消申請
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
