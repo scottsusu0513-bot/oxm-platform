@@ -219,40 +219,40 @@ export default function FactoryDashboard() {
         )}
 
         <Tabs defaultValue="info">
-          <TabsList className="h-auto flex flex-wrap w-full mb-4 gap-y-1">
-            <TabsTrigger value="info" className="basis-1/3 sm:basis-auto flex-1 min-w-0 text-xs sm:text-sm py-2 gap-1">
-              <Settings className="w-3 h-3 sm:w-4 sm:h-4 shrink-0" />
-              <span>基本資料</span>
+          <TabsList className="flex flex-wrap h-auto gap-1 mb-4 bg-white/80 p-1">
+            <TabsTrigger value="info" className="gap-1.5 text-xs sm:text-sm">
+              <Settings className="w-3.5 h-3.5 shrink-0" />
+              基本資料
             </TabsTrigger>
-            <TabsTrigger value="photos" className="basis-1/3 sm:basis-auto flex-1 min-w-0 text-xs sm:text-sm py-2 gap-1">
-              <Images className="w-3 h-3 sm:w-4 sm:h-4 shrink-0" />
-              <span>照片集</span>
+            <TabsTrigger value="photos" className="gap-1.5 text-xs sm:text-sm">
+              <Images className="w-3.5 h-3.5 shrink-0" />
+              照片集
             </TabsTrigger>
-            <TabsTrigger value="products" className="basis-1/3 sm:basis-auto flex-1 min-w-0 text-xs sm:text-sm py-2 gap-1">
-              <Package className="w-3 h-3 sm:w-4 sm:h-4 shrink-0" />
-              <span>產品管理</span>
+            <TabsTrigger value="products" className="gap-1.5 text-xs sm:text-sm">
+              <Package className="w-3.5 h-3.5 shrink-0" />
+              產品管理
             </TabsTrigger>
-            <TabsTrigger value="messages" className="basis-1/3 sm:basis-auto flex-1 min-w-0 text-xs sm:text-sm py-2 gap-1">
-              <MessageCircle className="w-3 h-3 sm:w-4 sm:h-4 shrink-0" />
-              <span>客戶詢問</span>
+            <TabsTrigger value="messages" className="gap-1.5 text-xs sm:text-sm">
+              <MessageCircle className="w-3.5 h-3.5 shrink-0" />
+              客戶詢問
               {convs && convs.some(c => c.unreadCount > 0) && (
-                <span className="ml-1 bg-red-500 text-white text-xs rounded-full w-4 h-4 sm:w-5 sm:h-5 flex items-center justify-center shrink-0">
+                <span className="ml-0.5 bg-red-500 text-white text-[10px] rounded-full w-4 h-4 flex items-center justify-center shrink-0">
                   {convs.reduce((sum, c) => sum + c.unreadCount, 0)}
                 </span>
               )}
             </TabsTrigger>
-            <TabsTrigger value="reviews" onClick={handleReviewTabClick} className="basis-1/3 sm:basis-auto flex-1 min-w-0 text-xs sm:text-sm py-2 gap-1">
-              <Star className="w-3 h-3 sm:w-4 sm:h-4 shrink-0" />
-              <span>客戶評價</span>
+            <TabsTrigger value="reviews" onClick={handleReviewTabClick} className="gap-1.5 text-xs sm:text-sm">
+              <Star className="w-3.5 h-3.5 shrink-0" />
+              客戶評價
               {showReviewBadge && (
-                <span className="ml-1 bg-red-500 text-white text-xs rounded-full min-w-4 sm:min-w-5 h-4 sm:h-5 px-1 flex items-center justify-center shrink-0">
+                <span className="ml-0.5 bg-red-500 text-white text-[10px] rounded-full min-w-4 h-4 px-1 flex items-center justify-center shrink-0">
                   {unseenReviewCount}
                 </span>
               )}
             </TabsTrigger>
-            <TabsTrigger value="ads" className="basis-1/3 sm:basis-auto flex-1 min-w-0 text-xs sm:text-sm py-2 gap-1">
-              <Megaphone className="w-3 h-3 sm:w-4 sm:h-4 shrink-0" />
-              <span>廣告曝光</span>
+            <TabsTrigger value="ads" className="gap-1.5 text-xs sm:text-sm">
+              <Megaphone className="w-3.5 h-3.5 shrink-0" />
+              廣告曝光
             </TabsTrigger>
           </TabsList>
 
