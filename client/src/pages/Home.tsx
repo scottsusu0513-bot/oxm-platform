@@ -365,37 +365,37 @@ export default function Home() {
       </section>
 
       {/* 代工廠 vs 工作室 介紹區（純展示，不可點擊）*/}
-      <section className="py-8 md:py-16 bg-white">
+      <section className="py-5 md:py-16 bg-white">
         <div className="container">
-          <div className="text-center mb-6 md:mb-10">
-            <h2 className="text-2xl sm:text-3xl font-bold mb-3">
+          <div className="text-center mb-4 md:mb-10">
+            <h2 className="text-xl md:text-3xl font-bold mb-2">
               <span className="text-orange-500">代工廠</span>
               <span className="text-muted-foreground mx-2">&</span>
               <span className="text-purple-500">工作室</span>
               ，一次找齊
             </h2>
-            <p className="text-muted-foreground">不同需求，找到最合適的合作夥伴</p>
+            <p className="text-sm text-muted-foreground">不同需求，找到最合適的合作夥伴</p>
           </div>
-          <div className="grid md:grid-cols-2 gap-6 max-w-4xl mx-auto">
+          <div className="grid md:grid-cols-2 gap-3 md:gap-6 max-w-4xl mx-auto">
             {/* 代工廠 */}
             <Card className="border-2 border-orange-100 shadow-sm">
-              <CardContent className="p-4 sm:p-8">
-                <div className="flex items-center gap-3 sm:gap-4 mb-4">
-                  <div className="w-12 h-12 sm:w-16 sm:h-16 rounded-xl sm:rounded-2xl bg-gradient-to-br from-orange-500 to-amber-400 flex items-center justify-center shadow-lg shrink-0">
-                    <Factory className="w-6 h-6 sm:w-8 sm:h-8 text-white" />
+              <CardContent className="p-3 md:p-8">
+                <div className="flex items-center gap-2 md:gap-4 mb-2 md:mb-4">
+                  <div className="w-9 h-9 md:w-16 md:h-16 rounded-lg md:rounded-2xl bg-gradient-to-br from-orange-500 to-amber-400 flex items-center justify-center shadow-md shrink-0">
+                    <Factory className="w-5 h-5 md:w-8 md:h-8 text-white" />
                   </div>
                   <div>
-                    <h3 className="text-xl font-bold text-orange-500">代工廠</h3>
-                    <p className="text-sm text-muted-foreground">ODM / OEM 製造</p>
+                    <h3 className="text-base md:text-xl font-bold text-orange-500">代工廠</h3>
+                    <p className="text-xs md:text-sm text-muted-foreground">ODM / OEM 製造</p>
                   </div>
                 </div>
-                <p className="text-muted-foreground mb-4 leading-relaxed">
-                  專業大規模生產，擁有完整設備與生產線。適合需要量產的品牌商與電商賣家，提供 ODM 設計代工與 OEM 純製造服務。
+                <p className="text-xs md:text-sm text-muted-foreground mb-2 md:mb-4 leading-normal md:leading-relaxed">
+                  專業大規模生產，擁有完整設備與生產線。適合需要量產的品牌商，提供 ODM 設計代工與 OEM 純製造服務。
                 </p>
-                <ul className="space-y-2 text-sm">
+                <ul className="space-y-1 md:space-y-2 text-xs md:text-sm">
                   {["大量生產，成本更低", "完整設備與品管流程", "ODM/OEM 彈性選擇"].map(item => (
-                    <li key={item} className="flex items-center gap-2 text-muted-foreground">
-                      <CheckCircle className="w-4 h-4 text-orange-500 shrink-0" />
+                    <li key={item} className="flex items-center gap-1.5 md:gap-2 text-muted-foreground">
+                      <CheckCircle className="w-3 h-3 md:w-4 md:h-4 text-orange-500 shrink-0" />
                       {item}
                     </li>
                   ))}
@@ -405,23 +405,23 @@ export default function Home() {
 
             {/* 工作室 */}
             <Card className="border-2 border-purple-100 shadow-sm">
-              <CardContent className="p-4 sm:p-8">
-                <div className="flex items-center gap-3 sm:gap-4 mb-4">
-                  <div className="w-12 h-12 sm:w-16 sm:h-16 rounded-xl sm:rounded-2xl bg-gradient-to-br from-purple-500 to-violet-400 flex items-center justify-center shadow-lg shrink-0">
-                    <Wrench className="w-6 h-6 sm:w-8 sm:h-8 text-white" />
+              <CardContent className="p-3 md:p-8">
+                <div className="flex items-center gap-2 md:gap-4 mb-2 md:mb-4">
+                  <div className="w-9 h-9 md:w-16 md:h-16 rounded-lg md:rounded-2xl bg-gradient-to-br from-purple-500 to-violet-400 flex items-center justify-center shadow-md shrink-0">
+                    <Wrench className="w-5 h-5 md:w-8 md:h-8 text-white" />
                   </div>
                   <div>
-                    <h3 className="text-xl font-bold text-purple-500">設計工作室</h3>
-                    <p className="text-sm text-muted-foreground">少量訂製・創意設計</p>
+                    <h3 className="text-base md:text-xl font-bold text-purple-500">設計工作室</h3>
+                    <p className="text-xs md:text-sm text-muted-foreground">少量訂製・創意設計</p>
                   </div>
                 </div>
-                <p className="text-muted-foreground mb-4 leading-relaxed">
+                <p className="text-xs md:text-sm text-muted-foreground mb-2 md:mb-4 leading-normal md:leading-relaxed">
                   靈活接受少量訂單與特殊訂製需求。適合個人創作者、新創品牌與設計師，提供打樣服務與個性化製作。
                 </p>
-                <ul className="space-y-2 text-sm">
+                <ul className="space-y-1 md:space-y-2 text-xs md:text-sm">
                   {["少量接單，門檻低", "個性化訂製服務", "提供打樣與設計協助"].map(item => (
-                    <li key={item} className="flex items-center gap-2 text-muted-foreground">
-                      <CheckCircle className="w-4 h-4 text-purple-500 shrink-0" />
+                    <li key={item} className="flex items-center gap-1.5 md:gap-2 text-muted-foreground">
+                      <CheckCircle className="w-3 h-3 md:w-4 md:h-4 text-purple-500 shrink-0" />
                       {item}
                     </li>
                   ))}
@@ -463,9 +463,9 @@ export default function Home() {
       </section>
 
       {/* Stats - 橘紫漸層 */}
-      <section className="py-12 bg-gradient-to-r from-orange-500 via-amber-400 to-purple-500 text-white">
+      <section className="py-5 md:py-12 bg-gradient-to-r from-orange-500 via-amber-400 to-purple-500 text-white">
         <div className="container">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-8 text-center">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 md:gap-8 text-center">
             {[
               { icon: Factory, num: "500+", label: "代工廠" },
               { icon: Sparkles, num: "300+", label: "設計工作室" },
@@ -473,9 +473,9 @@ export default function Home() {
               { icon: CheckCircle, num: "10+", label: "產業類別" },
             ].map(s => (
               <div key={s.label}>
-                <s.icon className="w-8 h-8 mx-auto mb-2 opacity-90" />
-                <p className="text-3xl font-extrabold">{s.num}</p>
-                <p className="text-sm opacity-80">{s.label}</p>
+                <s.icon className="w-6 h-6 md:w-8 md:h-8 mx-auto mb-1 md:mb-2 opacity-90" />
+                <p className="text-2xl md:text-3xl font-extrabold">{s.num}</p>
+                <p className="text-xs md:text-sm opacity-80">{s.label}</p>
               </div>
             ))}
           </div>
@@ -483,26 +483,26 @@ export default function Home() {
       </section>
 
       {/* Features */}
-      <section className="py-8 md:py-16 bg-white">
+      <section className="py-5 md:py-16 bg-white">
         <div className="container">
-          <div className="text-center mb-6 md:mb-10">
-            <h2 className="text-2xl sm:text-3xl font-bold mb-3">為什麼選擇 OXM？</h2>
-            <p className="text-muted-foreground text-sm sm:text-base">最完整的代工媒合服務，工廠與工作室都在這裡</p>
+          <div className="text-center mb-4 md:mb-10">
+            <h2 className="text-xl md:text-3xl font-bold mb-2">為什麼選擇 OXM？</h2>
+            <p className="text-xs md:text-base text-muted-foreground">最完整的代工媒合服務，工廠與工作室都在這裡</p>
           </div>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-6">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-6">
             {[
-              { icon: Search, title: "精準搜尋", desc: "依產業、地區、資本額等多維度篩選，快速鎖定目標夥伴", color: "text-blue-500 bg-blue-50" },
-              { icon: MessageCircle, title: "即時詢問", desc: "直接與工廠或工作室業主線上溝通，即時取得報價", color: "text-green-500 bg-green-50" },
-              { icon: Star, title: "評價系統", desc: "真實客戶回饋與星等評分，讓你選擇更有信心", color: "text-yellow-500 bg-yellow-50" },
-              { icon: Shield, title: "資訊透明", desc: "完整資料、產品規格、價格區間一目了然", color: "text-purple-500 bg-purple-50" },
+              { icon: Search, title: "精準搜尋", desc: "依產業、地區、資本額篩選，快速鎖定夥伴", color: "text-blue-500 bg-blue-50" },
+              { icon: MessageCircle, title: "即時詢問", desc: "直接與業主線上溝通，即時取得報價", color: "text-green-500 bg-green-50" },
+              { icon: Star, title: "評價系統", desc: "真實評分讓你選擇更有信心", color: "text-yellow-500 bg-yellow-50" },
+              { icon: Shield, title: "資訊透明", desc: "規格、價格區間一目了然", color: "text-purple-500 bg-purple-50" },
             ].map((feat) => (
               <Card key={feat.title} className="border-0 shadow-sm hover:shadow-md transition-shadow">
-                <CardContent className="p-4 sm:p-6 text-center">
-                  <div className={`w-10 h-10 sm:w-14 sm:h-14 mx-auto mb-3 sm:mb-4 rounded-xl sm:rounded-2xl ${feat.color} flex items-center justify-center`}>
-                    <feat.icon className="w-5 h-5 sm:w-7 sm:h-7" />
+                <CardContent className="p-3 md:p-6 text-center">
+                  <div className={`w-8 h-8 md:w-14 md:h-14 mx-auto mb-2 md:mb-4 rounded-lg md:rounded-2xl ${feat.color} flex items-center justify-center`}>
+                    <feat.icon className="w-4 h-4 md:w-7 md:h-7" />
                   </div>
-                  <h3 className="font-bold mb-1 sm:mb-2 text-sm sm:text-lg">{feat.title}</h3>
-                  <p className="text-xs sm:text-sm text-muted-foreground leading-relaxed">{feat.desc}</p>
+                  <h3 className="font-bold mb-1 text-xs md:text-lg">{feat.title}</h3>
+                  <p className="text-xs md:text-sm text-muted-foreground leading-snug md:leading-relaxed">{feat.desc}</p>
                 </CardContent>
               </Card>
             ))}
@@ -511,12 +511,12 @@ export default function Home() {
       </section>
 
       {/* 找代工指南 */}
-      <section id="guides" className="py-8 md:py-16 bg-gray-50">
+      <section id="guides" className="py-5 md:py-16 bg-gray-50">
         <div className="container">
-          <div className="flex items-end justify-between mb-6 md:mb-8">
+          <div className="flex items-end justify-between mb-4 md:mb-8">
             <div>
-              <h2 className="text-2xl sm:text-3xl font-bold mb-2">找代工指南</h2>
-              <p className="text-muted-foreground">第一次找 OEM / ODM 工廠？從這裡開始</p>
+              <h2 className="text-xl md:text-3xl font-bold mb-1">找代工指南</h2>
+              <p className="text-xs md:text-base text-muted-foreground">第一次找 OEM / ODM 工廠？從這裡開始</p>
             </div>
             <Link href="/blog">
               <Button variant="ghost" className="text-orange-500 hover:text-orange-600 gap-1 hidden sm:flex">
@@ -524,16 +524,16 @@ export default function Home() {
               </Button>
             </Link>
           </div>
-          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
+          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-4 mb-4 md:mb-6">
             {allPosts.slice(0, 3).map((post) => (
               <Link key={post.slug} href={`/blog/${post.slug}`}>
-                <Card className="hover:shadow-md transition-shadow cursor-pointer h-full border-0 shadow-sm hover:-translate-y-0.5 transition-transform">
-                  <CardContent className="p-6">
-                    <p className="text-xs text-muted-foreground mb-2">{post.date}</p>
-                    <h3 className="font-bold text-base mb-2 leading-snug hover:text-orange-500 transition-colors">{post.title}</h3>
-                    <p className="text-sm text-muted-foreground line-clamp-2 leading-relaxed">{post.description}</p>
-                    <div className="flex items-center gap-1 mt-4 text-sm text-orange-500 font-medium">
-                      閱讀全文 <ArrowRight className="w-3.5 h-3.5" />
+                <Card className="hover:shadow-md transition-shadow cursor-pointer h-full border-0 shadow-sm">
+                  <CardContent className="p-3 md:p-6">
+                    <p className="text-xs text-muted-foreground mb-1">{post.date}</p>
+                    <h3 className="font-bold text-sm md:text-base mb-1 leading-snug hover:text-orange-500 transition-colors">{post.title}</h3>
+                    <p className="text-xs md:text-sm text-muted-foreground line-clamp-2 leading-normal md:leading-relaxed">{post.description}</p>
+                    <div className="flex items-center gap-1 mt-2 md:mt-4 text-xs md:text-sm text-orange-500 font-medium">
+                      閱讀全文 <ArrowRight className="w-3 h-3 md:w-3.5 md:h-3.5" />
                     </div>
                   </CardContent>
                 </Card>
@@ -542,8 +542,8 @@ export default function Home() {
           </div>
           <div className="text-center sm:hidden">
             <Link href="/blog">
-              <Button variant="outline" className="border-orange-300 text-orange-600 hover:bg-orange-50 gap-1">
-                查看更多指南 <ArrowRight className="w-4 h-4" />
+              <Button variant="outline" size="sm" className="border-orange-300 text-orange-600 hover:bg-orange-50 gap-1">
+                查看更多指南 <ArrowRight className="w-3.5 h-3.5" />
               </Button>
             </Link>
           </div>
@@ -551,10 +551,10 @@ export default function Home() {
       </section>
 
       {/* CTA */}
-      <section className="py-8 md:py-16 bg-white">
+      <section className="py-5 md:py-16 bg-white">
         <div className="container text-center">
-          <h2 className="text-2xl sm:text-3xl font-bold mb-4">準備好開始了嗎？</h2>
-          <p className="text-muted-foreground mb-8 max-w-lg mx-auto">
+          <h2 className="text-xl md:text-3xl font-bold mb-3">準備好開始了嗎？</h2>
+          <p className="text-sm md:text-base text-muted-foreground mb-5 md:mb-8 max-w-lg mx-auto">
             不論你是尋找合作夥伴的品牌商，還是想要曝光的
             <span className="text-orange-500 font-medium">工廠</span>
             或
