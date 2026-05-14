@@ -604,7 +604,9 @@ export const appRouter = router({
       const conv = await db.getConversationById(input.conversationId);
       if (!conv) throw new Error("對話不存在");
       const factory = await db.getFactoryById(conv.factoryId);
-      if (conv.userId !== ctx.user.id && factory?.ownerId !== ctx.user.id && ctx.user.role !== 'admin') throw new Error("無權限");
+      const isFactoryOwner = factory?.ownerId === ctx.user.id;
+      const isCoMgr = !isFactoryOwner && !!factory && await db.isActiveCoManager(factory.id, ctx.user.id);
+      if (conv.userId !== ctx.user.id && !isFactoryOwner && !isCoMgr && ctx.user.role !== 'admin') throw new Error("無權限");
       try {
         await db.markMessagesAsRead(input.conversationId, ctx.user.id);
         return await db.getMessagesByConversation(input.conversationId, input.page);
@@ -644,9 +646,10 @@ export const appRouter = router({
       if (!conv) throw new Error("對話不存在");
       const factory = await db.getFactoryById(conv.factoryId);
       const isFactoryOwner = factory?.ownerId === ctx.user.id;
+      const isCoMgr = !isFactoryOwner && !!factory && await db.isActiveCoManager(factory.id, ctx.user.id);
       const isUser = conv.userId === ctx.user.id;
-      if (!isFactoryOwner && !isUser) throw new Error("無權限");
-      const senderRole = isFactoryOwner ? "factory" as const : "user" as const;
+      if (!isFactoryOwner && !isCoMgr && !isUser) throw new Error("無權限");
+      const senderRole = (isFactoryOwner || isCoMgr) ? "factory" as const : "user" as const;
       await db.saveMessage(input.conversationId, ctx.user.id, senderRole, input.content);
 
       // 工廠回覆時通知使用者（若有開啟 newMessage 通知設定）
@@ -832,7 +835,14 @@ export const appRouter = router({
     deleteConversation: protectedProcedure.input(z.object({
       conversationId: z.number(),
     })).mutation(async ({ ctx, input }) => {
-      await db.deleteConversation(input.conversationId, ctx.user.id);
+      const conv = await db.getConversationById(input.conversationId);
+      if (!conv) throw new Error("對話不存在");
+      const factory = await db.getFactoryById(conv.factoryId);
+      const isFactoryOwner = factory?.ownerId === ctx.user.id;
+      const isCoMgr = !isFactoryOwner && !!factory && await db.isActiveCoManager(factory.id, ctx.user.id);
+      if (!isFactoryOwner && !isCoMgr) throw new Error("無權限刪除此對話");
+      // 傳 factory.ownerId 讓 DB 層的 owner 檢查通過（co-manager 已在上方驗過）
+      await db.deleteConversation(input.conversationId, factory!.ownerId);
       return { success: true };
     }),
   }),
