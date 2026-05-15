@@ -1,7 +1,8 @@
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
 import { Link, useLocation } from "wouter";
-import { Factory, MessageCircle, User, LogOut, LayoutDashboard, Menu, X, UserPlus, Search, Settings, Heart, UserCircle, ChevronDown, FileText, ScrollText, AlertCircle } from "lucide-react";
+import { Factory, MessageCircle, User, LogOut, LayoutDashboard, Menu, X, UserPlus, Search, Settings, Heart, UserCircle, ChevronDown, FileText, ScrollText } from "lucide-react";
+import UnverifiedEmailHint from "@/components/UnverifiedEmailHint";
 import { useState, useEffect } from "react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import LoginDialog from "@/components/LoginDialog";
@@ -55,17 +56,10 @@ export default function Navbar() {
   const factoryBadgeCount = factoryUnread + reviewUnread;
   const showFactoryBadge = factoryBadgeCount > 0;
 
-  const showEmailWarning = isAuthenticated && user && !user.primaryEmailVerifiedAt;
+  const showEmailHint = isAuthenticated && user && !user.primaryEmailVerifiedAt;
 
   return (
     <>
-    {showEmailWarning && (
-      <div className="sticky top-0 z-[51] bg-amber-50 border-b border-amber-200 px-4 py-2 flex items-center gap-2 text-sm text-amber-800">
-        <AlertCircle className="w-4 h-4 shrink-0" />
-        <span className="flex-1">請驗證您的主要信箱，未驗證帳號無法使用詢價、評價等功能。</span>
-        <Link href="/member" className="underline font-medium whitespace-nowrap">前往驗證</Link>
-      </div>
-    )}
     <header className="sticky top-0 z-50 bg-white/95 backdrop-blur border-b border-border">
       <div className="container flex items-center justify-between h-16">
         {/* Logo */}
@@ -142,6 +136,7 @@ export default function Navbar() {
         <div className="hidden md:flex items-center gap-2">
           {isAuthenticated ? (
             <div className="flex items-center gap-2">
+              {showEmailHint && <UnverifiedEmailHint />}
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="ghost" size="sm" className="gap-1.5">
@@ -195,9 +190,12 @@ export default function Navbar() {
         </div>
 
         {/* Mobile Menu Toggle */}
-        <Button variant="ghost" size="sm" className="md:hidden" onClick={() => setMobileOpen(!mobileOpen)}>
-          {mobileOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
-        </Button>
+        <div className="md:hidden flex items-center gap-1">
+          {showEmailHint && <UnverifiedEmailHint />}
+          <Button variant="ghost" size="sm" onClick={() => setMobileOpen(!mobileOpen)}>
+            {mobileOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+          </Button>
+        </div>
       </div>
 
       {/* Mobile Menu */}
