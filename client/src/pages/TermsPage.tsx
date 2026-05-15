@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { Helmet } from "react-helmet-async";
 import Navbar from "@/components/Navbar";
 import { Button } from "@/components/ui/button";
@@ -5,7 +6,7 @@ import { ArrowLeft } from "lucide-react";
 
 function Section({ title, id, children }: { title: string; id?: string; children: React.ReactNode }) {
   return (
-    <section id={id}>
+    <section id={id} className="scroll-mt-24">
       <h2 className="text-lg font-semibold mb-3 text-foreground">{title}</h2>
       <div className="space-y-2 text-muted-foreground leading-relaxed text-sm">{children}</div>
     </section>
@@ -29,6 +30,32 @@ function SubItems({ items }: { items: string[] }) {
 }
 
 export default function TermsPage() {
+  useEffect(() => {
+    const hash = window.location.hash;
+    if (!hash) return;
+
+    const id = hash.replace("#", "");
+    let attempts = 0;
+
+    const scrollToHash = () => {
+      const el = document.getElementById(id);
+      attempts += 1;
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "start" });
+        return true;
+      }
+      return attempts >= 20;
+    };
+
+    if (scrollToHash()) return;
+
+    const interval = window.setInterval(() => {
+      if (scrollToHash()) window.clearInterval(interval);
+    }, 100);
+
+    return () => window.clearInterval(interval);
+  }, []);
+
   return (
     <div className="min-h-screen bg-background">
       <Helmet>
