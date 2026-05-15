@@ -81,11 +81,16 @@ export const appRouter = router({
       await db.createEmailVerificationToken({ userId: user.id, tokenHash, email: user.primaryEmail, expiresAt });
       const baseUrl = process.env.OAUTH_SERVER_URL || "https://www.oxmmatch.com";
       const verifyUrl = `${baseUrl}/verify-email?token=${rawToken}`;
-      sendEmailVerificationEmail({
-        toEmail: user.primaryEmail,
-        userName: user.name,
-        verifyUrl,
-      }).catch(err => console.error("[auth] sendVerificationEmail failed:", err));
+      try {
+        await sendEmailVerificationEmail({
+          toEmail: user.primaryEmail,
+          userName: user.name,
+          verifyUrl,
+        });
+      } catch (err) {
+        console.error("[auth] sendVerificationEmail failed:", err);
+        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "驗證信寄送失敗，請稍後再試" });
+      }
       return { success: true };
     }),
 
