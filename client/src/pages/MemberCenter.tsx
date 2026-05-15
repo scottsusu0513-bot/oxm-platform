@@ -112,6 +112,85 @@ export default function MemberCenter() {
 }
 
 // ─── 我的資料 ────────────────────────────────────────────────────────────────
+function PrimaryEmailSection({ user }: { user: any }) {
+  const utils = trpc.useUtils();
+  const [emailInput, setEmailInput] = useState(user.primaryEmail ?? "");
+  const [sending, setSending] = useState(false);
+
+  const isVerified = !!user.primaryEmailVerifiedAt;
+  const hasPrimary = !!user.primaryEmail;
+
+  const setEmailMut = trpc.auth.setPrimaryEmail.useMutation({
+    onSuccess: () => utils.auth.me.invalidate(),
+    onError: (e) => toast.error(e.message),
+  });
+
+  const sendVerifMut = trpc.auth.sendVerificationEmail.useMutation({
+    onSuccess: (res) => {
+      if (res.alreadyVerified) {
+        toast.success("此信箱已驗證完成");
+      } else {
+        toast.success("驗證信已寄出，請前往信箱完成驗證。");
+      }
+      setSending(false);
+    },
+    onError: (e) => { toast.error(e.message); setSending(false); },
+  });
+
+  async function handleSend() {
+    setSending(true);
+    const trimmed = emailInput.trim();
+    if (!hasPrimary || trimmed !== user.primaryEmail) {
+      await setEmailMut.mutateAsync({ email: trimmed });
+    }
+    sendVerifMut.mutate();
+  }
+
+  return (
+    <div className="space-y-1.5 sm:col-span-2">
+      <div className="flex items-center gap-2 flex-wrap">
+        <Label>主要信箱</Label>
+        {isVerified && (
+          <Badge className="bg-green-100 text-green-700 border-green-200 text-xs px-2">已驗證</Badge>
+        )}
+        {!isVerified && hasPrimary && (
+          <Badge className="bg-yellow-100 text-yellow-700 border-yellow-200 text-xs px-2">待驗證</Badge>
+        )}
+        {!isVerified && !hasPrimary && (
+          <Badge className="bg-gray-100 text-gray-500 border-gray-200 text-xs px-2">尚未設定</Badge>
+        )}
+      </div>
+
+      <div className="flex gap-2">
+        <Input
+          value={emailInput}
+          onChange={e => setEmailInput(e.target.value)}
+          placeholder="請輸入可接收通知的主要信箱"
+          readOnly={isVerified}
+          className={isVerified ? "bg-gray-50" : ""}
+        />
+        {!isVerified && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="shrink-0"
+            disabled={!emailInput.trim() || sending || setEmailMut.isPending || sendVerifMut.isPending}
+            onClick={handleSend}
+          >
+            {sending || setEmailMut.isPending || sendVerifMut.isPending
+              ? "寄送中…"
+              : hasPrimary ? "重新寄送驗證信" : "寄送驗證信"}
+          </Button>
+        )}
+      </div>
+
+      <p className="text-xs text-muted-foreground">
+        主要信箱用於接收詢價、合作確認、系統通知與客服回覆。完成驗證後，即可使用完整會員功能。
+      </p>
+    </div>
+  );
+}
+
 function ProfileTab({ user }: { user: any }) {
   const utils = trpc.useUtils();
   const [name, setName] = useState(user.name ?? "");
@@ -138,10 +217,6 @@ function ProfileTab({ user }: { user: any }) {
             <Input value={name} onChange={e => setName(e.target.value)} placeholder="請輸入名稱" />
           </div>
           <div className="space-y-1.5">
-            <Label>Email（Google 綁定）</Label>
-            <Input value={user.email ?? ""} disabled className="bg-gray-50" />
-          </div>
-          <div className="space-y-1.5">
             <Label className="flex items-center gap-1.5">
               <Phone className="w-3.5 h-3.5" />手機號碼
               {user.phoneVerified && <span className="text-xs text-green-600 font-medium">已驗證</span>}
@@ -160,6 +235,7 @@ function ProfileTab({ user }: { user: any }) {
             <Label>註冊時間</Label>
             <Input value={user.createdAt ? new Date(user.createdAt).toLocaleDateString("zh-TW") : "—"} disabled className="bg-gray-50" />
           </div>
+          <PrimaryEmailSection user={user} />
         </div>
 
         <div className="pt-2">
