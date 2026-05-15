@@ -625,6 +625,15 @@ export default function Home() {
             <p>scottsusu@oxmmatch.com</p>
           </div>
 
+          {/* Legal links */}
+          <div className="flex items-center justify-center gap-4 text-xs">
+            <a href="/terms" className="hover:text-gray-300 transition-colors">服務條款</a>
+            <span className="text-gray-700">·</span>
+            <a href="/privacy" className="hover:text-gray-300 transition-colors">隱私政策</a>
+            <span className="text-gray-700">·</span>
+            <a href="/terms#account-deletion" className="hover:text-gray-300 transition-colors">帳號刪除</a>
+          </div>
+
           {/* Copyright */}
           <p className="text-xs text-gray-600">&copy; {new Date().getFullYear()} OXM. All rights reserved.</p>
         </div>

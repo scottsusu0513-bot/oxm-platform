@@ -3,9 +3,9 @@ import Navbar from "@/components/Navbar";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft } from "lucide-react";
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({ title, id, children }: { title: string; id?: string; children: React.ReactNode }) {
   return (
-    <section>
+    <section id={id}>
       <h2 className="text-lg font-semibold mb-3 text-foreground">{title}</h2>
       <div className="space-y-2 text-muted-foreground leading-relaxed text-sm">{children}</div>
     </section>
@@ -235,6 +235,28 @@ export default function TermsPage() {
                 <li>電子郵件：<a href="mailto:scottsusu@oxmmatch.com" className="text-orange-600 hover:underline">scottsusu@oxmmatch.com</a></li>
                 <li>網站：<a href="https://www.oxmmatch.com" target="_blank" rel="noopener noreferrer" className="text-orange-600 hover:underline">https://www.oxmmatch.com</a></li>
               </ul>
+            </Section>
+
+            <Section title="十七、帳號刪除與資料刪除" id="account-deletion">
+              <p>使用者如需刪除 OXM 帳號與相關資料，可以透過以下方式提出申請：</p>
+              <p><strong className="text-foreground">方式一：APP 內申請</strong></p>
+              <p>請登入 OXM 後，前往「會員中心」→「帳號安全」→ 勾選「我了解此操作無法輕易復原」→ 點擊「申請刪除帳號」。</p>
+              <p><strong className="text-foreground">方式二：Email 申請</strong></p>
+              <p>
+                如您無法登入帳號，或已移除 APP，也可以來信至{" "}
+                <a href="mailto:scottsusu@oxmmatch.com" className="text-orange-600 hover:underline">scottsusu@oxmmatch.com</a>{" "}
+                申請刪除帳號與相關資料。
+              </p>
+              <p>信件主旨請填寫：「申請刪除 OXM 帳號」</p>
+              <p>信件內容請提供：</p>
+              <ul className="list-disc list-inside pl-2 space-y-1">
+                <li>您登入 OXM 使用的 Google 帳號 Email</li>
+                <li>您希望刪除帳號與相關資料的申請說明</li>
+              </ul>
+              <p>收到申請後，OXM 將於合理期間內處理您的帳號刪除與資料刪除請求。</p>
+              <p><strong className="text-foreground">刪除範圍</strong>可能包含：</p>
+              <p>會員帳號資料、個人資料、工廠資料、商品資料、詢價紀錄、站內訊息、上傳圖片與文件。</p>
+              <p>基於安全、防詐騙、法令遵循、爭議處理、系統備份或依法令要求，部分資料可能於必要範圍內保留一段期間。</p>
             </Section>
 
           </div>
