@@ -48,14 +48,13 @@ export default function LoginDialog({ open, onOpenChange }: LoginDialogProps) {
             以 LINE 帳號登入
           </Button>
 
-          {/* Apple */}
+          {/* Apple — 等 Apple Developer 審核通過後啟用 */}
           <Button
-            className="w-full h-12 text-base gap-3 bg-black hover:bg-zinc-800 text-white border-0"
-            disabled={loading !== null}
-            onClick={() => login("apple")}
+            className="w-full h-12 text-base gap-3 bg-black text-white border-0 opacity-40 cursor-not-allowed"
+            disabled={true}
           >
             <AppleIcon />
-            以 Apple 帳號登入
+            以 Apple 帳號登入（即將開放）
           </Button>
         </div>
         <p className="text-center text-xs text-muted-foreground pt-2 leading-relaxed">
