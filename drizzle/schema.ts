@@ -6,6 +6,8 @@ export const users = mysqlTable("users", {
   openId: varchar("openId", { length: 64 }).notNull().unique(),
   name: text("name"),
   email: varchar("email", { length: 320 }),
+  primaryEmail: varchar("primaryEmail", { length: 320 }),
+  primaryEmailVerifiedAt: timestamp("primaryEmailVerifiedAt"),
   loginMethod: varchar("loginMethod", { length: 64 }),
   role: mysqlEnum("role", ["user", "admin"]).default("user").notNull(),
   // factory_owner 表示此帳號是工廠業主
@@ -382,6 +384,7 @@ export const oauthStates = mysqlTable("oauthStates", {
   state: varchar("state", { length: 128 }).notNull().unique(),
   redirectTo: varchar("redirectTo", { length: 512 }),
   source: varchar("source", { length: 32 }), // "app" | "web" | null
+  provider: varchar("provider", { length: 30 }).default("google").notNull(), // 'google' | 'apple' | 'line'
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   expiresAt: timestamp("expiresAt").notNull(),
   usedAt: timestamp("usedAt"),
@@ -408,3 +411,33 @@ export const appLoginTickets = mysqlTable("appLoginTickets", {
 }));
 
 export type AppLoginTicket = typeof appLoginTickets.$inferSelect;
+
+// ===== 多 Provider OAuth 帳號關聯表 =====
+export const userAuthAccounts = mysqlTable("userAuthAccounts", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull().references(() => users.id, { onDelete: "cascade" }),
+  provider: varchar("provider", { length: 30 }).notNull(), // 'google' | 'apple' | 'line'
+  providerAccountId: varchar("providerAccountId", { length: 256 }).notNull(),
+  providerEmail: varchar("providerEmail", { length: 320 }),
+  providerEmailVerified: boolean("providerEmailVerified").default(false).notNull(),
+  displayName: varchar("displayName", { length: 200 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (table) => ({
+  providerAccountUq: uniqueIndex("uq_provider_account").on(table.provider, table.providerAccountId),
+}));
+
+export type UserAuthAccount = typeof userAuthAccounts.$inferSelect;
+
+// ===== Email 驗證 Token 表（DB 只存 SHA-256 hash）=====
+export const emailVerificationTokens = mysqlTable("emailVerificationTokens", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull().references(() => users.id, { onDelete: "cascade" }),
+  tokenHash: varchar("tokenHash", { length: 128 }).notNull().unique(),
+  email: varchar("email", { length: 320 }).notNull(),
+  expiresAt: timestamp("expiresAt").notNull(),
+  usedAt: timestamp("usedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type EmailVerificationToken = typeof emailVerificationTokens.$inferSelect;

@@ -459,3 +459,43 @@ export async function sendMessageReplyNotificationEmail(params: {
     console.error('[Email] 寄信失敗:', error);
   }
 }
+
+// ===== 寄送 Email 驗證信 =====
+export async function sendEmailVerificationEmail(params: {
+  toEmail: string;
+  userName: string | null;
+  verifyUrl: string;
+}) {
+  if (!isEmailEnabled()) {
+    console.log('[Email] 未設定 RESEND_API_KEY，跳過寄送驗證信；verifyUrl:', params.verifyUrl);
+    return;
+  }
+  try {
+    const resend = getResend();
+    if (!resend) return;
+    await resend.emails.send({
+      from: FROM_EMAIL,
+      to: params.toEmail,
+      subject: `【OXM】請驗證您的電子郵件地址`,
+      html: `
+        <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #f97316;">驗證您的電子郵件</h2>
+          <p>親愛的 ${params.userName ? `<strong>${params.userName}</strong>` : '用戶'} 您好，</p>
+          <p>感謝您使用 OXM 製造業媒合平台。請點擊下方按鈕驗證您的電子郵件地址：</p>
+          <div style="text-align: center; margin: 32px 0;">
+            <a href="${params.verifyUrl}"
+               style="background: #f97316; color: white; padding: 14px 32px; border-radius: 8px; text-decoration: none; font-size: 16px; font-weight: bold;">
+              驗證電子郵件
+            </a>
+          </div>
+          <p style="color: #666; font-size: 14px;">此連結將在 24 小時後失效。若您未申請驗證，請忽略此信。</p>
+          <hr style="border: none; border-top: 1px solid #eee; margin: 24px 0;" />
+          <p style="color: #999; font-size: 12px;">OXM 製造業媒合平台 | <a href="https://www.oxmmatch.com">www.oxmmatch.com</a></p>
+        </div>
+      `,
+    });
+    console.log('[Email] 已寄送驗證信到:', params.toEmail);
+  } catch (error) {
+    console.error('[Email] 驗證信寄送失敗:', error);
+  }
+}

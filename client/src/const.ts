@@ -3,26 +3,20 @@ import { Capacitor } from "@capacitor/core";
 
 export const getLoginUrl = () => "/api/oauth/google";
 
-export async function performLogin(): Promise<void> {
-  console.log("[performLogin] clicked");
-  const appLoginUrl = "https://www.oxmmatch.com/api/oauth/google?source=app";
+export type OAuthProvider = "google" | "apple" | "line";
+
+export async function performLogin(provider: OAuthProvider = "google"): Promise<void> {
+  const webUrl = `/api/oauth/${provider}`;
+  const appUrl = `https://www.oxmmatch.com/api/oauth/${provider}?source=app`;
   try {
-    const isNative = Capacitor.isNativePlatform();
-    console.log("[performLogin] isNative:", isNative);
-    if (isNative) {
-      console.log("[performLogin] Browser.open:", appLoginUrl);
+    if (Capacitor.isNativePlatform()) {
       const { Browser } = await import("@capacitor/browser");
-      await Browser.open({ url: appLoginUrl });
+      await Browser.open({ url: appUrl });
       return;
     }
-    console.log("[performLogin] web redirect");
-    window.location.href = "/api/oauth/google";
+    window.location.href = webUrl;
   } catch (error) {
     console.error("[performLogin] failed:", error);
-    if (Capacitor.isNativePlatform()) {
-      window.location.href = appLoginUrl;
-      return;
-    }
-    window.location.href = "/api/oauth/google";
+    window.location.href = Capacitor.isNativePlatform() ? appUrl : webUrl;
   }
 }

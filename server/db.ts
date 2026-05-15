@@ -13,6 +13,7 @@ import {
   inquiryBatches, inquiryBatchItems,
   messageCampaigns, messageRecipients, messageReplies,
   oauthStates, appLoginTickets, collaborationOrders,
+  userAuthAccounts, emailVerificationTokens,
   type Factory, type InsertFactory, type Product, type InsertProduct, type Favorite, type InsertFavorite
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
@@ -2143,6 +2144,7 @@ export async function createOauthState(params: {
   state: string;
   redirectTo?: string;
   source?: string;
+  provider?: string;
   userAgent?: string;
   ip?: string;
 }): Promise<void> {
@@ -2154,6 +2156,7 @@ export async function createOauthState(params: {
     state: params.state,
     redirectTo: params.redirectTo ?? null,
     source: params.source ?? null,
+    provider: params.provider ?? "google",
     createdAt: now,
     expiresAt,
     usedAt: null,
@@ -2162,7 +2165,7 @@ export async function createOauthState(params: {
   });
 }
 
-export async function consumeOauthState(state: string): Promise<{ valid: boolean; redirectTo?: string | null; source?: string | null }> {
+export async function consumeOauthState(state: string): Promise<{ valid: boolean; redirectTo?: string | null; source?: string | null; provider?: string | null }> {
   const db = await getDb();
   if (!db) return { valid: false };
   const now = new Date();
@@ -2183,7 +2186,137 @@ export async function consumeOauthState(state: string): Promise<{ valid: boolean
     .set({ usedAt: now })
     .where(eq(oauthStates.state, state));
 
-  return { valid: true, redirectTo: row.redirectTo, source: row.source };
+  return { valid: true, redirectTo: row.redirectTo, source: row.source, provider: row.provider };
+}
+
+// ===== Multi-provider Auth =====
+
+export async function getUserByAuthAccount(provider: string, providerAccountId: string) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db
+    .select({ user: users })
+    .from(userAuthAccounts)
+    .innerJoin(users, eq(userAuthAccounts.userId, users.id))
+    .where(and(
+      eq(userAuthAccounts.provider, provider),
+      eq(userAuthAccounts.providerAccountId, providerAccountId),
+    ))
+    .limit(1);
+  return rows[0]?.user;
+}
+
+export async function getUserByPrimaryEmail(email: string) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db
+    .select()
+    .from(users)
+    .where(and(
+      eq(users.primaryEmail, email),
+      sql`${users.primaryEmailVerifiedAt} IS NOT NULL`,
+    ))
+    .limit(1);
+  return rows[0];
+}
+
+export async function upsertUserAuthAccount(params: {
+  userId: number;
+  provider: string;
+  providerAccountId: string;
+  providerEmail?: string | null;
+  providerEmailVerified?: boolean;
+  displayName?: string | null;
+}): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .insert(userAuthAccounts)
+    .values({
+      userId: params.userId,
+      provider: params.provider,
+      providerAccountId: params.providerAccountId,
+      providerEmail: params.providerEmail ?? null,
+      providerEmailVerified: params.providerEmailVerified ?? false,
+      displayName: params.displayName ?? null,
+    })
+    .onDuplicateKeyUpdate({
+      set: {
+        providerEmail: params.providerEmail ?? null,
+        providerEmailVerified: params.providerEmailVerified ?? false,
+        displayName: params.displayName ?? null,
+        updatedAt: new Date(),
+      },
+    });
+}
+
+export async function setPrimaryEmail(userId: number, email: string): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .update(users)
+    .set({ primaryEmail: email, primaryEmailVerifiedAt: null })
+    .where(eq(users.id, userId));
+}
+
+export async function setPrimaryEmailVerified(userId: number, email: string): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .update(users)
+    .set({ primaryEmail: email, primaryEmailVerifiedAt: new Date() })
+    .where(eq(users.id, userId));
+}
+
+export async function createEmailVerificationToken(params: {
+  userId: number;
+  tokenHash: string;
+  email: string;
+  expiresAt: Date;
+}): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  // Invalidate prior unused tokens for same user+email
+  await db
+    .delete(emailVerificationTokens)
+    .where(and(
+      eq(emailVerificationTokens.userId, params.userId),
+      eq(emailVerificationTokens.email, params.email),
+      sql`${emailVerificationTokens.usedAt} IS NULL`,
+    ));
+  await db.insert(emailVerificationTokens).values({
+    userId: params.userId,
+    tokenHash: params.tokenHash,
+    email: params.email,
+    expiresAt: params.expiresAt,
+    usedAt: null,
+  });
+}
+
+export async function consumeEmailVerificationToken(tokenHash: string): Promise<{
+  valid: boolean;
+  userId?: number;
+  email?: string;
+}> {
+  const db = await getDb();
+  if (!db) return { valid: false };
+  const now = new Date();
+  const rows = await db
+    .select()
+    .from(emailVerificationTokens)
+    .where(and(
+      eq(emailVerificationTokens.tokenHash, tokenHash),
+      sql`${emailVerificationTokens.usedAt} IS NULL`,
+      sql`${emailVerificationTokens.expiresAt} > ${now}`,
+    ))
+    .limit(1);
+  const row = rows[0];
+  if (!row) return { valid: false };
+  await db
+    .update(emailVerificationTokens)
+    .set({ usedAt: now })
+    .where(eq(emailVerificationTokens.id, row.id));
+  return { valid: true, userId: row.userId, email: row.email };
 }
 
 export async function createAppLoginTicket(params: {

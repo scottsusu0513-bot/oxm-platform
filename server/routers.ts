@@ -1,6 +1,7 @@
 import { COOKIE_NAME } from "@shared/const";
 import { enhanceSearchKeyword } from './semantic-search';
-import { sendNewInquiryEmail, sendFactoryApprovedEmail, sendFactorySubmittedEmail, sendReportEmail, sendSupportTicketEmail, sendReviewReplyEmail, sendNewMessageNotificationEmail, sendReportStatusUpdateEmail, sendTicketStatusUpdateEmail, sendMessageReplyNotificationEmail } from './email';
+import { sendNewInquiryEmail, sendFactoryApprovedEmail, sendFactorySubmittedEmail, sendReportEmail, sendSupportTicketEmail, sendReviewReplyEmail, sendNewMessageNotificationEmail, sendReportStatusUpdateEmail, sendTicketStatusUpdateEmail, sendMessageReplyNotificationEmail, sendEmailVerificationEmail } from './email';
+import { sha256Hex, generateRawToken } from './_core/oauthHelpers';
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, protectedProcedure, adminProcedure, router } from "./_core/trpc";
@@ -15,6 +16,12 @@ import { nanoid } from "nanoid";
 import { factories, conversations, reviews, reports } from "../drizzle/schema";
 import { desc, eq, and, sql } from "drizzle-orm";
 import { getDb } from "./db";
+
+function requireVerifiedEmail(user: { primaryEmailVerifiedAt: Date | null }): void {
+  if (!user.primaryEmailVerifiedAt) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "UNVERIFIED_EMAIL" });
+  }
+}
 
 async function assertFactoryManager(factoryId: number, userId: number) {
   const factory = await db.getFactoryById(factoryId);
@@ -46,6 +53,53 @@ export const appRouter = router({
       ctx.res.setHeader("Set-Cookie", `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT${secureFlag}`);
       ctx.res.setHeader("Cache-Control", "no-store");
       return { success: true } as const;
+    }),
+
+    // 設定主要信箱（未驗證，之後再寄驗證信）
+    setPrimaryEmail: protectedProcedure.input(z.object({
+      email: z.string().email().max(320),
+    })).mutation(async ({ ctx, input }) => {
+      if (input.email.toLowerCase().endsWith("@privaterelay.appleid.com")) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "不可使用 Apple 隱藏信箱作為主要信箱" });
+      }
+      await db.setPrimaryEmail(ctx.user.id, input.email);
+      return { success: true };
+    }),
+
+    // 寄送驗證信（寄到 primaryEmail）
+    sendVerificationEmail: protectedProcedure.mutation(async ({ ctx }) => {
+      const user = await db.getUserById(ctx.user.id);
+      if (!user?.primaryEmail) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "請先設定主要信箱" });
+      }
+      if (user.primaryEmailVerifiedAt) {
+        return { success: true, alreadyVerified: true };
+      }
+      const rawToken = generateRawToken();
+      const tokenHash = sha256Hex(rawToken);
+      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+      await db.createEmailVerificationToken({ userId: user.id, tokenHash, email: user.primaryEmail, expiresAt });
+      const baseUrl = process.env.OAUTH_SERVER_URL || "https://www.oxmmatch.com";
+      const verifyUrl = `${baseUrl}/verify-email?token=${rawToken}`;
+      sendEmailVerificationEmail({
+        toEmail: user.primaryEmail,
+        userName: user.name,
+        verifyUrl,
+      }).catch(err => console.error("[auth] sendVerificationEmail failed:", err));
+      return { success: true };
+    }),
+
+    // 驗證信箱 token（從 email 點連結後呼叫）
+    verifyEmail: publicProcedure.input(z.object({
+      token: z.string().min(1).max(128),
+    })).mutation(async ({ input }) => {
+      const tokenHash = sha256Hex(input.token);
+      const result = await db.consumeEmailVerificationToken(tokenHash);
+      if (!result.valid || !result.userId || !result.email) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "TOKEN_INVALID_OR_EXPIRED" });
+      }
+      await db.setPrimaryEmailVerified(result.userId, result.email);
+      return { success: true };
     }),
   }),
 
@@ -134,6 +188,7 @@ export const appRouter = router({
       website: z.string().optional(),
       contactEmail: z.string().email().optional().or(z.literal("")),
     })).mutation(async ({ ctx, input }) => {
+      requireVerifiedEmail(ctx.user);
       if (ctx.user.role !== 'admin') {
         const existing = await db.getFactoryByOwnerId(ctx.user.id);
         if (existing) throw new TRPCError({ code: 'BAD_REQUEST', message: '您已經註冊過工廠' });
@@ -170,6 +225,7 @@ export const appRouter = router({
       weekendHours: z.string().max(50).optional(),
       businessNote: z.string().max(500).optional(),
     })).mutation(async ({ ctx, input }) => {
+      requireVerifiedEmail(ctx.user);
       const { id, ...data } = input;
       const factory = await db.getFactoryById(id);
       if (!factory) throw new TRPCError({ code: 'NOT_FOUND', message: '工廠不存在' });
@@ -244,6 +300,7 @@ export const appRouter = router({
     }),
 
     submitForReview: protectedProcedure.mutation(async ({ ctx }) => {
+      requireVerifiedEmail(ctx.user);
       const factory = await db.getFactoryByOwnerId(ctx.user.id);
       if (!factory) throw new Error("找不到工廠");
       if (factory.status !== 'draft' && factory.status !== 'rejected') throw new Error("只有未送審或已拒絕的工廠才能送出審核");
@@ -351,6 +408,7 @@ export const appRouter = router({
       invitationId: z.number(),
       action: z.enum(["accept", "decline"]),
     })).mutation(async ({ ctx, input }) => {
+      if (input.action === "accept") requireVerifiedEmail(ctx.user);
       if (input.action === "accept") {
         await db.acceptInvitation(input.invitationId, ctx.user.id);
       } else {
@@ -508,6 +566,7 @@ export const appRouter = router({
       factoryId: z.number(),
       productId: z.number().optional(),
     })).mutation(async ({ ctx, input }) => {
+      requireVerifiedEmail(ctx.user);
       const conv = await db.getOrCreateConversation(ctx.user.id, input.factoryId, input.productId);
       return conv;
     }),
@@ -658,6 +717,7 @@ export const appRouter = router({
       conversationId: z.number(),
       content: z.string().min(1).max(2000),
     })).mutation(async ({ ctx, input }) => {
+      requireVerifiedEmail(ctx.user);
       const conv = await db.getConversationById(input.conversationId);
       if (!conv) throw new Error("對話不存在");
       const factory = await db.getFactoryById(conv.factoryId);
@@ -876,6 +936,7 @@ export const appRouter = router({
       productId: z.number().nullable().optional(),
       projectName: z.string().min(1).max(200),
       description: z.string().min(1),
+      // note: requireVerifiedEmail checked below
       depositDueDate: z.string().max(10).nullable().optional(),
       productionStartDate: z.string().max(10).nullable().optional(),
       expectedCompletionDate: z.string().max(10).nullable().optional(),
@@ -883,6 +944,7 @@ export const appRouter = router({
       finalPaymentDueDate: z.string().max(10).nullable().optional(),
       note: z.string().max(2000).nullable().optional(),
     })).mutation(async ({ ctx, input }) => {
+      requireVerifiedEmail(ctx.user);
       const db_ = await getDb();
       if (!db_) throw new Error("DB not available");
       const [conv] = await db_.select().from(conversations).where(eq(conversations.id, input.conversationId)).limit(1);
@@ -950,6 +1012,7 @@ export const appRouter = router({
       orderId: z.number(),
       status: z.enum(["in_progress", "shipped", "completed"]),
     })).mutation(async ({ ctx, input }) => {
+      requireVerifiedEmail(ctx.user);
       const order = await db.getCollaborationOrderById(input.orderId);
       if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "找不到合作確認單" });
       if (order.status === "cancelled" || order.status === "cancel_requested") {
@@ -977,6 +1040,7 @@ export const appRouter = router({
       orderId: z.number(),
       reason: z.string().min(1).max(500),
     })).mutation(async ({ ctx, input }) => {
+      requireVerifiedEmail(ctx.user);
       const order = await db.getCollaborationOrderById(input.orderId);
       if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "找不到合作確認單" });
       const allowedStatuses = ["pending", "accepted", "in_progress", "shipped"];
@@ -1012,6 +1076,7 @@ export const appRouter = router({
       orderId: z.number(),
       action: z.enum(["accept", "reject"]),
     })).mutation(async ({ ctx, input }) => {
+      requireVerifiedEmail(ctx.user);
       const order = await db.getCollaborationOrderById(input.orderId);
       if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "找不到合作確認單" });
       if (order.status !== "cancel_requested") throw new TRPCError({ code: "BAD_REQUEST", message: "此合作確認單不在取消申請狀態" });
@@ -1095,6 +1160,7 @@ export const appRouter = router({
       rating: z.number().min(1).max(5),
       comment: z.string().max(1000).optional(),
     })).mutation(async ({ ctx, input }) => {
+      requireVerifiedEmail(ctx.user);
       await db.createReview({ ...input, userId: ctx.user.id });
       return { success: true };
     }),
@@ -1556,6 +1622,7 @@ export const appRouter = router({
       message: z.string().min(1).max(2000),
       factoryIds: z.array(z.number().int().positive()).min(1).max(20),
     })).mutation(async ({ ctx, input }) => {
+      requireVerifiedEmail(ctx.user);
       const uniqueIds = Array.from(new Set(input.factoryIds));
 
       // 驗證每間工廠
@@ -1626,6 +1693,7 @@ export const appRouter = router({
       factoryId: z.number(),
       reason: z.string().min(1).max(1000),
     })).mutation(async ({ ctx, input }) => {
+      requireVerifiedEmail(ctx.user);
       const db_ = await getDb();
       if (!db_) throw new Error("DB not available");
       await db_.insert(reports).values({ factoryId: input.factoryId, userId: ctx.user.id, reason: input.reason });
