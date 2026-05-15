@@ -6,12 +6,20 @@ import { CheckCircle, XCircle, Loader2, Link2 } from "lucide-react";
 
 export default function VerifyEmailPage() {
   const [, navigate] = useLocation();
+  const utils = trpc.useUtils();
   const token = new URLSearchParams(window.location.search).get("token") ?? "";
 
   const [status, setStatus] = useState<"loading" | "success" | "merged" | "error">("loading");
 
   const verifyMut = trpc.auth.verifyEmail.useMutation({
-    onSuccess: (res) => setStatus(res.merged ? "merged" : "success"),
+    onSuccess: (res) => {
+      if (res.merged) {
+        utils.auth.me.invalidate();
+        setStatus("merged");
+      } else {
+        setStatus("success");
+      }
+    },
     onError: () => setStatus("error"),
   });
 
@@ -42,13 +50,13 @@ export default function VerifyEmailPage() {
             <Link2 className="w-12 h-12 text-blue-500 mx-auto" />
             <h1 className="text-xl font-bold">驗證成功，帳號已連結</h1>
             <p className="text-muted-foreground">
-              您的登入方式已連結到既有 OXM 帳號。請重新登入以使用原帳號。
+              您的登入方式已連結到既有 OXM 帳號。
             </p>
             <Button
               className="w-full bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white border-0"
-              onClick={() => navigate("/")}
+              onClick={() => navigate("/member")}
             >
-              重新登入
+              前往會員中心
             </Button>
           </>
         )}

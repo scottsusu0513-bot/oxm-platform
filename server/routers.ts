@@ -1,4 +1,5 @@
-import { COOKIE_NAME } from "@shared/const";
+import { COOKIE_NAME, THIRTY_DAYS_MS } from "@shared/const";
+import { sdk } from "./_core/sdk";
 import { enhanceSearchKeyword } from './semantic-search';
 import { sendNewInquiryEmail, sendFactoryApprovedEmail, sendFactorySubmittedEmail, sendReportEmail, sendSupportTicketEmail, sendReviewReplyEmail, sendNewMessageNotificationEmail, sendReportStatusUpdateEmail, sendTicketStatusUpdateEmail, sendMessageReplyNotificationEmail, sendEmailVerificationEmail } from './email';
 import { sha256Hex, generateRawToken } from './_core/oauthHelpers';
@@ -97,7 +98,7 @@ export const appRouter = router({
     // 驗證信箱 token（從 email 點連結後呼叫）
     verifyEmail: publicProcedure.input(z.object({
       token: z.string().min(1).max(128),
-    })).mutation(async ({ input }) => {
+    })).mutation(async ({ input, ctx }) => {
       const tokenHash = sha256Hex(input.token);
       const result = await db.consumeEmailVerificationToken(tokenHash);
       if (!result.valid || !result.userId || !result.email) {
@@ -137,7 +138,12 @@ export const appRouter = router({
       }
       await db.clearPrimaryEmail(result.userId);
 
-      return { success: true, merged: true, mergedIntoUserId: existingVerified.id };
+      // 切換 session 到主帳號（與 OAuth 登入完全一致的 cookie 設定）
+      const sessionToken = await sdk.createSessionToken(existingVerified.openId, { expiresInMs: THIRTY_DAYS_MS });
+      const cookieOptions = getSessionCookieOptions(ctx.req);
+      ctx.res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: THIRTY_DAYS_MS });
+
+      return { success: true, merged: true };
     }),
 
     // 查目前登入 user 已綁定的 provider 列表
