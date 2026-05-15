@@ -111,6 +111,39 @@ export default function MemberCenter() {
   );
 }
 
+// ─── 登入方式 ─────────────────────────────────────────────────────────────────
+const KNOWN_PROVIDERS = [
+  { id: "google", label: "Google" },
+  { id: "line",   label: "LINE" },
+  { id: "apple",  label: "Apple" },
+] as const;
+
+function LinkedProvidersSection() {
+  const { data, isLoading } = trpc.auth.myLinkedProviders.useQuery();
+  return (
+    <div className="sm:col-span-2 space-y-2 pt-1">
+      <p className="text-sm font-medium leading-none">登入方式</p>
+      {isLoading ? (
+        <p className="text-xs text-muted-foreground">載入中…</p>
+      ) : (
+        <div className="divide-y rounded-md border">
+          {KNOWN_PROVIDERS.map(p => {
+            const bound = data?.some(a => a.provider === p.id);
+            return (
+              <div key={p.id} className="flex items-center justify-between px-3 py-2">
+                <span className="text-sm">{p.label}</span>
+                {bound
+                  ? <Badge className="bg-green-100 text-green-700 border-green-200 text-xs">已綁定</Badge>
+                  : <Badge className="bg-gray-100 text-gray-400 border-gray-200 text-xs">尚未綁定</Badge>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── 我的資料 ────────────────────────────────────────────────────────────────
 function PrimaryEmailSection({ user }: { user: any }) {
   const utils = trpc.useUtils();
@@ -228,14 +261,11 @@ function ProfileTab({ user }: { user: any }) {
             </div>
           </div>
           <div className="space-y-1.5">
-            <Label>登入方式</Label>
-            <Input value={user.loginMethod ?? "Google"} disabled className="bg-gray-50" />
-          </div>
-          <div className="space-y-1.5">
             <Label>註冊時間</Label>
             <Input value={user.createdAt ? new Date(user.createdAt).toLocaleDateString("zh-TW") : "—"} disabled className="bg-gray-50" />
           </div>
           <PrimaryEmailSection user={user} />
+          <LinkedProvidersSection />
         </div>
 
         <div className="pt-2">

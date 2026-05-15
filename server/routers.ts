@@ -103,8 +103,47 @@ export const appRouter = router({
       if (!result.valid || !result.userId || !result.email) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "TOKEN_INVALID_OR_EXPIRED" });
       }
-      await db.setPrimaryEmailVerified(result.userId, result.email);
-      return { success: true };
+
+      // 主帳號制：查是否已有其他 user 驗證同一個 primaryEmail
+      const existingVerified = await db.getUserByPrimaryEmail(result.email);
+
+      if (!existingVerified || existingVerified.id === result.userId) {
+        // 無衝突：一般流程
+        await db.setPrimaryEmailVerified(result.userId, result.email);
+        return { success: true, merged: false };
+      }
+
+      // 已有主帳號 — 執行綁定合併
+      // 安全檢查：暫時 user 是否已有重要資料
+      const hasActivity = await db.userHasImportantActivity(result.userId);
+      if (hasActivity) {
+        throw new TRPCError({ code: "CONFLICT", message: "此帳號已有使用紀錄，請聯繫客服協助合併帳號。" });
+      }
+
+      // 取得暫時 user 的所有 provider auth accounts
+      const tempAccounts = await db.getAuthAccountsByUserId(result.userId);
+
+      // 檢查主帳號是否已有相同 provider（避免覆蓋）
+      for (const acc of tempAccounts) {
+        const conflict = await db.getAuthAccountByProviderForUser(existingVerified.id, acc.provider);
+        if (conflict) {
+          throw new TRPCError({ code: "CONFLICT", message: "此登入方式已綁定到您的既有帳號，請直接使用原登入方式登入。" });
+        }
+      }
+
+      // 改綁所有 auth accounts 到主帳號，清空暫時 user 的 primaryEmail
+      for (const acc of tempAccounts) {
+        await db.reassignAuthAccountToUser(acc.id, existingVerified.id);
+      }
+      await db.clearPrimaryEmail(result.userId);
+
+      return { success: true, merged: true, mergedIntoUserId: existingVerified.id };
+    }),
+
+    // 查目前登入 user 已綁定的 provider 列表
+    myLinkedProviders: protectedProcedure.query(async ({ ctx }) => {
+      const accounts = await db.getAuthAccountsByUserId(ctx.user.id);
+      return accounts.map(a => ({ provider: a.provider, providerEmail: a.providerEmail ?? null }));
     }),
   }),
 

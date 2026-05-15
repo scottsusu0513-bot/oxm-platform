@@ -2268,6 +2268,53 @@ export async function setPrimaryEmailVerified(userId: number, email: string): Pr
     .where(eq(users.id, userId));
 }
 
+export async function getAuthAccountsByUserId(userId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(userAuthAccounts).where(eq(userAuthAccounts.userId, userId));
+}
+
+export async function getAuthAccountByProviderForUser(userId: number, provider: string) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db
+    .select()
+    .from(userAuthAccounts)
+    .where(and(eq(userAuthAccounts.userId, userId), eq(userAuthAccounts.provider, provider)))
+    .limit(1);
+  return rows[0];
+}
+
+export async function reassignAuthAccountToUser(authAccountId: number, toUserId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .update(userAuthAccounts)
+    .set({ userId: toUserId, updatedAt: new Date() })
+    .where(eq(userAuthAccounts.id, authAccountId));
+}
+
+export async function clearPrimaryEmail(userId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .update(users)
+    .set({ primaryEmail: null, primaryEmailVerifiedAt: null })
+    .where(eq(users.id, userId));
+}
+
+export async function userHasImportantActivity(userId: number): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const [[f], [c], [r], [m]] = await Promise.all([
+    db.select({ n: sql<number>`COUNT(*)` }).from(factories).where(eq(factories.ownerId, userId)),
+    db.select({ n: sql<number>`COUNT(*)` }).from(conversations).where(eq(conversations.userId, userId)),
+    db.select({ n: sql<number>`COUNT(*)` }).from(reviews).where(eq(reviews.userId, userId)),
+    db.select({ n: sql<number>`COUNT(*)` }).from(factoryCoManagers).where(eq(factoryCoManagers.userId, userId)),
+  ]);
+  return Number(f?.n) > 0 || Number(c?.n) > 0 || Number(r?.n) > 0 || Number(m?.n) > 0;
+}
+
 export async function createEmailVerificationToken(params: {
   userId: number;
   tokenHash: string;
