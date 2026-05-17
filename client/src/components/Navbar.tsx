@@ -57,6 +57,8 @@ export default function Navbar() {
   const showFactoryBadge = factoryBadgeCount > 0;
 
   const showEmailHint = isAuthenticated && user && !user.primaryEmailVerifiedAt;
+  // 手機版漢堡按鈕紅點：選單內任一項目有未讀通知時顯示
+  const hasAnyNotification = isAuthenticated && (userUnread > 0 || showFactoryBadge || pendingCount > 0);
 
   return (
     <>
@@ -192,8 +194,11 @@ export default function Navbar() {
         {/* Mobile Menu Toggle */}
         <div className="md:hidden flex items-center gap-1">
           {showEmailHint && <UnverifiedEmailHint />}
-          <Button variant="ghost" size="sm" onClick={() => setMobileOpen(!mobileOpen)}>
+          <Button variant="ghost" size="sm" className="relative" onClick={() => setMobileOpen(!mobileOpen)}>
             {mobileOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+            {hasAnyNotification && !mobileOpen && (
+              <span className="pointer-events-none absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-orange-500 ring-2 ring-background" />
+            )}
           </Button>
         </div>
       </div>
