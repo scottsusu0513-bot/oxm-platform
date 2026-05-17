@@ -78,12 +78,30 @@ function AnnouncementsSection({ navigate }: { navigate: (path: string) => void }
 }
 
 const marqueeImages = [
-  { src: "/marquee/01.png", alt: "OXM 跑馬燈圖片 1" },
-  { src: "/marquee/02.jpg", alt: "OXM 跑馬燈圖片 2" },
-  { src: "/marquee/03.png", alt: "OXM 跑馬燈圖片 3" },
-  { src: "/marquee/04.jpg", alt: "OXM 跑馬燈圖片 4" },
-  { src: "/marquee/05.jpg", alt: "OXM 跑馬燈圖片 5" },
+  { id: "01", alt: "OXM 跑馬燈圖片 1" },
+  { id: "02", alt: "OXM 跑馬燈圖片 2" },
+  { id: "03", alt: "OXM 跑馬燈圖片 3" },
+  { id: "04", alt: "OXM 跑馬燈圖片 4" },
+  { id: "05", alt: "OXM 跑馬燈圖片 5" },
 ];
+
+const MARQUEE_EXTS = [".jpg", ".png", ".jpeg", ".webp"];
+
+function MarqueeImageCard({ id, alt }: { id: string; alt: string }) {
+  const [extIdx, setExtIdx] = useState(0);
+  if (extIdx >= MARQUEE_EXTS.length) return null;
+  return (
+    <div className="h-14 w-[100px] md:h-[88px] md:w-[140px] rounded-2xl border border-border/40 shadow-sm overflow-hidden shrink-0 bg-muted">
+      <img
+        src={`/marquee/${id}${MARQUEE_EXTS[extIdx]}`}
+        alt={alt}
+        className="w-full h-full object-cover"
+        loading="lazy"
+        onError={() => setExtIdx(i => i + 1)}
+      />
+    </div>
+  );
+}
 
 const BUSINESS_TYPE_TABS = [
   { label: "工廠", value: "factory" },
@@ -200,12 +218,7 @@ export default function Home() {
             <div className="marquee-fade overflow-hidden mb-5 md:mb-8">
               <div className="marquee-track flex gap-3 md:gap-4 w-max">
                 {[...marqueeImages, ...marqueeImages].map((img, i) => (
-                  <div
-                    key={i}
-                    className="h-14 w-[100px] md:h-[88px] md:w-[140px] rounded-2xl border border-border/40 shadow-sm overflow-hidden shrink-0 bg-muted"
-                  >
-                    <img src={img.src} alt={img.alt} className="w-full h-full object-cover" loading="lazy" />
-                  </div>
+                  <MarqueeImageCard key={`${img.id}-${i}`} id={img.id} alt={img.alt} />
                 ))}
               </div>
             </div>
