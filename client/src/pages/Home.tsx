@@ -12,10 +12,11 @@ import {
   Search, ArrowRight, Star, Shield, MessageCircle, Zap,
   Shirt, Wrench, Cpu, Box, TreePine, Package, UtensilsCrossed,
   Heart, Flower2, Lamp, Users, CheckCircle, Factory, Sparkles, Cog, Layers, ChevronDown,
-  Megaphone, Newspaper, Pin, Instagram, Facebook, AtSign, Gauge
+  Megaphone, Newspaper, Pin, Instagram, Facebook, AtSign, Gauge,
+  ChevronLeft, ChevronRight
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useLocation, Link } from "wouter";
 import { allPosts } from "@/lib/blog";
 
@@ -77,28 +78,126 @@ function AnnouncementsSection({ navigate }: { navigate: (path: string) => void }
   );
 }
 
-const marqueeImages = [
-  { id: "01", alt: "OXM 跑馬燈圖片 1" },
-  { id: "02", alt: "OXM 跑馬燈圖片 2" },
-  { id: "03", alt: "OXM 跑馬燈圖片 3" },
-  { id: "04", alt: "OXM 跑馬燈圖片 4" },
-  { id: "05", alt: "OXM 跑馬燈圖片 5" },
+const CAROUSEL_EXTS = [".jpg", ".png", ".jpeg", ".webp"] as const;
+
+const carouselImages = [
+  { id: "01", alt: "OXM 首頁輪播圖片 1" },
+  { id: "02", alt: "OXM 首頁輪播圖片 2" },
+  { id: "03", alt: "OXM 首頁輪播圖片 3" },
+  { id: "04", alt: "OXM 首頁輪播圖片 4" },
+  { id: "05", alt: "OXM 首頁輪播圖片 5" },
 ];
 
-const MARQUEE_EXTS = [".jpg", ".png", ".jpeg", ".webp"];
+type ResolvedImage = { id: string; src: string; alt: string };
 
-function MarqueeImageCard({ id, alt }: { id: string; alt: string }) {
-  const [extIdx, setExtIdx] = useState(0);
-  if (extIdx >= MARQUEE_EXTS.length) return null;
+function HeroImageCarousel() {
+  const [resolved, setResolved] = useState<ResolvedImage[] | null>(null);
+  const [current, setCurrent] = useState(0);
+  const [paused, setPaused] = useState(false);
+  const [slideKey, setSlideKey] = useState(0);
+  const [slideDir, setSlideDir] = useState<"right" | "left">("right");
+
+  // Pre-resolve every image's actual URL (no broken image ever shown)
+  useEffect(() => {
+    let cancelled = false;
+    const tryLoad = (id: string, extIdx: number): Promise<string | null> =>
+      new Promise(resolve => {
+        if (extIdx >= CAROUSEL_EXTS.length) return resolve(null);
+        const img = new window.Image();
+        const src = `/marquee/${id}${CAROUSEL_EXTS[extIdx]}`;
+        img.onload = () => resolve(src);
+        img.onerror = () => tryLoad(id, extIdx + 1).then(resolve);
+        img.src = src;
+      });
+
+    Promise.all(
+      carouselImages.map(img =>
+        tryLoad(img.id, 0).then(src => (src ? { ...img, src } : null))
+      )
+    ).then(results => {
+      if (!cancelled)
+        setResolved(results.filter((r): r is ResolvedImage => r !== null));
+    });
+
+    return () => { cancelled = true; };
+  }, []);
+
+  const total = resolved?.length ?? 0;
+
+  // Auto-advance every 10 s; pauses on hover
+  useEffect(() => {
+    if (!resolved || total < 2 || paused) return;
+    const timer = setInterval(() => {
+      setSlideDir("right");
+      setSlideKey(k => k + 1);
+      setCurrent(c => (c + 1) % total);
+    }, 10000);
+    return () => clearInterval(timer);
+  }, [resolved, total, paused]);
+
+  const goTo = (idx: number, dir: "right" | "left" = "right") => {
+    setSlideDir(dir);
+    setSlideKey(k => k + 1);
+    setCurrent(idx);
+  };
+
+  if (resolved === null || total === 0) return null;
+
+  const img = resolved[current];
+
   return (
-    <div className="h-14 w-[100px] md:h-[88px] md:w-[140px] rounded-2xl border border-border/40 shadow-sm overflow-hidden shrink-0 bg-muted">
-      <img
-        src={`/marquee/${id}${MARQUEE_EXTS[extIdx]}`}
-        alt={alt}
-        className="w-full h-full object-cover"
-        loading="lazy"
-        onError={() => setExtIdx(i => i + 1)}
-      />
+    <div className="max-w-5xl mx-auto mb-5 md:mb-8">
+      {/* Main image frame */}
+      <div
+        className="relative overflow-hidden rounded-2xl md:rounded-3xl border border-border/40 shadow-lg bg-white/70"
+        onMouseEnter={() => setPaused(true)}
+        onMouseLeave={() => setPaused(false)}
+      >
+        <div className="h-[170px] md:h-[260px] w-full">
+          <img
+            key={slideKey}
+            src={img.src}
+            alt={img.alt}
+            className={`w-full h-full object-contain ${slideDir === "right" ? "carousel-slide-right" : "carousel-slide-left"}`}
+          />
+        </div>
+
+        {/* Arrows */}
+        {total > 1 && (
+          <>
+            <button
+              onClick={() => goTo((current - 1 + total) % total, "left")}
+              className="absolute left-2 md:left-3 top-1/2 -translate-y-1/2 w-8 h-8 md:w-10 md:h-10 rounded-full bg-white/60 hover:bg-white/90 flex items-center justify-center shadow-sm transition-colors z-10"
+              aria-label="上一張"
+            >
+              <ChevronLeft className="w-4 h-4 md:w-5 md:h-5 text-foreground/70" />
+            </button>
+            <button
+              onClick={() => goTo((current + 1) % total, "right")}
+              className="absolute right-2 md:right-3 top-1/2 -translate-y-1/2 w-8 h-8 md:w-10 md:h-10 rounded-full bg-white/60 hover:bg-white/90 flex items-center justify-center shadow-sm transition-colors z-10"
+              aria-label="下一張"
+            >
+              <ChevronRight className="w-4 h-4 md:w-5 md:h-5 text-foreground/70" />
+            </button>
+          </>
+        )}
+      </div>
+
+      {/* Dot indicators */}
+      {total > 1 && (
+        <div className="flex items-center justify-center gap-1.5 mt-2.5">
+          {resolved.map((_, i) => (
+            <button
+              key={i}
+              onClick={() => goTo(i, i > current ? "right" : "left")}
+              className={`h-1.5 rounded-full transition-all duration-300 ${
+                i === current ? "w-5 bg-orange-500" : "w-1.5 bg-black/20 hover:bg-black/35"
+              }`}
+              aria-label={`切換到第 ${i + 1} 張`}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -213,16 +312,8 @@ export default function Home() {
         </div>
 
         <div className="container relative">
-          {/* Image Marquee — 圖片清單為空時不顯示 */}
-          {marqueeImages.length > 0 && (
-            <div className="marquee-fade overflow-hidden mb-5 md:mb-8">
-              <div className="marquee-track flex gap-3 md:gap-4 w-max">
-                {[...marqueeImages, ...marqueeImages].map((img, i) => (
-                  <MarqueeImageCard key={`${img.id}-${i}`} id={img.id} alt={img.alt} />
-                ))}
-              </div>
-            </div>
-          )}
+          {/* Hero Image Carousel */}
+          <HeroImageCarousel />
 
           <div className="max-w-3xl mx-auto text-center mb-4 md:mb-10 relative">
             {/* 測試招募貼紙 — desktop */}
