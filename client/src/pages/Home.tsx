@@ -77,6 +77,14 @@ function AnnouncementsSection({ navigate }: { navigate: (path: string) => void }
   );
 }
 
+const marqueeImages = [
+  { src: "/marquee/metal.jpg",     alt: "金屬加工廠" },
+  { src: "/marquee/plastic.jpg",   alt: "塑膠代工" },
+  { src: "/marquee/food.jpg",      alt: "食品製造" },
+  { src: "/marquee/printing.jpg",  alt: "印刷包裝" },
+  { src: "/marquee/machinery.jpg", alt: "工業機械" },
+];
+
 const BUSINESS_TYPE_TABS = [
   { label: "工廠", value: "factory" },
   { label: "工作室", value: "studio" },
@@ -187,6 +195,20 @@ export default function Home() {
         </div>
 
         <div className="container relative">
+          {/* Image Marquee */}
+          <div className="marquee-fade overflow-hidden mb-5 md:mb-8">
+            <div className="marquee-track flex gap-3 md:gap-4 w-max">
+              {[...marqueeImages, ...marqueeImages].map((img, i) => (
+                <div
+                  key={i}
+                  className="h-14 w-[100px] md:h-[88px] md:w-[140px] rounded-2xl border border-border/40 shadow-sm overflow-hidden shrink-0"
+                >
+                  <img src={img.src} alt={img.alt} className="w-full h-full object-cover" loading="lazy" />
+                </div>
+              ))}
+            </div>
+          </div>
+
           <div className="max-w-3xl mx-auto text-center mb-4 md:mb-10 relative">
             {/* 測試招募貼紙 — desktop */}
             <div className="hidden lg:block absolute top-14 right-0 rotate-[2deg] z-10 select-none pointer-events-none">
