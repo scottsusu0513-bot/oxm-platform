@@ -78,11 +78,11 @@ function AnnouncementsSection({ navigate }: { navigate: (path: string) => void }
 }
 
 const marqueeImages = [
-  { src: "/marquee/metal.png",     alt: "金屬加工廠" },
-  { src: "/marquee/food.png",      alt: "食品製造" },
-  { src: "/marquee/printing.jpg",  alt: "印刷包裝" },
-  { src: "/marquee/machinery.jpg", alt: "工業機械" },
-  { src: "/marquee/OXM.jpg",       alt: "OXM 平台" },
+  { src: "/marquee/01.png", alt: "OXM 跑馬燈圖片 1" },
+  { src: "/marquee/02.jpg", alt: "OXM 跑馬燈圖片 2" },
+  { src: "/marquee/03.png", alt: "OXM 跑馬燈圖片 3" },
+  { src: "/marquee/04.jpg", alt: "OXM 跑馬燈圖片 4" },
+  { src: "/marquee/05.jpg", alt: "OXM 跑馬燈圖片 5" },
 ];
 
 const BUSINESS_TYPE_TABS = [
@@ -195,19 +195,21 @@ export default function Home() {
         </div>
 
         <div className="container relative">
-          {/* Image Marquee */}
-          <div className="marquee-fade overflow-hidden mb-5 md:mb-8">
-            <div className="marquee-track flex gap-3 md:gap-4 w-max">
-              {[...marqueeImages, ...marqueeImages].map((img, i) => (
-                <div
-                  key={i}
-                  className="h-14 w-[100px] md:h-[88px] md:w-[140px] rounded-2xl border border-border/40 shadow-sm overflow-hidden shrink-0"
-                >
-                  <img src={img.src} alt={img.alt} className="w-full h-full object-cover" loading="lazy" />
-                </div>
-              ))}
+          {/* Image Marquee — 圖片清單為空時不顯示 */}
+          {marqueeImages.length > 0 && (
+            <div className="marquee-fade overflow-hidden mb-5 md:mb-8">
+              <div className="marquee-track flex gap-3 md:gap-4 w-max">
+                {[...marqueeImages, ...marqueeImages].map((img, i) => (
+                  <div
+                    key={i}
+                    className="h-14 w-[100px] md:h-[88px] md:w-[140px] rounded-2xl border border-border/40 shadow-sm overflow-hidden shrink-0 bg-muted"
+                  >
+                    <img src={img.src} alt={img.alt} className="w-full h-full object-cover" loading="lazy" />
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
 
           <div className="max-w-3xl mx-auto text-center mb-4 md:mb-10 relative">
             {/* 測試招募貼紙 — desktop */}
