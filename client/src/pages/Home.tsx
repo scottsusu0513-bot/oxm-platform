@@ -150,16 +150,16 @@ function HeroImageCarousel() {
     <div className="max-w-4xl mx-auto mb-5 md:mb-8">
       {/* Main image frame */}
       <div
-        className="relative overflow-hidden rounded-2xl md:rounded-3xl border border-border/40 shadow-lg"
+        className="relative overflow-hidden rounded-2xl md:rounded-3xl border border-border/40 shadow-lg bg-white/70"
         onMouseEnter={() => setPaused(true)}
         onMouseLeave={() => setPaused(false)}
       >
-        <div className="h-[200px] md:h-[300px] lg:h-[340px] w-full">
+        <div className="h-[220px] md:h-[300px] lg:h-[340px] w-full">
           <img
             key={slideKey}
             src={img.src}
             alt={img.alt}
-            className={`w-full h-full object-cover object-center ${slideDir === "right" ? "carousel-slide-right" : "carousel-slide-left"}`}
+            className={`w-full h-full object-contain object-center md:object-cover ${slideDir === "right" ? "carousel-slide-right" : "carousel-slide-left"}`}
           />
         </div>
 
@@ -168,14 +168,14 @@ function HeroImageCarousel() {
           <>
             <button
               onClick={() => goTo((current - 1 + total) % total, "left")}
-              className="absolute left-3 md:left-4 top-1/2 -translate-y-1/2 w-8 h-8 md:w-10 md:h-10 rounded-full bg-white/60 hover:bg-white/90 flex items-center justify-center shadow-sm transition-colors z-10"
+              className="absolute left-2 md:left-4 top-1/2 -translate-y-1/2 w-8 h-8 md:w-10 md:h-10 rounded-full bg-white/60 hover:bg-white/90 flex items-center justify-center shadow-sm transition-colors z-10"
               aria-label="上一張"
             >
               <ChevronLeft className="w-4 h-4 md:w-5 md:h-5 text-foreground/70" />
             </button>
             <button
               onClick={() => goTo((current + 1) % total, "right")}
-              className="absolute right-3 md:right-4 top-1/2 -translate-y-1/2 w-8 h-8 md:w-10 md:h-10 rounded-full bg-white/60 hover:bg-white/90 flex items-center justify-center shadow-sm transition-colors z-10"
+              className="absolute right-2 md:right-4 top-1/2 -translate-y-1/2 w-8 h-8 md:w-10 md:h-10 rounded-full bg-white/60 hover:bg-white/90 flex items-center justify-center shadow-sm transition-colors z-10"
               aria-label="下一張"
             >
               <ChevronRight className="w-4 h-4 md:w-5 md:h-5 text-foreground/70" />
