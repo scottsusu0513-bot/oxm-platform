@@ -1951,11 +1951,17 @@ export async function createMessageRecipients(campaignId: number, receiverIds: n
   const db = await getDb();
   if (!db) throw new Error("DB not available");
   if (receiverIds.length === 0) return;
-  for (let i = 0; i < receiverIds.length; i += 500) {
-    const batch = receiverIds.slice(i, i + 500);
-    await db.insert(messageRecipients)
-      .values(batch.map(receiverId => ({ campaignId, receiverId })))
-      .onDuplicateKeyUpdate({ set: { id: sql`id` } });
+  // Pre-filter: skip already-existing recipients to avoid duplicate key errors
+  const existing = await db
+    .select({ receiverId: messageRecipients.receiverId })
+    .from(messageRecipients)
+    .where(eq(messageRecipients.campaignId, campaignId));
+  const existingSet = new Set(existing.map(r => r.receiverId));
+  const newIds = receiverIds.filter(id => !existingSet.has(id));
+  if (newIds.length === 0) return;
+  for (let i = 0; i < newIds.length; i += 500) {
+    const batch = newIds.slice(i, i + 500);
+    await db.insert(messageRecipients).values(batch.map(receiverId => ({ campaignId, receiverId })));
   }
 }
 
