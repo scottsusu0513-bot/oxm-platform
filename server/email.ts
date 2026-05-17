@@ -460,6 +460,46 @@ export async function sendMessageReplyNotificationEmail(params: {
   }
 }
 
+// ===== 寄送站內信廣播 Email =====
+export async function sendAdminBroadcastEmail(params: {
+  toEmail: string;
+  toName: string | null;
+  campaignTitle: string;
+  campaignContent: string;
+  campaignId: number;
+}) {
+  if (!isEmailEnabled()) {
+    console.log('[Email] 未設定 RESEND_API_KEY，跳過寄送站內信廣播信');
+    return;
+  }
+  const resend = getResend();
+  if (!resend) return;
+  const appUrl = process.env.VITE_APP_URL ?? 'http://localhost:3000';
+  try {
+    await resend.emails.send({
+      from: FROM_EMAIL,
+      to: params.toEmail,
+      subject: `【OXM 站內信】${params.campaignTitle}`,
+      html: `
+        <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #f97316;">您有一封來自 OXM 平台的站內信</h2>
+          <p>親愛的 ${params.toName ?? '用戶'}，您好：</p>
+          <div style="background: #f5f5f5; padding: 16px; border-radius: 8px; margin: 16px 0; white-space: pre-wrap;">
+            ${params.campaignContent.replace(/\n/g, '<br>')}
+          </div>
+          <a href="${appUrl}/messages?campaignId=${params.campaignId}"
+            style="background: #f97316; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none; display: inline-block;">
+            前往查看站內信
+          </a>
+          <p style="color: #999; font-size: 12px; margin-top: 24px;">此信件由 OXM 平台自動發送，請勿直接回覆此信件，如需回覆請至平台站內信功能。</p>
+        </div>
+      `,
+    });
+  } catch (error) {
+    console.error(`[Email] 寄送站內信廣播失敗 to ${params.toEmail}:`, error);
+  }
+}
+
 // ===== 寄送 Email 驗證信 =====
 export async function sendEmailVerificationEmail(params: {
   toEmail: string;

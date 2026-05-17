@@ -1,7 +1,7 @@
 import { COOKIE_NAME, THIRTY_DAYS_MS } from "@shared/const";
 import { sdk } from "./_core/sdk";
 import { enhanceSearchKeyword } from './semantic-search';
-import { sendNewInquiryEmail, sendFactoryApprovedEmail, sendFactorySubmittedEmail, sendReportEmail, sendSupportTicketEmail, sendReviewReplyEmail, sendNewMessageNotificationEmail, sendReportStatusUpdateEmail, sendTicketStatusUpdateEmail, sendMessageReplyNotificationEmail, sendEmailVerificationEmail } from './email';
+import { sendNewInquiryEmail, sendFactoryApprovedEmail, sendFactorySubmittedEmail, sendReportEmail, sendSupportTicketEmail, sendReviewReplyEmail, sendNewMessageNotificationEmail, sendReportStatusUpdateEmail, sendTicketStatusUpdateEmail, sendMessageReplyNotificationEmail, sendEmailVerificationEmail, sendAdminBroadcastEmail } from './email';
 import { sha256Hex, generateRawToken } from './_core/oauthHelpers';
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
@@ -662,7 +662,7 @@ export const appRouter = router({
           lastMessage: c.content.substring(0, 60),
           lastSenderRole: "admin",
           lastMessageAt: c.createdAt,
-          unreadCount: 0,
+          unreadCount: c.isRead ? 0 : 1,
           senderIsAdmin: true,
           title: c.title,
         }));
@@ -706,6 +706,11 @@ export const appRouter = router({
         replyContent: input.content,
         campaignId: input.campaignId,
       });
+      return { success: true };
+    }),
+
+    markAdminMessageRead: protectedProcedure.input(z.object({ campaignId: z.number() })).mutation(async ({ ctx, input }) => {
+      await db.markAdminMessageAsRead(input.campaignId, ctx.user.id);
       return { success: true };
     }),
 
@@ -957,7 +962,11 @@ export const appRouter = router({
     }),
 
     unreadCount: protectedProcedure.query(async ({ ctx }) => {
-      const userCount = await db.getUnreadCount(ctx.user.id);
+      const [regularCount, adminCount] = await Promise.all([
+        db.getUnreadCount(ctx.user.id),
+        db.getUnreadAdminMessageCount(ctx.user.id),
+      ]);
+      const userCount = regularCount + adminCount;
       const factory = await db.getFactoryByOwnerId(ctx.user.id);
       const factoryCount = factory ? await db.getUnreadCountForFactory(factory.id) : 0;
       return { userCount, factoryCount };
@@ -1550,6 +1559,20 @@ export const appRouter = router({
         receiverIds = [input.receiverId];
       }
       await db.createMessageRecipients(campaignId, receiverIds);
+      // 非同步寄信，不阻塞 response
+      db.getRecipientsWithEmails(campaignId).then(recipients => {
+        for (const r of recipients) {
+          if (r.email) {
+            sendAdminBroadcastEmail({
+              toEmail: r.email,
+              toName: r.name,
+              campaignTitle: input.title,
+              campaignContent: input.content,
+              campaignId,
+            });
+          }
+        }
+      });
       return { campaignId, recipientCount: receiverIds.length };
     }),
 

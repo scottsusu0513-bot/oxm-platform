@@ -37,6 +37,16 @@ export default function AdminMessageDetail() {
     onError: (err) => toast.error(err.message),
   });
 
+  const markReadMut = trpc.chat.markAdminMessageRead.useMutation();
+
+  useEffect(() => {
+    if (isAuthenticated && campaignId > 0) {
+      markReadMut.mutate({ campaignId });
+      utils.chat.unreadCount.invalidate();
+      utils.chat.myConversations.invalidate();
+    }
+  }, [isAuthenticated, campaignId]);
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [threadQuery.data?.length]);

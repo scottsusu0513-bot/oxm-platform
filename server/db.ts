@@ -1986,11 +1986,41 @@ export async function getAdminMessagesForUser(userId: number) {
       title: messageCampaigns.title,
       content: messageCampaigns.content,
       createdAt: messageCampaigns.createdAt,
+      isRead: messageRecipients.isRead,
     })
     .from(messageRecipients)
     .innerJoin(messageCampaigns, eq(messageRecipients.campaignId, messageCampaigns.id))
     .where(eq(messageRecipients.receiverId, userId))
     .orderBy(desc(messageCampaigns.createdAt));
+}
+
+export async function getUnreadAdminMessageCount(userId: number): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const [result] = await db
+    .select({ count: sql<number>`COUNT(*)` })
+    .from(messageRecipients)
+    .where(and(eq(messageRecipients.receiverId, userId), eq(messageRecipients.isRead, false)));
+  return Number(result?.count ?? 0);
+}
+
+export async function markAdminMessageAsRead(campaignId: number, userId: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .update(messageRecipients)
+    .set({ isRead: true })
+    .where(and(eq(messageRecipients.campaignId, campaignId), eq(messageRecipients.receiverId, userId)));
+}
+
+export async function getRecipientsWithEmails(campaignId: number): Promise<{ userId: number; email: string | null; name: string | null }[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select({ userId: users.id, email: users.email, name: users.name })
+    .from(messageRecipients)
+    .innerJoin(users, eq(messageRecipients.receiverId, users.id))
+    .where(and(eq(messageRecipients.campaignId, campaignId), isNull(users.deletedAt)));
 }
 
 export async function getMessageCampaignById(campaignId: number, userId: number) {

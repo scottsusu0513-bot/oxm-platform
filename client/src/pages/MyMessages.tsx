@@ -50,6 +50,9 @@ function UserConversationList({ conversations }: { conversations: any[] }) {
                   <span className="text-xs text-muted-foreground">
                     {new Date(conv.lastMessageAt).toLocaleDateString("zh-TW")}
                   </span>
+                  {conv.unreadCount > 0 && (
+                    <span className="w-2.5 h-2.5 rounded-full bg-orange-500 shrink-0" />
+                  )}
                 </div>
               </div>
             </Link>
