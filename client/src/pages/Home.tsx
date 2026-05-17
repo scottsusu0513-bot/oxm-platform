@@ -78,9 +78,12 @@ function AnnouncementsSection({ navigate }: { navigate: (path: string) => void }
   );
 }
 
-const CAROUSEL_EXTS = [".jpg", ".png", ".jpeg", ".webp"] as const;
+// png 優先（目前 marquee 圖片多為 .png）
+const CAROUSEL_EXTS = [".png", ".jpg", ".jpeg", ".webp"] as const;
 
-// 首頁輪播圖建議比例約 2.64:1，建議尺寸 2640 × 1000 px
+// 首頁輪播圖建議統一尺寸：2640 × 1000 px，比例約 2.64:1。
+// 若圖片比例不同，手機版 object-contain 會避免裁切，但可能產生留白（以模糊背景層填補）。
+// 要完全沒有裁切與留白，所有圖片必須先裁成相同比例。
 const carouselImages = [
   { id: "01", alt: "OXM 首頁輪播圖片 1" },
   { id: "02", alt: "OXM 首頁輪播圖片 2" },
@@ -98,26 +101,41 @@ function HeroImageCarousel() {
   const [slideKey, setSlideKey] = useState(0);
   const [slideDir, setSlideDir] = useState<"right" | "left">("right");
 
-  // Pre-resolve every image's actual URL (no broken image ever shown)
   useEffect(() => {
     let cancelled = false;
+
     const tryLoad = (id: string, extIdx: number): Promise<string | null> =>
       new Promise(resolve => {
         if (extIdx >= CAROUSEL_EXTS.length) return resolve(null);
-        const img = new window.Image();
+        const probe = new window.Image();
         const src = `/marquee/${id}${CAROUSEL_EXTS[extIdx]}`;
-        img.onload = () => resolve(src);
-        img.onerror = () => tryLoad(id, extIdx + 1).then(resolve);
-        img.src = src;
+        probe.onload = () => resolve(src);
+        probe.onerror = () => tryLoad(id, extIdx + 1).then(resolve);
+        probe.src = src;
       });
 
-    Promise.all(
-      carouselImages.map(img =>
-        tryLoad(img.id, 0).then(src => (src ? { ...img, src } : null))
-      )
-    ).then(results => {
-      if (!cancelled)
-        setResolved(results.filter((r): r is ResolvedImage => r !== null));
+    // Start all loads concurrently
+    const promises = carouselImages.map(imgDef => tryLoad(imgDef.id, 0));
+
+    // Show carousel as soon as first image resolves — don't wait for others
+    promises[0].then(src => {
+      if (cancelled) return;
+      if (process.env.NODE_ENV !== "production")
+        console.log(src ? `[OXM carousel] first image loaded: ${src}` : `[OXM carousel] image not found: ${carouselImages[0].id}`);
+      setResolved(src ? [{ ...carouselImages[0], src }] : []);
+    });
+
+    // When all finish, update to full ordered list
+    Promise.all(promises).then(srcs => {
+      if (cancelled) return;
+      srcs.slice(1).forEach((src, i) => {
+        if (process.env.NODE_ENV !== "production")
+          console.log(src ? `[OXM carousel] image loaded: ${src}` : `[OXM carousel] image not found: ${carouselImages[i + 1].id}`);
+      });
+      const loaded = srcs
+        .map((src, i) => (src ? { ...carouselImages[i], src } : null))
+        .filter((r): r is ResolvedImage => r !== null);
+      setResolved(loaded);
     });
 
     return () => { cancelled = true; };
@@ -125,16 +143,16 @@ function HeroImageCarousel() {
 
   const total = resolved?.length ?? 0;
 
-  // Auto-advance every 10 s; pauses on hover
+  // Auto-advance every 10 s; only starts when ≥ 2 images are loaded
   useEffect(() => {
-    if (!resolved || total < 2 || paused) return;
+    if (total < 2 || paused) return;
     const timer = setInterval(() => {
       setSlideDir("right");
       setSlideKey(k => k + 1);
       setCurrent(c => (c + 1) % total);
     }, 10000);
     return () => clearInterval(timer);
-  }, [resolved, total, paused]);
+  }, [total, paused]);
 
   const goTo = (idx: number, dir: "right" | "left" = "right") => {
     setSlideDir(dir);
@@ -148,20 +166,27 @@ function HeroImageCarousel() {
 
   return (
     <div className="max-w-4xl mx-auto mb-5 md:mb-8">
-      {/* Main image frame */}
+      {/* Fixed-height frame — prevents layout jump when switching images */}
       <div
-        className="relative overflow-hidden rounded-2xl md:rounded-3xl border border-border/40 shadow-lg bg-white/70"
+        className="relative h-[200px] md:h-[300px] lg:h-[340px] w-full overflow-hidden rounded-2xl md:rounded-3xl border border-border/40 shadow-lg bg-gradient-to-br from-white to-orange-50/40"
         onMouseEnter={() => setPaused(true)}
         onMouseLeave={() => setPaused(false)}
       >
-        <div className="w-full md:h-[300px] lg:h-[340px]">
-          <img
-            key={slideKey}
-            src={img.src}
-            alt={img.alt}
-            className={`w-full h-auto md:h-full md:object-cover object-center ${slideDir === "right" ? "carousel-slide-right" : "carousel-slide-left"}`}
-          />
-        </div>
+        {/* Blurred fill layer (mobile only) — softens object-contain letterbox */}
+        <img
+          src={img.src}
+          alt=""
+          aria-hidden
+          className="absolute inset-0 h-full w-full object-cover scale-110 blur-xl opacity-25 md:hidden"
+        />
+        {/* Main image: contain on mobile (no crop), cover on desktop */}
+        <img
+          key={slideKey}
+          src={img.src}
+          alt={img.alt}
+          loading="eager"
+          className={`absolute inset-0 h-full w-full object-contain object-center md:object-cover ${slideDir === "right" ? "carousel-slide-right" : "carousel-slide-left"}`}
+        />
 
         {/* Arrows */}
         {total > 1 && (
