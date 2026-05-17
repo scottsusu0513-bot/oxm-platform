@@ -80,6 +80,7 @@ function AnnouncementsSection({ navigate }: { navigate: (path: string) => void }
 
 const CAROUSEL_EXTS = [".jpg", ".png", ".jpeg", ".webp"] as const;
 
+// 首頁輪播圖建議比例約 2.64:1，建議尺寸 2640 × 1000 px
 const carouselImages = [
   { id: "01", alt: "OXM 首頁輪播圖片 1" },
   { id: "02", alt: "OXM 首頁輪播圖片 2" },
