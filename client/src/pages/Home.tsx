@@ -78,11 +78,11 @@ function AnnouncementsSection({ navigate }: { navigate: (path: string) => void }
 }
 
 const marqueeImages = [
-  { src: "/marquee/metal.jpg",     alt: "金屬加工廠" },
-  { src: "/marquee/plastic.jpg",   alt: "塑膠代工" },
-  { src: "/marquee/food.jpg",      alt: "食品製造" },
+  { src: "/marquee/metal.png",     alt: "金屬加工廠" },
+  { src: "/marquee/food.png",      alt: "食品製造" },
   { src: "/marquee/printing.jpg",  alt: "印刷包裝" },
   { src: "/marquee/machinery.jpg", alt: "工業機械" },
+  { src: "/marquee/OXM.jpg",       alt: "OXM 平台" },
 ];
 
 const BUSINESS_TYPE_TABS = [
