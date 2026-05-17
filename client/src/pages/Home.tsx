@@ -154,12 +154,12 @@ function HeroImageCarousel() {
         onMouseEnter={() => setPaused(true)}
         onMouseLeave={() => setPaused(false)}
       >
-        <div className="h-[220px] md:h-[300px] lg:h-[340px] w-full">
+        <div className="w-full md:h-[300px] lg:h-[340px]">
           <img
             key={slideKey}
             src={img.src}
             alt={img.alt}
-            className={`w-full h-full object-contain object-center md:object-cover ${slideDir === "right" ? "carousel-slide-right" : "carousel-slide-left"}`}
+            className={`w-full h-auto md:h-full md:object-cover object-center ${slideDir === "right" ? "carousel-slide-right" : "carousel-slide-left"}`}
           />
         </div>
 
