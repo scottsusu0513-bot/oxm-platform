@@ -73,7 +73,8 @@ export default function BlogList() {
                   <p className="text-xs text-muted-foreground mb-1">{post.date}</p>
                   <h2 className="text-lg font-bold mb-1 hover:text-orange-500 transition-colors">{post.title}</h2>
                   <p className="text-sm text-muted-foreground line-clamp-2">{post.description}</p>
-                  <div className="flex items-center gap-1 mt-3 text-sm text-orange-500 font-medium">
+                  <p className="text-xs text-orange-400 mt-2 font-medium">用一問一答快速看懂代工知識</p>
+                  <div className="flex items-center gap-1 mt-1 text-sm text-orange-500 font-medium">
                     閱讀全文 <ArrowRight className="w-3.5 h-3.5" />
                   </div>
                 </CardContent>
