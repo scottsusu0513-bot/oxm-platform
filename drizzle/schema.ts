@@ -350,6 +350,9 @@ export const messageCampaigns = mysqlTable("messageCampaigns", {
   targetType: mysqlEnum("targetType", ["all_users", "all_factory_managers", "single"]).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  deletedAt: timestamp("deletedAt"),
+  deletedById: int("deletedById").references(() => users.id, { onDelete: "set null" }),
+  deleteReason: text("deleteReason"),
 });
 
 export type MessageCampaign = typeof messageCampaigns.$inferSelect;

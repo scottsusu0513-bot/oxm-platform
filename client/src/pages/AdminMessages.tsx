@@ -8,10 +8,20 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Send, Users, Search, Loader2, MessageSquare, ChevronRight, CheckCircle2, Clock } from "lucide-react";
+import { ArrowLeft, Send, Users, Search, Loader2, MessageSquare, ChevronRight, CheckCircle2, Clock, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { AlertCircle } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 const TARGET_LABELS: Record<string, string> = {
   all_users: "全部用戶",
@@ -52,6 +62,8 @@ function AdminMessagesContent({ setLocation }: { setLocation: (p: string) => voi
   const [receiverName, setReceiverName] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [page, setPage] = useState(1);
+  const [retractTarget, setRetractTarget] = useState<{ id: number; title: string } | null>(null);
+  const [retractReason, setRetractReason] = useState("");
 
   const utils = trpc.useUtils();
   const campaignsQuery = trpc.admin.getMessageCampaigns.useQuery({ page, pageSize: 20 });
@@ -68,6 +80,15 @@ function AdminMessagesContent({ setLocation }: { setLocation: (p: string) => voi
       toast.success(`站內信已發送，共 ${data.recipientCount} 位收件人`);
       setTitle(""); setContent(""); setTargetType("all_users");
       setReceiverId(null); setReceiverName(""); setSearchQuery("");
+      utils.admin.getMessageCampaigns.invalidate();
+    },
+    onError: (err) => toast.error(err.message),
+  });
+  const retractMut = trpc.admin.retractAdminMessage.useMutation({
+    onSuccess: () => {
+      toast.success("站內信已撤回，用戶端將不再顯示");
+      setRetractTarget(null);
+      setRetractReason("");
       utils.admin.getMessageCampaigns.invalidate();
     },
     onError: (err) => toast.error(err.message),
@@ -170,20 +191,39 @@ function AdminMessagesContent({ setLocation }: { setLocation: (p: string) => voi
               {!campaignsQuery.isLoading && campaigns.length === 0 && <p className="text-center text-muted-foreground py-8 text-sm">尚無發送記錄</p>}
               <div className="space-y-3">
                 {campaigns.map((c: any) => (
-                  <button key={c.id} className="w-full text-left border rounded-lg p-3 hover:bg-muted/30 transition-colors"
-                    onClick={() => setLocation(`/admin/messages/${c.id}`)}>
+                  <div key={c.id} className={`border rounded-lg p-3 ${c.deletedAt ? "opacity-60 bg-muted/20" : "hover:bg-muted/30"} transition-colors`}>
                     <div className="flex items-start justify-between gap-2">
-                      <p className="font-medium text-sm line-clamp-1">{c.title}</p>
+                      <button className="flex-1 text-left" onClick={() => setLocation(`/admin/messages/${c.id}`)}>
+                        <p className="font-medium text-sm line-clamp-1">{c.title}</p>
+                      </button>
                       <div className="flex items-center gap-1.5 shrink-0">
-                        <Badge variant="outline" className="text-xs">{TARGET_LABELS[c.targetType] ?? c.targetType}</Badge>
-                        <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+                        {c.deletedAt ? (
+                          <Badge variant="destructive" className="text-xs">已撤回</Badge>
+                        ) : (
+                          <Badge variant="outline" className="text-xs">{TARGET_LABELS[c.targetType] ?? c.targetType}</Badge>
+                        )}
+                        {!c.deletedAt && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 w-6 p-0 text-muted-foreground hover:text-destructive"
+                            title="撤回站內信"
+                            onClick={(e) => { e.stopPropagation(); setRetractTarget({ id: c.id, title: c.title }); setRetractReason(""); }}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        )}
+                        <ChevronRight className="h-3.5 w-3.5 text-muted-foreground cursor-pointer" onClick={() => setLocation(`/admin/messages/${c.id}`)} />
                       </div>
                     </div>
                     <div className="flex items-center gap-3 mt-1.5 text-xs text-muted-foreground">
                       <span className="flex items-center gap-1"><Users className="h-3 w-3" />{c.recipientCount} 人</span>
                       <span>{new Date(c.createdAt).toLocaleDateString("zh-TW")}</span>
+                      {c.deletedAt && (
+                        <span className="text-destructive">撤回於 {new Date(c.deletedAt).toLocaleDateString("zh-TW")}{c.deleteReason ? `：${c.deleteReason}` : ""}</span>
+                      )}
                     </div>
-                  </button>
+                  </div>
                 ))}
               </div>
               {total > 20 && (
@@ -197,6 +237,40 @@ function AdminMessagesContent({ setLocation }: { setLocation: (p: string) => voi
           </Card>
         </div>
       </div>
+
+      {/* 撤回確認 Dialog */}
+      <AlertDialog open={!!retractTarget} onOpenChange={(open) => { if (!open) { setRetractTarget(null); setRetractReason(""); } }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>確認撤回站內信</AlertDialogTitle>
+            <AlertDialogDescription>
+              此操作會將這封站內信從所有收件人的站內信列表中隱藏，但後台仍保留紀錄。
+              <br /><br />
+              <span className="font-medium text-foreground">「{retractTarget?.title}」</span>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="px-1 pb-2">
+            <label className="text-sm font-medium mb-1 block">撤回原因（選填）</label>
+            <Input
+              placeholder="例：內容有誤，已重新發送"
+              value={retractReason}
+              onChange={e => setRetractReason(e.target.value)}
+              maxLength={200}
+            />
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => retractTarget && retractMut.mutate({ campaignId: retractTarget.id, reason: retractReason })}
+              disabled={retractMut.isPending}
+            >
+              {retractMut.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
+              確認撤回
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

@@ -1996,7 +1996,7 @@ export async function getAdminMessagesForUser(userId: number) {
     })
     .from(messageRecipients)
     .innerJoin(messageCampaigns, eq(messageRecipients.campaignId, messageCampaigns.id))
-    .where(eq(messageRecipients.receiverId, userId))
+    .where(and(eq(messageRecipients.receiverId, userId), isNull(messageCampaigns.deletedAt)))
     .orderBy(desc(messageCampaigns.createdAt));
 }
 
@@ -2006,8 +2006,22 @@ export async function getUnreadAdminMessageCount(userId: number): Promise<number
   const [result] = await db
     .select({ count: sql<number>`COUNT(*)` })
     .from(messageRecipients)
-    .where(and(eq(messageRecipients.receiverId, userId), eq(messageRecipients.isRead, false)));
+    .innerJoin(messageCampaigns, eq(messageRecipients.campaignId, messageCampaigns.id))
+    .where(and(
+      eq(messageRecipients.receiverId, userId),
+      eq(messageRecipients.isRead, false),
+      isNull(messageCampaigns.deletedAt),
+    ));
   return Number(result?.count ?? 0);
+}
+
+export async function retractAdminMessageCampaign(campaignId: number, deletedById: number, reason: string): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  await db
+    .update(messageCampaigns)
+    .set({ deletedAt: new Date(), deletedById, deleteReason: reason || null })
+    .where(and(eq(messageCampaigns.id, campaignId), isNull(messageCampaigns.deletedAt)));
 }
 
 export async function markAdminMessageAsRead(campaignId: number, userId: number) {
@@ -2036,7 +2050,9 @@ export async function getMessageCampaignById(campaignId: number, userId: number)
     .where(and(eq(messageRecipients.campaignId, campaignId), eq(messageRecipients.receiverId, userId)))
     .limit(1);
   if (recipient.length === 0) return null;
-  const rows = await db.select().from(messageCampaigns).where(eq(messageCampaigns.id, campaignId)).limit(1);
+  const rows = await db.select().from(messageCampaigns)
+    .where(and(eq(messageCampaigns.id, campaignId), isNull(messageCampaigns.deletedAt)))
+    .limit(1);
   return rows[0] ?? null;
 }
 
@@ -2050,6 +2066,8 @@ export async function getAdminMessageCampaigns(page = 1, pageSize = 20) {
       title: messageCampaigns.title,
       targetType: messageCampaigns.targetType,
       createdAt: messageCampaigns.createdAt,
+      deletedAt: messageCampaigns.deletedAt,
+      deleteReason: messageCampaigns.deleteReason,
       recipientCount: sql<number>`COUNT(${messageRecipients.id})`,
     })
     .from(messageCampaigns)
@@ -2150,6 +2168,8 @@ export async function getAdminMessageCampaignById(campaignId: number) {
       content: messageCampaigns.content,
       targetType: messageCampaigns.targetType,
       createdAt: messageCampaigns.createdAt,
+      deletedAt: messageCampaigns.deletedAt,
+      deleteReason: messageCampaigns.deleteReason,
       recipientCount: sql<number>`COUNT(${messageRecipients.id})`,
     })
     .from(messageCampaigns)

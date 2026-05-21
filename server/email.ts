@@ -1,7 +1,7 @@
 import { Resend } from 'resend';
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY ?? '';
-const FROM_EMAIL = process.env.FROM_EMAIL ?? 'OXM平台 <noreply@yourdomain.com>';
+const FROM_EMAIL = process.env.FROM_EMAIL ?? '';
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
 
 // 懶載入，沒有 API Key 就不初始化
@@ -468,12 +468,9 @@ export async function sendAdminBroadcastEmail(params: {
   campaignContent: string;
   campaignId: number;
 }) {
-  if (!isEmailEnabled()) {
-    console.log('[Email] 未設定 RESEND_API_KEY，跳過寄送站內信廣播信');
-    return;
-  }
-  const resend = getResend();
-  if (!resend) return;
+  if (!isEmailEnabled()) throw new Error('[Email] 未設定 RESEND_API_KEY，無法寄送站內信廣播信');
+  if (!FROM_EMAIL) throw new Error('[Email] 未設定 FROM_EMAIL，無法寄送 Email');
+  const resend = getResend()!;
   const appUrl = process.env.VITE_APP_URL ?? 'http://localhost:3000';
   try {
     await resend.emails.send({
@@ -496,7 +493,8 @@ export async function sendAdminBroadcastEmail(params: {
       `,
     });
   } catch (error) {
-    console.error(`[Email] 寄送站內信廣播失敗 to ${params.toEmail}:`, error);
+    // Re-throw so the caller (routers.ts) can log and count failures
+    throw error;
   }
 }
 

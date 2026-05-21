@@ -1560,19 +1560,38 @@ export const appRouter = router({
       }
       await db.createMessageRecipients(campaignId, receiverIds);
       // 非同步寄信，不阻塞 response
-      db.getRecipientsWithEmails(campaignId).then(recipients => {
-        for (const r of recipients) {
-          if (r.email) {
-            sendAdminBroadcastEmail({
-              toEmail: r.email,
-              toName: r.name,
-              campaignTitle: input.title,
-              campaignContent: input.content,
-              campaignId,
-            });
+      (async () => {
+        try {
+          const recipients = await db.getRecipientsWithEmails(campaignId);
+          const withEmail = recipients.filter(r => !!r.email);
+          console.log(`[adminMessage] campaignId=${campaignId} recipients total:${recipients.length} with email:${withEmail.length}`);
+          let successCount = 0;
+          let failCount = 0;
+          const BATCH = 50;
+          for (let i = 0; i < withEmail.length; i += BATCH) {
+            const batch = withEmail.slice(i, i + BATCH);
+            await Promise.all(batch.map(async (r) => {
+              try {
+                await sendAdminBroadcastEmail({
+                  toEmail: r.email!,
+                  toName: r.name,
+                  campaignTitle: input.title,
+                  campaignContent: input.content,
+                  campaignId,
+                });
+                successCount++;
+                console.log(`[adminMessage] email sent success: ${r.email}`);
+              } catch (err) {
+                failCount++;
+                console.error(`[adminMessage] email failed: ${r.email}`, err);
+              }
+            }));
           }
+          console.log(`[adminMessage] done — success:${successCount} failed:${failCount}`);
+        } catch (err) {
+          console.error(`[adminMessage] getRecipientsWithEmails failed for campaignId=${campaignId}:`, err);
         }
-      });
+      })();
       return { campaignId, recipientCount: receiverIds.length };
     }),
 
@@ -1628,6 +1647,15 @@ export const appRouter = router({
         content: input.content,
         senderRole: "admin",
       });
+      return { success: true };
+    }),
+
+    retractAdminMessage: adminProcedure.input(z.object({
+      campaignId: z.number().int(),
+      reason: z.string().max(500).default(''),
+    })).mutation(async ({ ctx, input }) => {
+      console.log(`[adminMessage] retract campaignId=${input.campaignId} by adminId=${ctx.user!.id} reason=${input.reason}`);
+      await db.retractAdminMessageCampaign(input.campaignId, ctx.user!.id, input.reason);
       return { success: true };
     }),
   }),
