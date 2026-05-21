@@ -1559,18 +1559,32 @@ export const appRouter = router({
         receiverIds = [input.receiverId];
       }
       await db.createMessageRecipients(campaignId, receiverIds);
-      // 非同步寄信，不阻塞 response
+      // 非同步寄信，不阻塞 response；sequential queue 避免 Resend 429
       (async () => {
+        const INTER_EMAIL_DELAY_MS = 500;
+        const RETRY_DELAYS_MS = [1500, 3000, 5000];
+
+        const isRateLimitError = (err: unknown): boolean => {
+          if (!err || typeof err !== 'object') return false;
+          const e = err as Record<string, unknown>;
+          const status = e['statusCode'] ?? e['status'] ?? (e['response'] as any)?.status;
+          return status === 429;
+        };
+
         try {
           const recipients = await db.getRecipientsWithEmails(campaignId);
           const withEmail = recipients.filter(r => !!r.email);
-          console.log(`[adminMessage] campaignId=${campaignId} recipients total:${recipients.length} with email:${withEmail.length}`);
+          const skipped = recipients.length - withEmail.length;
+          console.log(`[adminMessage] email queue start campaignId=${campaignId} total=${recipients.length} withEmail=${withEmail.length} skipped=${skipped}`);
+
           let successCount = 0;
           let failCount = 0;
-          const BATCH = 50;
-          for (let i = 0; i < withEmail.length; i += BATCH) {
-            const batch = withEmail.slice(i, i + BATCH);
-            await Promise.all(batch.map(async (r) => {
+
+          for (const r of withEmail) {
+            let lastErr: unknown;
+            let sent = false;
+
+            for (let attempt = 1; attempt <= RETRY_DELAYS_MS.length + 1; attempt++) {
               try {
                 await sendAdminBroadcastEmail({
                   toEmail: r.email!,
@@ -1579,15 +1593,32 @@ export const appRouter = router({
                   campaignContent: input.content,
                   campaignId,
                 });
+                console.log(`[adminMessage] email sent success campaignId=${campaignId} email=${r.email} attempt=${attempt}`);
                 successCount++;
-                console.log(`[adminMessage] email sent success: ${r.email}`);
+                sent = true;
+                break;
               } catch (err) {
-                failCount++;
-                console.error(`[adminMessage] email failed: ${r.email}`, err);
+                lastErr = err;
+                if (attempt <= RETRY_DELAYS_MS.length && isRateLimitError(err)) {
+                  const wait = RETRY_DELAYS_MS[attempt - 1];
+                  console.warn(`[adminMessage] email retry campaignId=${campaignId} email=${r.email} attempt=${attempt + 1} reason=429 waitMs=${wait}`);
+                  await new Promise(res => setTimeout(res, wait));
+                } else {
+                  break;
+                }
               }
-            }));
+            }
+
+            if (!sent) {
+              failCount++;
+              console.error(`[adminMessage] email failed campaignId=${campaignId} email=${r.email} attempts=${RETRY_DELAYS_MS.length + 1} error=`, lastErr);
+            }
+
+            // 每封之間固定間隔，避免 rate limit
+            await new Promise(res => setTimeout(res, INTER_EMAIL_DELAY_MS));
           }
-          console.log(`[adminMessage] done — success:${successCount} failed:${failCount}`);
+
+          console.log(`[adminMessage] email queue done campaignId=${campaignId} success=${successCount} failed=${failCount} skipped=${skipped}`);
         } catch (err) {
           console.error(`[adminMessage] getRecipientsWithEmails failed for campaignId=${campaignId}:`, err);
         }
