@@ -18,14 +18,20 @@ import {
   MessageCircle, Package, Check, X, ArrowLeft, Send, Heart, Wrench, Factory as FactoryIcon, Flag, Clock, ChevronLeft, ChevronRight, Images, CheckCircle
 } from "lucide-react";
 
-function ProductImageCarousel({ images }: { images: string[] }) {
+function ProductImageCarousel({ images, onImageClick }: { images: string[]; onImageClick?: (url: string) => void }) {
   const [idx, setIdx] = useState(0);
   if (!images.length) return null;
   const prev = (e: React.MouseEvent) => { e.stopPropagation(); setIdx(i => (i - 1 + images.length) % images.length); };
   const next = (e: React.MouseEvent) => { e.stopPropagation(); setIdx(i => (i + 1) % images.length); };
   return (
     <div className="relative w-28 h-28 shrink-0 rounded-lg overflow-hidden bg-muted">
-      <img src={images[idx]} alt="" className="w-full h-full object-cover" loading="lazy" />
+      <img
+        src={images[idx]}
+        alt=""
+        className={`w-full h-full object-cover ${onImageClick ? "cursor-pointer" : ""}`}
+        loading="lazy"
+        onClick={(e) => { e.stopPropagation(); onImageClick?.(images[idx]); }}
+      />
       {images.length > 1 && (
         <>
           <button onClick={prev} className="absolute left-0 inset-y-0 w-7 flex items-center justify-center bg-black/30 hover:bg-black/50 text-white transition-colors">
@@ -76,6 +82,7 @@ export default function FactoryDetail() {
 
   const [isFav, setIsFav] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [activeCat, setActiveCat] = useState<number | null | "all">("all");
 
   // Review form
@@ -264,7 +271,10 @@ export default function FactoryDetail() {
               {/* Avatar + info */}
               <div className="flex flex-col sm:flex-row gap-4 flex-1 min-w-0">
                 {/* Logo */}
-                <div className="w-32 h-32 mx-auto sm:mx-0 sm:w-36 sm:h-36 shrink-0 rounded-2xl bg-orange-50/30 border flex items-center justify-center p-4 overflow-hidden">
+                <div
+                  className={`w-full max-w-[220px] aspect-square mx-auto sm:mx-0 sm:w-36 sm:h-36 sm:max-w-none sm:aspect-auto shrink-0 rounded-2xl bg-orange-50/30 border flex items-center justify-center p-4 overflow-hidden ${(factory as any).avatarUrl ? "cursor-pointer hover:opacity-90 transition-opacity" : ""}`}
+                  onClick={() => { if ((factory as any).avatarUrl) setPreviewUrl((factory as any).avatarUrl); }}
+                >
                   {(factory as any).avatarUrl ? (
                     <img src={(factory as any).avatarUrl} alt={factory.name} className="w-full h-full object-contain" loading="lazy" />
                   ) : (
@@ -441,6 +451,24 @@ export default function FactoryDetail() {
           </div>
         )}
 
+        {/* Single-image preview modal (logo / product images) */}
+        {previewUrl && (
+          <div
+            className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center"
+            onClick={() => setPreviewUrl(null)}
+          >
+            <button
+              className="absolute top-4 right-4 text-white bg-black/40 rounded-full p-2 hover:bg-black/70"
+              onClick={() => setPreviewUrl(null)}
+            >
+              <X className="w-6 h-6" />
+            </button>
+            <div className="max-w-[95vw] max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
+              <img src={previewUrl} alt="" className="max-w-[95vw] max-h-[90vh] object-contain rounded" />
+            </div>
+          </div>
+        )}
+
         {/* Products */}
         <Card className="mb-6">
           <CardHeader>
@@ -475,7 +503,10 @@ export default function FactoryDetail() {
                     <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
                       <div className="flex gap-3 flex-1">
                         {product.images && (product.images as string[]).length > 0 && (
-                          <ProductImageCarousel images={product.images as string[]} />
+                          <ProductImageCarousel
+                            images={product.images as string[]}
+                            onImageClick={(url) => setPreviewUrl(url)}
+                          />
                         )}
                         <div className="flex-1">
                           <h4 className="font-medium mb-1">{product.name}</h4>
