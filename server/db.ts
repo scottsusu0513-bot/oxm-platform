@@ -2094,9 +2094,9 @@ export async function getAdminMessageCampaigns(page = 1, pageSize = 20) {
       deletedAt: messageCampaigns.deletedAt,
       deleteReason: messageCampaigns.deleteReason,
       recipientCount: sql<number>`COUNT(DISTINCT ${messageRecipients.id})`,
-      replyCount: sql<number>`COUNT(DISTINCT ${messageReplies.userId})`,
-      latestReplyAt: sql<string | null>`MAX(${messageReplies.createdAt})`,
-      // 每個 campaign 有幾位 recipient 的 user reply 尚未被管理員查看
+      // 用 correlated subquery 避免 cross-join（舊版 LEFT JOIN messageReplies 會造成 N×M 暴增）
+      replyCount: sql<number>`(SELECT COUNT(DISTINCT mr.userId) FROM messageReplies mr WHERE mr.campaignId = ${messageCampaigns.id} AND mr.senderRole = 'user')`,
+      latestReplyAt: sql<string | null>`(SELECT MAX(mr.createdAt) FROM messageReplies mr WHERE mr.campaignId = ${messageCampaigns.id} AND mr.senderRole = 'user')`,
       unreadReplyCount: sql<number>`(
         SELECT COUNT(DISTINCT r2.receiverId)
         FROM messageRecipients r2
@@ -2112,17 +2112,9 @@ export async function getAdminMessageCampaigns(page = 1, pageSize = 20) {
     })
     .from(messageCampaigns)
     .leftJoin(messageRecipients, eq(messageRecipients.campaignId, messageCampaigns.id))
-    .leftJoin(
-      messageReplies,
-      and(
-        eq(messageReplies.campaignId, messageCampaigns.id),
-        eq(messageReplies.senderRole, "user"),
-      ),
-    )
     .groupBy(messageCampaigns.id)
     .orderBy(
       sql`unreadReplyCount DESC`,
-      desc(sql`MAX(${messageReplies.createdAt})`),
       desc(messageCampaigns.createdAt),
     )
     .limit(pageSize)
@@ -2559,29 +2551,34 @@ export async function getAdminPendingNotifications(): Promise<{
   const db = await getDb();
   if (!db) return { hasMessageReplies: false, hasSupportPending: false };
 
-  // 找到任何 recipient：有 user reply，且 reply.createdAt > adminViewedAt（或 adminViewedAt IS NULL）
-  const pendingReplies = await db
-    .select({ x: sql<number>`1` })
-    .from(messageRecipients)
-    .where(sql`EXISTS (
-      SELECT 1 FROM messageReplies mr
-      WHERE mr.campaignId = ${messageRecipients.campaignId}
-      AND mr.userId = ${messageRecipients.receiverId}
-      AND mr.senderRole = 'user'
-      AND (${messageRecipients.adminViewedAt} IS NULL OR mr.createdAt > ${messageRecipients.adminViewedAt})
-    )`)
-    .limit(1);
+  try {
+    // 找到任何 recipient：有 user reply，且 reply.createdAt > adminViewedAt（或 adminViewedAt IS NULL）
+    const pendingReplies = await db
+      .select({ x: sql<number>`1` })
+      .from(messageRecipients)
+      .where(sql`EXISTS (
+        SELECT 1 FROM messageReplies mr
+        WHERE mr.campaignId = ${messageRecipients.campaignId}
+        AND mr.userId = ${messageRecipients.receiverId}
+        AND mr.senderRole = 'user'
+        AND (${messageRecipients.adminViewedAt} IS NULL OR mr.createdAt > ${messageRecipients.adminViewedAt})
+      )`)
+      .limit(1);
 
-  const pendingSupport = await db
-    .select({ id: supportTickets.id })
-    .from(supportTickets)
-    .where(eq(supportTickets.status, "pending"))
-    .limit(1);
+    const pendingSupport = await db
+      .select({ id: supportTickets.id })
+      .from(supportTickets)
+      .where(eq(supportTickets.status, "pending"))
+      .limit(1);
 
-  return {
-    hasMessageReplies: pendingReplies.length > 0,
-    hasSupportPending: pendingSupport.length > 0,
-  };
+    return {
+      hasMessageReplies: pendingReplies.length > 0,
+      hasSupportPending: pendingSupport.length > 0,
+    };
+  } catch (err) {
+    console.error("[getAdminPendingNotifications] query error:", err);
+    return { hasMessageReplies: false, hasSupportPending: false };
+  }
 }
 
 export async function markCampaignRecipientViewed(campaignId: number, receiverId: number): Promise<void> {

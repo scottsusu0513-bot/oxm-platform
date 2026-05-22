@@ -188,7 +188,14 @@ function AdminMessagesContent({ setLocation }: { setLocation: (p: string) => voi
             <CardHeader><CardTitle className="text-base">已發送記錄</CardTitle></CardHeader>
             <CardContent>
               {campaignsQuery.isLoading && <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>}
-              {!campaignsQuery.isLoading && campaigns.length === 0 && <p className="text-center text-muted-foreground py-8 text-sm">尚無發送記錄</p>}
+              {campaignsQuery.isError && (
+                <div className="text-center py-8 px-4">
+                  <p className="text-sm text-destructive font-medium">已發送紀錄載入失敗</p>
+                  <p className="text-xs text-muted-foreground mt-1">請稍後再試或重新整理頁面</p>
+                  <Button variant="outline" size="sm" className="mt-3" onClick={() => utils.admin.getMessageCampaigns.invalidate()}>重試</Button>
+                </div>
+              )}
+              {!campaignsQuery.isLoading && !campaignsQuery.isError && campaigns.length === 0 && <p className="text-center text-muted-foreground py-8 text-sm">尚無發送記錄</p>}
               <div className="space-y-3">
                 {campaigns.map((c: any) => (
                   <div
