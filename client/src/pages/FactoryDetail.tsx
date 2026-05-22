@@ -18,7 +18,7 @@ import {
   MessageCircle, Package, Check, X, ArrowLeft, Send, Heart, Wrench, Factory as FactoryIcon, Flag, Clock, ChevronLeft, ChevronRight, Images, CheckCircle
 } from "lucide-react";
 
-function ProductImageCarousel({ images, onImageClick }: { images: string[]; onImageClick?: (url: string) => void }) {
+function ProductImageCarousel({ images, onImageClick }: { images: string[]; onImageClick?: (images: string[], index: number) => void }) {
   const [idx, setIdx] = useState(0);
   if (!images.length) return null;
   const prev = (e: React.MouseEvent) => { e.stopPropagation(); setIdx(i => (i - 1 + images.length) % images.length); };
@@ -30,7 +30,7 @@ function ProductImageCarousel({ images, onImageClick }: { images: string[]; onIm
         alt=""
         className={`w-full h-full object-cover ${onImageClick ? "cursor-pointer" : ""}`}
         loading="lazy"
-        onClick={(e) => { e.stopPropagation(); onImageClick?.(images[idx]); }}
+        onClick={(e) => { e.stopPropagation(); onImageClick?.(images, idx); }}
       />
       {images.length > 1 && (
         <>
@@ -82,7 +82,8 @@ export default function FactoryDetail() {
 
   const [isFav, setIsFav] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewImages, setPreviewImages] = useState<string[]>([]);
+  const [previewIndex, setPreviewIndex] = useState(0);
   const [activeCat, setActiveCat] = useState<number | null | "all">("all");
 
   // Review form
@@ -273,7 +274,7 @@ export default function FactoryDetail() {
                 {/* Logo */}
                 <div
                   className={`w-full max-w-[220px] aspect-square mx-auto sm:mx-0 sm:w-36 sm:h-36 sm:max-w-none sm:aspect-auto shrink-0 rounded-2xl bg-orange-50/30 border flex items-center justify-center p-4 overflow-hidden ${(factory as any).avatarUrl ? "cursor-pointer hover:opacity-90 transition-opacity" : ""}`}
-                  onClick={() => { if ((factory as any).avatarUrl) setPreviewUrl((factory as any).avatarUrl); }}
+                  onClick={() => { if ((factory as any).avatarUrl) { setPreviewImages([(factory as any).avatarUrl]); setPreviewIndex(0); } }}
                 >
                   {(factory as any).avatarUrl ? (
                     <img src={(factory as any).avatarUrl} alt={factory.name} className="w-full h-full object-contain" loading="lazy" />
@@ -451,21 +452,51 @@ export default function FactoryDetail() {
           </div>
         )}
 
-        {/* Single-image preview modal (logo / product images) */}
-        {previewUrl && (
+        {/* Image preview modal (logo = single, product images = navigable) */}
+        {previewImages.length > 0 && (
           <div
             className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center"
-            onClick={() => setPreviewUrl(null)}
+            onClick={() => { setPreviewImages([]); setPreviewIndex(0); }}
           >
+            {/* Close */}
             <button
-              className="absolute top-4 right-4 text-white bg-black/40 rounded-full p-2 hover:bg-black/70"
-              onClick={() => setPreviewUrl(null)}
+              className="absolute top-4 right-4 text-white bg-black/40 rounded-full p-2 hover:bg-black/70 z-10"
+              onClick={() => { setPreviewImages([]); setPreviewIndex(0); }}
             >
               <X className="w-6 h-6" />
             </button>
-            <div className="max-w-[95vw] max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
-              <img src={previewUrl} alt="" className="max-w-[95vw] max-h-[90vh] object-contain rounded" />
+
+            {/* Prev */}
+            {previewImages.length > 1 && (
+              <button
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-white bg-black/40 rounded-full p-2 hover:bg-black/70 z-10"
+                onClick={(e) => { e.stopPropagation(); setPreviewIndex(i => (i - 1 + previewImages.length) % previewImages.length); }}
+              >
+                <ChevronLeft className="w-6 h-6" />
+              </button>
+            )}
+
+            {/* Image */}
+            <div className="max-w-[95vw] max-h-[90vh] flex flex-col items-center gap-2" onClick={(e) => e.stopPropagation()}>
+              <img
+                src={previewImages[previewIndex]}
+                alt=""
+                className="max-w-[95vw] max-h-[85vh] object-contain rounded"
+              />
+              {previewImages.length > 1 && (
+                <p className="text-white/60 text-xs">{previewIndex + 1} / {previewImages.length}</p>
+              )}
             </div>
+
+            {/* Next */}
+            {previewImages.length > 1 && (
+              <button
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-white bg-black/40 rounded-full p-2 hover:bg-black/70 z-10"
+                onClick={(e) => { e.stopPropagation(); setPreviewIndex(i => (i + 1) % previewImages.length); }}
+              >
+                <ChevronRight className="w-6 h-6" />
+              </button>
+            )}
           </div>
         )}
 
@@ -505,7 +536,7 @@ export default function FactoryDetail() {
                         {product.images && (product.images as string[]).length > 0 && (
                           <ProductImageCarousel
                             images={product.images as string[]}
-                            onImageClick={(url) => setPreviewUrl(url)}
+                            onImageClick={(imgs, i) => { setPreviewImages(imgs); setPreviewIndex(i); }}
                           />
                         )}
                         <div className="flex-1">
