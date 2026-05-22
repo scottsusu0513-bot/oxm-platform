@@ -25,6 +25,10 @@ export default function Navbar() {
     enabled: isAuthenticated && user?.role === 'admin',
     refetchInterval: 120000,
   });
+  const adminNotifQuery = trpc.admin.getAdminNotifications.useQuery(undefined, {
+    enabled: isAuthenticated && user?.role === 'admin',
+    refetchInterval: 60000,
+  });
   const [reviewSeenAt, setReviewSeenAt] = useState<number>(() => {
     try { return parseInt(localStorage.getItem('oxm_reviews_seen') ?? '0', 10); } catch { return 0; }
   });
@@ -49,6 +53,7 @@ export default function Navbar() {
   const showDashboardBtn = user?.isFactoryOwner || (!coManagedQuery.isLoading && (coManagedQuery.data?.length ?? 0) > 0);
 
   const pendingCount = pendingCountQuery.data?.count ?? 0;
+  const hasAdminNotification = !!(adminNotifQuery.data?.hasMessageReplies || adminNotifQuery.data?.hasSupportPending);
   // userUnread：買家收到工廠回覆 → 顯示在「我的訊息」
   // factoryUnread：工廠收到買家詢問 → 顯示在「工廠後台」按鈕
   const userUnread = unreadQuery.data?.userCount ?? 0;
@@ -58,7 +63,7 @@ export default function Navbar() {
 
   const showEmailHint = isAuthenticated && user && !user.primaryEmailVerifiedAt;
   // 手機版漢堡按鈕紅點：選單內任一項目有未讀通知時顯示
-  const hasAnyNotification = isAuthenticated && (userUnread > 0 || showFactoryBadge || pendingCount > 0);
+  const hasAnyNotification = isAuthenticated && (userUnread > 0 || showFactoryBadge || pendingCount > 0 || hasAdminNotification);
 
   return (
     <>
@@ -120,14 +125,20 @@ export default function Navbar() {
               {user?.role === "admin" && (
                 <Link href="/admin">
                   <Button variant={location === "/admin" ? "secondary" : "ghost"} size="sm" className="relative">
-  <Settings className="w-4 h-4 mr-1" />
-  管理員
-  {pendingCount > 0 && (
-    <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs font-bold rounded-full min-w-5 h-5 px-1 flex items-center justify-center">
-      {pendingCount}
-    </span>
-  )}
-</Button>
+                    <Settings className="w-4 h-4 mr-1" />
+                    管理員
+                    {pendingCount > 0 && (
+                      <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs font-bold rounded-full min-w-5 h-5 px-1 flex items-center justify-center">
+                        {pendingCount}
+                      </span>
+                    )}
+                    {hasAdminNotification && pendingCount === 0 && (
+                      <span className="pointer-events-none absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-orange-500 ring-2 ring-background" />
+                    )}
+                    {hasAdminNotification && pendingCount > 0 && (
+                      <span className="pointer-events-none absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full bg-orange-500 ring-1 ring-background" />
+                    )}
+                  </Button>
                 </Link>
               )}
             </>
@@ -240,18 +251,21 @@ export default function Navbar() {
                 </Link>
               ) : null}
               {user?.role === "admin" && (
-  <Link href="/admin" onClick={() => setMobileOpen(false)}>
-    <Button variant="ghost" className="w-full justify-start relative">
-      <Settings className="w-4 h-4 mr-2" />
-      管理員
-      {pendingCount > 0 && (
-        <span className="ml-auto bg-red-500 text-white text-xs font-bold rounded-full min-w-5 h-5 px-1 flex items-center justify-center">
-          {pendingCount}
-        </span>
-      )}
-    </Button>
-  </Link>
-)}
+                <Link href="/admin" onClick={() => setMobileOpen(false)}>
+                  <Button variant="ghost" className="w-full justify-start relative">
+                    <Settings className="w-4 h-4 mr-2" />
+                    管理員
+                    {pendingCount > 0 && (
+                      <span className="ml-auto bg-red-500 text-white text-xs font-bold rounded-full min-w-5 h-5 px-1 flex items-center justify-center">
+                        {pendingCount}
+                      </span>
+                    )}
+                    {hasAdminNotification && (
+                      <span className={`${pendingCount > 0 ? "ml-1" : "ml-auto"} h-2.5 w-2.5 rounded-full bg-orange-500 shrink-0`} />
+                    )}
+                  </Button>
+                </Link>
+              )}
               <Link href="/member" onClick={() => setMobileOpen(false)}>
                 <Button variant="ghost" className="w-full justify-start"><UserCircle className="w-4 h-4 mr-2" />會員中心</Button>
               </Link>

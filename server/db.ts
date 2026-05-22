@@ -2093,12 +2093,38 @@ export async function getAdminMessageCampaigns(page = 1, pageSize = 20) {
       createdAt: messageCampaigns.createdAt,
       deletedAt: messageCampaigns.deletedAt,
       deleteReason: messageCampaigns.deleteReason,
-      recipientCount: sql<number>`COUNT(${messageRecipients.id})`,
+      recipientCount: sql<number>`COUNT(DISTINCT ${messageRecipients.id})`,
+      replyCount: sql<number>`COUNT(DISTINCT ${messageReplies.userId})`,
+      latestReplyAt: sql<string | null>`MAX(${messageReplies.createdAt})`,
+      // 每個 campaign 有幾位 recipient 的 user reply 尚未被管理員查看
+      unreadReplyCount: sql<number>`(
+        SELECT COUNT(DISTINCT r2.receiverId)
+        FROM messageRecipients r2
+        WHERE r2.campaignId = ${messageCampaigns.id}
+        AND EXISTS (
+          SELECT 1 FROM messageReplies rep
+          WHERE rep.campaignId = r2.campaignId
+          AND rep.userId = r2.receiverId
+          AND rep.senderRole = 'user'
+          AND (r2.adminViewedAt IS NULL OR rep.createdAt > r2.adminViewedAt)
+        )
+      )`,
     })
     .from(messageCampaigns)
     .leftJoin(messageRecipients, eq(messageRecipients.campaignId, messageCampaigns.id))
+    .leftJoin(
+      messageReplies,
+      and(
+        eq(messageReplies.campaignId, messageCampaigns.id),
+        eq(messageReplies.senderRole, "user"),
+      ),
+    )
     .groupBy(messageCampaigns.id)
-    .orderBy(desc(messageCampaigns.createdAt))
+    .orderBy(
+      sql`unreadReplyCount DESC`,
+      desc(sql`MAX(${messageReplies.createdAt})`),
+      desc(messageCampaigns.createdAt),
+    )
     .limit(pageSize)
     .offset(offset);
   const [countRow] = await db.select({ count: sql<number>`COUNT(*)` }).from(messageCampaigns);
@@ -2148,7 +2174,11 @@ export async function getCampaignAllRecipients(campaignId: number) {
       userId: messageRecipients.receiverId,
       userName: users.name,
       userEmail: users.email,
-      latestReplyAt: sql<string | null>`MAX(${messageReplies.createdAt})`,
+      adminViewedAt: messageRecipients.adminViewedAt,
+      latestUserReplyAt: sql<string | null>`MAX(CASE WHEN ${messageReplies.senderRole} = 'user' THEN ${messageReplies.createdAt} END)`,
+      latestAdminReplyAt: sql<string | null>`MAX(CASE WHEN ${messageReplies.senderRole} = 'admin' THEN ${messageReplies.createdAt} END)`,
+      // 1 = 有 user reply 且尚未被管理員查看（或 adminViewedAt 之後又有新回覆）
+      hasUnreadReply: sql<number>`CASE WHEN MAX(CASE WHEN ${messageReplies.senderRole} = 'user' THEN ${messageReplies.createdAt} END) IS NOT NULL AND (${messageRecipients.adminViewedAt} IS NULL OR MAX(CASE WHEN ${messageReplies.senderRole} = 'user' THEN ${messageReplies.createdAt} END) > ${messageRecipients.adminViewedAt}) THEN 1 ELSE 0 END`,
     })
     .from(messageRecipients)
     .innerJoin(users, eq(messageRecipients.receiverId, users.id))
@@ -2160,8 +2190,12 @@ export async function getCampaignAllRecipients(campaignId: number) {
       ),
     )
     .where(eq(messageRecipients.campaignId, campaignId))
-    .groupBy(messageRecipients.receiverId, users.name, users.email)
-    .orderBy(users.name);
+    .groupBy(messageRecipients.receiverId, users.name, users.email, messageRecipients.adminViewedAt)
+    .orderBy(
+      sql`hasUnreadReply DESC`,
+      desc(sql`MAX(${messageReplies.createdAt})`),
+      users.name,
+    );
 }
 
 export async function getCampaignReplyingUsers(campaignId: number) {
@@ -2514,6 +2548,54 @@ export async function purgeExpiredOauthStates(): Promise<void> {
   await db
     .delete(oauthStates)
     .where(sql`${oauthStates.expiresAt} < ${cutoff} OR (${oauthStates.usedAt} IS NOT NULL AND ${oauthStates.createdAt} < ${cutoff})`);
+}
+
+// ===== 後台通知 =====
+
+export async function getAdminPendingNotifications(): Promise<{
+  hasMessageReplies: boolean;
+  hasSupportPending: boolean;
+}> {
+  const db = await getDb();
+  if (!db) return { hasMessageReplies: false, hasSupportPending: false };
+
+  // 找到任何 recipient：有 user reply，且 reply.createdAt > adminViewedAt（或 adminViewedAt IS NULL）
+  const pendingReplies = await db
+    .select({ x: sql<number>`1` })
+    .from(messageRecipients)
+    .where(sql`EXISTS (
+      SELECT 1 FROM messageReplies mr
+      WHERE mr.campaignId = ${messageRecipients.campaignId}
+      AND mr.userId = ${messageRecipients.receiverId}
+      AND mr.senderRole = 'user'
+      AND (${messageRecipients.adminViewedAt} IS NULL OR mr.createdAt > ${messageRecipients.adminViewedAt})
+    )`)
+    .limit(1);
+
+  const pendingSupport = await db
+    .select({ id: supportTickets.id })
+    .from(supportTickets)
+    .where(eq(supportTickets.status, "pending"))
+    .limit(1);
+
+  return {
+    hasMessageReplies: pendingReplies.length > 0,
+    hasSupportPending: pendingSupport.length > 0,
+  };
+}
+
+export async function markCampaignRecipientViewed(campaignId: number, receiverId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .update(messageRecipients)
+    .set({ adminViewedAt: new Date() })
+    .where(
+      and(
+        eq(messageRecipients.campaignId, campaignId),
+        eq(messageRecipients.receiverId, receiverId),
+      ),
+    );
 }
 
 // ===== 合作確認單 =====

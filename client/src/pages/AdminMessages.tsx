@@ -191,12 +191,23 @@ function AdminMessagesContent({ setLocation }: { setLocation: (p: string) => voi
               {!campaignsQuery.isLoading && campaigns.length === 0 && <p className="text-center text-muted-foreground py-8 text-sm">尚無發送記錄</p>}
               <div className="space-y-3">
                 {campaigns.map((c: any) => (
-                  <div key={c.id} className={`border rounded-lg p-3 ${c.deletedAt ? "opacity-60 bg-muted/20" : "hover:bg-muted/30"} transition-colors`}>
+                  <div
+                    key={c.id}
+                    className={`border rounded-lg p-3 cursor-pointer transition-colors ${
+                      c.deletedAt
+                        ? "opacity-60 bg-muted/20 hover:bg-muted/30"
+                        : c.replyCount > 0
+                          ? "bg-orange-50 border-orange-200 hover:bg-orange-100/70"
+                          : "hover:bg-muted/30"
+                    }`}
+                    onClick={() => setLocation(`/admin/messages/${c.id}`)}
+                  >
                     <div className="flex items-start justify-between gap-2">
-                      <button className="flex-1 text-left" onClick={() => setLocation(`/admin/messages/${c.id}`)}>
-                        <p className="font-medium text-sm line-clamp-1">{c.title}</p>
-                      </button>
+                      <p className="font-medium text-sm line-clamp-1 flex-1 min-w-0">{c.title}</p>
                       <div className="flex items-center gap-1.5 shrink-0">
+                        {c.replyCount > 0 && !c.deletedAt && (
+                          <Badge className="text-xs bg-orange-100 text-orange-700 border-orange-300 hover:bg-orange-100">新回覆</Badge>
+                        )}
                         {c.deletedAt ? (
                           <Badge variant="destructive" className="text-xs">已撤回</Badge>
                         ) : (
@@ -213,12 +224,18 @@ function AdminMessagesContent({ setLocation }: { setLocation: (p: string) => voi
                             <Trash2 className="h-3.5 w-3.5" />
                           </Button>
                         )}
-                        <ChevronRight className="h-3.5 w-3.5 text-muted-foreground cursor-pointer" onClick={() => setLocation(`/admin/messages/${c.id}`)} />
+                        <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
                       </div>
                     </div>
-                    <div className="flex items-center gap-3 mt-1.5 text-xs text-muted-foreground">
+                    <div className="flex items-center gap-3 mt-1.5 text-xs text-muted-foreground flex-wrap">
                       <span className="flex items-center gap-1"><Users className="h-3 w-3" />{c.recipientCount} 人</span>
                       <span>{new Date(c.createdAt).toLocaleDateString("zh-TW")}</span>
+                      {c.latestReplyAt && !c.deletedAt && (
+                        <span className="text-orange-600 flex items-center gap-1">
+                          <MessageSquare className="h-3 w-3" />
+                          最後回覆 {new Date(c.latestReplyAt).toLocaleDateString("zh-TW")}
+                        </span>
+                      )}
                       {c.deletedAt && (
                         <span className="text-destructive">撤回於 {new Date(c.deletedAt).toLocaleDateString("zh-TW")}{c.deleteReason ? `：${c.deleteReason}` : ""}</span>
                       )}
@@ -279,11 +296,26 @@ function AdminMessagesContent({ setLocation }: { setLocation: (p: string) => voi
 function CampaignThreadView({ campaignId, setLocation }: { campaignId: number; setLocation: (p: string) => void }) {
   const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
   const [selectedUserName, setSelectedUserName] = useState("");
+  const utils = trpc.useUtils();
 
   const campaignQuery = trpc.admin.getMessageCampaignDetail.useQuery({ campaignId });
   const usersQuery = trpc.admin.getCampaignAllRecipients.useQuery({ campaignId }, { refetchInterval: 15000 });
   const campaign = campaignQuery.data;
   const allRecipients = usersQuery.data ?? [];
+
+  const markViewedMut = trpc.admin.markCampaignRecipientViewed.useMutation({
+    onSuccess: () => {
+      utils.admin.getCampaignAllRecipients.invalidate({ campaignId });
+      utils.admin.getMessageCampaigns.invalidate();
+      utils.admin.getAdminNotifications.invalidate();
+    },
+  });
+
+  const handleSelectRecipient = (userId: number, userName: string) => {
+    setSelectedUserId(userId);
+    setSelectedUserName(userName);
+    markViewedMut.mutate({ campaignId, recipientUserId: userId });
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-orange-50 to-amber-50 p-4 md:p-8">
@@ -346,14 +378,36 @@ function CampaignThreadView({ campaignId, setLocation }: { campaignId: number; s
                 <p className="text-center text-muted-foreground text-sm py-8 px-4">尚無收件人資料。</p>
               )}
               <div className="divide-y">
-                {allRecipients.map((u: any) => (
-                  <button key={u.userId}
-                    className={`w-full text-left px-4 py-3 hover:bg-muted/30 transition-colors ${selectedUserId === u.userId ? "bg-orange-50 border-l-2 border-orange-400" : ""}`}
-                    onClick={() => { setSelectedUserId(u.userId); setSelectedUserName(u.userName ?? u.userEmail ?? "用戶"); }}>
-                    <p className="font-medium text-sm truncate">{u.userName ?? "未命名"}</p>
-                    <p className="text-xs text-muted-foreground truncate">{u.userEmail}</p>
-                  </button>
-                ))}
+                {allRecipients.map((u: any) => {
+                  const hasUnreadReply = !!u.hasUnreadReply;
+                  const hasReplied = !!u.latestUserReplyAt;
+                  return (
+                    <button key={u.userId}
+                      className={`w-full text-left px-4 py-3 transition-colors ${
+                        selectedUserId === u.userId
+                          ? "bg-orange-50 border-l-2 border-orange-400"
+                          : hasUnreadReply
+                            ? "bg-orange-50/70 border-l-2 border-orange-300 hover:bg-orange-100/50"
+                            : hasReplied
+                              ? "bg-amber-50/40 hover:bg-muted/30"
+                              : "hover:bg-muted/30"
+                      }`}
+                      onClick={() => handleSelectRecipient(u.userId, u.userName ?? u.userEmail ?? "用戶")}>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="font-medium text-sm truncate">{u.userName ?? "未命名"}</p>
+                          <p className="text-xs text-muted-foreground truncate">{u.userEmail}</p>
+                        </div>
+                        {hasUnreadReply && (
+                          <span className="text-xs bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded-full shrink-0">新回覆</span>
+                        )}
+                        {!hasUnreadReply && hasReplied && (
+                          <span className="text-xs text-muted-foreground shrink-0">已回覆</span>
+                        )}
+                      </div>
+                    </button>
+                  );
+                })}
               </div>
             </CardContent>
           </Card>

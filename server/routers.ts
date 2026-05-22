@@ -1340,6 +1340,10 @@ export const appRouter = router({
   return { count: Number(result?.count ?? 0) };
 }),
 
+    getAdminNotifications: adminProcedure.query(async () => {
+      return db.getAdminPendingNotifications();
+    }),
+
     getFactories: adminProcedure.input(z.object({
       page: z.number().int().min(1).default(1),
       pageSize: z.number().int().min(1).max(100).default(20),
@@ -1678,6 +1682,14 @@ export const appRouter = router({
         content: input.content,
         senderRole: "admin",
       });
+      return { success: true };
+    }),
+
+    markCampaignRecipientViewed: adminProcedure.input(z.object({
+      campaignId: z.number().int(),
+      recipientUserId: z.number().int(),
+    })).mutation(async ({ input }) => {
+      await db.markCampaignRecipientViewed(input.campaignId, input.recipientUserId);
       return { success: true };
     }),
 

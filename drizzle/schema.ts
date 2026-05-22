@@ -364,6 +364,7 @@ export const messageRecipients = mysqlTable("messageRecipients", {
   receiverId: int("receiverId").notNull().references(() => users.id, { onDelete: "cascade" }),
   isRead: boolean("isRead").notNull().default(false),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
+  adminViewedAt: timestamp("adminViewedAt"),
 }, (table) => ({
   campaignReceiverUq: uniqueIndex("mc_campaign_receiver_uq").on(table.campaignId, table.receiverId),
 }));
