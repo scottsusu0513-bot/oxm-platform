@@ -61,6 +61,8 @@ function AdminDashboardContent() {
     { enabled: isAdmin && activeTab === 'ads' }
   );
 
+  const adminNotifQuery = trpc.admin.getAdminNotifications.useQuery(undefined, { enabled: isAdmin });
+
   const approveMutation = trpc.admin.approveFactory.useMutation();
   const rejectMutation = trpc.admin.rejectFactory.useMutation();
   const setCertifiedMutation = trpc.admin.setCertified.useMutation();
@@ -68,6 +70,9 @@ function AdminDashboardContent() {
 
   const stats = statsQuery.data;
   const viewStats = viewStatsQuery.data;
+  const hasMessageReplies = !!adminNotifQuery.data?.hasMessageReplies;
+  const hasSupportPending = !!adminNotifQuery.data?.hasSupportPending;
+  const hasPendingFactories = (pendingFactoriesQuery.data?.items.length ?? 0) > 0;
 
   const handleApprove = async (factoryId: number) => {
     try {
@@ -178,7 +183,10 @@ function AdminDashboardContent() {
             </CardContent>
           </Card>
 
-          <Card className="cursor-pointer hover:shadow-lg transition-shadow" onClick={() => setLocation("/admin/support")}>
+          <Card className="relative cursor-pointer hover:shadow-lg transition-shadow" onClick={() => setLocation("/admin/support")}>
+            {hasSupportPending && (
+              <span className="absolute top-3 right-3 h-2.5 w-2.5 rounded-full bg-orange-500 border border-white pointer-events-none" />
+            )}
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-gray-600 flex items-center gap-2">
                 <HeadphonesIcon className="h-4 w-4" />客服中心
@@ -200,7 +208,10 @@ function AdminDashboardContent() {
             </CardContent>
           </Card>
 
-          <Card className="cursor-pointer hover:shadow-lg transition-shadow" onClick={() => setLocation("/admin/messages")}>
+          <Card className="relative cursor-pointer hover:shadow-lg transition-shadow" onClick={() => setLocation("/admin/messages")}>
+            {hasMessageReplies && (
+              <span className="absolute top-3 right-3 h-2.5 w-2.5 rounded-full bg-orange-500 border border-white pointer-events-none" />
+            )}
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-gray-600 flex items-center gap-2">
                 <Send className="h-4 w-4" />站內信
@@ -267,7 +278,12 @@ function AdminDashboardContent() {
         {/* Tab 懶載入 */}
         <Tabs value={activeTab} onValueChange={setActiveTab}>
           <TabsList className="mb-6">
-            <TabsTrigger value="overview">待審核</TabsTrigger>
+            <TabsTrigger value="overview" className="gap-1.5">
+              待審核
+              {hasPendingFactories && (
+                <span className="inline-block h-2 w-2 rounded-full bg-orange-500 shrink-0" />
+              )}
+            </TabsTrigger>
             <TabsTrigger value="approved">已批准</TabsTrigger>
             <TabsTrigger value="users">使用者</TabsTrigger>
             <TabsTrigger value="ads">廣告</TabsTrigger>
