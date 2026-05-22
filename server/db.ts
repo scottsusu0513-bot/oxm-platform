@@ -2093,30 +2093,12 @@ export async function getAdminMessageCampaigns(page = 1, pageSize = 20) {
       createdAt: messageCampaigns.createdAt,
       deletedAt: messageCampaigns.deletedAt,
       deleteReason: messageCampaigns.deleteReason,
-      recipientCount: sql<number>`COUNT(DISTINCT ${messageRecipients.id})`,
-      // 用 correlated subquery 避免 cross-join（舊版 LEFT JOIN messageReplies 會造成 N×M 暴增）
-      replyCount: sql<number>`(SELECT COUNT(DISTINCT mr.userId) FROM messageReplies mr WHERE mr.campaignId = ${messageCampaigns.id} AND mr.senderRole = 'user')`,
-      latestReplyAt: sql<string | null>`(SELECT MAX(mr.createdAt) FROM messageReplies mr WHERE mr.campaignId = ${messageCampaigns.id} AND mr.senderRole = 'user')`,
-      unreadReplyCount: sql<number>`(
-        SELECT COUNT(DISTINCT r2.receiverId)
-        FROM messageRecipients r2
-        WHERE r2.campaignId = ${messageCampaigns.id}
-        AND EXISTS (
-          SELECT 1 FROM messageReplies rep
-          WHERE rep.campaignId = r2.campaignId
-          AND rep.userId = r2.receiverId
-          AND rep.senderRole = 'user'
-          AND (r2.adminViewedAt IS NULL OR rep.createdAt > r2.adminViewedAt)
-        )
-      )`,
+      recipientCount: sql<number>`COUNT(${messageRecipients.id})`,
     })
     .from(messageCampaigns)
     .leftJoin(messageRecipients, eq(messageRecipients.campaignId, messageCampaigns.id))
     .groupBy(messageCampaigns.id)
-    .orderBy(
-      sql`unreadReplyCount DESC`,
-      desc(messageCampaigns.createdAt),
-    )
+    .orderBy(desc(messageCampaigns.createdAt))
     .limit(pageSize)
     .offset(offset);
   const [countRow] = await db.select({ count: sql<number>`COUNT(*)` }).from(messageCampaigns);
