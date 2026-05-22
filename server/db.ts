@@ -2148,6 +2148,7 @@ export async function getCampaignAllRecipients(campaignId: number) {
       userId: messageRecipients.receiverId,
       userName: users.name,
       userEmail: users.email,
+      adminViewedAt: messageRecipients.adminViewedAt,
       latestReplyAt: sql<string | null>`MAX(${messageReplies.createdAt})`,
     })
     .from(messageRecipients)
@@ -2160,7 +2161,7 @@ export async function getCampaignAllRecipients(campaignId: number) {
       ),
     )
     .where(eq(messageRecipients.campaignId, campaignId))
-    .groupBy(messageRecipients.receiverId, users.name, users.email)
+    .groupBy(messageRecipients.receiverId, users.name, users.email, messageRecipients.adminViewedAt)
     .orderBy(desc(sql`MAX(${messageReplies.createdAt})`), users.name);
 }
 
