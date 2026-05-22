@@ -2148,11 +2148,7 @@ export async function getCampaignAllRecipients(campaignId: number) {
       userId: messageRecipients.receiverId,
       userName: users.name,
       userEmail: users.email,
-      adminViewedAt: messageRecipients.adminViewedAt,
-      latestUserReplyAt: sql<string | null>`MAX(CASE WHEN ${messageReplies.senderRole} = 'user' THEN ${messageReplies.createdAt} END)`,
-      latestAdminReplyAt: sql<string | null>`MAX(CASE WHEN ${messageReplies.senderRole} = 'admin' THEN ${messageReplies.createdAt} END)`,
-      // 1 = 有 user reply 且尚未被管理員查看（或 adminViewedAt 之後又有新回覆）
-      hasUnreadReply: sql<number>`CASE WHEN MAX(CASE WHEN ${messageReplies.senderRole} = 'user' THEN ${messageReplies.createdAt} END) IS NOT NULL AND (${messageRecipients.adminViewedAt} IS NULL OR MAX(CASE WHEN ${messageReplies.senderRole} = 'user' THEN ${messageReplies.createdAt} END) > ${messageRecipients.adminViewedAt}) THEN 1 ELSE 0 END`,
+      latestReplyAt: sql<string | null>`MAX(${messageReplies.createdAt})`,
     })
     .from(messageRecipients)
     .innerJoin(users, eq(messageRecipients.receiverId, users.id))
@@ -2164,12 +2160,8 @@ export async function getCampaignAllRecipients(campaignId: number) {
       ),
     )
     .where(eq(messageRecipients.campaignId, campaignId))
-    .groupBy(messageRecipients.receiverId, users.name, users.email, messageRecipients.adminViewedAt)
-    .orderBy(
-      sql`hasUnreadReply DESC`,
-      desc(sql`MAX(${messageReplies.createdAt})`),
-      users.name,
-    );
+    .groupBy(messageRecipients.receiverId, users.name, users.email)
+    .orderBy(desc(sql`MAX(${messageReplies.createdAt})`), users.name);
 }
 
 export async function getCampaignReplyingUsers(campaignId: number) {

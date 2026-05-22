@@ -381,23 +381,27 @@ function CampaignThreadView({ campaignId, setLocation }: { campaignId: number; s
               {usersQuery.isLoading && (
                 <div className="flex justify-center py-8"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
               )}
-              {!usersQuery.isLoading && allRecipients.length === 0 && (
+              {usersQuery.isError && (
+                <div className="text-center py-8 px-4">
+                  <p className="text-sm text-destructive font-medium">收件人列表載入失敗</p>
+                  <p className="text-xs text-muted-foreground mt-1">請稍後再試</p>
+                  <Button variant="outline" size="sm" className="mt-3" onClick={() => utils.admin.getCampaignAllRecipients.invalidate({ campaignId })}>重試</Button>
+                </div>
+              )}
+              {!usersQuery.isLoading && !usersQuery.isError && allRecipients.length === 0 && (
                 <p className="text-center text-muted-foreground text-sm py-8 px-4">尚無收件人資料。</p>
               )}
               <div className="divide-y">
                 {allRecipients.map((u: any) => {
-                  const hasUnreadReply = !!u.hasUnreadReply;
-                  const hasReplied = !!u.latestUserReplyAt;
+                  const hasReplied = !!u.latestReplyAt;
                   return (
                     <button key={u.userId}
                       className={`w-full text-left px-4 py-3 transition-colors ${
                         selectedUserId === u.userId
                           ? "bg-orange-50 border-l-2 border-orange-400"
-                          : hasUnreadReply
-                            ? "bg-orange-50/70 border-l-2 border-orange-300 hover:bg-orange-100/50"
-                            : hasReplied
-                              ? "bg-amber-50/40 hover:bg-muted/30"
-                              : "hover:bg-muted/30"
+                          : hasReplied
+                            ? "bg-amber-50/40 hover:bg-muted/30"
+                            : "hover:bg-muted/30"
                       }`}
                       onClick={() => handleSelectRecipient(u.userId, u.userName ?? u.userEmail ?? "用戶")}>
                       <div className="flex items-center justify-between gap-2">
@@ -405,10 +409,7 @@ function CampaignThreadView({ campaignId, setLocation }: { campaignId: number; s
                           <p className="font-medium text-sm truncate">{u.userName ?? "未命名"}</p>
                           <p className="text-xs text-muted-foreground truncate">{u.userEmail}</p>
                         </div>
-                        {hasUnreadReply && (
-                          <span className="text-xs bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded-full shrink-0">新回覆</span>
-                        )}
-                        {!hasUnreadReply && hasReplied && (
+                        {hasReplied && (
                           <span className="text-xs text-muted-foreground shrink-0">已回覆</span>
                         )}
                       </div>
