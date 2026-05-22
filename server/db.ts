@@ -2556,6 +2556,32 @@ export async function getAdminPendingNotifications(): Promise<{
   }
 }
 
+export async function getCampaignsWithUnreadReplies(): Promise<{ campaignId: number; latestUnreadAt: string | null }[]> {
+  const db = await getDb();
+  if (!db) return [];
+  try {
+    return db
+      .select({
+        campaignId: messageRecipients.campaignId,
+        latestUnreadAt: sql<string | null>`MAX(${messageReplies.createdAt})`,
+      })
+      .from(messageRecipients)
+      .innerJoin(
+        messageReplies,
+        and(
+          eq(messageReplies.campaignId, messageRecipients.campaignId),
+          eq(messageReplies.userId, messageRecipients.receiverId),
+          eq(messageReplies.senderRole, "user"),
+        ),
+      )
+      .where(sql`(${messageRecipients.adminViewedAt} IS NULL OR ${messageReplies.createdAt} > ${messageRecipients.adminViewedAt})`)
+      .groupBy(messageRecipients.campaignId);
+  } catch (err) {
+    console.error("[getCampaignsWithUnreadReplies] query error:", err);
+    return [];
+  }
+}
+
 export async function markCampaignRecipientViewed(campaignId: number, receiverId: number): Promise<void> {
   const db = await getDb();
   if (!db) return;

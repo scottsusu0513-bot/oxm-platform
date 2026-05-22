@@ -1693,6 +1693,10 @@ export const appRouter = router({
       return { success: true };
     }),
 
+    getAdminMessageCampaignUnreadStats: adminProcedure.query(async () => {
+      return db.getCampaignsWithUnreadReplies();
+    }),
+
     retractAdminMessage: adminProcedure.input(z.object({
       campaignId: z.number().int(),
       reason: z.string().max(500).default(''),

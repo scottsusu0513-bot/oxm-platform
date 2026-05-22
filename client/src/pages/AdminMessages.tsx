@@ -101,8 +101,19 @@ function AdminMessagesContent({ setLocation }: { setLocation: (p: string) => voi
     createMut.mutate({ title: title.trim(), content: content.trim(), targetType, receiverId: receiverId ?? undefined });
   };
 
+  const unreadStatsQuery = trpc.admin.getAdminMessageCampaignUnreadStats.useQuery(undefined, {
+    refetchInterval: 30000,
+  });
+
   const campaigns = campaignsQuery.data?.items ?? [];
   const total = campaignsQuery.data?.total ?? 0;
+  const unreadCampaignIds = new Set((unreadStatsQuery.data ?? []).map((x: any) => x.campaignId));
+  const sortedCampaigns = [...campaigns].sort((a: any, b: any) => {
+    const aUnread = unreadCampaignIds.has(a.id);
+    const bUnread = unreadCampaignIds.has(b.id);
+    if (aUnread !== bUnread) return aUnread ? -1 : 1;
+    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+  });
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-orange-50 to-amber-50 p-4 md:p-8">
@@ -197,13 +208,15 @@ function AdminMessagesContent({ setLocation }: { setLocation: (p: string) => voi
               )}
               {!campaignsQuery.isLoading && !campaignsQuery.isError && campaigns.length === 0 && <p className="text-center text-muted-foreground py-8 text-sm">尚無發送記錄</p>}
               <div className="space-y-3">
-                {campaigns.map((c: any) => (
+                {sortedCampaigns.map((c: any) => {
+                  const hasUnread = !c.deletedAt && unreadCampaignIds.has(c.id);
+                  return (
                   <div
                     key={c.id}
                     className={`border rounded-lg p-3 cursor-pointer transition-colors ${
                       c.deletedAt
                         ? "opacity-60 bg-muted/20 hover:bg-muted/30"
-                        : c.replyCount > 0
+                        : hasUnread
                           ? "bg-orange-50 border-orange-200 hover:bg-orange-100/70"
                           : "hover:bg-muted/30"
                     }`}
@@ -212,8 +225,8 @@ function AdminMessagesContent({ setLocation }: { setLocation: (p: string) => voi
                     <div className="flex items-start justify-between gap-2">
                       <p className="font-medium text-sm line-clamp-1 flex-1 min-w-0">{c.title}</p>
                       <div className="flex items-center gap-1.5 shrink-0">
-                        {c.replyCount > 0 && !c.deletedAt && (
-                          <Badge className="text-xs bg-orange-100 text-orange-700 border-orange-300 hover:bg-orange-100">新回覆</Badge>
+                        {hasUnread && (
+                          <span className="h-2 w-2 rounded-full bg-orange-500 shrink-0" />
                         )}
                         {c.deletedAt ? (
                           <Badge variant="destructive" className="text-xs">已撤回</Badge>
@@ -248,7 +261,8 @@ function AdminMessagesContent({ setLocation }: { setLocation: (p: string) => voi
                       )}
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
               {total > 20 && (
                 <div className="flex justify-center gap-2 mt-4">
@@ -315,6 +329,7 @@ function CampaignThreadView({ campaignId, setLocation }: { campaignId: number; s
       utils.admin.getCampaignAllRecipients.invalidate({ campaignId });
       utils.admin.getMessageCampaigns.invalidate();
       utils.admin.getAdminNotifications.invalidate();
+      utils.admin.getAdminMessageCampaignUnreadStats.invalidate();
     },
   });
 
