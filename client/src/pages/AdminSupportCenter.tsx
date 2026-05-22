@@ -308,18 +308,14 @@ export default function AdminSupportCenter() {
                   <HeadphonesIcon className="w-4 h-4" />
                   客服投訴
                   {(ticketsCountQuery.data?.total ?? 0) > 0 && (
-                    <span className="ml-1 bg-red-500 text-white text-xs rounded-full min-w-5 h-5 px-1 flex items-center justify-center">
-                      {ticketsCountQuery.data?.total}
-                    </span>
+                    <span className="ml-1 h-2 w-2 rounded-full bg-orange-500 shrink-0" />
                   )}
                 </TabsTrigger>
                 <TabsTrigger value="reports" className="gap-2">
                   <Flag className="w-4 h-4" />
                   工廠檢舉
                   {(reportsCountQuery.data?.total ?? 0) > 0 && (
-                    <span className="ml-1 bg-red-500 text-white text-xs rounded-full min-w-5 h-5 px-1 flex items-center justify-center">
-                      {reportsCountQuery.data?.total}
-                    </span>
+                    <span className="ml-1 h-2 w-2 rounded-full bg-orange-500 shrink-0" />
                   )}
                 </TabsTrigger>
               </TabsList>

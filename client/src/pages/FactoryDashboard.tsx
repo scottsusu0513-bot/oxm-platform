@@ -237,18 +237,14 @@ export default function FactoryDashboard() {
               <MessageCircle className="w-3.5 h-3.5 shrink-0" />
               客戶詢問
               {convs && convs.some(c => c.unreadCount > 0) && (
-                <span className="ml-0.5 bg-red-500 text-white text-[10px] rounded-full w-4 h-4 flex items-center justify-center shrink-0">
-                  {convs.reduce((sum, c) => sum + c.unreadCount, 0)}
-                </span>
+                <span className="ml-0.5 h-2 w-2 rounded-full bg-orange-500 shrink-0" />
               )}
             </TabsTrigger>
             <TabsTrigger value="reviews" onClick={handleReviewTabClick} className="gap-1.5 text-xs sm:text-sm">
               <Star className="w-3.5 h-3.5 shrink-0" />
               客戶評價
               {showReviewBadge && (
-                <span className="ml-0.5 bg-red-500 text-white text-[10px] rounded-full min-w-4 h-4 px-1 flex items-center justify-center shrink-0">
-                  {unseenReviewCount}
-                </span>
+                <span className="ml-0.5 h-2 w-2 rounded-full bg-orange-500 shrink-0" />
               )}
             </TabsTrigger>
             <TabsTrigger value="ads" className="gap-1.5 text-xs sm:text-sm">
@@ -1214,7 +1210,7 @@ function ConversationList({ conversations }: { conversations: any[] }) {
                   <div className="flex items-center gap-2 shrink-0">
                     <span className="text-xs text-muted-foreground">{new Date(conv.lastMessageAt).toLocaleDateString("zh-TW")}</span>
                     {conv.unreadCount > 0 && (
-                      <span className="bg-red-500 text-white text-xs font-bold rounded-full w-5 h-5 flex items-center justify-center">{conv.unreadCount}</span>
+                      <span className="h-2.5 w-2.5 rounded-full bg-orange-500 shrink-0" />
                     )}
                   </div>
                 </div>

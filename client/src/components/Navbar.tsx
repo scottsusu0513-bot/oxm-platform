@@ -89,9 +89,7 @@ export default function Navbar() {
                   <MessageCircle className="w-4 h-4 mr-1" />
                   我的訊息
                   {userUnread > 0 && (
-                    <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs font-bold rounded-full min-w-5 h-5 px-1 flex items-center justify-center">
-                      {userUnread}
-                    </span>
+                    <span className="pointer-events-none absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-orange-500 ring-2 ring-background" />
                   )}
                 </Button>
               </Link>
@@ -107,9 +105,7 @@ export default function Navbar() {
                     <LayoutDashboard className="w-4 h-4 mr-1" />
                     工廠/工作室
                     {showFactoryBadge && (
-                      <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs font-bold rounded-full min-w-5 h-5 px-1 flex items-center justify-center">
-                        {factoryBadgeCount}
-                      </span>
+                      <span className="pointer-events-none absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-orange-500 ring-2 ring-background" />
                     )}
                   </Button>
                 </Link>
@@ -127,16 +123,8 @@ export default function Navbar() {
                   <Button variant={location === "/admin" ? "secondary" : "ghost"} size="sm" className="relative">
                     <Settings className="w-4 h-4 mr-1" />
                     管理員
-                    {pendingCount > 0 && (
-                      <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs font-bold rounded-full min-w-5 h-5 px-1 flex items-center justify-center">
-                        {pendingCount}
-                      </span>
-                    )}
-                    {hasAdminNotification && pendingCount === 0 && (
+                    {(pendingCount > 0 || hasAdminNotification) && (
                       <span className="pointer-events-none absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-orange-500 ring-2 ring-background" />
-                    )}
-                    {hasAdminNotification && pendingCount > 0 && (
-                      <span className="pointer-events-none absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full bg-orange-500 ring-1 ring-background" />
                     )}
                   </Button>
                 </Link>
@@ -227,9 +215,7 @@ export default function Navbar() {
                   <MessageCircle className="w-4 h-4 mr-2" />
                   我的訊息
                   {userUnread > 0 && (
-                    <span className="ml-auto bg-red-500 text-white text-xs font-bold rounded-full min-w-5 h-5 px-1 flex items-center justify-center">
-                      {userUnread}
-                    </span>
+                    <span className="ml-auto h-2.5 w-2.5 rounded-full bg-orange-500 shrink-0" />
                   )}
                 </Button>
               </Link>
@@ -239,9 +225,7 @@ export default function Navbar() {
                     <LayoutDashboard className="w-4 h-4 mr-2" />
                     工廠管理
                     {showFactoryBadge && (
-                      <span className="ml-auto bg-red-500 text-white text-xs font-bold rounded-full min-w-5 h-5 px-1 flex items-center justify-center">
-                        {factoryBadgeCount}
-                      </span>
+                      <span className="ml-auto h-2.5 w-2.5 rounded-full bg-orange-500 shrink-0" />
                     )}
                   </Button>
                 </Link>
@@ -255,13 +239,8 @@ export default function Navbar() {
                   <Button variant="ghost" className="w-full justify-start relative">
                     <Settings className="w-4 h-4 mr-2" />
                     管理員
-                    {pendingCount > 0 && (
-                      <span className="ml-auto bg-red-500 text-white text-xs font-bold rounded-full min-w-5 h-5 px-1 flex items-center justify-center">
-                        {pendingCount}
-                      </span>
-                    )}
-                    {hasAdminNotification && (
-                      <span className={`${pendingCount > 0 ? "ml-1" : "ml-auto"} h-2.5 w-2.5 rounded-full bg-orange-500 shrink-0`} />
+                    {(pendingCount > 0 || hasAdminNotification) && (
+                      <span className="ml-auto h-2.5 w-2.5 rounded-full bg-orange-500 shrink-0" />
                     )}
                   </Button>
                 </Link>

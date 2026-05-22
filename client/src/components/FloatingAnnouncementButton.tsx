@@ -54,7 +54,7 @@ export default function FloatingAnnouncementButton() {
           className={`${btnBase} bg-gradient-to-r from-orange-500 to-purple-500`}
         >
           {hasNew && (
-            <span className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full border-2 border-white" />
+            <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-orange-500 rounded-full border-2 border-white" />
           )}
           <Megaphone className="w-4 h-4 shrink-0" />
           <span className="hidden sm:inline text-sm">

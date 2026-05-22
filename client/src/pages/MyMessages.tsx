@@ -79,9 +79,7 @@ function UserConversationList({ conversations }: { conversations: any[] }) {
                     {new Date(conv.lastMessageAt).toLocaleDateString("zh-TW")}
                   </span>
                   {conv.unreadCount > 0 && (
-                    <span className="bg-red-500 text-white text-xs font-bold rounded-full min-w-5 h-5 px-1 flex items-center justify-center">
-                      {conv.unreadCount}
-                    </span>
+                    <span className="h-2.5 w-2.5 rounded-full bg-orange-500 shrink-0" />
                   )}
                 </div>
               </div>
@@ -173,9 +171,7 @@ function BatchDetail({ batchId }: { batchId: number }) {
                 </span>
               )}
               {item.unreadCount > 0 && (
-                <span className="bg-red-500 text-white text-xs font-bold rounded-full min-w-5 h-5 px-1 flex items-center justify-center">
-                  {item.unreadCount}
-                </span>
+                <span className="h-2.5 w-2.5 rounded-full bg-orange-500 shrink-0" />
               )}
               <ChevronRight className="w-3 h-3 text-muted-foreground" />
             </div>
@@ -282,9 +278,7 @@ export default function MyMessages() {
           >
             一般訊息
             {(userConvs?.reduce((s: number, c: any) => s + (c.unreadCount ?? 0), 0) ?? 0) > 0 && (
-              <span className="ml-2 bg-red-500 text-white text-xs rounded-full px-1.5">
-                {userConvs!.reduce((s: number, c: any) => s + (c.unreadCount ?? 0), 0)}
-              </span>
+              <span className="ml-1.5 inline-block h-2 w-2 rounded-full bg-orange-500 shrink-0" />
             )}
           </button>
           <button
