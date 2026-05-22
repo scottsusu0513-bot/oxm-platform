@@ -159,7 +159,12 @@ function ReportsTab() {
                       <p className="text-xs text-muted-foreground mt-2 italic">備註：{r.adminNote}</p>
                     )}
                   </div>
-                  <span className="text-xs text-muted-foreground shrink-0">#{r.id}</span>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {r.status === "pending" && (
+                      <span className="h-2 w-2 rounded-full bg-orange-500 shrink-0" />
+                    )}
+                    <span className="text-xs text-muted-foreground">#{r.id}</span>
+                  </div>
                 </div>
                 <ReportActions
                   id={r.id}
@@ -244,7 +249,12 @@ function TicketsTab() {
                       <p className="text-xs text-muted-foreground mt-2 italic">備註：{t.adminNote}</p>
                     )}
                   </div>
-                  <span className="text-xs text-muted-foreground shrink-0">#{t.id}</span>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {t.status === "pending" && (
+                      <span className="h-2 w-2 rounded-full bg-orange-500 shrink-0" />
+                    )}
+                    <span className="text-xs text-muted-foreground">#{t.id}</span>
+                  </div>
                 </div>
                 <TicketActions
                   id={t.id}
