@@ -47,8 +47,12 @@ async function initOAuthState(
     });
     db.purgeExpiredOauthStates().catch(() => {});
   } catch (err) {
-    console.error(`[OAuth/${provider}/init] Failed to write state:`, err);
-    res.status(500).json({ error: "OAuth init failed" });
+    console.error("[OAuth] Initialization failed", {
+      provider,
+      source,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    res.status(500).json({ error: "OAuth initialization failed" });
     return null;
   }
 

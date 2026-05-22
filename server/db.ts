@@ -1,6 +1,7 @@
 import { eq, and, like, desc, asc, sql, inArray, or, isNull, gt } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
+import type { EventEmitter } from "events";
 import {
   InsertUser, users, factories, products, productCategories,
   conversations, conversations as conversationsTable,
@@ -22,6 +23,18 @@ import { ADJACENT_REGIONS } from "../shared/constants";
 let _db: ReturnType<typeof drizzle> | null = null;
 let _pool: mysql.Pool | null = null;
 
+function isRetryableDbError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const code = (err as { code?: string }).code;
+  return code === "PROTOCOL_CONNECTION_LOST" || code === "ECONNRESET" || code === "ETIMEDOUT";
+}
+
+export function resetDbPool(): void {
+  console.error("[Database] Resetting pool after connection error");
+  _pool = null;
+  _db = null;
+}
+
 export async function getDb() {
   if (!_db && process.env.DATABASE_URL) {
     try {
@@ -32,6 +45,18 @@ export async function getDb() {
           waitForConnections: true,
           enableKeepAlive: true,
           keepAliveInitialDelay: 0,
+        });
+        (_pool as unknown as EventEmitter).on("error", (rawErr: unknown) => {
+          const err = rawErr as Error & { code?: string; fatal?: boolean };
+          console.error("[Database] Pool error:", {
+            code: err.code,
+            message: err.message,
+            fatal: err.fatal,
+          });
+          if (isRetryableDbError(err)) {
+            _pool = null;
+            _db = null;
+          }
         });
       }
       _db = drizzle(_pool) as unknown as ReturnType<typeof drizzle>;
@@ -2204,21 +2229,36 @@ export async function createOauthState(params: {
   userAgent?: string;
   ip?: string;
 }): Promise<void> {
-  const db = await getDb();
-  if (!db) return;
   const now = new Date();
-  const expiresAt = new Date(now.getTime() + 10 * 60 * 1000);
-  await db.insert(oauthStates).values({
+  const values = {
     state: params.state,
     redirectTo: params.redirectTo ?? null,
     source: params.source ?? null,
     provider: params.provider ?? "google",
     createdAt: now,
-    expiresAt,
+    expiresAt: new Date(now.getTime() + 10 * 60 * 1000),
     usedAt: null,
     userAgent: params.userAgent ?? null,
     ip: params.ip ?? null,
-  });
+  };
+
+  const doInsert = async () => {
+    const db = await getDb();
+    if (!db) throw new Error("DB not available when creating OAuth state");
+    await db.insert(oauthStates).values(values);
+  };
+
+  try {
+    await doInsert();
+  } catch (err) {
+    if (isRetryableDbError(err)) {
+      console.error("[OAuth] Retrying state creation after DB connection error", { code: (err as { code?: string }).code });
+      resetDbPool();
+      await doInsert();
+    } else {
+      throw err;
+    }
+  }
 }
 
 export async function consumeOauthState(state: string): Promise<{ valid: boolean; redirectTo?: string | null; source?: string | null; provider?: string | null }> {
