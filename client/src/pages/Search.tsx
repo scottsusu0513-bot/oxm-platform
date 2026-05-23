@@ -673,7 +673,7 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
                           value={inquiryTitle}
                           onChange={e => setInquiryTitle(e.target.value)}
                           placeholder="例如：0503 詢問紡織"
-                          className="h-8 text-xs"
+                          className="h-8 text-xs placeholder:text-gray-300"
                           maxLength={50}
                         />
                       </div>
@@ -973,7 +973,7 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
                 value={inquiryTitle}
                 onChange={e => setInquiryTitle(e.target.value)}
                 placeholder="例如：0503 詢問紡織"
-                className="h-9 text-sm"
+                className="h-9 text-sm placeholder:text-gray-300"
                 maxLength={50}
               />
             </div>

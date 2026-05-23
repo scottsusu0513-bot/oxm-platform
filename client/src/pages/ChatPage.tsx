@@ -730,6 +730,7 @@ export default function ChatPage() {
   const conversationId = isNewChat ? null : Number(params?.conversationId);
 
   const [, navigate] = useLocation();
+  const backPath: string = (window.history.state as Record<string, string> | null)?.from ?? "/messages";
   const searchString = useSearch();
   const searchParams = new URLSearchParams(searchString);
   const factoryId = searchParams.get("factoryId") ? Number(searchParams.get("factoryId")) : null;
@@ -926,8 +927,8 @@ export default function ChatPage() {
       <Navbar />
 
       <div className="container py-4 flex-1 flex flex-col max-w-3xl overflow-hidden">
-        <Button variant="ghost" size="sm" className="mb-3 self-start" onClick={() => navigate("/messages")}>
-          <ArrowLeft className="w-4 h-4 mr-1" /> 返回訊息列表
+        <Button variant="ghost" size="sm" className="mb-3 self-start" onClick={() => navigate(backPath)}>
+          <ArrowLeft className="w-4 h-4 mr-1" /> {backPath === "/factory-dashboard" ? "返回工廠管理後台" : "返回訊息列表"}
         </Button>
 
         <Card className="flex-1 flex flex-col">
@@ -1034,7 +1035,7 @@ export default function ChatPage() {
                             ? <PdfMessageCard pdf={attachmentData as unknown as PdfAttachment} messageId={msg.id} isMine={isMine} />
                             : <p className="text-sm text-muted-foreground italic">（附件資料異常）</p>
                         ) : (messageType === "text" || messageType === "co_manager_invite") ? (
-                          <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                          <p className="text-sm whitespace-pre-wrap break-all [overflow-wrap:anywhere]">{msg.content}</p>
                         ) : (
                           <p className="text-sm text-muted-foreground italic">（此訊息類型暫不支援）</p>
                         )}

@@ -647,8 +647,7 @@ export const appRouter = router({
       } catch {
         // inquiry 資料表尚未建立時不影響一般訊息
       }
-      const filtered = batchConvIds.size === 0 ? all : all.filter(c => !batchConvIds.has(c.id));
-      const regularConvs = filtered.map(c => ({ ...c, isAdminMessage: false as const }));
+      const regularConvs = all.map(c => ({ ...c, isAdminMessage: false as const, hasInquiry: batchConvIds.has(c.id) }));
 
       let adminMsgs: any[] = [];
       try {

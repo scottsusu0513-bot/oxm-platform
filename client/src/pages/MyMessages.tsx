@@ -14,6 +14,7 @@ import { toast } from "sonner";
 // ── 一般訊息列表 ──────────────────────────────────────────────────────────
 function UserConversationList({ conversations }: { conversations: any[] }) {
   const utils = trpc.useUtils();
+  const [, navigate] = useLocation();
   const deleteMut = trpc.chat.deleteConversation.useMutation({
     onSuccess: () => {
       toast.success("對話已刪除");
@@ -60,8 +61,8 @@ function UserConversationList({ conversations }: { conversations: any[] }) {
         }
         return (
           <div key={conv.id} className="flex items-center gap-2">
-            <Link href={`/chat/${conv.id}`} className="flex-1">
-              <div className="flex items-center justify-between p-4 rounded-lg border hover:bg-muted/30 transition-colors cursor-pointer min-h-[72px]">
+            <div className="flex-1 cursor-pointer" onClick={() => navigate(`/chat/${conv.id}`, { state: { from: "/messages" } })}>
+              <div className={`flex items-center justify-between p-4 rounded-lg border hover:bg-muted/30 transition-colors min-h-[72px] ${conv.hasInquiry ? "bg-orange-50/60 border-orange-200" : ""}`}>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
                     <p className="font-medium">{conv.factoryName}</p>
@@ -73,6 +74,9 @@ function UserConversationList({ conversations }: { conversations: any[] }) {
                       : "（尚無訊息）"
                     }
                   </p>
+                  {conv.hasInquiry && (
+                    <p className="text-xs text-orange-500 mt-1">此對話同時包含一鍵詢價內容</p>
+                  )}
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
                   <span className="text-xs text-muted-foreground">
@@ -83,7 +87,7 @@ function UserConversationList({ conversations }: { conversations: any[] }) {
                   )}
                 </div>
               </div>
-            </Link>
+            </div>
             <Button
               variant="ghost"
               size="sm"
@@ -149,6 +153,7 @@ function BatchTitleEditor({ batchId, initialTitle, onUpdated }: { batchId: numbe
 // ── 批次詳情（展開） ──────────────────────────────────────────────────────
 function BatchDetail({ batchId }: { batchId: number }) {
   const { data, isLoading } = trpc.inquiryBatch.getDetail.useQuery({ batchId }, { refetchInterval: 30000 });
+  const [, navigate] = useLocation();
 
   if (isLoading) return <p className="text-xs text-muted-foreground py-2 px-4">載入中…</p>;
   if (!data || data.items.length === 0) return <p className="text-xs text-muted-foreground py-2 px-4">此批次無工廠</p>;
@@ -156,8 +161,8 @@ function BatchDetail({ batchId }: { batchId: number }) {
   return (
     <div className="border-t divide-y">
       {data.items.map((item: any) => (
-        <Link key={item.id} href={item.conversationId ? `/chat/${item.conversationId}` : "#"}>
-          <div className="flex items-center justify-between px-4 py-3 hover:bg-muted/30 cursor-pointer">
+        <div key={item.id} className={item.conversationId ? "cursor-pointer" : ""} onClick={() => { if (item.conversationId) navigate(`/chat/${item.conversationId}`, { state: { from: "/messages" } }); }}>
+          <div className="flex items-center justify-between px-4 py-3 hover:bg-muted/30">
             <div className="flex-1 min-w-0">
               <p className="text-sm font-medium">{item.factoryName}</p>
               {item.lastMessage && (
@@ -176,7 +181,7 @@ function BatchDetail({ batchId }: { batchId: number }) {
               <ChevronRight className="w-3 h-3 text-muted-foreground" />
             </div>
           </div>
-        </Link>
+        </div>
       ))}
     </div>
   );

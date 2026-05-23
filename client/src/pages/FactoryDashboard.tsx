@@ -1174,6 +1174,7 @@ function ProductForm({ factoryId, product, categories = [], onDone }: { factoryI
 // ===== Conversation List =====
 function ConversationList({ conversations }: { conversations: any[] }) {
   const utils = trpc.useUtils();
+  const [, navigate] = useLocation();
   const deleteMut = trpc.chat.deleteConversation.useMutation({
     onSuccess: () => { toast.success("對話已刪除"); utils.chat.factoryConversations.invalidate(); },
     onError: (err) => toast.error(err.message),
@@ -1194,8 +1195,8 @@ function ConversationList({ conversations }: { conversations: any[] }) {
         <div className="space-y-2">
           {conversations.map(conv => (
             <div key={conv.id} className="flex items-center gap-2">
-              <Link href={`/chat/${conv.id}`} className="flex-1">
-                <div className="flex items-center justify-between p-4 rounded-lg border hover:bg-muted/30 transition-colors cursor-pointer">
+              <div className="flex-1 cursor-pointer" onClick={() => navigate(`/chat/${conv.id}`, { state: { from: "/factory-dashboard" } })}>
+                <div className="flex items-center justify-between p-4 rounded-lg border hover:bg-muted/30 transition-colors">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
                       <p className="font-medium">{conv.userName}</p>
@@ -1214,7 +1215,7 @@ function ConversationList({ conversations }: { conversations: any[] }) {
                     )}
                   </div>
                 </div>
-              </Link>
+              </div>
               <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-destructive shrink-0"
                 onClick={() => { if (confirm("確定要刪除此對話嗎？")) deleteMut.mutate({ conversationId: conv.id }); }}>
                 <Trash2 className="w-4 h-4" />
@@ -1258,7 +1259,7 @@ function ReviewList({ reviews, factoryId }: { reviews: any[], factoryId: number 
             <div key={r.id} className="p-4 rounded-lg border">
               <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center gap-2">
-                  <span className="font-medium text-sm">{r.factoryName ?? "我的工廠"}</span>
+                  <span className="font-medium text-sm">{r.userName ?? "匿名使用者"}</span>
                   <div className="flex gap-0.5">
                     {[1, 2, 3, 4, 5].map(s => (
                       <Star key={s} className={`w-3.5 h-3.5 ${r.rating >= s ? "text-yellow-500 fill-yellow-500" : "text-muted-foreground/20"}`} />
