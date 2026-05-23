@@ -101,7 +101,7 @@ export default function UsersList() {
                       <tr key={u.id} className="border-b hover:bg-gray-50">
                         <td className="py-3 px-4">{u.id}</td>
                         <td className="py-3 px-4 font-medium">{u.name || "-"}</td>
-                        <td className="py-3 px-4">{u.email || "-"}</td>
+                        <td className="py-3 px-4">{u.primaryEmail || u.email || "-"}</td>
                         <td className="py-3 px-4">
                           <div className="flex flex-wrap gap-1">
                             <span className={`text-xs px-1.5 py-0.5 rounded ${u.hasVerifiedPrimaryEmail ? 'bg-green-50 text-green-600' : 'bg-gray-100 text-gray-400'}`}>

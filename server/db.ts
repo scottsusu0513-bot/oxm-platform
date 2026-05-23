@@ -743,7 +743,8 @@ export async function getAdminUsers(page = 1, pageSize = 20, search?: string) {
     conditions.push(
       or(
         like(users.name, `%${search}%`),
-        like(users.email, `%${search}%`)
+        like(users.email, `%${search}%`),
+        like(users.primaryEmail, `%${search}%`)
       )
     );
   }
