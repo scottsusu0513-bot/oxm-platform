@@ -90,6 +90,7 @@ export default function UsersList() {
                       <th className="text-left py-3 px-4 font-semibold">ID</th>
                       <th className="text-left py-3 px-4 font-semibold">名稱</th>
                       <th className="text-left py-3 px-4 font-semibold">Email</th>
+                      <th className="text-left py-3 px-4 font-semibold">帳號狀態</th>
                       <th className="text-left py-3 px-4 font-semibold">擁有工廠</th>
                       <th className="text-left py-3 px-4 font-semibold">角色</th>
                       <th className="text-left py-3 px-4 font-semibold">註冊時間</th>
@@ -101,6 +102,19 @@ export default function UsersList() {
                         <td className="py-3 px-4">{u.id}</td>
                         <td className="py-3 px-4 font-medium">{u.name || "-"}</td>
                         <td className="py-3 px-4">{u.email || "-"}</td>
+                        <td className="py-3 px-4">
+                          <div className="flex flex-wrap gap-1">
+                            <span className={`text-xs px-1.5 py-0.5 rounded ${u.hasVerifiedPrimaryEmail ? 'bg-green-50 text-green-600' : 'bg-gray-100 text-gray-400'}`}>
+                              {u.hasVerifiedPrimaryEmail ? '✓ 主信箱' : '主信箱未驗證'}
+                            </span>
+                            <span className={`text-xs px-1.5 py-0.5 rounded ${u.hasGoogleLinked ? 'bg-green-50 text-green-600' : 'bg-gray-100 text-gray-400'}`}>
+                              {u.hasGoogleLinked ? '✓ Gmail' : 'Gmail未綁定'}
+                            </span>
+                            <span className={`text-xs px-1.5 py-0.5 rounded ${u.hasLineLinked ? 'bg-green-50 text-green-600' : 'bg-gray-100 text-gray-400'}`}>
+                              {u.hasLineLinked ? '✓ LINE' : 'LINE未綁定'}
+                            </span>
+                          </div>
+                        </td>
                         <td className="py-3 px-4">
                           {(u as any).factoryName
                             ? <span className="text-orange-700 font-medium">{(u as any).factoryName}</span>

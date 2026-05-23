@@ -392,35 +392,21 @@ function AdminDashboardContent() {
                   <div className="text-gray-500">沒有使用者</div>
                 ) : (
                   <div className="space-y-2">
-                    {usersQuery.data?.items.map((u) => {
-                      const ua = u as any;
-                      return (
-                        <div key={u.id} className="p-4 border rounded-lg flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <p className="font-medium">{u.name ?? '未命名'}</p>
-                            <p className="text-sm text-gray-500">{u.email}</p>
-                            <div className="flex flex-wrap gap-1.5 mt-1.5">
-                              <span className={`text-xs px-1.5 py-0.5 rounded ${ua.hasVerifiedPrimaryEmail ? 'bg-green-50 text-green-600' : 'bg-muted text-muted-foreground'}`}>
-                                {ua.hasVerifiedPrimaryEmail ? '✓ 主信箱' : '主信箱未驗證'}
-                              </span>
-                              <span className={`text-xs px-1.5 py-0.5 rounded ${ua.hasGoogleLinked ? 'bg-green-50 text-green-600' : 'bg-muted text-muted-foreground'}`}>
-                                {ua.hasGoogleLinked ? '✓ Gmail' : 'Gmail 未綁定'}
-                              </span>
-                              <span className={`text-xs px-1.5 py-0.5 rounded ${ua.hasLineLinked ? 'bg-green-50 text-green-600' : 'bg-muted text-muted-foreground'}`}>
-                                {ua.hasLineLinked ? '✓ LINE' : 'LINE 未綁定'}
-                              </span>
-                            </div>
-                          </div>
-                          <div className="text-right shrink-0">
-                            <p className="text-xs text-gray-400">{u.role}</p>
-                            {ua.factoryName
-                              ? <p className="text-xs text-orange-700 mt-0.5">{ua.factoryName}</p>
-                              : <p className="text-xs text-gray-300 mt-0.5">無工廠</p>
-                            }
-                          </div>
+                    {usersQuery.data?.items.map((u) => (
+                      <div key={u.id} className="p-4 border rounded-lg flex items-center justify-between">
+                        <div>
+                          <p className="font-medium">{u.name ?? '未命名'}</p>
+                          <p className="text-sm text-gray-500">{u.email}</p>
                         </div>
-                      );
-                    })}
+                        <div className="text-right">
+                          <p className="text-xs text-gray-400">{u.role}</p>
+                          {(u as any).factoryName
+                            ? <p className="text-xs text-orange-700 mt-0.5">{(u as any).factoryName}</p>
+                            : <p className="text-xs text-gray-300 mt-0.5">無工廠</p>
+                          }
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 )}
                 <Button variant="outline" size="sm" className="mt-4" onClick={() => setLocation("/admin/users")}>
