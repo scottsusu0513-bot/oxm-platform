@@ -773,7 +773,30 @@ export async function getAdminUsers(page = 1, pageSize = 20, search?: string) {
     .limit(pageSize).offset((page - 1) * pageSize);
 
   const items = rows.map(r => ({ ...r.user, factoryName: r.factoryName, factoryId: r.factoryId }));
-  return { items, total, page, pageSize };
+
+  // Batch-fetch linked providers (google / line)
+  const googleSet = new Set<number>();
+  const lineSet = new Set<number>();
+  if (items.length > 0) {
+    const userIds = items.map(u => u.id);
+    const authRows = await db
+      .select({ userId: userAuthAccounts.userId, provider: userAuthAccounts.provider })
+      .from(userAuthAccounts)
+      .where(inArray(userAuthAccounts.userId, userIds));
+    for (const row of authRows) {
+      if (row.provider === 'google') googleSet.add(row.userId);
+      if (row.provider === 'line') lineSet.add(row.userId);
+    }
+  }
+
+  const enriched = items.map(u => ({
+    ...u,
+    hasVerifiedPrimaryEmail: !!u.primaryEmailVerifiedAt,
+    hasGoogleLinked: googleSet.has(u.id),
+    hasLineLinked: lineSet.has(u.id),
+  }));
+
+  return { items: enriched, total, page, pageSize };
 }
 
 export async function getAdminAds(page = 1, pageSize = 20) {
