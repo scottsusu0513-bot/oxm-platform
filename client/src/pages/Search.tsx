@@ -14,7 +14,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { INDUSTRIES, INDUSTRY_OPTIONS, TAIWAN_REGIONS } from "@shared/constants";
 import { trpc } from "@/lib/trpc";
 import { useLocation, Link } from "wouter";
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { Search as SearchIcon, Star, MapPin, Factory, ChevronLeft, ChevronRight, Megaphone, Heart, X, Wrench, ChevronDown, Clock, ShoppingCart, Plus, Minus, Send } from "lucide-react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { performLogin } from "@/const";
@@ -339,8 +339,10 @@ const { isAuthenticated } = useAuth();
   const [industry, setIndustry] = useState<string[]>([]);
   const [subIndustry, setSubIndustry] = useState<string[]>([]);
   const [region, setRegion] = useState<string[]>([]);
-  const [keyword, setKeyword] = useState("");
+  const [keyword, setKeyword] = useState("");          // input display value (every keypress)
+  const [committedKeyword, setCommittedKeyword] = useState(() => params.get("keyword") ?? ""); // drives query
   const [businessType, setBusinessType] = useState("all");
+  const isComposing = useRef(false);
   const [showHistory, setShowHistory] = useState(false);
   const [page, setPage] = useState(1);
   const [sortBy, setSortBy] = useState("rating");
@@ -393,7 +395,9 @@ const { isAuthenticated } = useAuth();
     setIndustry(params.getAll("industry").filter(Boolean));
     setSubIndustry(params.getAll("subIndustry").filter(Boolean));
     setRegion(params.getAll("region").filter(Boolean));
-    setKeyword(params.get("keyword") ?? "");
+    const kw = params.get("keyword") ?? "";
+    setKeyword(kw);
+    setCommittedKeyword(kw);
     setBusinessType(params.get("businessType") ?? "all");
     setPage(1);
   }, []);
@@ -406,12 +410,12 @@ const { isAuthenticated } = useAuth();
     industry: industry.length > 0 ? industry : undefined,
     subIndustry: subIndustry.length > 0 ? subIndustry : undefined,
     region: region.length > 0 ? region : undefined,
-    keyword: keyword || undefined,
+    keyword: committedKeyword || undefined,
     businessType: businessType && businessType !== "all" ? businessType : undefined,
     sortBy: sortBy as "rating" | "reviews" | "response" | "newest" | undefined,
     page,
     pageSize: window.matchMedia("(max-width: 768px)").matches ? 12 : 20,
-  }), [mfgMode, industry, subIndustry, region, keyword, businessType, sortBy, page]);
+  }), [mfgMode, industry, subIndustry, region, committedKeyword, businessType, sortBy, page]);
 
   const appliedFilters = useMemo(() => {
     const filters: Array<{ key: string; label: string; value: string }> = [];
@@ -419,10 +423,10 @@ const { isAuthenticated } = useAuth();
     if (industry.length > 0) filters.push({ key: "industry", label: "產業", value: industry.join("、") });
     if (subIndustry.length > 0) filters.push({ key: "subIndustry", label: "子產業", value: subIndustry.join("、") });
     if (region.length > 0) filters.push({ key: "region", label: "地區", value: region.join("、") });
-    if (keyword) filters.push({ key: "keyword", label: "關鍵字", value: keyword });
+    if (committedKeyword) filters.push({ key: "keyword", label: "關鍵字", value: committedKeyword });
     if (businessType && businessType !== "all") filters.push({ key: "businessType", label: "類型", value: businessType === "factory" ? "代工廠" : "工作室" });
     return filters;
-  }, [mfgMode, industry, subIndustry, region, keyword, businessType]);
+  }, [mfgMode, industry, subIndustry, region, committedKeyword, businessType]);
 
   const removeFilter = (key: string) => {
     if (key === "businessType") setBusinessType("all");
@@ -430,7 +434,7 @@ const { isAuthenticated } = useAuth();
     else if (key === "industry") { setIndustry([]); setSubIndustry([]); }
     else if (key === "subIndustry") setSubIndustry([]);
     else if (key === "region") setRegion([]);
-    else if (key === "keyword") setKeyword("");
+    else if (key === "keyword") { setKeyword(""); setCommittedKeyword(""); }
     setPage(1);
   };
 
@@ -471,7 +475,9 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
   };
 
   const handleSearch = () => {
+    if (isComposing.current) return;
     setPage(1);
+    setCommittedKeyword(keyword);
     const p = new URLSearchParams();
     if (mfgMode) p.set("mfgMode", mfgMode);
     industry.forEach(i => p.append("industry", i));
@@ -485,7 +491,7 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
 
   const clearFilters = () => {
     setMfgMode(""); setIndustry([]); setSubIndustry([]); setRegion([]);
-    setKeyword(""); setBusinessType("all"); setPage(1);
+    setKeyword(""); setCommittedKeyword(""); setBusinessType("all"); setPage(1);
     navigate("/search", { replace: true });
   };
 
@@ -605,7 +611,9 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
                     placeholder="名稱或產品..."
                     value={keyword}
                     onChange={e => setKeyword(e.target.value)}
-                    onKeyDown={e => e.key === "Enter" && handleSearch()}
+                    onCompositionStart={() => { isComposing.current = true; }}
+                    onCompositionEnd={() => { isComposing.current = false; }}
+                    onKeyDown={e => { if (e.key === "Enter" && !isComposing.current) handleSearch(); }}
                     onFocus={() => setShowHistory(true)}
                     onBlur={() => setTimeout(() => setShowHistory(false), 150)}
                     className="h-9 text-sm"
@@ -616,7 +624,7 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
                         <div
                           key={i}
                           className="px-3 py-2 text-sm hover:bg-muted cursor-pointer flex items-center gap-2"
-                          onMouseDown={() => { setKeyword(h); setShowHistory(false); }}
+                          onMouseDown={() => { setKeyword(h); setCommittedKeyword(h); setShowHistory(false); }}
                         >
                           <SearchIcon className="w-3 h-3 text-muted-foreground" />
                           {h}
@@ -761,7 +769,10 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
                     withClear
                   />
                   <Input placeholder="關鍵字..." value={keyword} onChange={e => setKeyword(e.target.value)}
-                    onKeyDown={e => e.key === "Enter" && handleSearch()} className="w-[140px] h-8 text-xs" />
+                    onCompositionStart={() => { isComposing.current = true; }}
+                    onCompositionEnd={() => { isComposing.current = false; }}
+                    onKeyDown={e => { if (e.key === "Enter" && !isComposing.current) handleSearch(); }}
+                    className="w-[140px] h-8 text-xs" />
                   <Button size="sm" className="h-8 text-xs px-3" onClick={handleSearch}><SearchIcon className="w-3.5 h-3.5 mr-1" />搜尋</Button>
                   <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={clearFilters}>清除</Button>
                 </div>

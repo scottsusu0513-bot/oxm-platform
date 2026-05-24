@@ -180,7 +180,7 @@ export async function getSearchIntent(keyword: string): Promise<AISearchIntent |
   // 3. 呼叫 AI（1500ms timeout）
   try {
     const timeout = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('AI intent timeout')), 1500)
+      setTimeout(() => reject(new Error('AI intent timeout')), 2500)
     );
 
     let resolvePromise: Promise<AISearchIntent>;
