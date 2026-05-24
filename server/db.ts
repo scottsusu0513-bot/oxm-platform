@@ -276,29 +276,40 @@ export async function searchFactories(params: {
   const hasIntent = !!intent && intent.confidence >= 0.5;
   const useAIMode = hasIntent && (!sortBy || sortBy === 'rating');
 
-  if (useAIMode) {
-    // Step 1: 先查 products 命中的 factoryId（keyword + productKeywords + searchSynonyms）
-    // 這樣即使工廠本身文字不含 keyword，只要有商品命中就能進候選集
-    const searchTerms = [
-      keyword,
-      ...intent!.productKeywords,
-      ...intent!.searchSynonyms,
-    ].filter((t): t is string => !!t && t.trim().length > 0);
+  console.log(`[AISearch] keyword="${keyword ?? ''}" useAIMode=${useAIMode} confidence=${intent?.confidence ?? 0} mainIndustries=[${intent?.mainIndustries?.join(',') ?? ''}]`);
 
+  if (useAIMode) {
+    // Step 1: 預查 products 命中的 factoryId，讓只有商品命中的工廠也能進候選集
+    // try-catch 確保 DB 任何錯誤都不中斷主流程，並完整印出錯誤原因
     let productMatchedIds: number[] = [];
-    if (searchTerms.length > 0) {
-      const prodConds = searchTerms.flatMap(term => [
-        like(products.name,        `%${term}%`),
-        like(products.description, `%${term}%`),
-      ]);
-      const matchedRows = await db
-        .select({ factoryId: products.factoryId })
-        .from(products)
-        .where(or(...prodConds)!);
-      productMatchedIds = Array.from(new Set(matchedRows.map(r => r.factoryId))).slice(0, 200);
+    try {
+      const searchTerms = [
+        keyword,
+        ...intent!.productKeywords,
+        ...intent!.searchSynonyms,
+      ].filter((t): t is string => !!t && t.trim().length > 0);
+
+      console.log(`[AISearch] searchTerms=[${searchTerms.join(',')}]`);
+
+      if (searchTerms.length > 0) {
+        const prodConds = searchTerms.flatMap(term => [
+          like(products.name,        `%${term}%`),
+          like(products.description, `%${term}%`),
+        ]);
+        const matchedRows = await db
+          .select({ factoryId: products.factoryId })
+          .from(products)
+          .where(or(...prodConds)!);
+        productMatchedIds = Array.from(new Set(matchedRows.map(r => r.factoryId))).slice(0, 200);
+      }
+      console.log(`[AISearch] productMatchedIds=[${productMatchedIds.join(',')}]`);
+    } catch (e) {
+      console.error('[AISearch] product pre-query FAILED:', e);
     }
 
-    // Step 2: 候選集 WHERE = 使用者篩選 AND (factories 文字/產業 OR products 命中的 factoryId)
+    // Step 2: 候選集 content layer（OR 層）
+    // 外層 AND：status='approved' + 使用者手動篩選
+    // 內層 OR：factory 文字命中 | AI 主產業命中 | factory.id IN productMatchedIds
     const contentConds: any[] = [];
     if (keyword) {
       contentConds.push(
@@ -311,20 +322,27 @@ export async function searchFactories(params: {
       contentConds.push(sql`JSON_OVERLAPS(${factories.industry}, ${JSON.stringify(intent!.mainIndustries)})`);
     }
     if (productMatchedIds.length > 0) {
+      // 商品命中的工廠 ID 直接 OR 進候選集，不受 AI 產業推測限制
       contentConds.push(inArray(factories.id, productMatchedIds));
     }
+
+    const keywordCondCount   = keyword ? 3 : 0;
+    const industryCondCount  = (!userHasSelectedIndustry && (intent!.mainIndustries.length > 0)) ? 1 : 0;
+    const productIdCondCount = productMatchedIds.length > 0 ? 1 : 0;
+    console.log(`[AISearch] contentConds count=${contentConds.length} (keyword:${keywordCondCount} industry:${industryCondCount} product_ids:${productIdCondCount})`);
+
     if (contentConds.length > 0) conditions.push(or(...contentConds)!);
 
-    const whereClause = conditions.length > 1 ? and(...conditions) : conditions[0];
+    const whereClause = and(...conditions);
 
-    // COUNT 正確反映擴展後的候選集大小
     const [countResult] = await db.select({ count: sql<number>`COUNT(*)` }).from(factories).where(whereClause);
     const total = Number(countResult?.count ?? 0);
 
-    // 拉候選集（最多 AI_CANDIDATE_LIMIT 筆）
     const candidates = await db.select().from(factories).where(whereClause)
       .orderBy(desc(factories.avgRating), desc(factories.reviewCount))
       .limit(AI_CANDIDATE_LIMIT);
+
+    console.log(`[AISearch] total=${total} candidates=${candidates.length}`);
 
     // Step 3: 批次查候選工廠的所有商品
     const productMap = new Map<number, string[]>();
@@ -356,6 +374,9 @@ export async function searchFactories(params: {
       return new Date(b.factory.updatedAt).getTime() - new Date(a.factory.updatedAt).getTime();
     });
 
+    const topLog = scored.slice(0, 3).map(s => `{id:${s.factory.id},name:"${s.factory.name}",tier:${s.tier}}`).join(',');
+    console.log(`[AISearch] topResults=[${topLog}]`);
+
     // JS 層分頁
     const offset = (page - 1) * pageSize;
     const items = scored.slice(offset, offset + pageSize).map(s => s.factory);
@@ -363,6 +384,7 @@ export async function searchFactories(params: {
   }
 
   // 非 AI 模式：維持現有行為（keyword 文字搜尋 + SQL 分頁）
+  console.log(`[AISearch] using non-AI mode keyword="${keyword ?? ''}" (intent=${intent ? `confidence=${intent.confidence}` : 'null'})`);
   if (keyword) {
     conditions.push(or(
       like(factories.name,        `%${keyword}%`),
