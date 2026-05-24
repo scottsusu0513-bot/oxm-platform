@@ -1,6 +1,6 @@
 import { COOKIE_NAME, THIRTY_DAYS_MS } from "@shared/const";
 import { sdk } from "./_core/sdk";
-import { enhanceSearchKeyword } from './semantic-search';
+import { enhanceSearchKeyword, getSearchIntent } from './semantic-search';
 import { sendNewInquiryEmail, sendFactoryApprovedEmail, sendFactorySubmittedEmail, sendReportEmail, sendSupportTicketEmail, sendReviewReplyEmail, sendNewMessageNotificationEmail, sendReportStatusUpdateEmail, sendTicketStatusUpdateEmail, sendMessageReplyNotificationEmail, sendEmailVerificationEmail, sendAdminBroadcastEmail } from './email';
 import { sha256Hex, generateRawToken } from './_core/oauthHelpers';
 import { getSessionCookieOptions } from "./_core/cookies";
@@ -303,13 +303,30 @@ export const appRouter = router({
   page: z.number().int().min(1).default(1),
   pageSize: z.number().int().min(1).max(50).default(20),
 })).query(async ({ input }) => {
-  const enhancedKeyword = input.keyword ? await enhanceSearchKeyword(input.keyword) : input.keyword;
-  const industry = input.industry && input.industry.length > 0 ? input.industry : undefined;
-  const subIndustry = input.subIndustry && input.subIndustry.length > 0 ? input.subIndustry : undefined;
-  const region = input.region && input.region.length > 0 ? input.region : undefined;
-  const capitalLevel = input.capitalLevel && input.capitalLevel.length > 0 ? input.capitalLevel : undefined;
-  const businessType = input.businessType && input.businessType !== 'all' ? input.businessType : undefined;
-  const result = await db.searchFactories({ ...input, industry, subIndustry, region, capitalLevel, keyword: enhancedKeyword, businessType });
+  const industry      = input.industry     && input.industry.length > 0     ? input.industry     : undefined;
+  const subIndustry   = input.subIndustry  && input.subIndustry.length > 0  ? input.subIndustry  : undefined;
+  const region        = input.region       && input.region.length > 0       ? input.region       : undefined;
+  const capitalLevel  = input.capitalLevel && input.capitalLevel.length > 0 ? input.capitalLevel : undefined;
+  const businessType  = input.businessType && input.businessType !== 'all'  ? input.businessType : undefined;
+
+  // 使用者是否有手動選主產業（影響 AI matchTier 計算範圍）
+  const userHasSelectedIndustry = !!(industry && industry.length > 0);
+
+  // 取得 AI 搜尋意圖（keyword 有值時嘗試；有 industry 時仍呼叫，用於 productKeywords 加權）
+  const intent = input.keyword ? await getSearchIntent(input.keyword) : null;
+
+  // fallback keyword：intent 無法使用時沿用舊有 enhanceSearchKeyword
+  const keyword = input.keyword
+    ? (intent ? input.keyword : await enhanceSearchKeyword(input.keyword))
+    : undefined;
+
+  const result = await db.searchFactories({
+    ...input,
+    industry, subIndustry, region, capitalLevel, businessType,
+    keyword,
+    intent,
+    userHasSelectedIndustry,
+  });
   let ads: Awaited<ReturnType<typeof db.getActiveAds>> = [];
 
   if (input.page === 1) {

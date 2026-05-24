@@ -19,6 +19,7 @@ import {
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 import { ADJACENT_REGIONS } from "../shared/constants";
+import type { AISearchIntent } from './semantic-search';
 
 let _db: ReturnType<typeof drizzle> | null = null;
 let _pool: mysql.Pool | null = null;
@@ -194,6 +195,33 @@ export async function getFactoryByOwnerId(ownerId: number) {
   return result.length > 0 ? result[0] : undefined;
 }
 
+// AI 搜尋候選集上限：避免全表掃後在 JS 排序太多筆
+const AI_CANDIDATE_LIMIT = 300;
+
+function computeMatchTier(
+  factory: Factory,
+  productTexts: string[],
+  intent: AISearchIntent,
+  userHasSelectedIndustry: boolean,
+): 0 | 1 | 2 | 3 {
+  const mainMatch = !userHasSelectedIndustry &&
+    (factory.industry as string[]).some(i => intent.mainIndustries.includes(i));
+
+  const subMatch = !userHasSelectedIndustry &&
+    ((factory.subIndustry ?? []) as string[]).some(s => intent.subIndustries.includes(s));
+
+  const allKeywords = [...intent.productKeywords, ...intent.searchSynonyms].map(k => k.toLowerCase());
+  const prodMatch = allKeywords.length > 0 && productTexts.some(text =>
+    allKeywords.some(kw => text.toLowerCase().includes(kw))
+  );
+
+  if (userHasSelectedIndustry) return prodMatch ? 1 : 0;
+  if (mainMatch && subMatch && prodMatch) return 3;
+  if (mainMatch && subMatch)             return 2;
+  if (mainMatch)                         return 1;
+  return 0;
+}
+
 export async function searchFactories(params: {
   industry?: string[];
   subIndustry?: string[];
@@ -205,31 +233,105 @@ export async function searchFactories(params: {
   page?: number;
   pageSize?: number;
   sortBy?: string;
+  intent?: AISearchIntent | null;
+  userHasSelectedIndustry?: boolean;
 }) {
   const db = await getDb();
   if (!db) return { items: [], total: 0 };
-  const { industry, subIndustry, region, capitalLevel, mfgMode, keyword, businessType, page = 1, pageSize = 20, sortBy } = params;
+  const {
+    industry, subIndustry, region, capitalLevel, mfgMode, keyword,
+    businessType, page = 1, pageSize = 20, sortBy,
+    intent, userHasSelectedIndustry = false,
+  } = params;
 
+  // 使用者手動篩選條件（最高優先，永遠在 SQL WHERE 層處理）
   const conditions = [eq(factories.status, 'approved')];
-  if (industry && industry.length > 0) {
+  if (industry && industry.length > 0)
     conditions.push(sql`JSON_OVERLAPS(${factories.industry}, ${JSON.stringify(industry)})`);
-  }
   if (subIndustry && subIndustry.length > 0) {
-    const subConditions = subIndustry.map(s => sql`JSON_CONTAINS(${factories.subIndustry}, ${JSON.stringify([s])})`);
-    conditions.push(or(...subConditions)!);
+    const subConds = subIndustry.map(s => sql`JSON_CONTAINS(${factories.subIndustry}, ${JSON.stringify([s])})`);
+    conditions.push(or(...subConds)!);
   }
   if (businessType) conditions.push(eq(factories.businessType, businessType as "factory" | "studio"));
-  if (region && region.length > 0) conditions.push(inArray(factories.region, region));
+  if (region && region.length > 0)       conditions.push(inArray(factories.region, region));
   if (capitalLevel && capitalLevel.length > 0) conditions.push(inArray(factories.capitalLevel, capitalLevel));
-  if (mfgMode) conditions.push(sql`JSON_CONTAINS(${factories.mfgModes}, ${JSON.stringify([mfgMode])})`);
+  if (mfgMode)                           conditions.push(sql`JSON_CONTAINS(${factories.mfgModes}, ${JSON.stringify([mfgMode])})`);
 
+  // AI 模式：intent 存在且信心度足夠，且使用者沒有指定其他排序方式
+  const hasIntent = !!intent && intent.confidence >= 0.5;
+  const useAIMode = hasIntent && (!sortBy || sortBy === 'rating');
+
+  if (useAIMode) {
+    // 候選集 WHERE：keyword 文字條件 OR intent 主產業（若使用者未手動選產業）
+    const contentConds: ReturnType<typeof like>[] = [];
+    if (keyword) {
+      contentConds.push(
+        like(factories.name,        `%${keyword}%`),
+        like(factories.description, `%${keyword}%`),
+        sql`JSON_SEARCH(${factories.industry}, 'one', ${`%${keyword}%`}) IS NOT NULL` as any,
+      );
+    }
+    if (!userHasSelectedIndustry && intent!.mainIndustries.length > 0) {
+      contentConds.push(
+        sql`JSON_OVERLAPS(${factories.industry}, ${JSON.stringify(intent!.mainIndustries)})` as any,
+      );
+    }
+    if (contentConds.length > 0) conditions.push(or(...contentConds)!);
+
+    const whereClause = conditions.length > 1 ? and(...conditions) : conditions[0];
+
+    // COUNT 仍然正確反映符合條件的總筆數
+    const [countResult] = await db.select({ count: sql<number>`COUNT(*)` }).from(factories).where(whereClause);
+    const total = Number(countResult?.count ?? 0);
+
+    // 拉候選集（最多 AI_CANDIDATE_LIMIT 筆，依評分取得最有代表性的候選）
+    const candidates = await db.select().from(factories).where(whereClause)
+      .orderBy(desc(factories.avgRating), desc(factories.reviewCount))
+      .limit(AI_CANDIDATE_LIMIT);
+
+    // 批次查候選工廠的商品（只取 factoryId + 文字欄位）
+    const productMap = new Map<number, string[]>();
+    if (candidates.length > 0) {
+      const candidateIds = candidates.map(f => f.id);
+      const productRows = await db
+        .select({ factoryId: products.factoryId, name: products.name, desc: products.description })
+        .from(products)
+        .where(inArray(products.factoryId, candidateIds));
+      for (const p of productRows) {
+        const list = productMap.get(p.factoryId) ?? [];
+        list.push(`${p.name} ${p.desc ?? ''}`);
+        productMap.set(p.factoryId, list);
+      }
+    }
+
+    // 計算 matchTier 並排序
+    const scored = candidates.map(f => ({
+      factory: f,
+      tier: computeMatchTier(f, productMap.get(f.id) ?? [], intent!, userHasSelectedIndustry),
+    }));
+
+    scored.sort((a, b) => {
+      if (b.tier !== a.tier)                                   return b.tier - a.tier;
+      const rDiff = Number(b.factory.avgRating ?? 0) - Number(a.factory.avgRating ?? 0);
+      if (rDiff !== 0)                                         return rDiff;
+      const rcDiff = (b.factory.reviewCount ?? 0) - (a.factory.reviewCount ?? 0);
+      if (rcDiff !== 0)                                        return rcDiff;
+      return new Date(b.factory.updatedAt).getTime() - new Date(a.factory.updatedAt).getTime();
+    });
+
+    // JS 層分頁
+    const offset = (page - 1) * pageSize;
+    const items = scored.slice(offset, offset + pageSize).map(s => s.factory);
+    return { items, total };
+  }
+
+  // 非 AI 模式：維持現有行為（keyword 文字搜尋 + SQL 分頁）
   if (keyword) {
-    const keywordConditions = [
-      like(factories.name, `%${keyword}%`),
+    conditions.push(or(
+      like(factories.name,        `%${keyword}%`),
       like(factories.description, `%${keyword}%`),
       sql`JSON_SEARCH(${factories.industry}, 'one', ${`%${keyword}%`}) IS NOT NULL`,
-    ];
-    conditions.push(or(...keywordConditions)!);
+    )!);
   }
 
   const whereClause = conditions.length > 1 ? and(...conditions) : conditions[0];

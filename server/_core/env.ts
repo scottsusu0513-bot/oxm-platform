@@ -33,4 +33,7 @@ export const ENV = {
       return [] as string[];
     }
   })(),
+  aiSearchProvider: (process.env.AI_SEARCH_PROVIDER ?? 'disabled') as 'openai' | 'anthropic' | 'disabled',
+  aiSearchModel:    process.env.AI_SEARCH_MODEL ?? 'gpt-4o-mini',
+  openaiApiKey:     process.env.OPENAI_API_KEY ?? '',
 };

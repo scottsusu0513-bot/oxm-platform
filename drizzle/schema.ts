@@ -251,6 +251,24 @@ export const searchCache = mysqlTable("searchCache", {
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 
+// ===== AI 搜尋意圖快取 =====
+export const aiSearchIntents = mysqlTable("aiSearchIntents", {
+  id:              int("id").autoincrement().primaryKey(),
+  normalizedQuery: varchar("normalizedQuery", { length: 200 }).notNull().unique(),
+  mainIndustries:  json("mainIndustries").$type<string[]>().notNull(),
+  subIndustries:   json("subIndustries").$type<string[]>().notNull(),
+  productKeywords: json("productKeywords").$type<string[]>().notNull(),
+  searchSynonyms:  json("searchSynonyms").$type<string[]>().notNull(),
+  confidence:      decimal("confidence", { precision: 4, scale: 3 }).notNull(),
+  aiProvider:      varchar("aiProvider", { length: 50 }).notNull().default('openai'),
+  aiModel:         varchar("aiModel", { length: 100 }).notNull().default('gpt-4o-mini'),
+  hitCount:        int("hitCount").notNull().default(0),
+  lastUsedAt:      timestamp("lastUsedAt").defaultNow().notNull(),
+  createdAt:       timestamp("createdAt").defaultNow().notNull(),
+  updatedAt:       timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+export type AiSearchIntent = typeof aiSearchIntents.$inferSelect;
+
 // ===== 平台公告 =====
 export const announcements = mysqlTable("announcements", {
   id: int("id").autoincrement().primaryKey(),
