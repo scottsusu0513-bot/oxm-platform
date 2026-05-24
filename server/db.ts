@@ -203,22 +203,37 @@ function computeMatchTier(
   productTexts: string[],
   intent: AISearchIntent,
   userHasSelectedIndustry: boolean,
-): 0 | 1 | 2 | 3 {
+  keyword?: string,
+): 0 | 1 | 2 | 3 | 4 {
   const mainMatch = !userHasSelectedIndustry &&
     (factory.industry as string[]).some(i => intent.mainIndustries.includes(i));
 
   const subMatch = !userHasSelectedIndustry &&
     ((factory.subIndustry ?? []) as string[]).some(s => intent.subIndustries.includes(s));
 
-  const allKeywords = [...intent.productKeywords, ...intent.searchSynonyms].map(k => k.toLowerCase());
-  const prodMatch = allKeywords.length > 0 && productTexts.some(text =>
-    allKeywords.some(kw => text.toLowerCase().includes(kw))
+  // 商品文字包含原始 keyword（最強訊號）
+  const productExactMatch = !!keyword && productTexts.some(text =>
+    text.toLowerCase().includes(keyword.toLowerCase())
   );
 
-  if (userHasSelectedIndustry) return prodMatch ? 1 : 0;
-  if (mainMatch && subMatch && prodMatch) return 3;
-  if (mainMatch && subMatch)             return 2;
-  if (mainMatch)                         return 1;
+  // 商品文字包含 AI 推測近義詞
+  const intentKws = [...intent.productKeywords, ...intent.searchSynonyms].map(k => k.toLowerCase());
+  const productIntentMatch = intentKws.length > 0 && productTexts.some(text =>
+    intentKws.some(kw => text.toLowerCase().includes(kw))
+  );
+
+  if (userHasSelectedIndustry) {
+    // 使用者已手動選產業，main/sub 由 SQL 保證，只依商品命中程度排序
+    if (productExactMatch)    return 3;
+    if (productIntentMatch)   return 1;
+    return 0;
+  }
+
+  // 完整 5 tier（0–4）
+  if (mainMatch && subMatch && productExactMatch) return 4;
+  if (productExactMatch)                          return 3;
+  if (mainMatch && subMatch && productIntentMatch) return 2;
+  if (mainMatch && subMatch)                      return 1;
   return 0;
 }
 
@@ -262,34 +277,56 @@ export async function searchFactories(params: {
   const useAIMode = hasIntent && (!sortBy || sortBy === 'rating');
 
   if (useAIMode) {
-    // 候選集 WHERE：keyword 文字條件 OR intent 主產業（若使用者未手動選產業）
-    const contentConds: ReturnType<typeof like>[] = [];
+    // Step 1: 先查 products 命中的 factoryId（keyword + productKeywords + searchSynonyms）
+    // 這樣即使工廠本身文字不含 keyword，只要有商品命中就能進候選集
+    const searchTerms = [
+      keyword,
+      ...intent!.productKeywords,
+      ...intent!.searchSynonyms,
+    ].filter((t): t is string => !!t && t.trim().length > 0);
+
+    let productMatchedIds: number[] = [];
+    if (searchTerms.length > 0) {
+      const prodConds = searchTerms.flatMap(term => [
+        like(products.name,        `%${term}%`),
+        like(products.description, `%${term}%`),
+      ]);
+      const matchedRows = await db
+        .select({ factoryId: products.factoryId })
+        .from(products)
+        .where(or(...prodConds)!);
+      productMatchedIds = Array.from(new Set(matchedRows.map(r => r.factoryId))).slice(0, 200);
+    }
+
+    // Step 2: 候選集 WHERE = 使用者篩選 AND (factories 文字/產業 OR products 命中的 factoryId)
+    const contentConds: any[] = [];
     if (keyword) {
       contentConds.push(
         like(factories.name,        `%${keyword}%`),
         like(factories.description, `%${keyword}%`),
-        sql`JSON_SEARCH(${factories.industry}, 'one', ${`%${keyword}%`}) IS NOT NULL` as any,
+        sql`JSON_SEARCH(${factories.industry}, 'one', ${`%${keyword}%`}) IS NOT NULL`,
       );
     }
     if (!userHasSelectedIndustry && intent!.mainIndustries.length > 0) {
-      contentConds.push(
-        sql`JSON_OVERLAPS(${factories.industry}, ${JSON.stringify(intent!.mainIndustries)})` as any,
-      );
+      contentConds.push(sql`JSON_OVERLAPS(${factories.industry}, ${JSON.stringify(intent!.mainIndustries)})`);
+    }
+    if (productMatchedIds.length > 0) {
+      contentConds.push(inArray(factories.id, productMatchedIds));
     }
     if (contentConds.length > 0) conditions.push(or(...contentConds)!);
 
     const whereClause = conditions.length > 1 ? and(...conditions) : conditions[0];
 
-    // COUNT 仍然正確反映符合條件的總筆數
+    // COUNT 正確反映擴展後的候選集大小
     const [countResult] = await db.select({ count: sql<number>`COUNT(*)` }).from(factories).where(whereClause);
     const total = Number(countResult?.count ?? 0);
 
-    // 拉候選集（最多 AI_CANDIDATE_LIMIT 筆，依評分取得最有代表性的候選）
+    // 拉候選集（最多 AI_CANDIDATE_LIMIT 筆）
     const candidates = await db.select().from(factories).where(whereClause)
       .orderBy(desc(factories.avgRating), desc(factories.reviewCount))
       .limit(AI_CANDIDATE_LIMIT);
 
-    // 批次查候選工廠的商品（只取 factoryId + 文字欄位）
+    // Step 3: 批次查候選工廠的所有商品
     const productMap = new Map<number, string[]>();
     if (candidates.length > 0) {
       const candidateIds = candidates.map(f => f.id);
@@ -304,10 +341,10 @@ export async function searchFactories(params: {
       }
     }
 
-    // 計算 matchTier 並排序
+    // Step 4: 計算新 5-tier matchTier 並排序
     const scored = candidates.map(f => ({
       factory: f,
-      tier: computeMatchTier(f, productMap.get(f.id) ?? [], intent!, userHasSelectedIndustry),
+      tier: computeMatchTier(f, productMap.get(f.id) ?? [], intent!, userHasSelectedIndustry, keyword),
     }));
 
     scored.sort((a, b) => {
