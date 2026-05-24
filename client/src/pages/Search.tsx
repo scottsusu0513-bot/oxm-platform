@@ -279,7 +279,10 @@ function FactoryCardContent({ factory, cartHas, cartAdd, cartRemove, setCartOpen
         <span className="truncate">地址：{factory.address || "無"}</span>
         <span>{factory.foundedYear ? `成立於 ${factory.foundedYear} 年` : "成立年份：無"}</span>
         <span className="truncate">負責人：{factory.ownerName || "無"}</span>
-        <span>電話：{factory.phone || "無"}</span>
+        <span>電話：{factory.phone
+          ? <a href={`tel:${factory.phone.replace(/[\s\-\(\)]/g, "")}`} onClick={e => e.stopPropagation()} className="hover:underline underline-offset-2">{factory.phone}</a>
+          : "無"
+        }</span>
         <span className="truncate">官方網站：{factory.website
           ? <a href={factory.website} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline" onClick={e => e.stopPropagation()}>連結</a>
           : "無"
