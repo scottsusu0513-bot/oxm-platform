@@ -460,7 +460,8 @@ export const appRouter = router({
       if (!factory) throw new Error("您尚未擁有工廠");
 
       const invitee = await db.getUserByEmail(input.email);
-      if (!invitee) throw new Error("此 Email 尚未在平台上註冊");
+      // Don't reveal whether email is registered — prevents enumeration
+      if (!invitee) return { success: true as const, conversationId: null as number | null };
       if (invitee.id === ctx.user.id) throw new Error("不能邀請自己");
 
       const alreadyCoManager = await db.isActiveCoManager(factory.id, invitee.id);
@@ -778,7 +779,7 @@ export const appRouter = router({
           userId: ctx.user.id,
           error,
         });
-        throw error;
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: '訊息載入失敗，請稍後再試' });
       }
     }),
 
@@ -790,8 +791,10 @@ export const appRouter = router({
       if (!conv) return null;
       const factory = await db.getFactoryById(conv.factoryId);
       const product = conv.productId ? await db.getProductById(conv.productId) : null;
+      const isConvUser = conv.userId === ctx.user.id;
       const isFactoryOwner = factory?.ownerId === ctx.user.id;
-      const isCoMgr = !isFactoryOwner && !!factory && await db.isActiveCoManager(factory.id, ctx.user.id);
+      const isCoMgr = !isConvUser && !isFactoryOwner && !!factory && await db.isActiveCoManager(factory.id, ctx.user.id);
+      if (!isConvUser && !isFactoryOwner && !isCoMgr && ctx.user.role !== 'admin') return null;
       return {
         factoryName: factory?.name ?? "未知工廠",
         productName: product?.name ?? null,
@@ -971,13 +974,16 @@ export const appRouter = router({
       if (!msg) throw new TRPCError({ code: "NOT_FOUND", message: "訊息不存在" });
       if (msg.type !== "pdf") throw new TRPCError({ code: "BAD_REQUEST", message: "此訊息不是 PDF 附件" });
 
-      // 驗證對話存取權限（使用者本人 or 工廠 owner）
+      // 驗證對話存取權限（使用者本人、工廠 owner、active co-manager、admin）
       const conv = await db.getConversationById(msg.conversationId);
       if (!conv) throw new TRPCError({ code: "NOT_FOUND", message: "對話不存在" });
       const factory = await db.getFactoryById(conv.factoryId);
       const isConvUser = conv.userId === ctx.user.id;
       const isFactoryOwner = factory?.ownerId === ctx.user.id;
-      if (!isConvUser && !isFactoryOwner) throw new TRPCError({ code: "FORBIDDEN", message: "無權存取此檔案" });
+      const isCoMgrPdf = !isConvUser && !isFactoryOwner && !!factory && await db.isActiveCoManager(factory.id, ctx.user.id);
+      if (!isConvUser && !isFactoryOwner && !isCoMgrPdf && ctx.user.role !== 'admin') {
+        throw new TRPCError({ code: "FORBIDDEN", message: "無權存取此檔案" });
+      }
 
       const attachment = (msg.attachmentData ?? {}) as {
         fileKey?: string; fileUrl?: string; expiresAt?: string; deleted?: boolean;
