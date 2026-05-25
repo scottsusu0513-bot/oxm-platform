@@ -16,6 +16,7 @@ import {
   ChevronLeft, ChevronRight
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
+import { useAuth } from "@/_core/hooks/useAuth";
 import { useState, useEffect } from "react";
 import { useLocation, Link } from "wouter";
 import { allPosts } from "@/lib/blog";
@@ -291,6 +292,7 @@ function MultiSelect({ options, value, onChange, placeholder, disabled, withClea
 
 export default function Home() {
   const [, navigate] = useLocation();
+  const { user, isAuthenticated } = useAuth();
   const [activeMode, setActiveMode] = useState("");
   const [industry, setIndustry] = useState("");
   const [subIndustry, setSubIndustry] = useState<string[]>([]);
@@ -727,7 +729,13 @@ export default function Home() {
               size="lg"
               variant="outline"
               className="text-base px-8 border-orange-300 text-orange-600 hover:bg-orange-50"
-              onClick={() => navigate("/register-factory")}
+              onClick={() => {
+                if (isAuthenticated && user?.isFactoryOwner && user?.role !== 'admin') {
+                  navigate("/dashboard");
+                } else {
+                  navigate("/register-factory");
+                }
+              }}
             >
               <ArrowRight className="w-5 h-5 mr-2" />
               免費刊登工廠／工作室

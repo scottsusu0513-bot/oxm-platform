@@ -327,13 +327,51 @@ function FactoryInfoForm({ factory, isOwner = true }: { factory: any; isOwner?: 
   const [avatarUploading, setAvatarUploading] = useState(false);
   const avatarInputRef = useRef<HTMLInputElement>(null);
 
+  // Snapshot of saved form values for dirty detection (avatar excluded — it saves immediately on upload)
+  const initialForm = useRef({
+    name: factory.name as string,
+    industry: Array.isArray(factory.industry) ? [...factory.industry as string[]] : typeof factory.industry === 'string' && factory.industry ? [factory.industry as string] : [] as string[],
+    subIndustry: [...((factory as any).subIndustry ?? [])] as string[],
+    mfgModes: [...(factory.mfgModes as string[])],
+    region: factory.region as string,
+    description: (factory.description ?? "") as string,
+    capitalLevel: factory.capitalLevel as string,
+    foundedYear: (factory.foundedYear?.toString() ?? "") as string,
+    ownerName: (factory.ownerName ?? "") as string,
+    phone: (factory.phone ?? "") as string,
+    website: (factory.website ?? "") as string,
+    contactEmail: (factory.contactEmail ?? "") as string,
+    address: (factory.address ?? "") as string,
+    operationStatus: (factory.operationStatus ?? "normal") as "normal" | "busy" | "full",
+    weekdayHours: ((factory as any).weekdayHours ?? "") as string,
+    weekendHours: ((factory as any).weekendHours ?? "") as string,
+    businessNote: ((factory as any).businessNote ?? "") as string,
+  });
+
+  const arrEq = (a: string[], b: string[]) =>
+    a.length === b.length && [...a].sort().join("\0") === [...b].sort().join("\0");
+
+  const isDirty =
+    name !== initialForm.current.name ||
+    !arrEq(industry, initialForm.current.industry) ||
+    !arrEq(subIndustry, initialForm.current.subIndustry) ||
+    !arrEq(mfgModes, initialForm.current.mfgModes) ||
+    region !== initialForm.current.region ||
+    description !== initialForm.current.description ||
+    capitalLevel !== initialForm.current.capitalLevel ||
+    foundedYear !== initialForm.current.foundedYear ||
+    ownerName !== initialForm.current.ownerName ||
+    phone !== initialForm.current.phone ||
+    website !== initialForm.current.website ||
+    contactEmail !== initialForm.current.contactEmail ||
+    address !== initialForm.current.address ||
+    operationStatus !== initialForm.current.operationStatus ||
+    weekdayHours !== initialForm.current.weekdayHours ||
+    weekendHours !== initialForm.current.weekendHours ||
+    businessNote !== initialForm.current.businessNote;
+
   const utils = trpc.useUtils();
   const updateFactory = trpc.factory.update.useMutation({
-    onSuccess: () => {
-      toast.success("資料已更新");
-      utils.factory.getMine.invalidate();
-      utils.factory.getById.invalidate({ id: factory.id });
-    },
     onError: (err) => toast.error(err.message),
   });
   const uploadAvatarMut = trpc.factory.uploadAvatar.useMutation();
@@ -376,8 +414,14 @@ function FactoryInfoForm({ factory, isOwner = true }: { factory: any; isOwner?: 
   };
 
   const handleSave = () => {
+    if (!isDirty) return;
     if (avatarUploading) { toast.error("圖片上傳中，請稍候"); return; }
     if (foundedYear && foundedYear.length !== 4) { toast.error("成立年份請輸入4位數西元年"); return; }
+    const snapshot = {
+      name, industry: [...industry], subIndustry: [...subIndustry], mfgModes: [...mfgModes],
+      region, description, capitalLevel, foundedYear, ownerName, phone, website, contactEmail,
+      address, operationStatus, weekdayHours, weekendHours, businessNote,
+    };
     updateFactory.mutate({
       id: factory.id, name,
       industry: industry.length > 0 ? industry : undefined,
@@ -391,6 +435,13 @@ function FactoryInfoForm({ factory, isOwner = true }: { factory: any; isOwner?: 
       ownerName: ownerName || undefined, phone: phone || undefined,
       website: website || undefined, contactEmail: contactEmail || undefined,
       avatarUrl: avatarUrl || factory.avatarUrl || undefined,
+    }, {
+      onSuccess: () => {
+        toast.success("資料已更新");
+        initialForm.current = snapshot;
+        utils.factory.getMine.invalidate();
+        utils.factory.getById.invalidate({ id: factory.id });
+      },
     });
   };
 
@@ -704,8 +755,12 @@ function FactoryInfoForm({ factory, isOwner = true }: { factory: any; isOwner?: 
             )}
             <Button
               onClick={handleSave}
-              disabled={updateFactory.isPending}
-              className="bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white border-0"
+              disabled={!isDirty || updateFactory.isPending}
+              className={
+                isDirty
+                  ? "bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white border-0"
+                  : "bg-gray-200 text-gray-400 cursor-not-allowed border-0"
+              }
             >
               <Save className="w-4 h-4 mr-1" />{updateFactory.isPending ? "儲存中..." : "儲存變更"}
             </Button>
