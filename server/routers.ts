@@ -38,7 +38,7 @@ export const appRouter = router({
   system: systemRouter,
 
   analytics: router({
-    record: publicProcedure.input(z.object({ visitorId: z.string().max(64) })).mutation(async ({ input }) => {
+    record: publicProcedure.input(z.object({ visitorId: z.string().regex(/^[a-zA-Z0-9\-_]+$/).min(1).max(64) })).mutation(async ({ input }) => {
       await db.recordPageView(input.visitorId);
     }),
     getStats: adminProcedure.query(async () => {
@@ -75,6 +75,11 @@ export const appRouter = router({
       }
       if (user.primaryEmailVerifiedAt) {
         return { success: true, alreadyVerified: true };
+      }
+      // Cooldown: prevent re-sending within 5 minutes
+      const recent = await db.getLatestEmailVerificationToken(user.id, user.primaryEmail);
+      if (recent && recent.createdAt > new Date(Date.now() - 5 * 60 * 1000)) {
+        throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: "驗證信已寄出，請稍後再試" });
       }
       const rawToken = generateRawToken();
       const tokenHash = sha256Hex(rawToken);
@@ -207,9 +212,21 @@ export const appRouter = router({
 
   // ===== 工廠 =====
   factory: router({
-    getById: publicProcedure.input(z.object({ id: z.number() })).query(async ({ input }) => {
+    getById: publicProcedure.input(z.object({ id: z.number() })).query(async ({ input, ctx }) => {
       const factory = await db.getFactoryById(input.id);
       if (!factory) return null;
+      // Non-approved factories are only visible to their owner, co-managers, and admins
+      if (factory.status !== "approved") {
+        const user = ctx.user;
+        if (!user) return null;
+        if (!user.isAdmin) {
+          const isOwner = factory.ownerId === user.id;
+          if (!isOwner) {
+            const isCoMgr = await db.isActiveCoManager(factory.id, user.id);
+            if (!isCoMgr) return null;
+          }
+        }
+      }
       const prods = await db.getProductsByFactoryId(input.id);
       return { ...factory, products: prods };
     }),
@@ -1236,6 +1253,8 @@ export const appRouter = router({
       comment: z.string().max(1000).optional(),
     })).mutation(async ({ ctx, input }) => {
       requireVerifiedEmail(ctx.user);
+      const existing = await db.getReviewByUserAndFactory(ctx.user.id, input.factoryId);
+      if (existing) throw new TRPCError({ code: "BAD_REQUEST", message: "您已為此工廠留過評價" });
       await db.createReview({ ...input, userId: ctx.user.id });
       return { success: true };
     }),

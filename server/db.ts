@@ -2612,6 +2612,21 @@ export async function userHasImportantActivity(userId: number): Promise<boolean>
   return Number(f?.n) > 0 || Number(c?.n) > 0 || Number(r?.n) > 0 || Number(m?.n) > 0;
 }
 
+export async function getLatestEmailVerificationToken(userId: number, email: string) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db.select()
+    .from(emailVerificationTokens)
+    .where(and(
+      eq(emailVerificationTokens.userId, userId),
+      eq(emailVerificationTokens.email, email),
+      sql`${emailVerificationTokens.usedAt} IS NULL`,
+    ))
+    .orderBy(desc(emailVerificationTokens.createdAt))
+    .limit(1);
+  return rows[0] ?? undefined;
+}
+
 export async function createEmailVerificationToken(params: {
   userId: number;
   tokenHash: string;

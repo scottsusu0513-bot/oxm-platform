@@ -3,6 +3,10 @@ import * as db from "../db";
 import { ENV } from "./env";
 import { randomBytes } from "crypto";
 import { handleOAuthCallback, issueSessionOrTicket } from "./oauthHelpers";
+import { createRemoteJWKSet, jwtVerify } from "jose";
+
+// Cached Apple JWKS (fetched lazily on first Apple login)
+const APPLE_JWKS = createRemoteJWKSet(new URL("https://appleid.apple.com/auth/keys"));
 
 const OAUTH_STATE_COOKIE = "oauth_state";
 
@@ -361,12 +365,23 @@ export function registerOAuthRoutes(app: Express) {
         return;
       }
 
-      // Decode id_token payload (we trust Apple's signature for now; full JWKS verify is optional)
-      const idTokenPayload = decodeJwtPayload(tokenData.id_token);
-      const appleUserId: string = idTokenPayload?.sub;
-      const appleEmail: string | null = idTokenPayload?.email ?? null;
-      const appleEmailVerified: boolean = idTokenPayload?.email_verified === true || idTokenPayload?.email_verified === "true";
-      const isPrivateRelay: boolean = idTokenPayload?.is_private_email === true || idTokenPayload?.is_private_email === "true";
+      // Verify id_token signature against Apple JWKS (ES256)
+      let idTokenPayload: Record<string, unknown>;
+      try {
+        const { payload } = await jwtVerify(tokenData.id_token, APPLE_JWKS, {
+          issuer: "https://appleid.apple.com",
+          audience: ENV.appleClientId,
+        });
+        idTokenPayload = payload as Record<string, unknown>;
+      } catch (err) {
+        console.error("[OAuth/apple/callback] id_token JWKS verification failed:", (err as Error).message);
+        res.status(400).json({ error: "Apple id_token 驗證失敗，請稍後再試" });
+        return;
+      }
+      const appleUserId: string = idTokenPayload.sub as string;
+      const appleEmail: string | null = (idTokenPayload.email as string | undefined) ?? null;
+      const appleEmailVerified: boolean = idTokenPayload.email_verified === true || idTokenPayload.email_verified === "true";
+      const isPrivateRelay: boolean = idTokenPayload.is_private_email === true || idTokenPayload.is_private_email === "true";
 
       if (!appleUserId) {
         res.status(400).json({ error: "Failed to get Apple user ID" });
@@ -447,17 +462,6 @@ export function registerOAuthRoutes(app: Express) {
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
-
-function decodeJwtPayload(token: string): any {
-  try {
-    const [, payloadB64] = token.split(".");
-    const padded = payloadB64.replace(/-/g, "+").replace(/_/g, "/");
-    const json = Buffer.from(padded, "base64").toString("utf8");
-    return JSON.parse(json);
-  } catch {
-    return null;
-  }
-}
 
 async function generateAppleClientSecret(): Promise<string> {
   const { SignJWT } = await import("jose");

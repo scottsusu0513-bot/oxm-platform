@@ -25,8 +25,8 @@ export const messageLimiter = createLimiter(60 * 60 * 1000, 20);
 // 圖片上傳: 10 次/小時
 export const uploadLimiter = createLimiter(60 * 60 * 1000, 10);
 
-// 搜尋 API: 120 次/分鐘（防爬蟲）
-export const searchLimiter = createLimiter(60 * 1000, 120);
+// 搜尋 API: 30 次/分鐘（防爬蟲 + 保護 AI 搜尋成本）
+export const searchLimiter = createLimiter(60 * 1000, 30);
 
 // 檢舉: 5 次/小時（防濫用）
 export const reportLimiter = createLimiter(60 * 60 * 1000, 5);
