@@ -39,6 +39,12 @@ export default function FactoryRegister() {
   const utils = trpc.useUtils();
 
   const { data: existingFactory, isLoading: factoryLoading } = trpc.factory.getMine.useQuery(undefined, { enabled: isAuthenticated });
+  const coManagedQuery = trpc.factory.getCoManagedFactories.useQuery(undefined, {
+    enabled: isAuthenticated && user?.role !== 'admin',
+    staleTime: 60000,
+  });
+  const isCoManager = (coManagedQuery.data?.length ?? 0) > 0;
+  const hasFactoryAccess = !!existingFactory || isCoManager;
 
   const [name, setName] = useState("");
   const [industry, setIndustry] = useState<string[]>([]);
@@ -135,12 +141,12 @@ export default function FactoryRegister() {
   };
 
   useEffect(() => {
-    if (existingFactory && user?.role !== 'admin') {
+    if (user?.role !== 'admin' && hasFactoryAccess) {
       navigate("/dashboard");
     }
-  }, [existingFactory, navigate, user]);
+  }, [hasFactoryAccess, navigate, user]);
 
-  if (factoryLoading) {
+  if (factoryLoading || (isAuthenticated && user?.role !== 'admin' && coManagedQuery.isLoading)) {
     return (
       <div className="min-h-screen bg-background">
         <Navbar />
@@ -163,14 +169,14 @@ export default function FactoryRegister() {
     );
   }
 
-  if (existingFactory && user?.role !== 'admin') {
+  if (user?.role !== 'admin' && hasFactoryAccess) {
     return (
       <div className="min-h-screen bg-background">
         <Navbar />
         <div className="container py-16 text-center">
           <AlertCircle className="w-16 h-16 mx-auto mb-4 text-yellow-600" />
-          <h2 className="text-xl font-semibold mb-2">您已有一個刊登</h2>
-          <p className="text-muted-foreground mb-4">每個帳號只能申請一次</p>
+          <h2 className="text-xl font-semibold mb-2">您已有管理中的工廠</h2>
+          <p className="text-muted-foreground mb-4">您已有管理中的工廠，請至工廠管理後台管理資料</p>
           <Button onClick={() => navigate("/dashboard")}>返回管理後台</Button>
         </div>
       </div>

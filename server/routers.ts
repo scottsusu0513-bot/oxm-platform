@@ -258,7 +258,9 @@ export const appRouter = router({
       requireVerifiedEmail(ctx.user);
       if (ctx.user.role !== 'admin') {
         const existing = await db.getFactoryByOwnerId(ctx.user.id);
-        if (existing) throw new TRPCError({ code: 'BAD_REQUEST', message: '您已經註冊過工廠' });
+        if (existing) throw new TRPCError({ code: 'BAD_REQUEST', message: '您已有管理中的工廠，請至工廠管理後台管理資料' });
+        const coManaged = await db.getCoManagedFactories(ctx.user.id);
+        if (coManaged.length > 0) throw new TRPCError({ code: 'BAD_REQUEST', message: '您已有管理中的工廠，請至工廠管理後台管理資料' });
       }
       try {
         const factoryId = await db.createFactory({ ...input, ownerId: ctx.user.id, status: 'draft' });

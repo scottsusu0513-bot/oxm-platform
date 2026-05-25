@@ -293,6 +293,12 @@ function MultiSelect({ options, value, onChange, placeholder, disabled, withClea
 export default function Home() {
   const [, navigate] = useLocation();
   const { user, isAuthenticated } = useAuth();
+  const coManagedQuery = trpc.factory.getCoManagedFactories.useQuery(undefined, {
+    enabled: isAuthenticated && !user?.isFactoryOwner && user?.role !== 'admin',
+    staleTime: 60000,
+  });
+  const hasFactoryAccess = isAuthenticated && user?.role !== 'admin' &&
+    (user?.isFactoryOwner || (coManagedQuery.data?.length ?? 0) > 0);
   const [activeMode, setActiveMode] = useState("");
   const [industry, setIndustry] = useState("");
   const [subIndustry, setSubIndustry] = useState<string[]>([]);
@@ -730,7 +736,7 @@ export default function Home() {
               variant="outline"
               className="text-base px-8 border-orange-300 text-orange-600 hover:bg-orange-50"
               onClick={() => {
-                if (isAuthenticated && user?.isFactoryOwner && user?.role !== 'admin') {
+                if (hasFactoryAccess) {
                   navigate("/dashboard");
                 } else {
                   navigate("/register-factory");
