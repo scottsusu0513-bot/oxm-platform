@@ -67,7 +67,7 @@ export default function Navbar() {
 
   return (
     <>
-    <header className="sticky top-0 z-50 bg-white/95 backdrop-blur border-b border-border">
+    <header className="sticky top-0 z-50 bg-white/95 backdrop-blur border-b border-border" style={{ paddingTop: 'env(safe-area-inset-top, 0px)' }}>
       <div className="container flex items-center justify-between h-16">
         {/* Logo */}
         <Link href="/" className="flex items-center gap-2 font-extrabold text-xl no-underline">
@@ -202,9 +202,12 @@ export default function Navbar() {
         </div>
       </div>
 
-      {/* Mobile Menu */}
+      {/* Mobile Menu — px-4 pt-4 keeps top spacing; bottom accounts for home indicator */}
       {mobileOpen && (
-        <div className="md:hidden border-t border-border bg-white p-4 space-y-2">
+        <div
+          className="md:hidden border-t border-border bg-white px-4 pt-4 space-y-2"
+          style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 16px)' }}
+        >
           <Link href="/search" onClick={() => setMobileOpen(false)}>
             <Button variant="ghost" className="w-full justify-start"><Search className="w-4 h-4 mr-2" />搜尋工廠</Button>
           </Link>

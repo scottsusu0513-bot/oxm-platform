@@ -43,7 +43,7 @@ const AdminAnnouncements    = lazy(() => import("./pages/AdminAnnouncements"));
 const AdminMessages         = lazy(() => import("./pages/AdminMessages"));
 const AdminMessageDetail    = lazy(() => import("./pages/AdminMessageDetail"));
 
-// Handles oxm://oauth/callback?ticket=... deep links on Android
+// Handles oxm://oauth/callback?ticket=... deep links on iOS and Android
 function AppDeepLinkHandler() {
   const utils = trpc.useUtils();
 
