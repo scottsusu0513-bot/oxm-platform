@@ -285,7 +285,7 @@ export function registerOAuthRoutes(app: Express) {
   // ── Apple: Initiate ─────────────────────────────────────────────────────────
   app.get("/api/oauth/apple", async (req: Request, res: Response) => {
     if (!ENV.appleClientId || !ENV.appleTeamId || !ENV.appleKeyId || !ENV.applePrivateKey) {
-      res.status(503).json({ error: "Apple 登入尚未開放，請稍後再試。" });
+      res.status(503).json({ error: "Apple 登入伺服器設定尚未完成，請稍後再試。" });
       return;
     }
 
@@ -316,7 +316,7 @@ export function registerOAuthRoutes(app: Express) {
   // ── Apple: Callback (POST, Apple sends form_post) ───────────────────────────
   app.post("/api/oauth/apple/callback", async (req: Request, res: Response) => {
     if (!ENV.appleClientId || !ENV.appleTeamId || !ENV.appleKeyId || !ENV.applePrivateKey) {
-      res.status(503).json({ error: "Apple 登入尚未開放，請稍後再試。" });
+      res.status(503).json({ error: "Apple 登入伺服器設定尚未完成，請稍後再試。" });
       return;
     }
 

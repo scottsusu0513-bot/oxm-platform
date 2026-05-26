@@ -1,6 +1,22 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
+/* ── iOS / Capacitor safe area utilities ──────────────────────────────────────
+   viewport-fit=cover (index.html) exposes env(safe-area-inset-*).
+   Pages without a sticky Navbar must pad their top container so no interactive
+   element sits behind the Dynamic Island / notch.
+   On desktop  env(safe-area-inset-top) resolves to 0, so md breakpoint keeps
+   the original md:p-8 spacing.
+   ──────────────────────────────────────────────────────────────────────────── */
+.admin-page-top {
+  padding-top: calc(env(safe-area-inset-top, 0px) + 1rem);
+}
+@media (min-width: 768px) {
+  .admin-page-top {
+    padding-top: 2rem; /* same as Tailwind md:p-8 */
+  }
+}
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {

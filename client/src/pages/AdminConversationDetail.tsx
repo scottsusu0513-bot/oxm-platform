@@ -29,7 +29,7 @@ export default function AdminConversationDetail() {
   const meta = metaQuery.data;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-orange-50 to-amber-50 p-4 md:p-8">
+    <div className="min-h-screen bg-gradient-to-br from-orange-50 to-amber-50 px-4 pb-4 md:px-8 md:pb-8 admin-page-top">
       <div className="max-w-3xl mx-auto">
         <div className="flex items-center gap-4 mb-6">
           <Button variant="outline" size="sm" onClick={() => setLocation("/admin/conversations")} className="gap-2">
