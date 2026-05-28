@@ -1934,6 +1934,19 @@ export async function getCoManagersByFactory(factoryId: number) {
     .orderBy(asc(factoryCoManagers.createdAt));
 }
 
+export async function getFactoryCoManagerEmails(factoryId: number): Promise<string[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.select({ email: users.email })
+    .from(factoryCoManagers)
+    .innerJoin(users, eq(factoryCoManagers.userId, users.id))
+    .where(and(
+      eq(factoryCoManagers.factoryId, factoryId),
+      isNull(factoryCoManagers.removedAt)
+    ));
+  return rows.map(r => r.email).filter((e): e is string => typeof e === 'string' && e.length > 0);
+}
+
 export async function getPendingInvitationsByFactory(factoryId: number) {
   const db = await getDb();
   if (!db) return [];

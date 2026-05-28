@@ -1,7 +1,7 @@
 import { COOKIE_NAME, THIRTY_DAYS_MS } from "@shared/const";
 import { sdk } from "./_core/sdk";
 import { enhanceSearchKeyword, getSearchIntent } from './semantic-search';
-import { sendNewInquiryEmail, sendFactoryApprovedEmail, sendFactorySubmittedEmail, sendReportEmail, sendSupportTicketEmail, sendReviewReplyEmail, sendNewMessageNotificationEmail, sendReportStatusUpdateEmail, sendTicketStatusUpdateEmail, sendMessageReplyNotificationEmail, sendEmailVerificationEmail, sendAdminBroadcastEmail } from './email';
+import { sendNewInquiryEmail, sendFactoryApprovedEmail, sendFactoryRejectedEmail, sendFactorySubmittedEmail, sendReportEmail, sendSupportTicketEmail, sendReviewReplyEmail, sendNewMessageNotificationEmail, sendReportStatusUpdateEmail, sendTicketStatusUpdateEmail, sendMessageReplyNotificationEmail, sendEmailVerificationEmail, sendAdminBroadcastEmail } from './email';
 import { sha256Hex, generateRawToken } from './_core/oauthHelpers';
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
@@ -838,34 +838,44 @@ export const appRouter = router({
       }
 
       if (senderRole === "user") {
-        try {
-          const productInfo = conv.productId ? await db.getProductById(conv.productId) : null;
-          await notifyOwner({
-            title: `[OXM] 新客戶詢問 - ${factory?.name ?? "工廠"}`,
-            content: [
-              `工廠名稱：${factory?.name}`,
-              factory?.contactEmail ? `工廠信箱：${factory.contactEmail}` : null,
-              productInfo ? `詢問產品：${productInfo.name}` : null,
-              `客戶名稱：${ctx.user.name ?? "匿名"}`,
-              `客戶信箱：${ctx.user.email ?? "未提供"}`,
-              ``,
-              `訊息內容：`,
-              `「${input.content.substring(0, 500)}」`,
-              ``,
-              `請登入 OXM 平台回覆客戶。`,
-            ].filter(Boolean).join("\n"),
-          });
-          // 寄 email 給工廠（只有填了 contactEmail 才寄）
-          if (factory?.contactEmail) {
-            await sendNewInquiryEmail({
-              factoryName: factory.name,
-              factoryEmail: factory.contactEmail,
-              userName: ctx.user.name ?? '匿名',
-              productName: productInfo?.name,
-              message: input.content,
+        const productInfo = conv.productId ? await db.getProductById(conv.productId) : null;
+
+        // notifyOwner 獨立 fire-and-forget，失敗不影響 Email
+        notifyOwner({
+          title: `[OXM] 新客戶詢問 - ${factory?.name ?? "工廠"}`,
+          content: [
+            `工廠名稱：${factory?.name}`,
+            factory?.contactEmail ? `工廠信箱：${factory.contactEmail}` : null,
+            productInfo ? `詢問產品：${productInfo.name}` : null,
+            `客戶名稱：${ctx.user.name ?? "匿名"}`,
+            `客戶信箱：${ctx.user.email ?? "未提供"}`,
+            ``,
+            `訊息內容：`,
+            `「${input.content.substring(0, 500)}」`,
+            ``,
+            `請登入 OXM 平台回覆客戶。`,
+          ].filter(Boolean).join("\n"),
+        }).catch((e) => { console.warn("[chat.send] notifyOwner 失敗（非嚴重）", e); });
+
+        // 寄 Email 給工廠 owner（contactEmail）+ co-managers，獨立執行不阻擋主流程
+        if (factory) {
+          db.getFactoryCoManagerEmails(factory.id).then((coMgrEmails) => {
+            const recipients = new Set<string>();
+            if (factory.contactEmail) recipients.add(factory.contactEmail);
+            for (const e of coMgrEmails) {
+              if (e && e !== ctx.user.email) recipients.add(e);
+            }
+            Array.from(recipients).forEach((email) => {
+              sendNewInquiryEmail({
+                factoryName: factory.name,
+                factoryEmail: email,
+                userName: ctx.user.name ?? '匿名',
+                productName: productInfo?.name,
+                message: input.content,
+              }).catch(() => {});
             });
-          }
-        } catch (e) { console.warn("通知發送失敗", e); }
+          }).catch(() => {});
+        }
       }
       return { success: true };
     }),
@@ -1440,6 +1450,15 @@ export const appRouter = router({
 
     rejectFactory: adminProcedure.input(z.object({ factoryId: z.number(), reason: z.string() })).mutation(async ({ input }) => {
       await db.updateFactory(input.factoryId, -1, { status: 'rejected', rejectionReason: input.reason });
+      // 寄 email 通知工廠審核退回（只有填了 contactEmail 才寄）
+      const rejectedFactory = await db.getFactoryById(input.factoryId);
+      if (rejectedFactory?.contactEmail) {
+        sendFactoryRejectedEmail({
+          factoryName: rejectedFactory.name,
+          factoryEmail: rejectedFactory.contactEmail,
+          reason: input.reason || undefined,
+        }).catch((err) => { console.error('[Email] 審核退回通知寄送失敗:', err); });
+      }
       return { success: true };
     }),
 
@@ -1838,17 +1857,23 @@ export const appRouter = router({
           await db.createInquiryBatchItem(batchId, factoryId, conv.id);
           successCount++;
 
-          // 通知工廠（非同步，失敗不影響主流程）
-          if (factory.contactEmail) {
-            import("./email").then(({ sendNewInquiryEmail }) => {
+          // 通知工廠 owner + co-managers（非同步，失敗不影響主流程）
+          db.getFactoryCoManagerEmails(factory.id).then((coMgrEmails) => {
+            const recipients = new Set<string>();
+            if (factory.contactEmail) recipients.add(factory.contactEmail);
+            for (const e of coMgrEmails) {
+              if (e && e !== ctx.user.email) recipients.add(e);
+            }
+            Array.from(recipients).forEach((email) => {
               sendNewInquiryEmail({
                 factoryName: factory.name,
-                factoryEmail: factory.contactEmail!,
+                factoryEmail: email,
                 userName: ctx.user.name ?? "匿名",
                 message: input.message,
+                inquiryType: "batch",
               }).catch(() => {});
-            }).catch(() => {});
-          }
+            });
+          }).catch(() => {});
         } catch (err) {
           console.error(`[inquiryBatch.createAndSend] factory #${factoryId} failed:`, err);
         }

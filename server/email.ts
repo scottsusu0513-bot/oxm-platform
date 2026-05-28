@@ -19,11 +19,20 @@ export async function sendNewInquiryEmail(params: {
   userName: string;
   productName?: string;
   message: string;
+  inquiryType?: "normal" | "batch";
 }) {
   if (!isEmailEnabled()) {
     console.log('[Email] 未設定 RESEND_API_KEY，跳過寄信');
     return;
   }
+
+  const isBatch = params.inquiryType === "batch";
+  const subject = isBatch
+    ? `【OXM】您在 OXM 收到一則一鍵詢價`
+    : `【OXM】您有一則新的客戶詢問`;
+  const batchBadge = isBatch
+    ? `<p style="background: #eef2ff; color: #4f46e5; padding: 8px 12px; border-radius: 6px; display: inline-block; font-size: 13px; margin: 0 0 12px;">此為 OXM 一鍵詢價功能送出的詢問，買家同時聯繫了多間工廠</p>`
+    : '';
 
   try {
     const resend = getResend();
@@ -31,11 +40,12 @@ export async function sendNewInquiryEmail(params: {
     await resend.emails.send({
       from: FROM_EMAIL,
       to: params.factoryEmail,
-      subject: `【OXM】您有一則新的客戶詢問`,
+      subject,
       html: `
         <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2 style="color: #f97316;">您有一則新的客戶詢問</h2>
+          <h2 style="color: #f97316;">${isBatch ? '您收到一則一鍵詢價' : '您有一則新的客戶詢問'}</h2>
           <p>親愛的 <strong>${params.factoryName}</strong> 您好，</p>
+          ${batchBadge}
           <p>您在 OXM 平台收到一則來自 <strong>${params.userName}</strong> 的詢問訊息。</p>
           ${params.productName ? `<p>詢問產品：<strong>${params.productName}</strong></p>` : ''}
           <div style="background: #f5f5f5; padding: 16px; border-radius: 8px; margin: 16px 0;">
@@ -51,6 +61,49 @@ export async function sendNewInquiryEmail(params: {
       `,
     });
     console.log(`[Email] 已寄送新詢問通知給 ${params.factoryEmail}`);
+  } catch (error) {
+    console.error('[Email] 寄信失敗:', error);
+  }
+}
+
+// ===== 寄信給工廠：審核退回 =====
+export async function sendFactoryRejectedEmail(params: {
+  factoryName: string;
+  factoryEmail: string;
+  reason?: string;
+}) {
+  if (!isEmailEnabled()) {
+    console.log('[Email] 未設定 RESEND_API_KEY，跳過寄信');
+    return;
+  }
+
+  try {
+    const resend = getResend();
+    if (!resend) return;
+    await resend.emails.send({
+      from: FROM_EMAIL,
+      to: params.factoryEmail,
+      subject: `【OXM】您的工廠審核未通過`,
+      html: `
+        <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #f97316;">您的工廠審核未通過</h2>
+          <p>親愛的 <strong>${params.factoryName}</strong> 您好，</p>
+          <p>感謝您在 OXM 平台送出工廠審核申請，經審核後目前您的工廠資料尚未通過審核。</p>
+          ${params.reason ? `
+          <div style="background: #f5f5f5; padding: 16px; border-radius: 8px; margin: 16px 0;">
+            <p style="margin: 0; font-weight: bold;">退回原因：</p>
+            <p style="margin: 8px 0 0;">${params.reason}</p>
+          </div>` : ''}
+          <p>請登入 OXM 平台修改工廠資料，修改完成後可重新送出審核。</p>
+          <a href="${process.env.VITE_APP_URL ?? 'http://localhost:3000'}/dashboard"
+            style="background: #f97316; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none; display: inline-block;">
+            前往修改工廠資料
+          </a>
+          <p style="color: #999; font-size: 12px; margin-top: 24px;">此信件由 OXM 平台自動發送，請勿直接回覆。</p>
+        </div>
+      `,
+    });
+    console.log(`[Email] 已寄送審核退回通知給 ${params.factoryEmail}`);
   } catch (error) {
     console.error('[Email] 寄信失敗:', error);
   }
