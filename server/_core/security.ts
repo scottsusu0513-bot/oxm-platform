@@ -83,6 +83,12 @@ export function setupOriginCheck(app: Express) {
 
     // 只檢查 POST/PUT/DELETE 請求
     if (["POST", "PUT", "DELETE"].includes(req.method)) {
+      // Apple Sign in with Apple uses response_mode=form_post, so Apple's server
+      // POSTs to our callback from appleid.apple.com. The route is already
+      // CSRF-protected by the DB-validated state parameter — skip origin check.
+      if (req.path === "/api/oauth/apple/callback") {
+        return next();
+      }
       if (origin && !isOriginAllowed(origin)) {
         return res.status(403).json({ error: "Origin not allowed" });
       }

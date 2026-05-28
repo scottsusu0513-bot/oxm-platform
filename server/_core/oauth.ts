@@ -289,6 +289,7 @@ export function registerOAuthRoutes(app: Express) {
       return;
     }
 
+    const source = getQueryParam(req, "source") ?? "web";
     const state = await initOAuthState(req, res, "apple");
     if (!state) return;
 
@@ -300,17 +301,25 @@ export function registerOAuthRoutes(app: Express) {
       res.status(500).json({ error: "Apple OAuth init failed" });
       return;
     }
-
-    // Store clientSecret in state cookie for callback (short-lived, httpOnly)
-    // Apple requires response_mode=form_post; state is embedded in form POST
-    res.redirect(`https://appleid.apple.com/auth/authorize?${new URLSearchParams({
+    const appleParams = new URLSearchParams({
       client_id: ENV.appleClientId,
       redirect_uri: ENV.appleRedirectUri,
       response_type: "code",
       scope: "name email",
       response_mode: "form_post",
       state,
-    }).toString()}`);
+    });
+
+    console.log("[OAuth/apple/init]", {
+      client_id: ENV.appleClientId,
+      redirect_uri: ENV.appleRedirectUri,
+      source,
+      state_prefix: state.slice(0, 8),
+      authorize_redirect_uri: appleParams.get("redirect_uri"),
+    });
+
+    // Apple requires response_mode=form_post; state is embedded in form POST
+    res.redirect(`https://appleid.apple.com/auth/authorize?${appleParams.toString()}`);
   });
 
   // ── Apple: Callback (POST, Apple sends form_post) ───────────────────────────
@@ -322,6 +331,14 @@ export function registerOAuthRoutes(app: Express) {
 
     const isProd = process.env.NODE_ENV === "production";
     const { code, state: stateParam, user: userJson } = req.body ?? {};
+
+    console.log("[OAuth/apple/callback] received form_post:", {
+      has_code: !!code,
+      has_state: !!stateParam,
+      has_user: !!userJson,
+      origin: req.headers.origin ?? "(none)",
+      referer: req.headers.referer ? req.headers.referer.slice(0, 60) : "(none)",
+    });
 
     if (!code || !stateParam) {
       res.status(400).json({ error: "code and state are required" });
@@ -339,6 +356,8 @@ export function registerOAuthRoutes(app: Express) {
       res.status(400).json({ error: "Invalid OAuth state" });
       return;
     }
+
+    console.log("[OAuth/apple/callback] state valid, source:", dbResult.source);
 
     const { maxAge: _omit3, ...clearOpts3 } = getStateCookieOptions(isProd);
     void _omit3;
