@@ -17,6 +17,7 @@ import { nanoid } from "nanoid";
 import { factories, conversations, reviews, reports } from "../drizzle/schema";
 import { desc, eq, and, sql } from "drizzle-orm";
 import { getDb } from "./db";
+import { sendPushToUser } from "./push";
 
 function requireVerifiedEmail(user: { primaryEmailVerifiedAt: Date | null }): void {
   if (!user.primaryEmailVerifiedAt) {
@@ -1793,6 +1794,20 @@ export const appRouter = router({
       console.log(`[adminMessage] retract campaignId=${input.campaignId} by adminId=${ctx.user!.id} reason=${input.reason}`);
       await db.retractAdminMessageCampaign(input.campaignId, ctx.user!.id, input.reason);
       return { success: true };
+    }),
+
+    // 測試推播（admin only — 不輸出完整 token，只回傳統計數字）
+    sendTestPushNotification: adminProcedure.input(z.object({
+      userId: z.number().int().positive().optional(),
+      title: z.string().max(100).optional(),
+      body: z.string().max(200).optional(),
+    })).mutation(async ({ ctx, input }) => {
+      const targetUserId = input.userId ?? ctx.user!.id;
+      const result = await sendPushToUser(targetUserId, {
+        title: input.title ?? "OXM 測試通知",
+        body: input.body ?? "你的手機推播通知已設定成功",
+      });
+      return { targetUserId, ...result };
     }),
   }),
 
