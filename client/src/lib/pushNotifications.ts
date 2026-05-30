@@ -1,19 +1,23 @@
 import { Capacitor } from "@capacitor/core";
-import { PushNotifications } from "@capacitor/push-notifications";
+import { FirebaseMessaging } from "@capacitor-firebase/messaging";
 
 type PlatformType = "android" | "ios" | "unknown";
 type RegisterInput = { token: string; platform: PlatformType };
 type RegisterFn = (input: RegisterInput) => Promise<unknown>;
 export type PushInitResult = "success" | "denied" | "not_native" | "plugin_unavailable" | "error";
 
-// Module-level guards — listeners are registered at most once per app session
+// Module-level guards — listeners registered at most once per app session
 let listenersRegistered = false;
 let currentRegisterFn: RegisterFn | null = null;
+
+function getPlatform(): PlatformType {
+  const raw = Capacitor.getPlatform();
+  return raw === "android" || raw === "ios" ? raw : "unknown";
+}
 
 export async function initPushNotifications(registerFn: RegisterFn): Promise<PushInitResult> {
   if (!Capacitor.isNativePlatform()) return "not_native";
 
-  // Always update callback so the latest mutation reference is used
   currentRegisterFn = registerFn;
 
   try {
@@ -21,53 +25,62 @@ export async function initPushNotifications(registerFn: RegisterFn): Promise<Pus
       listenersRegistered = true;
 
       try {
-        await PushNotifications.addListener("registration", async (token) => {
-          const raw = Capacitor.getPlatform();
-          const platform: PlatformType = raw === "android" || raw === "ios" ? raw : "unknown";
+        // Token refresh — re-register updated FCM token with backend
+        await FirebaseMessaging.addListener("tokenReceived", async (event) => {
           try {
             if (currentRegisterFn) {
-              await currentRegisterFn({ token: token.value, platform });
+              await currentRegisterFn({ token: event.token, platform: getPlatform() });
             }
           } catch {
-            console.warn("[Push] token registration to server failed");
+            console.warn("[Push] token refresh registration to server failed");
           }
         });
 
-        await PushNotifications.addListener("registrationError", (err) => {
-          console.warn("[Push] registration error:", err.error);
+        // Foreground notification received
+        await FirebaseMessaging.addListener("notificationReceived", (event) => {
+          console.info("[Push] foreground notification:", event.notification.title ?? "(no title)");
         });
 
-        await PushNotifications.addListener("pushNotificationReceived", (notification) => {
-          console.info("[Push] foreground notification:", notification.title ?? "(no title)");
-        });
-
-        await PushNotifications.addListener("pushNotificationActionPerformed", (action) => {
+        // Notification tapped / action performed
+        await FirebaseMessaging.addListener("notificationActionPerformed", (event) => {
           console.info("[Push] notification tapped");
-          const data = action.notification.data as Record<string, string> | undefined;
+          const data = event.notification.data as Record<string, string> | undefined;
           if (data?.type === "chat" && data?.conversationId) {
             // 預留導頁，下一階段接 navigation
             // window.location.href = `/chat/${data.conversationId}`;
           }
         });
+
       } catch (listenerErr) {
-        // 若 addListener 失敗，標記重置讓下次有機會重試
+        // Listener setup failed — reset guard so next attempt can retry
         listenersRegistered = false;
         console.warn("[Push] addListener failed:", listenerErr);
         return "plugin_unavailable";
       }
     }
 
-    let perm = await PushNotifications.checkPermissions();
+    // Check / request notification permission
+    let perm = await FirebaseMessaging.checkPermissions();
     if (perm.receive !== "granted") {
-      perm = await PushNotifications.requestPermissions();
+      perm = await FirebaseMessaging.requestPermissions();
     }
     if (perm.receive !== "granted") return "denied";
 
-    await PushNotifications.register();
+    // Get FCM token (not APNs raw token)
+    const { token } = await FirebaseMessaging.getToken();
+
+    // Register FCM token with backend
+    try {
+      if (currentRegisterFn) {
+        await currentRegisterFn({ token, platform: getPlatform() });
+      }
+    } catch {
+      console.warn("[Push] FCM token registration to server failed");
+    }
+
     return "success";
 
   } catch (err: unknown) {
-    // 捕捉舊版 APP native plugin 不存在、not implemented、permission API throw 等情況
     const msg = err instanceof Error ? err.message : String(err);
     if (
       msg.includes("not implemented") ||
