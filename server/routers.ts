@@ -1983,6 +1983,44 @@ export const appRouter = router({
     }),
   }),
 
+  // ===== Push Notification Tokens =====
+  notification: router({
+    registerPushToken: protectedProcedure.input(z.object({
+      token: z.string().min(1).max(512),
+      platform: z.enum(["android", "ios", "unknown"]),
+      deviceId: z.string().max(100).optional(),
+      appVersion: z.string().max(50).optional(),
+    })).mutation(async ({ ctx, input }) => {
+      await db.upsertPushNotificationToken(ctx.user.id, input);
+      return { success: true };
+    }),
+
+    unregisterPushToken: protectedProcedure.input(z.object({
+      token: z.string().min(1).max(512),
+    })).mutation(async ({ ctx, input }) => {
+      await db.disablePushNotificationToken(ctx.user.id, input.token);
+      return { success: true };
+    }),
+
+    // 開發用：回傳 token 遮罩清單（不完整輸出 token）
+    getMyPushTokens: protectedProcedure.query(async ({ ctx }) => {
+      const rows = await db.getEnabledPushTokensByUserId(ctx.user.id);
+      return rows.map(r => ({
+        id: r.id,
+        platform: r.platform,
+        deviceId: r.deviceId,
+        appVersion: r.appVersion,
+        enabled: r.enabled,
+        lastSeenAt: r.lastSeenAt,
+        createdAt: r.createdAt,
+        // token 僅回傳前 8 碼 + 後 6 碼，避免完整暴露
+        tokenPreview: r.token.length > 14
+          ? `${r.token.substring(0, 8)}...${r.token.substring(r.token.length - 6)}`
+          : r.token.substring(0, 4) + '****',
+      }));
+    }),
+  }),
+
 });
 
 export type AppRouter = typeof appRouter;

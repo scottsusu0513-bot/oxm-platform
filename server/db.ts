@@ -1,6 +1,7 @@
 import { eq, and, like, desc, asc, sql, inArray, or, isNull, gt } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
+import { createHash } from "crypto";
 import type { EventEmitter } from "events";
 import {
   InsertUser, users, factories, products, productCategories,
@@ -15,6 +16,7 @@ import {
   messageCampaigns, messageRecipients, messageReplies,
   oauthStates, appLoginTickets, collaborationOrders,
   userAuthAccounts, emailVerificationTokens,
+  pushNotificationTokens,
   type Factory, type InsertFactory, type Product, type InsertProduct, type Favorite, type InsertFavorite
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
@@ -3018,4 +3020,65 @@ export async function createVerifiedOrderReview(data: {
     reviewType: "verified_order",
   });
   await recalcFactoryRating(data.factoryId);
+}
+
+// ===== Push Notification Tokens =====
+
+function hashPushToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+export async function upsertPushNotificationToken(
+  userId: number,
+  input: { token: string; platform: string; deviceId?: string; appVersion?: string }
+) {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  const tokenHash = hashPushToken(input.token);
+  await db.insert(pushNotificationTokens)
+    .values({
+      userId,
+      token: input.token,
+      tokenHash,
+      platform: input.platform,
+      deviceId: input.deviceId ?? null,
+      appVersion: input.appVersion ?? null,
+      enabled: true,
+      lastSeenAt: new Date(),
+    })
+    .onDuplicateKeyUpdate({
+      // ON DUPLICATE KEY 由 UNIQUE(userId, tokenHash) 觸發
+      set: {
+        token: input.token,
+        platform: input.platform,
+        deviceId: input.deviceId ?? null,
+        appVersion: input.appVersion ?? null,
+        enabled: true,
+        lastSeenAt: new Date(),
+        updatedAt: new Date(),
+      },
+    });
+}
+
+export async function disablePushNotificationToken(userId: number, token: string) {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  const tokenHash = hashPushToken(token);
+  await db.update(pushNotificationTokens)
+    .set({ enabled: false, updatedAt: new Date() })
+    .where(and(
+      eq(pushNotificationTokens.userId, userId),
+      eq(pushNotificationTokens.tokenHash, tokenHash)
+    ));
+}
+
+export async function getEnabledPushTokensByUserId(userId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select()
+    .from(pushNotificationTokens)
+    .where(and(
+      eq(pushNotificationTokens.userId, userId),
+      eq(pushNotificationTokens.enabled, true)
+    ));
 }

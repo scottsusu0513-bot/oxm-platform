@@ -464,3 +464,25 @@ export const emailVerificationTokens = mysqlTable("emailVerificationTokens", {
 });
 
 export type EmailVerificationToken = typeof emailVerificationTokens.$inferSelect;
+
+// ===== Push Notification Tokens =====
+export const pushNotificationTokens = mysqlTable("pushNotificationTokens", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull(),
+  token: varchar("token", { length: 512 }).notNull(),
+  // SHA-256(token) hex digest — 64 chars，用於 unique index，規避 varchar(512) 的 index 長度限制
+  tokenHash: varchar("tokenHash", { length: 64 }).notNull(),
+  platform: varchar("platform", { length: 20 }).notNull(),
+  deviceId: varchar("deviceId", { length: 100 }),
+  appVersion: varchar("appVersion", { length: 50 }),
+  enabled: boolean("enabled").default(true).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  lastSeenAt: timestamp("lastSeenAt"),
+}, (t) => ({
+  userTokenHashUnique: uniqueIndex("pnt_user_token_hash_unique").on(t.userId, t.tokenHash),
+  userIdIdx: index("pnt_user_id_idx").on(t.userId),
+  enabledIdx: index("pnt_enabled_idx").on(t.enabled),
+}));
+
+export type PushNotificationToken = typeof pushNotificationTokens.$inferSelect;
