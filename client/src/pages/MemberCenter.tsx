@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { Link } from "wouter";
 import { StatusTimeline } from "@/components/StatusTimeline";
+import { initPushNotifications } from "@/lib/pushNotifications";
 
 const STATUS_LABELS: Record<string, { label: string; color: string }> = {
   pending:    { label: "已寄出",  color: "bg-gray-100 text-gray-700" },
@@ -490,13 +491,42 @@ function NotificationsTab({ user }: { user: any }) {
     }).catch(() => {});
   }, []);
 
+  const registerPushToken = trpc.notification.registerPushToken.useMutation();
+  const pendingPushInitRef = useRef(false);
+
   const mutation = trpc.user.updateNotificationSettings.useMutation({
-    onSuccess: () => {
+    onSuccess: async () => {
       toast.success("通知設定已儲存");
+      const shouldInitPush = pendingPushInitRef.current;
+      pendingPushInitRef.current = false;
       setDirtySettings({});
       utils.auth.me.invalidate();
+
+      if (shouldInitPush) {
+        try {
+          const result = await initPushNotifications(async (input) => {
+            await registerPushToken.mutateAsync(input);
+          });
+          if (result === "success") {
+            toast.success("手機推播通知已開啟");
+          } else if (result === "denied") {
+            toast.warning("尚未允許系統通知，請到手機設定中開啟 OXM 通知");
+          } else if (result === "plugin_unavailable") {
+            toast.warning("目前無法啟用手機推播，請更新至最新版 OXM App 後再試");
+          } else if (result === "error") {
+            toast.warning("手機推播啟用失敗，請稍後再試");
+          }
+          // pushEnabled 設定已儲存成功，不因 push init 結果而回滾
+        } catch (e) {
+          console.warn("[Push] init failed after settings save", e);
+          toast.warning("手機推播啟用時發生問題，請稍後再試");
+        }
+      }
     },
-    onError: (e) => toast.error(e.message),
+    onError: (e) => {
+      pendingPushInitRef.current = false;
+      toast.error(e.message);
+    },
   });
 
   // 同時更新顯示狀態和髒標記
@@ -588,7 +618,12 @@ function NotificationsTab({ user }: { user: any }) {
         </div>
 
         <Button
-          onClick={() => { if (hasDirty) mutation.mutate({ settings: dirtySettings }); }}
+          onClick={() => {
+            if (!hasDirty) return;
+            // 如果本次儲存包含 pushEnabled=true 且在 native app，儲存成功後執行 initPushNotifications
+            pendingPushInitRef.current = isNativeApp && dirtySettings.pushEnabled === true;
+            mutation.mutate({ settings: dirtySettings });
+          }}
           disabled={mutation.isPending || !hasDirty}
           className="bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white border-0 disabled:opacity-50"
         >
