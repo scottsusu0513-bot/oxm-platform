@@ -493,6 +493,23 @@ function NotificationsTab({ user }: { user: any }) {
 
   const registerPushToken = trpc.notification.registerPushToken.useMutation();
   const pendingPushInitRef = useRef(false);
+  const silentInitAttemptedRef = useRef(false); // 確保同一生命週期只自動 init 一次
+
+  // 若 pushEnabled 已是 true（前次儲存），isNativeApp 確認後靜默執行一次 init
+  // 解決：設定頁重開時 dirtySettings 為空、不觸發 initPushNotifications 的問題
+  useEffect(() => {
+    if (!isNativeApp) return;                         // 1. 只在 native 執行，Web 直接返回
+    if (!(settings.pushEnabled ?? false)) return;
+    if (silentInitAttemptedRef.current) return;       // 2. 同一生命週期只跑一次
+    silentInitAttemptedRef.current = true;
+    initPushNotifications(async (input) => {
+      await registerPushToken.mutateAsync(input);
+    }).then(result => {
+      if (result !== "success" && result !== "not_native") {
+        console.warn("[Push] auto-init result:", result); // 3. 失敗只 console.warn，不 toast
+      }
+    }).catch(e => console.warn("[Push] auto-init failed:", e));
+  }, [isNativeApp]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const mutation = trpc.user.updateNotificationSettings.useMutation({
     onSuccess: async () => {
