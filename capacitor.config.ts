@@ -9,6 +9,12 @@ const config: CapacitorConfig = {
     androidScheme: 'https',
     cleartext: false,
   },
+  plugins: {
+    FirebaseMessaging: {
+      // 讓 iOS App 在前景時仍顯示通知橫幅、播放音效、更新 badge
+      presentationOptions: ["alert", "badge", "sound"],
+    },
+  },
 };
 
 export default config;
