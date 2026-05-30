@@ -56,6 +56,18 @@ export async function sendPushToUser(
     tokens: tokenList,
     notification: { title: payload.title, body: payload.body },
     ...(payload.data ? { data: payload.data } : {}),
+    apns: {
+      payload: {
+        aps: {
+          sound: "default",
+        },
+      },
+    },
+    android: {
+      notification: {
+        sound: "default",
+      },
+    },
   };
 
   const response = await getMessaging().sendEachForMulticast(message);
