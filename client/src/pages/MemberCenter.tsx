@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
@@ -15,6 +15,7 @@ import { toast } from "sonner";
 import {
   User, Heart, Clock, Star, MessageCircle, Flag, Bell, Shield, HeadphonesIcon,
   ExternalLink, Edit2, Trash2, AlertTriangle, Phone, ArrowLeft, History, FileText, ScrollText,
+  Smartphone, Mail,
 } from "lucide-react";
 import { Link } from "wouter";
 import { StatusTimeline } from "@/components/StatusTimeline";
@@ -29,21 +30,54 @@ const STATUS_LABELS: Record<string, { label: string; color: string }> = {
 
 const SUPPORT_TYPES = ["帳號問題", "交易糾紛", "檢舉申訴", "功能建議", "其他"];
 
-const DEFAULT_NOTIFICATIONS = {
+const DEFAULT_NOTIFICATIONS: Record<string, boolean> = {
+  // Email 設定（沿用既有 key，不改動後端寄信邏輯）
   reviewReply: true,
   newMessage: true,
   reportUpdate: true,
   ticketUpdate: true,
   announcement: false,
+  // Push 設定（新增，本階段只存 DB，下階段才接推播）
+  pushEnabled: false,
+  pushNewMessage: true,
+  pushReviewReply: true,
+  pushReportUpdate: true,
+  pushTicketUpdate: true,
+  pushAnnouncement: false,
 };
 
-const NOTIFICATION_LABELS: Record<string, string> = {
-  reviewReply:  "工廠回覆我的評價",
-  newMessage:   "詢價有新訊息",
-  reportUpdate: "檢舉狀態更新",
-  ticketUpdate: "客服投訴狀態更新",
-  announcement: "平台公告",
-};
+const NOTIFICATION_ROWS = [
+  {
+    label: "工廠回覆我的評價",
+    description: "當工廠回覆你的評價時通知你",
+    emailKey: "reviewReply",
+    pushKey: "pushReviewReply",
+  },
+  {
+    label: "詢價有新訊息",
+    description: "包含新訊息、商品詢問、一鍵詢價與工廠回覆",
+    emailKey: "newMessage",
+    pushKey: "pushNewMessage",
+  },
+  {
+    label: "檢舉狀態更新",
+    description: "當你的檢舉案件有狀態更新時通知你",
+    emailKey: "reportUpdate",
+    pushKey: "pushReportUpdate",
+  },
+  {
+    label: "客服投訴狀態更新",
+    description: "當你的客服工單有回覆或狀態更新時通知你",
+    emailKey: "ticketUpdate",
+    pushKey: "pushTicketUpdate",
+  },
+  {
+    label: "平台公告",
+    description: "包含系統維護、功能更新與重要平台訊息",
+    emailKey: "announcement",
+    pushKey: "pushAnnouncement",
+  },
+];
 
 export default function MemberCenter() {
   const { user, loading: authLoading } = useAuth();
@@ -443,34 +477,120 @@ function ReportsTab() {
 // ─── 通知設定 ─────────────────────────────────────────────────────────────────
 function NotificationsTab({ user }: { user: any }) {
   const utils = trpc.useUtils();
-  const saved = (user.notificationSettings as Record<string, boolean> | null) ?? DEFAULT_NOTIFICATIONS;
+  const saved = (user.notificationSettings as Record<string, boolean> | null) ?? {};
+  // settings：顯示用，合併預設值與已存設定
   const [settings, setSettings] = useState<Record<string, boolean>>({ ...DEFAULT_NOTIFICATIONS, ...saved });
+  // dirtySettings：只記錄本次有變更的 key，按儲存時只送這份
+  const [dirtySettings, setDirtySettings] = useState<Record<string, boolean>>({});
+  const [isNativeApp, setIsNativeApp] = useState(false);
+
+  useEffect(() => {
+    import("@capacitor/core").then(({ Capacitor }) => {
+      setIsNativeApp(Capacitor.isNativePlatform());
+    }).catch(() => {});
+  }, []);
 
   const mutation = trpc.user.updateNotificationSettings.useMutation({
-    onSuccess: () => { toast.success("通知設定已儲存"); utils.auth.me.invalidate(); },
+    onSuccess: () => {
+      toast.success("通知設定已儲存");
+      setDirtySettings({});
+      utils.auth.me.invalidate();
+    },
     onError: (e) => toast.error(e.message),
   });
+
+  // 同時更新顯示狀態和髒標記
+  const markChanged = (key: string, v: boolean) => {
+    setSettings(prev => ({ ...prev, [key]: v }));
+    setDirtySettings(prev => ({ ...prev, [key]: v }));
+  };
+
+  const pushMasterOn = settings.pushEnabled ?? false;
+  const pushItemDisabled = !isNativeApp || !pushMasterOn;
+  const hasDirty = Object.keys(dirtySettings).length > 0;
 
   return (
     <Card>
       <CardHeader>
         <CardTitle>通知設定</CardTitle>
-        <CardDescription>選擇您希望接收哪些 Email 通知</CardDescription>
+        <CardDescription>選擇您希望接收哪些 OXM 通知。手機通知需使用 OXM App 開啟。</CardDescription>
       </CardHeader>
-      <CardContent className="space-y-4">
-        {Object.entries(NOTIFICATION_LABELS).map(([key, label]) => (
-          <div key={key} className="flex items-center justify-between py-2 border-b last:border-0">
-            <Label className="text-sm font-normal cursor-pointer">{label}</Label>
-            <Switch
-              checked={settings[key] ?? false}
-              onCheckedChange={(v) => setSettings(prev => ({ ...prev, [key]: v }))}
-            />
+      <CardContent className="space-y-6">
+
+        {/* ── 手機推播總開關 ── */}
+        <div className="flex items-start justify-between gap-4 p-4 rounded-lg bg-muted/40 border">
+          <div className="flex items-start gap-3">
+            <Smartphone className="w-5 h-5 text-muted-foreground mt-0.5 shrink-0" />
+            <div className="space-y-0.5">
+              <p className="text-sm font-medium">手機推播通知</p>
+              <p className="text-xs text-muted-foreground">允許 OXM 在手機上發送即時通知</p>
+              {!isNativeApp && (
+                <p className="text-xs text-orange-500 pt-0.5">請使用 OXM App 開啟手機推播通知</p>
+              )}
+              {isNativeApp && !pushMasterOn && (
+                <p className="text-xs text-muted-foreground pt-0.5">開啟後，下方手機通知分類才會生效</p>
+              )}
+            </div>
           </div>
-        ))}
+          {/* disabled on web → onCheckedChange 不觸發 → pushEnabled 不進 dirtySettings */}
+          <Switch
+            disabled={!isNativeApp}
+            checked={pushMasterOn}
+            onCheckedChange={(v) => markChanged("pushEnabled", v)}
+            className={!isNativeApp ? "opacity-40 shrink-0" : "shrink-0"}
+          />
+        </div>
+
+        {/* ── 通知分類表 ── */}
+        <div>
+          {/* 欄位標頭 */}
+          <div className="flex items-center gap-3 pb-2 border-b">
+            <div className="flex-1" />
+            <div className="flex gap-1 shrink-0">
+              <div className="w-[72px] flex items-center justify-center gap-1 text-xs font-medium text-muted-foreground">
+                <Mail className="w-3 h-3" />
+                <span>Email</span>
+              </div>
+              <div className="w-[72px] flex items-center justify-center gap-1 text-xs font-medium text-muted-foreground">
+                <Smartphone className="w-3 h-3" />
+                <span>手機</span>
+              </div>
+            </div>
+          </div>
+
+          {/* 通知列 */}
+          {NOTIFICATION_ROWS.map(({ label, description, emailKey, pushKey }) => (
+            <div key={emailKey} className="flex items-center gap-3 py-3 border-b last:border-0">
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium">{label}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">{description}</p>
+              </div>
+              <div className="flex gap-1 shrink-0">
+                {/* Email 開關：Web / APP 都可操作，只送 emailKey */}
+                <div className="w-[72px] flex justify-center">
+                  <Switch
+                    checked={settings[emailKey] ?? false}
+                    onCheckedChange={(v) => markChanged(emailKey, v)}
+                  />
+                </div>
+                {/* 手機推播開關：Web disabled → onCheckedChange 不觸發 → pushKey 不進 dirtySettings */}
+                <div className="w-[72px] flex justify-center">
+                  <Switch
+                    disabled={pushItemDisabled}
+                    checked={settings[pushKey] ?? false}
+                    onCheckedChange={(v) => markChanged(pushKey, v)}
+                    className={pushItemDisabled ? "opacity-40" : ""}
+                  />
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+
         <Button
-          onClick={() => mutation.mutate({ settings })}
-          disabled={mutation.isPending}
-          className="mt-2 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white border-0"
+          onClick={() => { if (hasDirty) mutation.mutate({ settings: dirtySettings }); }}
+          disabled={mutation.isPending || !hasDirty}
+          className="bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white border-0 disabled:opacity-50"
         >
           儲存設定
         </Button>

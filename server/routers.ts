@@ -857,15 +857,23 @@ export const appRouter = router({
           ].filter(Boolean).join("\n"),
         }).catch((e) => { console.warn("[chat.send] notifyOwner 失敗（非嚴重）", e); });
 
-        // 寄 Email 給工廠 owner（contactEmail）+ co-managers，獨立執行不阻擋主流程
+        // 寄 Email 通知工廠端：factory.contactEmail 受 owner 的 newMessage 設定控制，co-manager 各自判斷
         if (factory) {
-          db.getFactoryCoManagerEmails(factory.id).then((coMgrEmails) => {
+          Promise.all([
+            db.getUserById(factory.ownerId),
+            db.getFactoryCoManagersWithPreferences(factory.id),
+          ]).then(([owner, coMgrs]) => {
             const recipients = new Set<string>();
-            if (factory.contactEmail) recipients.add(factory.contactEmail);
-            for (const e of coMgrEmails) {
-              if (e && e !== ctx.user.email) recipients.add(e);
+            const ownerSettings = (owner?.notificationSettings as Record<string, boolean> | null) ?? {};
+            if (factory.contactEmail && ownerSettings.newMessage !== false) {
+              recipients.add(factory.contactEmail);
             }
-            Array.from(recipients).forEach((email) => {
+            for (const { email, notificationSettings } of coMgrs) {
+              if (email === ctx.user.email) continue;
+              const s = (notificationSettings as Record<string, boolean> | null) ?? {};
+              if (s.newMessage !== false) recipients.add(email);
+            }
+            recipients.forEach((email) => {
               sendNewInquiryEmail({
                 factoryName: factory.name,
                 factoryEmail: email,
@@ -874,7 +882,21 @@ export const appRouter = router({
                 message: input.content,
               }).catch(() => {});
             });
-          }).catch(() => {});
+          }).catch((e) => {
+            console.warn('[chat.send] 通知設定查詢失敗，fallback 寄送所有收件人', e);
+            const fallback = new Set<string>();
+            if (factory.contactEmail) fallback.add(factory.contactEmail);
+            db.getFactoryCoManagerEmails(factory.id).then((emails) => {
+              emails.forEach(e => { if (e && e !== ctx.user.email) fallback.add(e); });
+              fallback.forEach(email => sendNewInquiryEmail({
+                factoryName: factory.name,
+                factoryEmail: email,
+                userName: ctx.user.name ?? '匿名',
+                productName: productInfo?.name,
+                message: input.content,
+              }).catch(() => {}));
+            }).catch(() => {});
+          });
         }
       }
       return { success: true };
@@ -1639,7 +1661,12 @@ export const appRouter = router({
 
         try {
           const recipients = await db.getRecipientsWithEmails(campaignId);
-          const withEmail = recipients.filter(r => !!r.email);
+          // announcement 預設 false（opt-in），只有明確設為 true 才寄
+          const withEmail = recipients.filter(r => {
+            if (!r.email) return false;
+            const s = (r.notificationSettings as Record<string, boolean> | null) ?? {};
+            return s.announcement === true;
+          });
           const skipped = recipients.length - withEmail.length;
           console.log(`[adminMessage] email queue start campaignId=${campaignId} total=${recipients.length} withEmail=${withEmail.length} skipped=${skipped}`);
 
@@ -1857,14 +1884,22 @@ export const appRouter = router({
           await db.createInquiryBatchItem(batchId, factoryId, conv.id);
           successCount++;
 
-          // 通知工廠 owner + co-managers（非同步，失敗不影響主流程）
-          db.getFactoryCoManagerEmails(factory.id).then((coMgrEmails) => {
+          // 通知工廠端：factory.contactEmail 受 owner 的 newMessage 設定控制，co-manager 各自判斷
+          Promise.all([
+            db.getUserById(factory.ownerId),
+            db.getFactoryCoManagersWithPreferences(factory.id),
+          ]).then(([owner, coMgrs]) => {
             const recipients = new Set<string>();
-            if (factory.contactEmail) recipients.add(factory.contactEmail);
-            for (const e of coMgrEmails) {
-              if (e && e !== ctx.user.email) recipients.add(e);
+            const ownerSettings = (owner?.notificationSettings as Record<string, boolean> | null) ?? {};
+            if (factory.contactEmail && ownerSettings.newMessage !== false) {
+              recipients.add(factory.contactEmail);
             }
-            Array.from(recipients).forEach((email) => {
+            for (const { email, notificationSettings } of coMgrs) {
+              if (email === ctx.user.email) continue;
+              const s = (notificationSettings as Record<string, boolean> | null) ?? {};
+              if (s.newMessage !== false) recipients.add(email);
+            }
+            recipients.forEach((email) => {
               sendNewInquiryEmail({
                 factoryName: factory.name,
                 factoryEmail: email,
@@ -1873,7 +1908,21 @@ export const appRouter = router({
                 inquiryType: "batch",
               }).catch(() => {});
             });
-          }).catch(() => {});
+          }).catch((e) => {
+            console.warn(`[inquiryBatch.createAndSend] factory #${factory.id} 通知設定查詢失敗，fallback 寄送所有收件人`, e);
+            const fallback = new Set<string>();
+            if (factory.contactEmail) fallback.add(factory.contactEmail);
+            db.getFactoryCoManagerEmails(factory.id).then((emails) => {
+              emails.forEach(e => { if (e && e !== ctx.user.email) fallback.add(e); });
+              fallback.forEach(email => sendNewInquiryEmail({
+                factoryName: factory.name,
+                factoryEmail: email,
+                userName: ctx.user.name ?? "匿名",
+                message: input.message,
+                inquiryType: "batch",
+              }).catch(() => {}));
+            }).catch(() => {});
+          });
         } catch (err) {
           console.error(`[inquiryBatch.createAndSend] factory #${factoryId} failed:`, err);
         }

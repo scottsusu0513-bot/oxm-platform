@@ -1556,7 +1556,11 @@ export async function updateUserProfile(userId: number, data: { name?: string; p
 export async function updateUserNotificationSettings(userId: number, settings: Record<string, boolean>) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
-  await db.update(users).set({ notificationSettings: settings }).where(eq(users.id, userId));
+  const current = await db.select({ notificationSettings: users.notificationSettings })
+    .from(users).where(eq(users.id, userId)).limit(1);
+  const existing = (current[0]?.notificationSettings as Record<string, boolean> | null) ?? {};
+  const merged = { ...existing, ...settings };
+  await db.update(users).set({ notificationSettings: merged }).where(eq(users.id, userId));
 }
 
 export async function softDeleteUser(userId: number) {
@@ -1947,6 +1951,22 @@ export async function getFactoryCoManagerEmails(factoryId: number): Promise<stri
   return rows.map(r => r.email).filter((e): e is string => typeof e === 'string' && e.length > 0);
 }
 
+export async function getFactoryCoManagersWithPreferences(factoryId: number): Promise<{ email: string; notificationSettings: Record<string, boolean> | null }[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.select({
+    email: users.email,
+    notificationSettings: users.notificationSettings,
+  })
+    .from(factoryCoManagers)
+    .innerJoin(users, eq(factoryCoManagers.userId, users.id))
+    .where(and(
+      eq(factoryCoManagers.factoryId, factoryId),
+      isNull(factoryCoManagers.removedAt)
+    ));
+  return rows.filter(r => typeof r.email === 'string' && r.email.length > 0) as { email: string; notificationSettings: Record<string, boolean> | null }[];
+}
+
 export async function getPendingInvitationsByFactory(factoryId: number) {
   const db = await getDb();
   if (!db) return [];
@@ -2271,11 +2291,11 @@ export async function markAdminMessageAsRead(campaignId: number, userId: number)
     .where(and(eq(messageRecipients.campaignId, campaignId), eq(messageRecipients.receiverId, userId)));
 }
 
-export async function getRecipientsWithEmails(campaignId: number): Promise<{ userId: number; email: string | null; name: string | null }[]> {
+export async function getRecipientsWithEmails(campaignId: number): Promise<{ userId: number; email: string | null; name: string | null; notificationSettings: Record<string, boolean> | null }[]> {
   const db = await getDb();
   if (!db) return [];
   return db
-    .select({ userId: users.id, email: users.email, name: users.name })
+    .select({ userId: users.id, email: users.email, name: users.name, notificationSettings: users.notificationSettings })
     .from(messageRecipients)
     .innerJoin(users, eq(messageRecipients.receiverId, users.id))
     .where(and(eq(messageRecipients.campaignId, campaignId), isNull(users.deletedAt)));
