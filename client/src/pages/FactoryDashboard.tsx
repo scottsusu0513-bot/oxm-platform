@@ -14,7 +14,7 @@ import { trpc } from "@/lib/trpc";
 import { compressImage } from "@/lib/compressImage";
 import { INDUSTRIES, INDUSTRY_OPTIONS, TAIWAN_REGIONS, CAPITAL_OPTIONS, MFG_MODE_OPTIONS } from "@shared/constants";
 import { useState, useEffect, useRef } from "react";
-import { useLocation, Link } from "wouter";
+import { useLocation, useSearch, Link } from "wouter";
 import { toast } from "sonner";
 import {
   Factory, Package, MessageCircle, Settings, Plus, Pencil, Trash2, Save, Star, AlertTriangle, ImagePlus, X, ArrowLeft, Camera, Send, CheckCircle, Clock, XCircle, Wrench, Images, ChevronDown, Megaphone, Users, UserMinus, ClipboardList
@@ -64,6 +64,8 @@ function StatusBadge({ status }: { status: string }) {
 export default function FactoryDashboard() {
   const { user, isAuthenticated, loading } = useAuth();
   const [, navigate] = useLocation();
+  const searchString = useSearch();
+  const initialTab = new URLSearchParams(searchString).get("tab") ?? "info";
 
   const { data: ownedFactory, isLoading: ownedLoading } = trpc.factory.getMine.useQuery(undefined, { enabled: isAuthenticated });
 
@@ -219,7 +221,7 @@ export default function FactoryDashboard() {
           </div>
         )}
 
-        <Tabs defaultValue="info">
+        <Tabs defaultValue={initialTab}>
           <TabsList className="flex flex-wrap h-auto gap-1 mb-4 bg-white/80 p-1">
             <TabsTrigger value="info" className="gap-1.5 text-xs sm:text-sm">
               <Settings className="w-3.5 h-3.5 shrink-0" />
@@ -1244,18 +1246,18 @@ function ConversationList({ conversations }: { conversations: any[] }) {
   }
 
   return (
-    <Card>
+    <Card className="w-full min-w-0 overflow-hidden">
       <CardHeader><CardTitle>客戶詢問</CardTitle><CardDescription>查看並回覆客戶的詢問訊息</CardDescription></CardHeader>
       <CardContent>
         <div className="space-y-2">
           {conversations.map(conv => (
-            <div key={conv.id} className="flex items-center gap-2">
-              <div className="flex-1 cursor-pointer" onClick={() => navigate(`/chat/${conv.id}`, { state: { from: "/factory-dashboard" } })}>
-                <div className="flex items-center justify-between p-4 rounded-lg border hover:bg-muted/30 transition-colors">
+            <div key={conv.id} className="flex items-center gap-2 min-w-0">
+              <div className="flex-1 min-w-0 cursor-pointer" onClick={() => navigate(`/chat/${conv.id}`, { state: { from: "/dashboard?tab=messages" } })}>
+                <div className="flex items-center justify-between p-4 rounded-lg border hover:bg-muted/30 transition-colors min-w-0 w-full">
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <p className="font-medium">{conv.userName}</p>
-                      {conv.productName && <Badge variant="outline" className="text-xs">{conv.productName}</Badge>}
+                    <div className="flex items-center gap-2 min-w-0 overflow-hidden">
+                      <p className="font-medium truncate">{conv.userName}</p>
+                      {conv.productName && <Badge variant="outline" className="text-xs shrink-0">{conv.productName}</Badge>}
                     </div>
                     {conv.lastMessage && (
                       <p className="text-sm text-muted-foreground truncate mt-0.5">
