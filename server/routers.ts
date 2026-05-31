@@ -2034,6 +2034,53 @@ export const appRouter = router({
           : r.token.substring(0, 4) + '****',
       }));
     }),
+
+    // App badge count — 彙整所有紅點來源，沿用 Navbar 相同邏輯
+    getAppBadgeCount: protectedProcedure
+      .input(z.object({ reviewSince: z.number().int().optional() }).optional())
+      .query(async ({ ctx, input }) => {
+        const userId = ctx.user.id;
+
+        // 使用者未讀：chat 訊息 + 管理員站內信
+        const [regularCount, adminMsgCount] = await Promise.all([
+          db.getUnreadCount(userId),
+          db.getUnreadAdminMessageCount(userId),
+        ]);
+        const userUnread = regularCount + adminMsgCount;
+
+        // 工廠方未讀：客戶詢問 + 新評價（工廠業主才有）
+        let factoryUnread = 0;
+        let reviewUnread = 0;
+        const factory = await db.getFactoryByOwnerId(userId);
+        if (factory) {
+          factoryUnread = await db.getUnreadCountForFactory(factory.id);
+          const since = (input?.reviewSince ?? 0) > 0 ? new Date(input!.reviewSince!) : undefined;
+          const { count } = await db.countNewReviewsSince(factory.id, since);
+          reviewUnread = count;
+        }
+
+        // 管理員：待審工廠數 + 管理員通知
+        let pendingAdminCount = 0;
+        if (ctx.user.role === 'admin') {
+          const db_ = await getDb();
+          if (db_) {
+            const [result] = await db_
+              .select({ count: sql<number>`COUNT(*)` })
+              .from(factories)
+              .where(eq(factories.status, 'pending'));
+            pendingAdminCount = Number(result?.count ?? 0);
+          }
+          const { hasMessageReplies, hasSupportPending } = await db.getAdminPendingNotifications();
+          if (hasMessageReplies) pendingAdminCount += 1;
+          if (hasSupportPending) pendingAdminCount += 1;
+        }
+
+        const total = Math.max(0, userUnread + factoryUnread + reviewUnread + pendingAdminCount);
+        return {
+          total,
+          breakdown: { userUnread, factoryUnread, reviewUnread, pendingAdminCount },
+        };
+      }),
   }),
 
 });
