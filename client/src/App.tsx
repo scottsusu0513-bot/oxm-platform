@@ -2,11 +2,13 @@ import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Route, Switch } from "wouter";
 import { trpc } from "@/lib/trpc";
-import { lazy, Suspense, useEffect } from "react";
+import { lazy, Suspense, useEffect, useState, useMemo } from "react";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { HelmetProvider } from "react-helmet-async";
 import { toast } from "sonner";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { setBadgeCount, clearBadge } from "@/lib/appBadge";
 
 // ── 公開頁面 ──────────────────────────────────────────────────────────────
 const Home                  = lazy(() => import("./pages/Home"));
@@ -42,6 +44,69 @@ const AdminSupportCenter    = lazy(() => import("./pages/AdminSupportCenter"));
 const AdminAnnouncements    = lazy(() => import("./pages/AdminAnnouncements"));
 const AdminMessages         = lazy(() => import("./pages/AdminMessages"));
 const AdminMessageDetail    = lazy(() => import("./pages/AdminMessageDetail"));
+
+// ── App badge count syncer ────────────────────────────────────────────────────
+// 只在 Capacitor native app 執行，沿用 Navbar 相同紅點邏輯計算 badge 數字
+function AppBadgeSyncer() {
+  const { user } = useAuth();
+  const utils = trpc.useUtils();
+  const [isNative, setIsNative] = useState(false);
+
+  useEffect(() => {
+    import("@capacitor/core").then(({ Capacitor }) => {
+      setIsNative(Capacitor.isNativePlatform());
+    }).catch(() => {});
+  }, []);
+
+  const reviewSince = useMemo(() => {
+    try { return parseInt(localStorage.getItem('oxm_reviews_seen') ?? '0', 10); } catch { return 0; }
+  }, []);
+
+  const badgeQuery = trpc.notification.getAppBadgeCount.useQuery(
+    { reviewSince: reviewSince > 0 ? reviewSince : undefined },
+    { enabled: !!user && isNative, refetchInterval: 60000 }
+  );
+
+  // Badge count 變動時同步到 App icon
+  useEffect(() => {
+    if (badgeQuery.data?.total === undefined) return;
+    setBadgeCount(badgeQuery.data.total).catch(() => {});
+  }, [badgeQuery.data?.total]);
+
+  // 登出時清除 badge
+  useEffect(() => {
+    if (user || !isNative) return;
+    clearBadge().catch(() => {});
+  }, [user, isNative]);
+
+  // App 回到前景時重新取得 badge count
+  useEffect(() => {
+    if (!isNative) return;
+    let cleanup: (() => void) | undefined;
+    import("@capacitor/app").then(async ({ App: CapApp }) => {
+      const handle = await CapApp.addListener("appStateChange", ({ isActive }) => {
+        if (isActive) utils.notification.getAppBadgeCount.invalidate();
+      });
+      cleanup = () => handle.remove();
+    }).catch(() => {});
+    return () => { cleanup?.(); };
+  }, [isNative, utils]);
+
+  // 收到前景 FCM 通知時重新 sync
+  useEffect(() => {
+    if (!isNative) return;
+    let cleanup: (() => void) | undefined;
+    import("@capacitor-firebase/messaging").then(async ({ FirebaseMessaging }) => {
+      const handle = await FirebaseMessaging.addListener("notificationReceived", () => {
+        utils.notification.getAppBadgeCount.invalidate();
+      });
+      cleanup = () => handle.remove();
+    }).catch(() => {});
+    return () => { cleanup?.(); };
+  }, [isNative, utils]);
+
+  return null;
+}
 
 // Handles oxm://oauth/callback?ticket=... deep links on iOS and Android
 function AppDeepLinkHandler() {
@@ -204,6 +269,7 @@ function App() {
           <TooltipProvider>
             <Toaster />
             <PageViewTracker />
+            <AppBadgeSyncer />
             <AppDeepLinkHandler />
             <Router />
           </TooltipProvider>
