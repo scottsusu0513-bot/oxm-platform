@@ -17,7 +17,7 @@ import { nanoid } from "nanoid";
 import { factories, conversations, reviews, reports } from "../drizzle/schema";
 import { desc, eq, and, sql } from "drizzle-orm";
 import { getDb } from "./db";
-import { sendPushToUser } from "./push";
+import { sendPushToUser, sendPushToRecipients } from "./push";
 
 function requireVerifiedEmail(user: { primaryEmailVerifiedAt: Date | null }): void {
   if (!user.primaryEmailVerifiedAt) {
@@ -835,6 +835,19 @@ export const appRouter = router({
               conversationId: input.conversationId,
             }).catch(() => {});
           }
+          if (settings.pushNewMessage !== false) {
+            sendPushToRecipients({
+              userIds: [conv.userId],
+              excludeUserId: ctx.user.id,
+              title: "OXM 有新的訊息",
+              body: `${factory?.name ?? "工廠"} 傳來一則新訊息`,
+              data: {
+                type: "chat_message",
+                conversationId: String(input.conversationId),
+                targetPath: `/chat/${input.conversationId}`,
+              },
+            }).catch(() => {});
+          }
         }).catch(() => {});
       }
 
@@ -898,6 +911,33 @@ export const appRouter = router({
               }).catch(() => {}));
             }).catch(() => {});
           });
+        }
+
+        // 手機推播：通知工廠端（buyer 傳訊時）
+        if (factory) {
+          Promise.all([
+            db.getUserById(factory.ownerId),
+            db.getFactoryCoManagerUserIdsWithPreferences(factory.id),
+          ]).then(([owner, coMgrs]) => {
+            const pushIds: number[] = [];
+            const ownerSettings = (owner?.notificationSettings as Record<string, boolean> | null) ?? {};
+            if (owner && ownerSettings.pushNewMessage !== false) pushIds.push(factory.ownerId);
+            for (const { userId, notificationSettings } of coMgrs) {
+              const s = (notificationSettings as Record<string, boolean> | null) ?? {};
+              if (s.pushNewMessage !== false) pushIds.push(userId);
+            }
+            return sendPushToRecipients({
+              userIds: pushIds,
+              excludeUserId: ctx.user.id,
+              title: "OXM 有新的詢問訊息",
+              body: `${ctx.user.name ?? "客戶"} 傳來一則新訊息`,
+              data: {
+                type: "chat_message",
+                conversationId: String(input.conversationId),
+                targetPath: `/chat/${input.conversationId}`,
+              },
+            });
+          }).catch((e) => { console.warn("[Push] chat.send factory push error", e); });
         }
       }
       return { success: true };
@@ -1364,6 +1404,19 @@ export const appRouter = router({
             factoryId: factory.id,
           }).catch(() => {});
         }
+        if (settings.pushReviewReply !== false) {
+          sendPushToRecipients({
+            userIds: [review.userId],
+            excludeUserId: ctx.user.id,
+            title: "OXM 工廠回覆了你的評價",
+            body: `${factory.name} 回覆了你的評價`,
+            data: {
+              type: "review_reply",
+              factoryId: String(factory.id),
+              targetPath: `/factory/${factory.id}`,
+            },
+          }).catch(() => {});
+        }
       }).catch(() => {});
 
       return { success: true };
@@ -1460,7 +1513,6 @@ export const appRouter = router({
 
     approveFactory: adminProcedure.input(z.object({ factoryId: z.number() })).mutation(async ({ input }) => {
   await db.updateFactory(input.factoryId, -1, { status: 'approved' });
-  // 寄 email 通知工廠審核通過（只有填了 contactEmail 才寄）
   const factory = await db.getFactoryById(input.factoryId);
   if (factory?.contactEmail) {
     await sendFactoryApprovedEmail({
@@ -1468,12 +1520,19 @@ export const appRouter = router({
       factoryEmail: factory.contactEmail,
     });
   }
+  if (factory) {
+    sendPushToRecipients({
+      userIds: [factory.ownerId],
+      title: "OXM 工廠審核通過",
+      body: `「${factory.name}」已通過審核，現已正式上架`,
+      data: { type: "factory_approved", targetPath: "/dashboard" },
+    }).catch(() => {});
+  }
   return { success: true };
 }),
 
     rejectFactory: adminProcedure.input(z.object({ factoryId: z.number(), reason: z.string() })).mutation(async ({ input }) => {
       await db.updateFactory(input.factoryId, -1, { status: 'rejected', rejectionReason: input.reason });
-      // 寄 email 通知工廠審核退回（只有填了 contactEmail 才寄）
       const rejectedFactory = await db.getFactoryById(input.factoryId);
       if (rejectedFactory?.contactEmail) {
         sendFactoryRejectedEmail({
@@ -1481,6 +1540,14 @@ export const appRouter = router({
           factoryEmail: rejectedFactory.contactEmail,
           reason: input.reason || undefined,
         }).catch((err) => { console.error('[Email] 審核退回通知寄送失敗:', err); });
+      }
+      if (rejectedFactory) {
+        sendPushToRecipients({
+          userIds: [rejectedFactory.ownerId],
+          title: "OXM 工廠審核結果",
+          body: `「${rejectedFactory.name}」審核未通過，請修改後重新送審`,
+          data: { type: "factory_rejected", targetPath: "/dashboard" },
+        }).catch(() => {});
       }
       return { success: true };
     }),
@@ -1648,6 +1715,32 @@ export const appRouter = router({
         receiverIds = [input.receiverId];
       }
       await db.createMessageRecipients(campaignId, receiverIds);
+
+      // 手機推播：只推給 announcement === true 的使用者，fire-and-forget
+      (async () => {
+        try {
+          const recipients = await db.getRecipientsWithEmails(campaignId);
+          const pushIds = recipients
+            .filter(r => ((r.notificationSettings as Record<string, boolean> | null) ?? {}).pushAnnouncement === true)
+            .map(r => r.userId);
+          if (pushIds.length > 0) {
+            const bodyText = input.title.length > 100 ? input.title.slice(0, 97) + "..." : input.title;
+            await sendPushToRecipients({
+              userIds: pushIds,
+              title: "OXM 平台通知",
+              body: bodyText,
+              data: {
+                type: "admin_announcement",
+                campaignId: String(campaignId),
+                targetPath: "/messages",
+              },
+            });
+          }
+        } catch (err) {
+          console.warn("[Push] campaign push error:", err instanceof Error ? err.message : String(err));
+        }
+      })();
+
       // 非同步寄信，不阻塞 response；sequential queue 避免 Resend 429
       (async () => {
         const INTER_EMAIL_DELAY_MS = 500;
@@ -1898,6 +1991,32 @@ export const appRouter = router({
           await db.saveMessage(conv.id, ctx.user.id, "user", input.message);
           await db.createInquiryBatchItem(batchId, factoryId, conv.id);
           successCount++;
+
+          // 手機推播：通知工廠端
+          Promise.all([
+            db.getUserById(factory.ownerId),
+            db.getFactoryCoManagerUserIdsWithPreferences(factory.id),
+          ]).then(([owner, coMgrs]) => {
+            const pushIds: number[] = [];
+            const ownerSettings = (owner?.notificationSettings as Record<string, boolean> | null) ?? {};
+            if (owner && ownerSettings.pushNewMessage !== false) pushIds.push(factory.ownerId);
+            for (const { userId, notificationSettings } of coMgrs) {
+              const s = (notificationSettings as Record<string, boolean> | null) ?? {};
+              if (s.pushNewMessage !== false) pushIds.push(userId);
+            }
+            return sendPushToRecipients({
+              userIds: pushIds,
+              excludeUserId: ctx.user.id,
+              title: "OXM 有新的詢價需求",
+              body: "你收到一筆新的合作詢價",
+              data: {
+                type: "inquiry_batch",
+                conversationId: String(conv.id),
+                inquiryBatchId: String(batchId),
+                targetPath: "/dashboard?tab=messages",
+              },
+            });
+          }).catch((e) => { console.warn(`[Push] inquiryBatch factory #${factoryId} push error`, e); });
 
           // 通知工廠端：factory.contactEmail 受 owner 的 newMessage 設定控制，co-manager 各自判斷
           Promise.all([

@@ -10,6 +10,28 @@ export type PushInitResult = "success" | "denied" | "not_native" | "plugin_unava
 let listenersRegistered = false;
 let currentRegisterFn: RegisterFn | null = null;
 
+// Stores a targetPath from a notification tap before React is fully mounted (cold-start case)
+let pendingNavigatePath: string | null = null;
+
+/** Consume and clear the pending push navigation path (call once on app mount). */
+export function consumePendingNavigatePath(): string | null {
+  const p = pendingNavigatePath;
+  pendingNavigatePath = null;
+  return p;
+}
+
+function resolveTargetPath(data: Record<string, string> | undefined): string {
+  if (!data) return "/messages";
+  if (data.targetPath && data.targetPath.startsWith("/")) return data.targetPath;
+  if (data.conversationId) return `/chat/${data.conversationId}`;
+  return "/messages";
+}
+
+function dispatchPushNavigate(path: string) {
+  pendingNavigatePath = path;
+  window.dispatchEvent(new CustomEvent("oxm-push-navigate", { detail: { path } }));
+}
+
 function getPlatform(): PlatformType {
   const raw = Capacitor.getPlatform();
   return raw === "android" || raw === "ios" ? raw : "unknown";
@@ -41,14 +63,11 @@ export async function initPushNotifications(registerFn: RegisterFn): Promise<Pus
           console.info("[Push] foreground notification:", event.notification.title ?? "(no title)");
         });
 
-        // Notification tapped / action performed
+        // Notification tapped / action performed — navigate to targetPath
         await FirebaseMessaging.addListener("notificationActionPerformed", (event) => {
-          console.info("[Push] notification tapped");
-          const data = event.notification.data as Record<string, string> | undefined;
-          if (data?.type === "chat" && data?.conversationId) {
-            // 預留導頁，下一階段接 navigation
-            // window.location.href = `/chat/${data.conversationId}`;
-          }
+          const data = event.notification?.data as Record<string, string> | undefined;
+          const path = resolveTargetPath(data);
+          dispatchPushNavigate(path);
         });
 
       } catch (listenerErr) {

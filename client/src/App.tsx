@@ -1,6 +1,6 @@
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { Route, Switch } from "wouter";
+import { Route, Switch, useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { lazy, Suspense, useEffect, useState, useMemo } from "react";
 import ErrorBoundary from "./components/ErrorBoundary";
@@ -9,6 +9,7 @@ import { HelmetProvider } from "react-helmet-async";
 import { toast } from "sonner";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { setBadgeCount, clearBadge } from "@/lib/appBadge";
+import { consumePendingNavigatePath } from "@/lib/pushNotifications";
 
 // ── 公開頁面 ──────────────────────────────────────────────────────────────
 const Home                  = lazy(() => import("./pages/Home"));
@@ -177,6 +178,28 @@ function AppDeepLinkHandler() {
   return null;
 }
 
+// Handles push notification tap navigation (background, cold-start, foreground)
+function PushNavigationHandler() {
+  const [, navigate] = useLocation();
+
+  useEffect(() => {
+    // Consume path stored before React mounted (cold-start tap)
+    const pending = consumePendingNavigatePath();
+    if (pending) navigate(pending);
+
+    const handler = (e: Event) => {
+      const path = (e as CustomEvent<{ path: string }>).detail?.path;
+      if (path && typeof path === "string" && path.startsWith("/")) {
+        navigate(path);
+      }
+    };
+    window.addEventListener("oxm-push-navigate", handler);
+    return () => window.removeEventListener("oxm-push-navigate", handler);
+  }, [navigate]);
+
+  return null;
+}
+
 function PageFallback() {
   return (
     <div className="min-h-screen flex flex-col items-center justify-center gap-3">
@@ -271,6 +294,7 @@ function App() {
             <PageViewTracker />
             <AppBadgeSyncer />
             <AppDeepLinkHandler />
+            <PushNavigationHandler />
             <Router />
           </TooltipProvider>
         </ThemeProvider>

@@ -1969,6 +1969,22 @@ export async function getFactoryCoManagersWithPreferences(factoryId: number): Pr
   return rows.filter(r => typeof r.email === 'string' && r.email.length > 0) as { email: string; notificationSettings: Record<string, boolean> | null }[];
 }
 
+export async function getFactoryCoManagerUserIdsWithPreferences(factoryId: number): Promise<{ userId: number; notificationSettings: Record<string, boolean> | null }[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.select({
+    userId: factoryCoManagers.userId,
+    notificationSettings: users.notificationSettings,
+  })
+    .from(factoryCoManagers)
+    .innerJoin(users, eq(factoryCoManagers.userId, users.id))
+    .where(and(
+      eq(factoryCoManagers.factoryId, factoryId),
+      isNull(factoryCoManagers.removedAt)
+    ));
+  return rows as { userId: number; notificationSettings: Record<string, boolean> | null }[];
+}
+
 export async function getPendingInvitationsByFactory(factoryId: number) {
   const db = await getDb();
   if (!db) return [];

@@ -96,3 +96,58 @@ export async function sendPushToUser(
     failureCount: response.failureCount,
   };
 }
+
+export interface SendPushToRecipientsResult {
+  targetUserCount: number;
+  tokenCount: number;
+  successCount: number;
+  failureCount: number;
+}
+
+/**
+ * Send push to a list of users. Deduplicates userIds, excludes sender.
+ * Caller is responsible for pre-filtering by notification settings.
+ * Always fire-and-forget safe (does not throw).
+ */
+export async function sendPushToRecipients(opts: {
+  userIds: number[];
+  excludeUserId?: number;
+  title: string;
+  body: string;
+  data: Record<string, string>;
+}): Promise<SendPushToRecipientsResult> {
+  const result: SendPushToRecipientsResult = {
+    targetUserCount: 0,
+    tokenCount: 0,
+    successCount: 0,
+    failureCount: 0,
+  };
+  const seen = new Set<number>();
+
+  for (const userId of opts.userIds) {
+    if (seen.has(userId)) continue;
+    seen.add(userId);
+    if (opts.excludeUserId != null && userId === opts.excludeUserId) continue;
+
+    try {
+      result.targetUserCount++;
+      const r = await sendPushToUser(userId, {
+        title: opts.title,
+        body: opts.body,
+        data: opts.data,
+      });
+      if (r.status === "sent") {
+        result.tokenCount += r.tokenCount;
+        result.successCount += r.successCount;
+        result.failureCount += r.failureCount;
+      }
+    } catch (err) {
+      console.warn(
+        `[Push] sendPushToRecipients userId=${userId} error:`,
+        err instanceof Error ? err.message : String(err)
+      );
+    }
+  }
+
+  return result;
+}
