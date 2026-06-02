@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
+import { AppLoading } from "@/components/AppLoading";
 import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -18,7 +19,7 @@ export default function PendingFactoriesList() {
   const { data: pendingData } = trpc.admin.getPendingFactories.useQuery({ page, pageSize }, { enabled: isAdmin });
   const { data: approvedData } = trpc.admin.getApprovedFactories.useQuery({ page, pageSize }, { enabled: isAdmin });
 
-  if (authLoading) return <div className="flex items-center justify-center min-h-screen">載入中...</div>;
+  if (authLoading) return <AppLoading />;
   if (!user || user.role !== "admin") {
     return (
       <div className="flex items-center justify-center min-h-screen">

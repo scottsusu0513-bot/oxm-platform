@@ -1,5 +1,6 @@
 import { useLocation } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
+import { AppLoading } from "@/components/AppLoading";
 import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -48,7 +49,7 @@ export default function FactoryReviewDetail() {
   });
   const utils = trpc.useUtils();
 
-  if (authLoading) return <div className="flex items-center justify-center min-h-screen">載入中...</div>;
+  if (authLoading) return <AppLoading />;
   if (!user || user.role !== "admin") {
     return (
       <div className="flex items-center justify-center min-h-screen">
@@ -57,7 +58,7 @@ export default function FactoryReviewDetail() {
     );
   }
 
-  if (factoryLoading) return <div className="flex items-center justify-center min-h-screen">載入中...</div>;
+  if (factoryLoading) return <AppLoading />;
   if (!factory) {
     return (
       <div className="flex items-center justify-center min-h-screen">

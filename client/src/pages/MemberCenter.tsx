@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
+import { AppLoading } from "@/components/AppLoading";
 import { trpc } from "@/lib/trpc";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -84,7 +85,7 @@ export default function MemberCenter() {
   const { user, loading: authLoading } = useAuth();
   const [, setLocation] = useLocation();
 
-  if (authLoading) return <div className="flex items-center justify-center min-h-screen">載入中...</div>;
+  if (authLoading) return <AppLoading />;
   if (!user) {
     setLocation("/");
     return null;

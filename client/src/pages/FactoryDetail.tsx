@@ -251,7 +251,7 @@ export default function FactoryDetail() {
   });
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-background animate-page-enter">
       <Helmet>
         <title>{metaTitle}</title>
         <meta name="description" content={metaDesc} />

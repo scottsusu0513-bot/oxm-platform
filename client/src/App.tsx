@@ -10,6 +10,7 @@ import { toast } from "sonner";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { setBadgeCount, clearBadge } from "@/lib/appBadge";
 import { consumePendingNavigatePath } from "@/lib/pushNotifications";
+import { AppLoading } from "@/components/AppLoading";
 
 // ── 公開頁面 ──────────────────────────────────────────────────────────────
 const Home                  = lazy(() => import("./pages/Home"));
@@ -201,12 +202,7 @@ function PushNavigationHandler() {
 }
 
 function PageFallback() {
-  return (
-    <div className="min-h-screen flex flex-col items-center justify-center gap-3">
-      <span className="text-2xl font-bold tracking-widest text-orange-500">OXM</span>
-      <span className="text-sm text-muted-foreground">載入中...</span>
-    </div>
-  );
+  return <AppLoading />;
 }
 
 function Router() {

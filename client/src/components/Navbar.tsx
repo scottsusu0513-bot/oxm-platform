@@ -18,7 +18,23 @@ export default function Navbar() {
   const { user, isAuthenticated, logout } = useAuth();
   const [location] = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [menuVisible, setMenuVisible] = useState(false);
+  const [menuClosing, setMenuClosing] = useState(false);
   const [loginDialogOpen, setLoginDialogOpen] = useState(false);
+
+  useEffect(() => {
+    if (mobileOpen) {
+      setMenuClosing(false);
+      setMenuVisible(true);
+      return;
+    }
+    setMenuClosing(true);
+    const t = setTimeout(() => {
+      setMenuVisible(false);
+      setMenuClosing(false);
+    }, 200);
+    return () => clearTimeout(t);
+  }, [mobileOpen]);
 
   const unreadQuery = trpc.chat.unreadCount.useQuery(undefined, { enabled: isAuthenticated, refetchInterval: 30000 });
   const pendingCountQuery = trpc.admin.getPendingCount.useQuery(undefined, {
@@ -203,9 +219,9 @@ export default function Navbar() {
       </div>
 
       {/* Mobile Menu — px-4 pt-4 keeps top spacing; bottom accounts for home indicator */}
-      {mobileOpen && (
+      {menuVisible && (
         <div
-          className="md:hidden border-t border-border bg-white px-4 pt-4 space-y-2"
+          className={`md:hidden border-t border-border bg-white px-4 pt-4 space-y-2 ${menuClosing ? "animate-menu-exit" : "animate-menu-enter"}`}
           style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 16px)' }}
         >
           <Link href="/search" onClick={() => setMobileOpen(false)}>

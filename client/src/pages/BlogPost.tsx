@@ -21,7 +21,7 @@ export default function BlogPost() {
   const canonicalUrl = `${BASE}/blog/${post.slug}`;
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-background animate-page-enter">
       <Helmet>
         <title>{post.title}｜OXM 找代工指南</title>
         <meta name="description" content={post.description} />
@@ -85,7 +85,19 @@ export default function BlogPost() {
               prose-td:text-muted-foreground
               prose-blockquote:border-orange-300 prose-blockquote:text-muted-foreground
             ">
-              <ReactMarkdown>{post.content}</ReactMarkdown>
+              <ReactMarkdown
+                components={{
+                  img: ({ src, alt, ...props }) => (
+                    <img
+                      src={src}
+                      alt={alt}
+                      loading="lazy"
+                      decoding="async"
+                      {...props}
+                    />
+                  ),
+                }}
+              >{post.content}</ReactMarkdown>
             </div>
           )}
         </article>

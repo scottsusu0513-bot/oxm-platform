@@ -1,4 +1,5 @@
 import { useAuth } from "@/_core/hooks/useAuth";
+import { AppLoading } from "@/components/AppLoading";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,7 +14,7 @@ export default function AdminDashboard() {
   const { user, loading: authLoading } = useAuth();
   const [, setLocation] = useLocation();
 
-  if (authLoading) return <div className="flex items-center justify-center min-h-screen">載入中...</div>;
+  if (authLoading) return <AppLoading />;
   if (!user || user.role !== "admin") {
     return (
       <div className="flex items-center justify-center min-h-screen">

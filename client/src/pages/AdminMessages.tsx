@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useLocation, useParams } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
+import { AppLoading } from "@/components/AppLoading";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -35,7 +36,7 @@ export default function AdminMessages() {
   const { campaignId: campaignIdStr } = useParams<{ campaignId?: string }>();
   const campaignId = campaignIdStr ? parseInt(campaignIdStr, 10) : null;
 
-  if (authLoading) return <div className="flex items-center justify-center min-h-screen">載入中...</div>;
+  if (authLoading) return <AppLoading />;
   if (!user || user.role !== "admin") {
     return (
       <div className="flex items-center justify-center min-h-screen">

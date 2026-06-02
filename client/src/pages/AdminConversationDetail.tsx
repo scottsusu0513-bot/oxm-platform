@@ -1,5 +1,6 @@
 import { useRoute, useLocation } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
+import { AppLoading } from "@/components/AppLoading";
 import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -22,7 +23,7 @@ export default function AdminConversationDetail() {
   );
 
   console.log('[AdminConversationDetail] matched:', matched, 'params:', params);
-  if (authLoading) return <div className="flex items-center justify-center min-h-screen">載入中...</div>;
+  if (authLoading) return <AppLoading />;
   if (!user || user.role !== "admin") return <div className="flex items-center justify-center min-h-screen text-red-600">無權限</div>;
 
   const messages = (messagesQuery.data as any) ?? [];

@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 import { useAuth } from "@/_core/hooks/useAuth";
+import { AppLoading } from "@/components/AppLoading";
 import { trpc } from "@/lib/trpc";
 import { compressImage } from "@/lib/compressImage";
 import { INDUSTRIES, INDUSTRY_OPTIONS, TAIWAN_REGIONS, CAPITAL_OPTIONS, MFG_MODE_OPTIONS } from "@shared/constants";
@@ -120,12 +121,7 @@ export default function FactoryDashboard() {
   }, [loading, isAuthenticated, factoryLoading, factory, coManagedList, navigate]);
 
   if (loading || factoryLoading || !factory) {
-    return (
-      <div className="min-h-screen bg-background">
-        <Navbar />
-        <div className="container py-16 text-center text-muted-foreground">載入中...</div>
-      </div>
-    );
+    return <AppLoading />;
   }
 
   const isPending = factory.status === 'pending';

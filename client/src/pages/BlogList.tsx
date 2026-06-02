@@ -13,7 +13,7 @@ const pageDesc = "第一次找台灣代工廠？從 OEM vs ODM 差異、MOQ 談�
 
 export default function BlogList() {
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-background animate-page-enter">
       <Helmet>
         <title>{pageTitle}</title>
         <meta name="description" content={pageDesc} />

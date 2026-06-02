@@ -1080,8 +1080,13 @@ export default function ChatPage() {
                       <Plus className="w-4 h-4" />
                     </Button>
 
-                    {attachMenuOpen && (
-                      <div className="absolute bottom-12 left-0 z-50 w-48 rounded-lg border bg-popover shadow-md py-1">
+                    <div
+                      className={`absolute bottom-12 left-0 z-50 w-48 rounded-lg border bg-popover shadow-md py-1 transition-all duration-[180ms] ease-out origin-bottom-left ${
+                        attachMenuOpen
+                          ? "opacity-100 scale-100 pointer-events-auto"
+                          : "opacity-0 scale-95 pointer-events-none"
+                      }`}
+                    >
                         <button
                           className="flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-muted transition-colors"
                           onClick={() => {
@@ -1116,7 +1121,6 @@ export default function ChatPage() {
                           />
                         </label>
                       </div>
-                    )}
                   </div>
                 )}
 

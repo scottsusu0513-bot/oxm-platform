@@ -1,6 +1,66 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
+@keyframes page-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-page-enter {
+  animation: page-enter 160ms ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-page-enter {
+    animation: none !important;
+  }
+}
+
+@keyframes menu-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes menu-exit {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+}
+
+.animate-menu-enter {
+  animation: menu-enter 180ms ease-out both;
+  transform-origin: top center;
+}
+
+.animate-menu-exit {
+  animation: menu-exit 160ms ease-in both;
+  transform-origin: top center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-menu-enter,
+  .animate-menu-exit {
+    animation: none !important;
+  }
+}
+
 /* ── iOS / Capacitor safe area utilities ──────────────────────────────────────
    viewport-fit=cover (index.html) exposes env(safe-area-inset-*).
    Pages without a sticky Navbar must pad their top container so no interactive

@@ -1,4 +1,5 @@
 import { useAuth } from "@/_core/hooks/useAuth";
+import { AppLoading } from "@/components/AppLoading";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -30,7 +31,7 @@ const DEFAULT_FORM: FormState = { title: "", content: "", type: "news", isPinned
 
 export default function AdminAnnouncements() {
   const { user, loading } = useAuth();
-  if (loading) return <div className="flex items-center justify-center min-h-screen">載入中...</div>;
+  if (loading) return <AppLoading />;
   if (!user || user.role !== "admin") return <div className="flex items-center justify-center min-h-screen text-muted-foreground">無權限</div>;
   return <AdminAnnouncementsContent />;
 }
