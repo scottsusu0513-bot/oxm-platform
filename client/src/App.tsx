@@ -11,6 +11,7 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { setBadgeCount, clearBadge } from "@/lib/appBadge";
 import { consumePendingNavigatePath } from "@/lib/pushNotifications";
 import { AppLoading } from "@/components/AppLoading";
+import { AppBottomNav } from "@/components/AppBottomNav";
 
 // ── 公開頁面 ──────────────────────────────────────────────────────────────
 const Home                  = lazy(() => import("./pages/Home"));
@@ -292,6 +293,7 @@ function App() {
             <AppDeepLinkHandler />
             <PushNavigationHandler />
             <Router />
+            <AppBottomNav />
           </TooltipProvider>
         </ThemeProvider>
       </ErrorBoundary>
