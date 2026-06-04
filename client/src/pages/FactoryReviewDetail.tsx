@@ -251,8 +251,12 @@ export default function FactoryReviewDetail() {
                     <p className="font-medium">{factory.foundedYear}</p>
                   </div>
                   <div>
+                    <Label className="text-gray-600">負責人</Label>
+                    <p className="font-medium">{factory.ownerName || "未填寫"}</p>
+                  </div>
+                  <div>
                     <Label className="text-gray-600">聯絡人</Label>
-                    <p className="font-medium">{factory.ownerName}</p>
+                    <p className="font-medium">{(factory as any).contactPersonName || "未填寫"}</p>
                   </div>
                   <div>
                     <Label className="text-gray-600">電話</Label>

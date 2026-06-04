@@ -37,6 +37,7 @@ export const factories = mysqlTable("factories", {
   capitalLevel: varchar("capitalLevel", { length: 30 }).notNull(),
   foundedYear: int("foundedYear"),
   ownerName: varchar("ownerName", { length: 100 }),
+  contactPersonName: varchar("contactPersonName", { length: 100 }), // 洽詢窗口／聯絡人
   phone: varchar("phone", { length: 30 }),
   website: varchar("website", { length: 500 }),
   contactEmail: varchar("contactEmail", { length: 320 }),

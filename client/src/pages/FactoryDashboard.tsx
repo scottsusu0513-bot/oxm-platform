@@ -312,6 +312,7 @@ function FactoryInfoForm({ factory, isOwner = true }: { factory: any; isOwner?: 
   const [capitalLevel, setCapitalLevel] = useState(factory.capitalLevel);
   const [foundedYear, setFoundedYear] = useState(factory.foundedYear?.toString() ?? "");
   const [ownerName, setOwnerName] = useState(factory.ownerName ?? "");
+  const [contactPersonName, setContactPersonName] = useState((factory as any).contactPersonName ?? "");
   const [phone, setPhone] = useState(factory.phone ?? "");
   const [website, setWebsite] = useState(factory.website ?? "");
   const [contactEmail, setContactEmail] = useState(factory.contactEmail ?? "");
@@ -336,6 +337,7 @@ function FactoryInfoForm({ factory, isOwner = true }: { factory: any; isOwner?: 
     capitalLevel: factory.capitalLevel as string,
     foundedYear: (factory.foundedYear?.toString() ?? "") as string,
     ownerName: (factory.ownerName ?? "") as string,
+    contactPersonName: ((factory as any).contactPersonName ?? "") as string,
     phone: (factory.phone ?? "") as string,
     website: (factory.website ?? "") as string,
     contactEmail: (factory.contactEmail ?? "") as string,
@@ -359,6 +361,7 @@ function FactoryInfoForm({ factory, isOwner = true }: { factory: any; isOwner?: 
     capitalLevel !== initialForm.current.capitalLevel ||
     foundedYear !== initialForm.current.foundedYear ||
     ownerName !== initialForm.current.ownerName ||
+    contactPersonName !== initialForm.current.contactPersonName ||
     phone !== initialForm.current.phone ||
     website !== initialForm.current.website ||
     contactEmail !== initialForm.current.contactEmail ||
@@ -417,7 +420,7 @@ function FactoryInfoForm({ factory, isOwner = true }: { factory: any; isOwner?: 
     if (foundedYear && foundedYear.length !== 4) { toast.error("成立年份請輸入4位數西元年"); return; }
     const snapshot = {
       name, industry: [...industry], subIndustry: [...subIndustry], mfgModes: [...mfgModes],
-      region, description, capitalLevel, foundedYear, ownerName, phone, website, contactEmail,
+      region, description, capitalLevel, foundedYear, ownerName, contactPersonName, phone, website, contactEmail,
       address, operationStatus, weekdayHours, weekendHours, businessNote,
     };
     updateFactory.mutate({
@@ -430,7 +433,9 @@ function FactoryInfoForm({ factory, isOwner = true }: { factory: any; isOwner?: 
       weekendHours: weekendHours || undefined,
       businessNote: businessNote || undefined,
       foundedYear: foundedYear ? parseInt(foundedYear) : undefined,
-      ownerName: ownerName || undefined, phone: phone || undefined,
+      ownerName: ownerName || undefined,
+      contactPersonName: contactPersonName || undefined,
+      phone: phone || undefined,
       website: website || undefined, contactEmail: contactEmail || undefined,
       avatarUrl: avatarUrl || factory.avatarUrl || undefined,
     }, {
@@ -640,8 +645,9 @@ function FactoryInfoForm({ factory, isOwner = true }: { factory: any; isOwner?: 
               <Input disabled={isLocked} inputMode="numeric" value={foundedYear} onChange={e => handleYearChange(e.target.value)} placeholder="西元（例：2010）" maxLength={4} />
             </div>
             <div className="space-y-2">
-              <Label>負責人</Label>
+              <Label>負責人姓名</Label>
               <Input disabled={isLocked} value={ownerName} onChange={e => setOwnerName(e.target.value)} />
+              <p className="text-xs text-muted-foreground">負責人通常為工廠老闆、創辦人或實際經營者。</p>
             </div>
           </div>
         </div>
@@ -656,9 +662,14 @@ function FactoryInfoForm({ factory, isOwner = true }: { factory: any; isOwner?: 
           </div>
         </div>
 
-        {/* ── 聯絡資訊 ── */}
+        {/* ── 聯絡窗口 ── */}
         <div className="py-6 space-y-5">
-          <p className="text-sm font-semibold text-foreground">聯絡資訊</p>
+          <p className="text-sm font-semibold text-foreground">聯絡窗口</p>
+          <div className="space-y-2">
+            <Label>聯絡人姓名</Label>
+            <Input disabled={isLocked} value={contactPersonName} onChange={e => setContactPersonName(e.target.value)} placeholder="洽詢窗口姓名" />
+            <p className="text-xs text-muted-foreground">聯絡人為使用者詢價、電話或平台訊息時，第一位接洽的窗口。</p>
+          </div>
           <div className="grid sm:grid-cols-2 gap-5">
             <div className="space-y-2">
               <Label>聯絡電話</Label>

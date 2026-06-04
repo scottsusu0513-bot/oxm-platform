@@ -373,7 +373,11 @@ export default function FactoryDetail() {
                   <div className="flex items-center gap-2"><MapPin className="w-4 h-4 text-muted-foreground" /><span>{factory.region}</span></div>
                   {(factory as any).address && <div className="flex items-center gap-2 sm:col-span-2"><MapPin className="w-4 h-4 text-muted-foreground shrink-0" /><span className="text-muted-foreground">{(factory as any).address}</span></div>}
                   {factory.foundedYear && <div className="flex items-center gap-2"><Calendar className="w-4 h-4 text-muted-foreground" /><span>成立於 {factory.foundedYear} 年</span></div>}
-                  {factory.ownerName && <div className="flex items-center gap-2"><Building2 className="w-4 h-4 text-muted-foreground" /><span>負責人：{factory.ownerName}</span></div>}
+                  {(() => {
+                    const display = (factory as any).contactPersonName || factory.ownerName;
+                    if (!display) return null;
+                    return <div className="flex items-center gap-2"><Building2 className="w-4 h-4 text-muted-foreground" /><span>洽詢窗口：{display}</span></div>;
+                  })()}
                   {factory.phone && <div className="flex items-center gap-2"><Phone className="w-4 h-4 text-muted-foreground" /><a href={`tel:${factory.phone.replace(/[\s\-\(\)]/g, "")}`} className="hover:underline underline-offset-2">{factory.phone}</a></div>}
                   <div className="flex items-center gap-2">
                     <Clock className="w-4 h-4 text-muted-foreground" />

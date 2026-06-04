@@ -55,6 +55,7 @@ export default function FactoryRegister() {
   const [capitalLevel, setCapitalLevel] = useState("");
   const [foundedYear, setFoundedYear] = useState("");
   const [ownerName, setOwnerName] = useState("");
+  const [contactPersonName, setContactPersonName] = useState("");
   const [phone, setPhone] = useState("");
   const [website, setWebsite] = useState("");
   const [contactEmail, setContactEmail] = useState(user?.email ?? "");
@@ -119,6 +120,7 @@ export default function FactoryRegister() {
         businessType,
         foundedYear: foundedYear ? parseInt(foundedYear) : undefined,
         ownerName: ownerName || undefined,
+        contactPersonName: contactPersonName || undefined,
         phone: phone || undefined,
         website: website || undefined,
         contactEmail: contactEmail || undefined,
@@ -467,9 +469,16 @@ export default function FactoryRegister() {
                   {errors.foundedYear && <p className="text-xs text-red-500 mt-1">{errors.foundedYear}</p>}
                 </div>
                 <div>
-                  <Label htmlFor="owner">負責人</Label>
+                  <Label htmlFor="owner">負責人姓名</Label>
                   <Input id="owner" value={ownerName} onChange={e => setOwnerName(e.target.value)} placeholder="負責人姓名" />
+                  <p className="text-xs text-muted-foreground mt-1">負責人通常為工廠老闆、創辦人或實際經營者。</p>
                 </div>
+              </div>
+
+              <div>
+                <Label htmlFor="contactPerson">聯絡人姓名</Label>
+                <Input id="contactPerson" value={contactPersonName} onChange={e => setContactPersonName(e.target.value)} placeholder="洽詢窗口姓名" />
+                <p className="text-xs text-muted-foreground mt-1">聯絡人為使用者詢價、電話或平台訊息時，第一位接洽的窗口。</p>
               </div>
 
               <div className="grid sm:grid-cols-2 gap-4">
