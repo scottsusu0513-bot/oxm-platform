@@ -52,13 +52,17 @@ function ArticleContent({ article }: { article: ManualArticle }) {
             </div>
           </div>
 
-          {/* 橘色提醒框（重要注意事項） */}
+          {/* 橘色提醒框（重要注意事項；支援字串或字串陣列） */}
           {step.note && (
             <div className="ml-9 flex items-start gap-2 rounded-lg bg-orange-50 dark:bg-orange-950/30 border border-orange-200 dark:border-orange-800 px-3 py-2.5">
               <AlertCircle className="w-4 h-4 shrink-0 text-orange-500 mt-0.5" aria-hidden="true" />
-              <p className="text-xs text-orange-700 dark:text-orange-300 leading-relaxed">
-                {step.note}
-              </p>
+              <div className="space-y-1">
+                {(Array.isArray(step.note) ? step.note : [step.note]).map((line, i) => (
+                  <p key={i} className="text-xs text-orange-700 dark:text-orange-300 leading-relaxed">
+                    {line}
+                  </p>
+                ))}
+              </div>
             </div>
           )}
 

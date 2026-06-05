@@ -29,7 +29,7 @@ export interface ManualStep {
   id: string;
   title?: string;
   description: string;
-  note?: string;          // 橘色提示框（重要提醒，不適合放在 description 裡的強調資訊）
+  note?: string | string[];  // 橘色提示框；傳陣列時每一項各為一段
   image?: string;         // 路徑，例如 "/manual/getting-started/register/step-01/annotated.png"
   imageAlt?: string;
   imageCaption?: string;
@@ -76,7 +76,7 @@ export const MANUAL_ARTICLES: ManualArticle[] = [
     categoryId: 'getting-started',
     title: '如何註冊帳號',
     summary: '使用 Google、LINE 或 Apple 帳號即可快速完成 OXM 會員註冊，首次登入即自動建立帳號，無需填寫複雜表單。',
-    keywords: ['註冊', '帳號', '會員', 'Google', 'LINE', 'Apple', '登入', '驗證信', '信箱驗證'],
+    keywords: ['註冊', '帳號', '會員', 'Google', 'LINE', 'Apple', '登入', '驗證信', '信箱驗證', '收不到驗證信', '垃圾郵件', '促銷信件', '客服'],
     isPopular: false,
     order: 1,
     status: 'ready',
@@ -101,36 +101,16 @@ export const MANUAL_ARTICLES: ManualArticle[] = [
         id: 'step-3',
         title: '完成 Email 驗證',
         description: '登入後前往「會員中心 → 我的資料」，確認主要信箱是否已完成驗證。若尚未驗證，請依畫面提示重新寄送驗證信。',
-        note: '尚未完成 Email 驗證的帳號，無法刊登工廠／工作室，也無法向工廠發送詢問。',
+        note: [
+          '尚未完成 Email 驗證的帳號，無法刊登工廠／工作室，也無法向工廠發送詢問。',
+          '若未收到驗證信，請先檢查垃圾郵件或促銷信件匣；仍未收到時，請聯繫 OXM 客服協助處理。',
+        ],
         image: '/manual/getting-started/register/step-03/3.png',
         imageAlt: '會員中心「我的資料」頁面，橘色虛線框標示主要信箱驗證狀態區塊，步驟編號 ③',
         imageCaption: '在「我的資料」確認主要信箱的驗證狀態',
       },
     ],
   },
-  {
-    id: 'login',
-    categoryId: 'getting-started',
-    title: '如何登入 OXM',
-    summary: '透過右上角的「登入」按鈕，使用 Google 帳號一鍵登入平台。',
-    keywords: ['登入', '帳號', 'Google', '會員'],
-    isPopular: false,
-    order: 2,
-    status: 'coming-soon',
-    steps: [],
-  },
-  {
-    id: 'no-verification-email',
-    categoryId: 'getting-started',
-    title: '收不到驗證信怎麼辦',
-    summary: '若收不到驗證信，請先確認垃圾信件夾，或重新發送驗證信。',
-    keywords: ['驗證信', '信箱', 'Email', '收不到', '垃圾信'],
-    isPopular: true,
-    order: 3,
-    status: 'coming-soon',
-    steps: [],
-  },
-
   // ── 我要找工廠 ───────────────────────────────────────────────────────────
 
   {
