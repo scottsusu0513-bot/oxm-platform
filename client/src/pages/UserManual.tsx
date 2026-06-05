@@ -25,7 +25,7 @@ import {
 // ── 單篇教學展開內容 ─────────────────────────────────────────────────────────
 
 function ArticleContent({ article }: { article: ManualArticle }) {
-  if (article.status === 'coming-soon' || article.steps.length === 0) {
+  if (article.steps.length === 0) {
     return (
       <div className="px-4 pb-4 text-sm text-muted-foreground flex items-center gap-2">
         <Clock className="w-4 h-4 shrink-0" />
@@ -66,7 +66,7 @@ function ArticleContent({ article }: { article: ManualArticle }) {
             </div>
           )}
 
-          {step.image && (
+          {step.image ? (
             <div className="ml-9">
               <ManualAnnotatedImage
                 src={step.image}
@@ -75,7 +75,12 @@ function ArticleContent({ article }: { article: ManualArticle }) {
                 annotations={step.annotations}
               />
             </div>
-          )}
+          ) : article.status === 'draft' ? (
+            <div className="ml-9 flex items-center gap-2 text-xs text-muted-foreground px-3 py-2 rounded-lg bg-muted/30 border border-dashed border-border">
+              <Clock className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+              教學圖片準備中
+            </div>
+          ) : null}
         </div>
       ))}
     </div>
@@ -107,12 +112,16 @@ function ArticleItem({
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-medium text-sm leading-snug">{article.title}</span>
-            {article.status === 'coming-soon' ? (
+            {article.status === 'ready' ? (
+              <CheckCircle className="w-3.5 h-3.5 shrink-0 text-green-500" aria-label="已完成" />
+            ) : article.status === 'draft' ? (
+              <Badge variant="outline" className="text-[10px] px-1.5 py-0 shrink-0 text-orange-500 border-orange-300">
+                圖片準備中
+              </Badge>
+            ) : (
               <Badge variant="outline" className="text-[10px] px-1.5 py-0 shrink-0 text-muted-foreground">
                 準備中
               </Badge>
-            ) : (
-              <CheckCircle className="w-3.5 h-3.5 shrink-0 text-green-500" aria-label="已完成" />
             )}
           </div>
           {!isOpen && (
