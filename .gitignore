@@ -1,3 +1,6 @@
+# Manual source images (unmasked originals — never commit)
+manual-source/
+
 # Dependencies
 **/node_modules
 .pnpm-store/

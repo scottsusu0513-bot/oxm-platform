@@ -1,6 +1,8 @@
 import { useState } from "react";
+import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
-import { Megaphone, BookOpen } from "lucide-react";
+import { Megaphone, BookOpen, HelpCircle } from "lucide-react";
+import { MANUAL_ENTRY_ENABLED } from "@/lib/manual";
 
 const LS_KEY = "oxm:lastViewedAnnouncementsAt";
 
@@ -17,6 +19,7 @@ const btnBase = `relative flex items-center gap-2 px-4 py-2.5
   transition-all duration-200 select-none`;
 
 export default function FloatingAnnouncementButton() {
+  const [, navigate] = useLocation();
   const { data: items = [] } = trpc.announcement.list.useQuery({ limit: 20 });
   const [lastViewed, setLastViewedState] = useState<number>(getLastViewed);
 
@@ -35,7 +38,22 @@ export default function FloatingAnnouncementButton() {
   };
 
   return (
-    <div className="fixed bottom-6 right-5 z-40 flex flex-col items-end gap-2">
+    <div
+      className="fixed right-5 z-40 flex flex-col items-end gap-2"
+      style={{ bottom: "calc(1.5rem + env(safe-area-inset-bottom, 0px))" }}
+    >
+      {/* 使用手冊（MANUAL_ENTRY_ENABLED 為 true 時才顯示） */}
+      {MANUAL_ENTRY_ENABLED && (
+        <button
+          onClick={() => navigate("/manual")}
+          aria-label="使用手冊"
+          className={`${btnBase} bg-gradient-to-r from-orange-500 to-amber-500`}
+        >
+          <HelpCircle className="w-4 h-4 shrink-0" />
+          <span className="hidden sm:inline text-sm">使用手冊</span>
+        </button>
+      )}
+
       {/* 找代工指南 */}
       <button
         onClick={() => document.getElementById("guides")?.scrollIntoView({ behavior: "smooth" })}

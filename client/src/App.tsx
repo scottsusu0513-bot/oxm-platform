@@ -30,6 +30,7 @@ const BlogPost              = lazy(() => import("./pages/BlogPost"));
 const PrivacyPolicyPage     = lazy(() => import("./pages/PrivacyPolicyPage"));
 const TermsPage             = lazy(() => import("./pages/TermsPage"));
 const VerifyEmailPage       = lazy(() => import("./pages/VerifyEmailPage"));
+const UserManual            = lazy(() => import("./pages/UserManual"));
 const NotFound              = lazy(() => import("./pages/NotFound"));
 
 // ── Admin 頁面（獨立 chunk，一般使用者不會載入）──────────────────────────
@@ -240,6 +241,7 @@ function Router() {
         <Route path="/blog/:slug" component={BlogPost} />
         <Route path="/blog" component={BlogList} />
         <Route path="/announcements" component={Announcements} />
+        <Route path="/manual" component={UserManual} />
         <Route path="/privacy" component={PrivacyPolicyPage} />
         <Route path="/terms" component={TermsPage} />
         <Route path="/verify-email" component={VerifyEmailPage} />
