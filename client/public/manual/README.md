@@ -42,7 +42,7 @@ client/public/manual/
 |------|-----------|------|--------|--------|
 | `getting-started` | `register` | 如何註冊帳號 | 3 | **ready** |
 | `find-factory` | `search-factory` | 如何搜尋並聯絡工廠 | 6 | **ready** |
-| `list-factory` | `register-factory` | 如何刊登工廠／工作室 | 6 | draft |
+| `list-factory` | `register-factory` | 如何刊登工廠／工作室 | 8 | draft |
 | `manage-store` | `upload-photos` | 如何完善工廠後台 | 5 | draft |
 | `messaging` | `send-message` | 如何使用訊息與 PDF 型錄 | 5 | draft |
 | `collaboration` | `create-order` | 如何建立與完成合作確認單 | 7 | draft |
