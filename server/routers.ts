@@ -258,17 +258,16 @@ export const appRouter = router({
       contactEmail: z.string().email().optional().or(z.literal("")),
     })).mutation(async ({ ctx, input }) => {
       requireVerifiedEmail(ctx.user);
-      if (ctx.user.role !== 'admin') {
-        const existing = await db.getFactoryByOwnerId(ctx.user.id);
-        if (existing) throw new TRPCError({ code: 'BAD_REQUEST', message: '您已有管理中的工廠，請至工廠管理後台管理資料' });
-        const coManaged = await db.getCoManagedFactories(ctx.user.id);
-        if (coManaged.length > 0) throw new TRPCError({ code: 'BAD_REQUEST', message: '您已有管理中的工廠，請至工廠管理後台管理資料' });
-      }
       try {
-        const factoryId = await db.createFactory({ ...input, ownerId: ctx.user.id, status: 'draft' });
-        await db.setFactoryOwner(ctx.user.id, true);
+        // createFactoryAtomic 使用 transaction + users row lock
+        // admin 亦受同一規則約束：無法繞過一人一間工廠限制
+        const factoryId = await db.createFactoryAtomic(ctx.user.id, input);
         return { id: factoryId };
       } catch (err: any) {
+        const BAD = ["您已擁有工廠，無法再次建立工廠", "您已隸屬其他工廠，無法建立新的工廠"];
+        if (BAD.includes(err?.message)) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: err.message });
+        }
         console.error('[factory.create] DB error:', err?.message);
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: '建立工廠失敗，請稍後再試' });
       }
@@ -467,8 +466,15 @@ export const appRouter = router({
       if (!invitee) return { success: true as const, conversationId: null as number | null };
       if (invitee.id === ctx.user.id) throw new Error("不能邀請自己");
 
-      const alreadyCoManager = await db.isActiveCoManager(factory.id, invitee.id);
-      if (alreadyCoManager) throw new Error("此用戶已是本工廠的次管理者");
+      // 跨廠唯一性預檢：被邀請人是否已有工廠角色
+      // 注意：此預檢不能取代 acceptInvitation 內的正式鎖定檢查
+      const inviteeAffil = await db.getActiveFactoryAffiliation(invitee.id);
+      if (inviteeAffil) {
+        if (inviteeAffil.factoryId === factory.id && inviteeAffil.role === "co_manager") {
+          throw new Error("此用戶已是本工廠的次管理者");
+        }
+        throw new Error("此使用者已擁有或管理其他工廠，無法邀請");
+      }
 
       const hasPending = await db.hasPendingInvitation(factory.id, invitee.id);
       if (hasPending) throw new Error("已有一筆待處理的邀請，請等對方回應後再試");

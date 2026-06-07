@@ -1849,6 +1849,168 @@ export async function getInvitationById(id: number) {
   return result[0] ?? null;
 }
 
+// 查詢使用者當前有效的工廠身分（owner 或 active co-manager）
+// 若意外發現多重身分，記錄錯誤並拋出例外，不靜默取第一筆
+// conn 參數用於在 transaction 內部呼叫（已持有鎖時不另開連線）
+export async function getActiveFactoryAffiliation(
+  userId: number,
+  conn?: mysql.PoolConnection
+): Promise<{ factoryId: number; role: "owner" | "co_manager" } | null> {
+  let ownerRows: { id: number }[];
+  let coManagerRows: { factoryId: number }[];
+
+  if (conn) {
+    const [oRows]: any = await conn.execute(
+      "SELECT id FROM factories WHERE ownerId = ?",
+      [userId]
+    );
+    const [cRows]: any = await conn.execute(
+      "SELECT factoryId FROM factoryCoManagers WHERE userId = ? AND removedAt IS NULL",
+      [userId]
+    );
+    ownerRows = oRows as { id: number }[];
+    coManagerRows = cRows as { factoryId: number }[];
+  } else {
+    const db = await getDb();
+    if (!db) return null;
+    ownerRows = await db.select({ id: factories.id })
+      .from(factories)
+      .where(eq(factories.ownerId, userId));
+    coManagerRows = await db.select({ factoryId: factoryCoManagers.factoryId })
+      .from(factoryCoManagers)
+      .where(and(eq(factoryCoManagers.userId, userId), isNull(factoryCoManagers.removedAt)));
+  }
+
+  const isOwner = ownerRows.length > 0;
+  const isCoManager = coManagerRows.length > 0;
+
+  if (isOwner && isCoManager) {
+    console.error(
+      `[getActiveFactoryAffiliation] Data integrity violation: userId ${userId} is simultaneously owner (factoryId ${ownerRows[0].id}) and co-manager (factoryId ${coManagerRows[0].factoryId})`
+    );
+    throw new Error("帳號資料異常：同時身兼工廠負責人與共同管理者，請聯繫客服");
+  }
+
+  if (isOwner) {
+    if (ownerRows.length > 1) {
+      console.error(
+        `[getActiveFactoryAffiliation] Data integrity violation: userId ${userId} owns ${ownerRows.length} factories`
+      );
+      throw new Error("帳號資料異常：同時擁有多間工廠，請聯繫客服");
+    }
+    return { factoryId: ownerRows[0].id, role: "owner" };
+  }
+
+  if (isCoManager) {
+    if (coManagerRows.length > 1) {
+      console.error(
+        `[getActiveFactoryAffiliation] Data integrity violation: userId ${userId} is active co-manager of ${coManagerRows.length} factories`
+      );
+      throw new Error("帳號資料異常：同時身兼多間工廠的共同管理者，請聯繫客服");
+    }
+    return { factoryId: coManagerRows[0].factoryId, role: "co_manager" };
+  }
+
+  return null;
+}
+
+// 在 transaction 內建立工廠，以 users row lock 防止並發競態
+// 同時承擔 router 層的唯一性檢查責任，不再依賴外層非 atomic 的 check-then-insert
+export async function createFactoryAtomic(
+  userId: number,
+  data: Omit<InsertFactory, "id" | "createdAt" | "updatedAt" | "avgRating" | "reviewCount" | "ownerId" | "status">
+): Promise<number> {
+  await getDb();
+  const pool = _pool;
+  if (!pool) throw new Error("DB not available");
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    // 鎖定 users row，與 acceptInvitation 使用相同鎖序
+    // 保證「建立工廠」與「接受邀請」兩條路徑不能同時為同一個 userId 建立工廠身分
+    const [userLock]: any = await conn.execute(
+      "SELECT id FROM users WHERE id = ? FOR UPDATE",
+      [userId]
+    );
+    if (!userLock || userLock.length === 0) {
+      throw new Error("使用者不存在");
+    }
+
+    // 跨廠唯一性：已擁有任何工廠？
+    const [ownerRows]: any = await conn.execute(
+      "SELECT id FROM factories WHERE ownerId = ? LIMIT 1",
+      [userId]
+    );
+    if (ownerRows && ownerRows.length > 0) {
+      throw new Error("您已擁有工廠，無法再次建立工廠");
+    }
+
+    // 跨廠唯一性：已是任何工廠的 active co-manager？
+    const [coMgrRows]: any = await conn.execute(
+      "SELECT id FROM factoryCoManagers WHERE userId = ? AND removedAt IS NULL LIMIT 1",
+      [userId]
+    );
+    if (coMgrRows && coMgrRows.length > 0) {
+      throw new Error("您已隸屬其他工廠，無法建立新的工廠");
+    }
+
+    const toArray = (v: unknown): string[] => {
+      if (Array.isArray(v)) return v as string[];
+      if (typeof v === "string" && v) return [v];
+      return [];
+    };
+    const industry = toArray((data as any).industry);
+    const mfgModes = toArray((data as any).mfgModes);
+    const subIndustry = Array.isArray((data as any).subIndustry) ? (data as any).subIndustry : [];
+    const rawAvatar = (data as any).avatarUrl as string | null | undefined;
+    const avatarUrl = rawAvatar && /^https?:\/\//.test(rawAvatar) ? rawAvatar : null;
+
+    const [insertResult]: any = await conn.execute(
+      `INSERT INTO factories (
+        ownerId, name, industry, mfgModes, region, description, capitalLevel, address,
+        foundedYear, avatarUrl, businessType, ownerName, contactPersonName, phone, website,
+        contactEmail, subIndustry, status, operationStatus, certified, createdAt, updatedAt
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', 'normal', FALSE, NOW(), NOW())`,
+      [
+        userId,
+        data.name,
+        JSON.stringify(industry),
+        JSON.stringify(mfgModes),
+        data.region,
+        (data as any).description ?? null,
+        data.capitalLevel,
+        data.address,
+        (data as any).foundedYear ?? null,
+        avatarUrl,
+        (data as any).businessType ?? "factory",
+        (data as any).ownerName ?? null,
+        (data as any).contactPersonName ?? null,
+        (data as any).phone ?? null,
+        (data as any).website ?? null,
+        (data as any).contactEmail ?? null,
+        JSON.stringify(subIndustry),
+      ]
+    );
+
+    const factoryId = insertResult.insertId;
+
+    await conn.execute(
+      "UPDATE users SET isFactoryOwner = TRUE WHERE id = ?",
+      [userId]
+    );
+
+    await conn.commit();
+    return factoryId;
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
 export async function acceptInvitation(invitationId: number, inviteeUserId: number): Promise<void> {
   await getDb(); // 確保 _pool 已初始化
   const pool = _pool;
@@ -1870,13 +2032,36 @@ export async function acceptInvitation(invitationId: number, inviteeUserId: numb
       throw new Error("無權限操作此邀請");
     }
 
-    // 檢查是否已為 active co-manager
-    const [existing]: any = await conn.execute(
-      "SELECT id FROM factoryCoManagers WHERE factoryId = ? AND userId = ? AND removedAt IS NULL",
-      [inv.factoryId, inviteeUserId]
+    // 鎖定被邀請人的 users row，與 createFactoryAtomic 使用相同鎖序
+    // 保證兩間不同工廠同時發送邀請，最多只能有一筆接受成功
+    const [userLock]: any = await conn.execute(
+      "SELECT id FROM users WHERE id = ? FOR UPDATE",
+      [inviteeUserId]
     );
-    if (existing && existing.length > 0) {
-      throw new Error("您已是此工廠的次管理者");
+    if (!userLock || userLock.length === 0) {
+      throw new Error("使用者不存在");
+    }
+
+    // 跨廠唯一性：已擁有任何工廠？
+    const [ownerRows]: any = await conn.execute(
+      "SELECT id FROM factories WHERE ownerId = ? LIMIT 1",
+      [inviteeUserId]
+    );
+    if (ownerRows && ownerRows.length > 0) {
+      throw new Error("您已擁有或管理其他工廠，無法加入此工廠");
+    }
+
+    // 跨廠唯一性：已是任何工廠的 active co-manager？
+    // 區分「同一工廠」和「其他工廠」，給出不同訊息
+    const [coMgrAny]: any = await conn.execute(
+      "SELECT factoryId FROM factoryCoManagers WHERE userId = ? AND removedAt IS NULL LIMIT 1",
+      [inviteeUserId]
+    );
+    if (coMgrAny && coMgrAny.length > 0) {
+      if (Number(coMgrAny[0].factoryId) === Number(inv.factoryId)) {
+        throw new Error("您已是此工廠的次管理者");
+      }
+      throw new Error("您已擁有或管理其他工廠，無法加入此工廠");
     }
 
     // 檢查人數上限

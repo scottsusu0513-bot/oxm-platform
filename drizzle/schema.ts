@@ -1,4 +1,5 @@
 import { int, mysqlEnum, mysqlTable, text, timestamp, varchar, boolean, decimal, json, uniqueIndex, index, date } from "drizzle-orm/mysql-core";
+import { sql } from "drizzle-orm";
 
 // ===== 使用者表 =====
 export const users = mysqlTable("users", {
@@ -27,7 +28,7 @@ export type InsertUser = typeof users.$inferInsert;
 // ===== 工廠表 =====
 export const factories = mysqlTable("factories", {
   id: int("id").autoincrement().primaryKey(),
-  ownerId: int("ownerId").notNull(), // references users.id
+  ownerId: int("ownerId").notNull().unique(), // references users.id — uniqueIndex enforced by uq_factory_owner_id
   name: varchar("name", { length: 200 }).notNull(),
   industry: json("industry").$type<string[]>().notNull(),
   // ODM, OEM 以 JSON 陣列儲存，支援複選
@@ -331,8 +332,15 @@ export const factoryCoManagers = mysqlTable("factoryCoManagers", {
   invitedBy: int("invitedBy").notNull().references(() => users.id, { onDelete: "cascade" }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   removedAt: timestamp("removedAt"),
+  // Virtual generated column: userId when row is active (removedAt IS NULL), NULL when removed.
+  // MySQL unique index ignores NULLs, so removed history rows are not constrained.
+  // Enforced by migration 0036_factory_uniqueness.sql.
+  activeUserId: int("activeUserId").generatedAlwaysAs(
+    sql`CASE WHEN \`removedAt\` IS NULL THEN \`userId\` ELSE NULL END`
+  ),
 }, (table) => ({
   coManagerLookupIdx: index("idx_co_manager_lookup").on(table.factoryId, table.userId),
+  activeUserUq: uniqueIndex("uq_active_co_manager_user").on(table.activeUserId),
 }));
 
 export type FactoryCoManager = typeof factoryCoManagers.$inferSelect;
