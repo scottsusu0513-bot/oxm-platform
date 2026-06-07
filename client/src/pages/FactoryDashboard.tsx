@@ -1268,15 +1268,13 @@ function ConversationList({ conversations }: { conversations: any[] }) {
                     </div>
                     {conv.buyerAffiliation && (
                       <p className="text-xs text-muted-foreground truncate mt-0.5">
-                        {conv.buyerAffiliation.factoryStatus === "approved" ? (
-                          <Link
-                            href={`/factory/${conv.buyerAffiliation.factoryId}`}
-                            onClick={(e: React.MouseEvent) => e.stopPropagation()}
-                            className="hover:underline"
-                          >
-                            {conv.buyerAffiliation.factoryName}
-                          </Link>
-                        ) : conv.buyerAffiliation.factoryName}
+                        <Link
+                          href={`/factory/${conv.buyerAffiliation.factoryId}`}
+                          onClick={(e: React.MouseEvent) => e.stopPropagation()}
+                          className="hover:underline"
+                        >
+                          {conv.buyerAffiliation.factoryName}
+                        </Link>
                         ・{conv.buyerAffiliation.role === "owner" ? "負責人" : "管理員"}
                       </p>
                     )}

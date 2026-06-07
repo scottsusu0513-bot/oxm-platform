@@ -1929,18 +1929,18 @@ export async function getActiveFactoryAffiliationsByUserIds(
   const uniqueIds = Array.from(new Set(userIds));
   const result = new Map<number, { factoryId: number; factoryName: string; role: "owner" | "co_manager"; factoryStatus: string }>();
 
-  // Query 1: owner 關係（JOIN factories 一次取名稱與狀態）
+  // Query 1: approved 工廠 owner（非 approved 不算有效公開身分）
   const ownerRows = await db
     .select({ ownerUserId: factories.ownerId, factoryId: factories.id, factoryName: factories.name, factoryStatus: factories.status })
     .from(factories)
-    .where(inArray(factories.ownerId, uniqueIds));
+    .where(and(inArray(factories.ownerId, uniqueIds), eq(factories.status, "approved")));
 
-  // Query 2: active co-manager 關係（removedAt IS NULL，JOIN factories 取名稱與狀態）
+  // Query 2: approved 工廠 active co-manager（removedAt IS NULL + status approved）
   const coMgrRows = await db
     .select({ userId: factoryCoManagers.userId, factoryId: factoryCoManagers.factoryId, factoryName: factories.name, factoryStatus: factories.status })
     .from(factoryCoManagers)
     .innerJoin(factories, eq(factoryCoManagers.factoryId, factories.id))
-    .where(and(inArray(factoryCoManagers.userId, uniqueIds), isNull(factoryCoManagers.removedAt)));
+    .where(and(inArray(factoryCoManagers.userId, uniqueIds), isNull(factoryCoManagers.removedAt), eq(factories.status, "approved")));
 
   const ownerMap = new Map<number, typeof ownerRows[0]>();
   for (const row of ownerRows) {

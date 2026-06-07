@@ -942,11 +942,9 @@ export default function ChatPage() {
             </CardTitle>
             {isFactorySide && !isNewChat && meta?.buyerAffiliation && (
               <p className="text-sm text-muted-foreground mt-0.5 truncate">
-                {meta.buyerAffiliation.factoryStatus === "approved" ? (
-                  <Link href={`/factory/${meta.buyerAffiliation.factoryId}`} className="hover:underline">
-                    {meta.buyerAffiliation.factoryName}
-                  </Link>
-                ) : meta.buyerAffiliation.factoryName}
+                <Link href={`/factory/${meta.buyerAffiliation.factoryId}`} className="hover:underline">
+                  {meta.buyerAffiliation.factoryName}
+                </Link>
                 ・{meta.buyerAffiliation.role === "owner" ? "負責人" : "管理員"}
               </p>
             )}
