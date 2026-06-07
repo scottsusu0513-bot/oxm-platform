@@ -1368,6 +1368,9 @@ export async function getConversationsByFactoryWithDetails(factoryId: number, re
     productList.forEach(p => productMap.set(p.id, p));
   }
 
+  // 批次查買家工廠身分（與 userMap 同一批 userIds，不產生 N+1）
+  const affiliationMap = await getActiveFactoryAffiliationsByUserIds(userIds);
+
   const convIds = convs.map(c => c.id);
 
   // 批次查未讀（工廠角度：讀者是工廠owner，所以排除 factory 自己送的）
@@ -1417,6 +1420,7 @@ export async function getConversationsByFactoryWithDetails(factoryId: number, re
       unreadCount: unreadMap.get(conv.id) ?? 0,
       lastMessage: lastMsg ? lastMsg.content.substring(0, 60) : null,
       lastSenderRole: lastMsg?.senderRole ?? null,
+      buyerAffiliation: affiliationMap.get(conv.userId) ?? null,
     };
   });
 }
@@ -1912,6 +1916,74 @@ export async function getActiveFactoryAffiliation(
   }
 
   return null;
+}
+
+// 批次取得多個 userId 的工廠身分（含工廠名稱與狀態），最多兩次批次查詢，避免 N+1。
+export async function getActiveFactoryAffiliationsByUserIds(
+  userIds: number[]
+): Promise<Map<number, { factoryId: number; factoryName: string; role: "owner" | "co_manager"; factoryStatus: string }>> {
+  if (userIds.length === 0) return new Map();
+  const db = await getDb();
+  if (!db) return new Map();
+
+  const uniqueIds = Array.from(new Set(userIds));
+  const result = new Map<number, { factoryId: number; factoryName: string; role: "owner" | "co_manager"; factoryStatus: string }>();
+
+  // Query 1: owner 關係（JOIN factories 一次取名稱與狀態）
+  const ownerRows = await db
+    .select({ ownerUserId: factories.ownerId, factoryId: factories.id, factoryName: factories.name, factoryStatus: factories.status })
+    .from(factories)
+    .where(inArray(factories.ownerId, uniqueIds));
+
+  // Query 2: active co-manager 關係（removedAt IS NULL，JOIN factories 取名稱與狀態）
+  const coMgrRows = await db
+    .select({ userId: factoryCoManagers.userId, factoryId: factoryCoManagers.factoryId, factoryName: factories.name, factoryStatus: factories.status })
+    .from(factoryCoManagers)
+    .innerJoin(factories, eq(factoryCoManagers.factoryId, factories.id))
+    .where(and(inArray(factoryCoManagers.userId, uniqueIds), isNull(factoryCoManagers.removedAt)));
+
+  const ownerMap = new Map<number, typeof ownerRows[0]>();
+  for (const row of ownerRows) {
+    const uid = row.ownerUserId as number;
+    if (ownerMap.has(uid)) {
+      console.error(`[getActiveFactoryAffiliationsByUserIds] userId ${uid} owns multiple factories`);
+      throw new Error("帳號資料異常：同時擁有多間工廠，請聯繫客服");
+    }
+    ownerMap.set(uid, row);
+  }
+
+  const coMgrMap = new Map<number, typeof coMgrRows[0]>();
+  for (const row of coMgrRows) {
+    if (coMgrMap.has(row.userId)) {
+      console.error(`[getActiveFactoryAffiliationsByUserIds] userId ${row.userId} is active co-manager of multiple factories`);
+      throw new Error("帳號資料異常：同時身兼多間工廠的共同管理者，請聯繫客服");
+    }
+    coMgrMap.set(row.userId, row);
+  }
+
+  for (const userId of uniqueIds) {
+    const ownerEntry = ownerMap.get(userId);
+    const coMgrEntry = coMgrMap.get(userId);
+    if (ownerEntry && coMgrEntry) {
+      console.error(`[getActiveFactoryAffiliationsByUserIds] userId ${userId} is simultaneously owner and co-manager`);
+      throw new Error("帳號資料異常：同時身兼工廠負責人與共同管理者，請聯繫客服");
+    }
+    if (ownerEntry) {
+      result.set(userId, { factoryId: ownerEntry.factoryId, factoryName: ownerEntry.factoryName, role: "owner", factoryStatus: ownerEntry.factoryStatus });
+    } else if (coMgrEntry) {
+      result.set(userId, { factoryId: coMgrEntry.factoryId, factoryName: coMgrEntry.factoryName, role: "co_manager", factoryStatus: coMgrEntry.factoryStatus });
+    }
+  }
+
+  return result;
+}
+
+// 取得單一 userId 的工廠身分詳情（含名稱與狀態），委派給批次 helper 避免重複邏輯。
+export async function getActiveFactoryAffiliationDetail(
+  userId: number
+): Promise<{ factoryId: number; factoryName: string; factoryStatus: string; role: "owner" | "co_manager" } | null> {
+  const map = await getActiveFactoryAffiliationsByUserIds([userId]);
+  return map.get(userId) ?? null;
 }
 
 // 在 transaction 內建立工廠，以 users row lock 防止並發競態

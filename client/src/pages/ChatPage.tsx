@@ -12,7 +12,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { performLogin } from "@/const";
 import { trpc } from "@/lib/trpc";
-import { useRoute, useLocation, useSearch } from "wouter";
+import { useRoute, useLocation, useSearch, Link } from "wouter";
 import { useState, useRef, useEffect, useCallback } from "react";
 import { toast } from "sonner";
 import { Send, ArrowLeft, Factory, User, CheckCircle, XCircle, Plus, Package, FileText, ExternalLink, Download, ClipboardList, Star } from "lucide-react";
@@ -934,12 +934,22 @@ export default function ChatPage() {
         <Card className="flex-1 flex flex-col">
           <CardHeader className="pb-3">
             <CardTitle className="text-lg flex items-center gap-2">
-              <Factory className="w-5 h-5" />
-              {displayFactoryName}
+              {isFactorySide && !isNewChat ? <User className="w-5 h-5" /> : <Factory className="w-5 h-5" />}
+              {isFactorySide && !isNewChat ? (meta?.buyerName ?? "對方") : displayFactoryName}
               {displayProductName && (
                 <Badge variant="outline" className="text-xs font-normal">{displayProductName}</Badge>
               )}
             </CardTitle>
+            {isFactorySide && !isNewChat && meta?.buyerAffiliation && (
+              <p className="text-sm text-muted-foreground mt-0.5">
+                {meta.buyerAffiliation.factoryStatus === "approved" ? (
+                  <Link href={`/factory/${meta.buyerAffiliation.factoryId}`} className="hover:underline">
+                    {meta.buyerAffiliation.factoryName}
+                  </Link>
+                ) : meta.buyerAffiliation.factoryName}
+                ・{meta.buyerAffiliation.role === "owner" ? "負責人" : "管理員"}
+              </p>
+            )}
           </CardHeader>
 
           <CardContent className="flex-1 flex flex-col p-0">

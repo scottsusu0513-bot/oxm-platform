@@ -1266,6 +1266,20 @@ function ConversationList({ conversations }: { conversations: any[] }) {
                       <p className="font-medium truncate">{conv.userName}</p>
                       {conv.productName && <Badge variant="outline" className="text-xs shrink-0">{conv.productName}</Badge>}
                     </div>
+                    {conv.buyerAffiliation && (
+                      <p className="text-xs text-muted-foreground truncate mt-0.5">
+                        {conv.buyerAffiliation.factoryStatus === "approved" ? (
+                          <Link
+                            href={`/factory/${conv.buyerAffiliation.factoryId}`}
+                            onClick={(e: React.MouseEvent) => e.stopPropagation()}
+                            className="hover:underline"
+                          >
+                            {conv.buyerAffiliation.factoryName}
+                          </Link>
+                        ) : conv.buyerAffiliation.factoryName}
+                        ・{conv.buyerAffiliation.role === "owner" ? "負責人" : "管理員"}
+                      </p>
+                    )}
                     {conv.lastMessage && (
                       <p className="text-sm text-muted-foreground truncate mt-0.5">
                         {conv.lastSenderRole === "factory" ? "你：" : ""}{conv.lastMessage}

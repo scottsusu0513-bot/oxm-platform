@@ -804,6 +804,11 @@ export const appRouter = router({
       const isFactoryOwner = factory?.ownerId === ctx.user.id;
       const isCoMgr = !isConvUser && !isFactoryOwner && !!factory && await db.isActiveCoManager(factory.id, ctx.user.id);
       if (!isConvUser && !isFactoryOwner && !isCoMgr && ctx.user.role !== 'admin') return null;
+      // 取得買家姓名與工廠身分（供工廠端顯示詢問者身分用）
+      const [buyer, buyerAffiliation] = await Promise.all([
+        db.getUserById(conv.userId),
+        db.getActiveFactoryAffiliationDetail(conv.userId),
+      ]);
       return {
         factoryName: factory?.name ?? "未知工廠",
         productName: product?.name ?? null,
@@ -812,6 +817,10 @@ export const appRouter = router({
         userId: conv.userId,
         factoryOwnerId: factory?.ownerId ?? null,
         isCoMgr,
+        buyerName: buyer?.name ?? null,
+        buyerAffiliation: buyerAffiliation
+          ? { factoryId: buyerAffiliation.factoryId, factoryName: buyerAffiliation.factoryName, factoryStatus: buyerAffiliation.factoryStatus, role: buyerAffiliation.role }
+          : null,
       };
     }),
 
