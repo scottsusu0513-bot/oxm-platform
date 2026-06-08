@@ -526,7 +526,7 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
           {/* 左側篩選欄 - 桌面 */}
           <div className="hidden lg:block">
-            <Card className="sticky top-6">
+            <Card className="sticky top-20 max-h-[calc(100vh-6rem)] overflow-y-auto overscroll-contain">
               <CardContent className="p-4">
                 <h3 className="font-semibold mb-4 text-sm">篩選條件</h3>
 
