@@ -474,6 +474,30 @@ export const emailVerificationTokens = mysqlTable("emailVerificationTokens", {
 
 export type EmailVerificationToken = typeof emailVerificationTokens.$inferSelect;
 
+// ===== 工廠基本資料修改申請表 =====
+export const factoryRevisions = mysqlTable("factoryRevisions", {
+  id: int("id").autoincrement().primaryKey(),
+  factoryId: int("factoryId").notNull().references(() => factories.id, { onDelete: "cascade" }),
+  submittedBy: int("submittedBy").notNull().references(() => users.id, { onDelete: "cascade" }),
+  originalData: json("originalData").$type<Record<string, any>>().notNull(),
+  proposedData: json("proposedData").$type<Record<string, any>>().notNull(),
+  revisionReason: text("revisionReason"),
+  status: mysqlEnum("status", ["pending", "approved", "rejected"]).notNull().default("pending"),
+  rejectionReason: text("rejectionReason"),
+  reviewedBy: int("reviewedBy"),
+  reviewedAt: timestamp("reviewedAt"),
+  submittedAt: timestamp("submittedAt").notNull().defaultNow(),
+  // Virtual generated column: factoryId when pending, NULL otherwise.
+  // MySQL UNIQUE INDEX ignores NULLs → only one pending revision per factory enforced.
+  pendingFactoryId: int("pendingFactoryId").generatedAlwaysAs(
+    sql`CASE WHEN \`status\` = 'pending' THEN \`factoryId\` ELSE NULL END`
+  ),
+}, (table) => ({
+  pendingFactoryUq: uniqueIndex("uq_factory_one_pending_revision").on(table.pendingFactoryId),
+}));
+
+export type FactoryRevision = typeof factoryRevisions.$inferSelect;
+
 // ===== Push Notification Tokens =====
 export const pushNotificationTokens = mysqlTable("pushNotificationTokens", {
   id: int("id").autoincrement().primaryKey(),

@@ -586,3 +586,115 @@ export async function sendEmailVerificationEmail(params: {
   });
   console.log('[Email] 已寄送驗證信到:', params.toEmail);
 }
+
+// ===== 工廠基本資料修改申請 Email =====
+
+function escapeHtml(str: string | null | undefined): string {
+  if (!str) return '';
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+export async function sendRevisionSubmittedEmail(params: {
+  factoryName: string;
+  factoryId: number;
+  submitterName: string | null;
+  revisionReason?: string | null;
+}) {
+  if (!isEmailEnabled() || !ADMIN_EMAIL) return;
+  const resend = getResend();
+  if (!resend) return;
+  const adminUrl = `${process.env.OAUTH_SERVER_URL || 'https://www.oxmmatch.com'}/admin`;
+  const safeName = escapeHtml(params.factoryName);
+  const safeSubmitter = escapeHtml(params.submitterName ?? '未知');
+  const safeReason = params.revisionReason ? escapeHtml(params.revisionReason) : null;
+  try {
+    await resend.emails.send({
+      from: FROM_EMAIL,
+      to: ADMIN_EMAIL,
+      subject: `【OXM 後台】工廠「${params.factoryName}」提交基本資料修改申請`,
+      html: `
+        <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #f97316;">工廠基本資料修改申請</h2>
+          <p>工廠「<strong>${safeName}</strong>」（ID: ${params.factoryId}）的管理者 <strong>${safeSubmitter}</strong> 提交了一筆基本資料修改申請。</p>
+          ${safeReason ? `<p>申請原因：${safeReason}</p>` : ''}
+          <div style="text-align: center; margin: 32px 0;">
+            <a href="${adminUrl}" style="background: #f97316; color: white; padding: 12px 28px; border-radius: 8px; text-decoration: none; font-weight: bold;">前往後台審核</a>
+          </div>
+          <p style="color: #999; font-size: 12px;">OXM 製造業媒合平台</p>
+        </div>
+      `,
+    });
+  } catch (err) {
+    console.error('[Email] sendRevisionSubmittedEmail failed:', err);
+  }
+}
+
+// recipientName: the individual recipient's display name (owner or co-manager)
+export async function sendRevisionApprovedEmail(params: {
+  factoryName: string;
+  factoryEmail: string | null;
+  recipientName: string | null;
+}) {
+  if (!isEmailEnabled() || !params.factoryEmail) return;
+  const resend = getResend();
+  if (!resend) return;
+  const safeName = escapeHtml(params.factoryName);
+  const safeRecipient = escapeHtml(params.recipientName ?? params.factoryName);
+  try {
+    await resend.emails.send({
+      from: FROM_EMAIL,
+      to: params.factoryEmail,
+      subject: `【OXM】您的工廠資料修改申請已通過`,
+      html: `
+        <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #16a34a;">資料修改申請通過</h2>
+          <p>親愛的 <strong>${safeRecipient}</strong> 您好，</p>
+          <p>您為工廠「<strong>${safeName}</strong>」提交的基本資料修改申請已通過審核，最新資料已正式更新至公開頁面。</p>
+          <p>感謝您維護正確的工廠資訊！</p>
+          <p style="color: #999; font-size: 12px;">OXM 製造業媒合平台 | <a href="https://www.oxmmatch.com">www.oxmmatch.com</a></p>
+        </div>
+      `,
+    });
+  } catch (err) {
+    console.error('[Email] sendRevisionApprovedEmail failed:', err);
+  }
+}
+
+// recipientName: the individual recipient's display name (owner or co-manager)
+export async function sendRevisionRejectedEmail(params: {
+  factoryName: string;
+  factoryEmail: string | null;
+  recipientName: string | null;
+  reason: string;
+}) {
+  if (!isEmailEnabled() || !params.factoryEmail) return;
+  const resend = getResend();
+  if (!resend) return;
+  const safeName = escapeHtml(params.factoryName);
+  const safeRecipient = escapeHtml(params.recipientName ?? params.factoryName);
+  const safeReason = escapeHtml(params.reason);
+  try {
+    await resend.emails.send({
+      from: FROM_EMAIL,
+      to: params.factoryEmail,
+      subject: `【OXM】您的工廠資料修改申請未通過`,
+      html: `
+        <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #dc2626;">資料修改申請未通過</h2>
+          <p>親愛的 <strong>${safeRecipient}</strong> 您好，</p>
+          <p>您為工廠「<strong>${safeName}</strong>」提交的基本資料修改申請未通過審核。</p>
+          <p>退回原因：<strong>${safeReason}</strong></p>
+          <p>您可以修改後重新提交。如有疑問請聯繫客服。</p>
+          <p style="color: #999; font-size: 12px;">OXM 製造業媒合平台 | <a href="https://www.oxmmatch.com">www.oxmmatch.com</a></p>
+        </div>
+      `,
+    });
+  } catch (err) {
+    console.error('[Email] sendRevisionRejectedEmail failed:', err);
+  }
+}

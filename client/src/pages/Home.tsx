@@ -765,7 +765,7 @@ export default function Home() {
               <p className="font-bold text-white text-lg">OXM</p>
               <Wrench className="w-5 h-5 text-purple-400" />
             </div>
-            <p>全台代工廠與設計工作室媒合平台</p>
+            <p>台灣傳統產業資源媒合平台</p>
           </div>
 
           {/* Social */}

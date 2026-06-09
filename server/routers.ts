@@ -1,7 +1,7 @@
 import { COOKIE_NAME, THIRTY_DAYS_MS } from "@shared/const";
 import { sdk } from "./_core/sdk";
 import { enhanceSearchKeyword, getSearchIntent } from './semantic-search';
-import { sendNewInquiryEmail, sendFactoryApprovedEmail, sendFactoryRejectedEmail, sendFactorySubmittedEmail, sendReportEmail, sendSupportTicketEmail, sendReviewReplyEmail, sendNewMessageNotificationEmail, sendReportStatusUpdateEmail, sendTicketStatusUpdateEmail, sendMessageReplyNotificationEmail, sendEmailVerificationEmail, sendAdminBroadcastEmail } from './email';
+import { sendNewInquiryEmail, sendFactoryApprovedEmail, sendFactoryRejectedEmail, sendFactorySubmittedEmail, sendReportEmail, sendSupportTicketEmail, sendReviewReplyEmail, sendNewMessageNotificationEmail, sendReportStatusUpdateEmail, sendTicketStatusUpdateEmail, sendMessageReplyNotificationEmail, sendEmailVerificationEmail, sendAdminBroadcastEmail, sendRevisionSubmittedEmail, sendRevisionApprovedEmail, sendRevisionRejectedEmail } from './email';
 import { sha256Hex, generateRawToken } from './_core/oauthHelpers';
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
@@ -34,6 +34,30 @@ async function assertFactoryManager(factoryId: number, userId: number) {
   }
   return factory;
 }
+
+// Validates proposedData field types — enforces correct types at submission and approve time.
+// All fields are partial since proposedData only includes the fields being changed.
+const FactoryBasicDataSchema = z.object({
+  name: z.string().min(1).max(200),
+  industry: z.array(z.string()),
+  subIndustry: z.array(z.string()),
+  mfgModes: z.array(z.string()),
+  region: z.string(),
+  description: z.string().nullable(),
+  capitalLevel: z.string(),
+  foundedYear: z.number().int().nullable(),
+  ownerName: z.string().nullable(),
+  contactPersonName: z.string().nullable(),
+  phone: z.string().nullable(),
+  website: z.string().nullable(),
+  contactEmail: z.string().nullable(),
+  address: z.string(),
+  operationStatus: z.enum(["normal", "busy", "full"]),
+  weekdayHours: z.string().nullable(),
+  weekendHours: z.string().nullable(),
+  businessNote: z.string().nullable(),
+  avatarUrl: z.string().nullable(),
+}).partial();
 
 export const appRouter = router({
   system: systemRouter,
@@ -213,30 +237,54 @@ export const appRouter = router({
 
   // ===== 工廠 =====
   factory: router({
-    getById: publicProcedure.input(z.object({ id: z.number() })).query(async ({ input, ctx }) => {
+    getById: publicProcedure.input(z.object({
+      id: z.number(),
+      // Pass true from FactoryDashboard to include latestRevision without a separate query.
+      // Omit (or false) for public browsing to avoid the extra DB round-trip.
+      includeRevision: z.boolean().optional().default(false),
+    })).query(async ({ input, ctx }) => {
       const factory = await db.getFactoryById(input.id);
       if (!factory) return null;
+      const authedUser = ctx.user;
+      let isAuthorized = false;
       // Non-approved factories are only visible to their owner, co-managers, and admins
       if (factory.status !== "approved") {
-        const user = ctx.user;
-        if (!user) return null;
-        if (!user.isAdmin) {
-          const isOwner = factory.ownerId === user.id;
-          if (!isOwner) {
-            const isCoMgr = await db.isActiveCoManager(factory.id, user.id);
+        if (!authedUser) return null;
+        if (authedUser.isAdmin) {
+          isAuthorized = true;
+        } else {
+          const isOwner = factory.ownerId === authedUser.id;
+          if (isOwner) {
+            isAuthorized = true;
+          } else {
+            const isCoMgr = await db.isActiveCoManager(factory.id, authedUser.id);
             if (!isCoMgr) return null;
+            isAuthorized = true;
           }
         }
+      } else if (input.includeRevision && authedUser) {
+        // Approved factory: only fetch revision info when explicitly requested by an authorized user
+        if (authedUser.isAdmin || factory.ownerId === authedUser.id) {
+          isAuthorized = true;
+        } else {
+          isAuthorized = await db.isActiveCoManager(factory.id, authedUser.id);
+        }
       }
-      const prods = await db.getProductsByFactoryId(input.id);
-      return { ...factory, products: prods };
+      const [prods, latestRevision] = await Promise.all([
+        db.getProductsByFactoryId(input.id),
+        isAuthorized && input.includeRevision ? db.getLatestRevisionByFactory(input.id) : Promise.resolve(null),
+      ]);
+      return { ...factory, products: prods, latestRevision: latestRevision ?? null };
     }),
 
     getMine: protectedProcedure.query(async ({ ctx }) => {
       const factory = await db.getFactoryByOwnerId(ctx.user.id);
       if (!factory) return null;
-      const prods = await db.getProductsByFactoryId(factory.id);
-      return { ...factory, products: prods };
+      const [prods, latestRevision] = await Promise.all([
+        db.getProductsByFactoryId(factory.id),
+        db.getLatestRevisionByFactory(factory.id),
+      ]);
+      return { ...factory, products: prods, latestRevision: latestRevision ?? null };
     }),
 
     create: protectedProcedure.input(z.object({
@@ -303,6 +351,16 @@ export const appRouter = router({
       const isOwner = factory.ownerId === ctx.user.id;
       const isCoMgr = !isOwner && await db.isActiveCoManager(id, ctx.user.id);
       if (!isOwner && !isCoMgr) throw new TRPCError({ code: 'FORBIDDEN', message: '無權限修改此工廠' });
+
+      // Status-based routing
+      if (factory.status === 'pending') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: '首次申請審核中，請等待審核完成後再修改資料' });
+      }
+      if (factory.status === 'approved') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: '已上線工廠的基本資料需透過「修改申請」流程更改，請使用提交修改申請功能' });
+      }
+
+      // draft / rejected → allow direct update
       try {
         await db.updateFactory(id, isOwner ? ctx.user.id : -1, data);
       } catch (err: any) {
@@ -310,6 +368,81 @@ export const appRouter = router({
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: '更新工廠失敗，請稍後再試' });
       }
       return { success: true };
+    }),
+
+    submitRevision: protectedProcedure.input(z.object({
+      factoryId: z.number(),
+      proposedData: z.record(z.string(), z.any()),
+      revisionReason: z.string().trim().min(2, "修改原因至少 2 個字").max(200, "修改原因最多 200 個字"),
+    })).mutation(async ({ ctx, input }) => {
+      requireVerifiedEmail(ctx.user);
+      const factory = await db.getFactoryById(input.factoryId);
+      if (!factory) throw new TRPCError({ code: 'NOT_FOUND', message: '找不到工廠' });
+
+      // Only owner or active co-manager may submit a revision
+      const isOwner = factory.ownerId === ctx.user.id;
+      const isCoMgr = !isOwner && await db.isActiveCoManager(factory.id, ctx.user.id);
+      if (!isOwner && !isCoMgr) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: '無權限提交此工廠的修改申請' });
+      }
+
+      if (factory.status !== 'approved') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: '只有已上線的工廠才能提交修改申請' });
+      }
+
+      // Application-layer duplicate check (DB unique index is the final safety net)
+      const existing = await db.getPendingRevisionByFactory(factory.id);
+      if (existing) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: '已有一筆審核中的修改申請，請等待審核完成後再提交新申請' });
+      }
+
+      // Read original data from DB — never trust the frontend for originalData
+      const originalData = db.extractBasicData(factory);
+
+      // Whitelist: strip any fields not in BASIC_DATA_FIELDS
+      const allowedSet = new Set(db.BASIC_DATA_FIELDS as readonly string[]);
+      const proposedData: Record<string, any> = {};
+      for (const key of Object.keys(input.proposedData)) {
+        if (allowedSet.has(key)) {
+          proposedData[key] = input.proposedData[key];
+        }
+      }
+
+      if (Object.keys(proposedData).length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: '修改申請必須包含至少一個欄位' });
+      }
+
+      // Runtime type validation: reject incorrect field value types (e.g. string where array expected)
+      const typeCheck = FactoryBasicDataSchema.safeParse(proposedData);
+      if (!typeCheck.success) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: '修改申請包含無效欄位值，請重新整理頁面後再試' });
+      }
+
+      let revisionId: number;
+      try {
+        revisionId = await db.createRevision(
+          factory.id,
+          ctx.user.id,
+          originalData,
+          proposedData,
+          input.revisionReason,
+        );
+      } catch (err: any) {
+        if (err?.message === 'DUPLICATE_PENDING_REVISION') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: '已有一筆基本資料修改申請正在審核中' });
+        }
+        throw err;
+      }
+
+      // Notify admin (fire-and-forget)
+      sendRevisionSubmittedEmail({
+        factoryName: factory.name,
+        factoryId: factory.id,
+        submitterName: ctx.user.name ?? null,
+        revisionReason: input.revisionReason,
+      }).catch(err => console.error('[Email] sendRevisionSubmittedEmail failed:', err));
+
+      return { success: true, revisionId };
     }),
 
     search: publicProcedure.input(z.object({
@@ -373,18 +506,51 @@ export const appRouter = router({
     uploadAvatar: protectedProcedure.input(z.object({
       base64: z.string().max(10 * 1024 * 1024),
       mimeType: z.enum(["image/jpeg", "image/png", "image/webp"]).default("image/jpeg"),
+      // Optional: pass factoryId to support co-managers; falls back to owner lookup when omitted.
+      factoryId: z.number().optional(),
     })).mutation(async ({ ctx, input }) => {
-      const factory = await db.getFactoryByOwnerId(ctx.user.id);
-      if (!factory) throw new Error("找不到工廠");
+      let factory: Awaited<ReturnType<typeof db.getFactoryByOwnerId>>;
+      if (input.factoryId) {
+        factory = await db.getFactoryById(input.factoryId);
+        if (!factory) throw new TRPCError({ code: 'NOT_FOUND', message: '找不到工廠' });
+        const isOwner = factory.ownerId === ctx.user.id;
+        const isCoMgr = !isOwner && await db.isActiveCoManager(factory.id, ctx.user.id);
+        if (!isOwner && !isCoMgr) throw new TRPCError({ code: 'FORBIDDEN', message: '無權限上傳此工廠大頭貼' });
+      } else {
+        factory = await db.getFactoryByOwnerId(ctx.user.id);
+        if (!factory) throw new Error("找不到工廠");
+      }
       const base64Data = input.base64.includes(",") ? input.base64.split(",")[1] : input.base64;
       const buffer = Buffer.from(base64Data, "base64");
       const validation = await validateImageUpload(buffer);
       if (!validation.valid) throw new Error(validation.error ?? "圖片格式不正確");
       const ext = input.mimeType.includes("png") ? "png" : input.mimeType.includes("webp") ? "webp" : "jpg";
-      const key = `factory-avatars/${factory.id}/${nanoid()}.${ext}`;
-      const { url } = await storagePut(key, buffer, input.mimeType);
-      await db.updateFactory(factory.id, ctx.user.id, { avatarUrl: url });
-      return { url };
+
+      switch (factory.status) {
+        case 'draft':
+        case 'rejected': {
+          // Direct update: upload and save to DB
+          const key = `factory-avatars/${factory.id}/${nanoid()}.${ext}`;
+          const { url } = await storagePut(key, buffer, input.mimeType);
+          await db.updateFactory(factory.id, ctx.user.id, { avatarUrl: url });
+          return { url, savedToDb: true };
+        }
+        case 'pending': {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: '首次申請審核中，不可更換大頭貼' });
+        }
+        case 'approved': {
+          // Upload to a separate temp prefix. factories.avatarUrl is NOT updated here.
+          // The URL is staged on the client and included in proposedData upon revision submission.
+          // If the user abandons without submitting, the object is orphaned under factory-avatars-temp/.
+          // A S3 lifecycle rule on the factory-avatars-temp/ prefix (e.g., expire after 30 days)
+          // can be applied to clean up abandoned temp objects without affecting production avatars.
+          const key = `factory-avatars-temp/${factory.id}/${nanoid()}.${ext}`;
+          const { url } = await storagePut(key, buffer, input.mimeType);
+          return { url, savedToDb: false };
+        }
+        default:
+          throw new Error("未知的工廠狀態");
+      }
     }),
 
     submitForReview: protectedProcedure.mutation(async ({ ctx }) => {
@@ -1477,14 +1643,19 @@ export const appRouter = router({
       return db.getAdminStats();
     }),
     getPendingCount: protectedProcedure.query(async ({ ctx }) => {
-  if (ctx.user.role !== 'admin') return { count: 0 };
-  const db_ = await getDb();
-  if (!db_) return { count: 0 };
-  const [result] = await db_.select({ count: sql<number>`COUNT(*)` })
-    .from(factories)
-    .where(eq(factories.status, 'pending'));
-  return { count: Number(result?.count ?? 0) };
-}),
+      if (ctx.user.role !== 'admin') return { count: 0, factoryCount: 0, revisionCount: 0 };
+      const [factoryCount, revisionCount] = await Promise.all([
+        (async () => {
+          const db_ = await getDb();
+          if (!db_) return 0;
+          const [result] = await db_.select({ count: sql<number>`COUNT(*)` })
+            .from(factories).where(eq(factories.status, 'pending'));
+          return Number(result?.count ?? 0);
+        })(),
+        db.getPendingRevisionCount(),
+      ]);
+      return { count: factoryCount + revisionCount, factoryCount, revisionCount };
+    }),
 
     getAdminNotifications: adminProcedure.query(async () => {
       return db.getAdminPendingNotifications();
@@ -1574,6 +1745,102 @@ export const appRouter = router({
       pageSize: z.number().int().min(1).max(100).default(20),
     })).query(async ({ input }) => {
       return db.getAdminPendingFactories(input.page, input.pageSize);
+    }),
+
+    getPendingRevisions: adminProcedure.input(z.object({
+      page: z.number().int().min(1).default(1),
+      pageSize: z.number().int().min(1).max(100).default(20),
+    })).query(async ({ input }) => {
+      return db.getAdminPendingRevisions(input.page, input.pageSize);
+    }),
+
+    approveRevision: adminProcedure.input(z.object({ revisionId: z.number() })).mutation(async ({ ctx, input }) => {
+      // Pre-validate proposedData types before applying (defense-in-depth; submitRevision also validates)
+      const revision = await db.getRevisionById(input.revisionId);
+      if (revision && revision.status === 'pending') {
+        const proposed = typeof revision.proposedData === 'string'
+          ? JSON.parse(revision.proposedData as string)
+          : revision.proposedData;
+        const check = FactoryBasicDataSchema.safeParse(proposed);
+        if (!check.success) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: '修改申請資料格式有誤，無法套用，請要求工廠重新提交' });
+        }
+      }
+      const result = await db.approveRevisionAtomic(input.revisionId, ctx.user!.id);
+      // Notifications to owner + all active co-managers — fire-and-forget after successful transaction
+      db.getCoManagersByFactory(result.factoryId).then(coMgrs => {
+        // Email: deduplicated recipients (avoid Map/Set iteration; use array + includes check)
+        const seenEmails: string[] = [];
+        const recipients: Array<{ email: string; name: string | null }> = [];
+        const addEmailRecipient = (email: string | null | undefined, name: string | null) => {
+          if (!email || seenEmails.includes(email)) return;
+          seenEmails.push(email);
+          recipients.push({ email, name });
+        };
+        addEmailRecipient(result.ownerEmail, result.ownerName);
+        for (const mgr of coMgrs) addEmailRecipient(mgr.email, mgr.name ?? null);
+        for (const { email, name } of recipients) {
+          sendRevisionApprovedEmail({
+            factoryName: result.factoryName,
+            factoryEmail: email,
+            recipientName: name,
+          }).catch(err => console.error('[Email] sendRevisionApprovedEmail failed:', err));
+        }
+        // Push: deduplicated userIds
+        const pushIds: number[] = result.ownerId ? [result.ownerId] : [];
+        for (const mgr of coMgrs) {
+          if (mgr.userId && !pushIds.includes(mgr.userId)) pushIds.push(mgr.userId);
+        }
+        if (pushIds.length > 0) {
+          sendPushToRecipients({
+            userIds: pushIds,
+            title: "OXM 資料修改申請通過",
+            body: `「${result.factoryName}」的基本資料修改申請已通過`,
+            data: { type: "revision_approved", targetPath: "/dashboard" },
+          }).catch(() => {});
+        }
+      }).catch(() => {});
+      return { success: true };
+    }),
+
+    rejectRevision: adminProcedure.input(z.object({
+      revisionId: z.number(),
+      reason: z.string().trim().min(1, "請填寫拒絕原因").max(500),
+    })).mutation(async ({ ctx, input }) => {
+      const result = await db.rejectRevisionAtomic(input.revisionId, ctx.user!.id, input.reason);
+      // Notifications to owner + all active co-managers — fire-and-forget after successful transaction
+      db.getCoManagersByFactory(result.factoryId).then(coMgrs => {
+        const seenEmails: string[] = [];
+        const recipients: Array<{ email: string; name: string | null }> = [];
+        const addEmailRecipient = (email: string | null | undefined, name: string | null) => {
+          if (!email || seenEmails.includes(email)) return;
+          seenEmails.push(email);
+          recipients.push({ email, name });
+        };
+        addEmailRecipient(result.ownerEmail, result.ownerName);
+        for (const mgr of coMgrs) addEmailRecipient(mgr.email, mgr.name ?? null);
+        for (const { email, name } of recipients) {
+          sendRevisionRejectedEmail({
+            factoryName: result.factoryName,
+            factoryEmail: email,
+            recipientName: name,
+            reason: input.reason,
+          }).catch(err => console.error('[Email] sendRevisionRejectedEmail failed:', err));
+        }
+        const pushIds: number[] = result.ownerId ? [result.ownerId] : [];
+        for (const mgr of coMgrs) {
+          if (mgr.userId && !pushIds.includes(mgr.userId)) pushIds.push(mgr.userId);
+        }
+        if (pushIds.length > 0) {
+          sendPushToRecipients({
+            userIds: pushIds,
+            title: "OXM 資料修改申請結果",
+            body: `「${result.factoryName}」的基本資料修改申請未通過，請確認原因後重新申請`,
+            data: { type: "revision_rejected", targetPath: "/dashboard" },
+          }).catch(() => {});
+        }
+      }).catch(() => {});
+      return { success: true };
     }),
 
     getApprovedFactories: adminProcedure.input(z.object({

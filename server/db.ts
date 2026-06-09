@@ -17,6 +17,7 @@ import {
   oauthStates, appLoginTickets, collaborationOrders,
   userAuthAccounts, emailVerificationTokens,
   pushNotificationTokens,
+  factoryRevisions,
   type Factory, type InsertFactory, type Product, type InsertProduct, type Favorite, type InsertFavorite
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
@@ -3354,4 +3355,313 @@ export async function getEnabledPushTokensByUserId(userId: number) {
       eq(pushNotificationTokens.userId, userId),
       eq(pushNotificationTokens.enabled, true)
     ));
+}
+
+// ===== 工廠基本資料修改申請 =====
+
+// 19 個基本資料欄位白名單（不含 businessType，申請後無法更改）
+export const BASIC_DATA_FIELDS = [
+  "name", "industry", "subIndustry", "mfgModes", "region", "description",
+  "capitalLevel", "foundedYear", "ownerName", "contactPersonName", "phone",
+  "website", "contactEmail", "address", "operationStatus",
+  "weekdayHours", "weekendHours", "businessNote", "avatarUrl",
+] as const;
+
+export type BasicDataField = typeof BASIC_DATA_FIELDS[number];
+
+export function extractBasicData(factory: Factory): Record<BasicDataField, any> {
+  return {
+    name: factory.name,
+    industry: factory.industry,
+    subIndustry: factory.subIndustry ?? [],
+    mfgModes: factory.mfgModes,
+    region: factory.region,
+    description: factory.description ?? null,
+    capitalLevel: factory.capitalLevel,
+    foundedYear: factory.foundedYear ?? null,
+    ownerName: factory.ownerName ?? null,
+    contactPersonName: factory.contactPersonName ?? null,
+    phone: factory.phone ?? null,
+    website: factory.website ?? null,
+    contactEmail: factory.contactEmail ?? null,
+    address: factory.address,
+    operationStatus: factory.operationStatus,
+    weekdayHours: factory.weekdayHours ?? null,
+    weekendHours: factory.weekendHours ?? null,
+    businessNote: factory.businessNote ?? null,
+    avatarUrl: factory.avatarUrl ?? null,
+  };
+}
+
+export async function getPendingRevisionByFactory(factoryId: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select().from(factoryRevisions)
+    .where(and(eq(factoryRevisions.factoryId, factoryId), eq(factoryRevisions.status, "pending")))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+export async function createRevision(
+  factoryId: number,
+  submittedBy: number,
+  originalData: Record<string, any>,
+  proposedData: Record<string, any>,
+  revisionReason: string,
+): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  try {
+    const result = await db.insert(factoryRevisions).values({
+      factoryId,
+      submittedBy,
+      originalData,
+      proposedData,
+      revisionReason,
+      status: "pending",
+      submittedAt: new Date(),
+    } as any);
+    return (result as any)[0].insertId;
+  } catch (err: any) {
+    // MySQL duplicate key on uq_factory_one_pending_revision
+    if (err?.errno === 1062 || err?.code === 'ER_DUP_ENTRY') {
+      throw new Error('DUPLICATE_PENDING_REVISION');
+    }
+    throw err;
+  }
+}
+
+export async function approveRevisionAtomic(revisionId: number, adminId: number): Promise<{
+  factoryId: number;
+  ownerId: number;
+  factoryName: string;
+  ownerEmail: string | null;
+  ownerName: string | null;
+  proposedData: Record<string, any>;
+}> {
+  await getDb();
+  const pool = _pool;
+  if (!pool) throw new Error("DB not available");
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    const [revRows]: any = await conn.execute(
+      "SELECT * FROM factoryRevisions WHERE id = ? AND status = 'pending' FOR UPDATE",
+      [revisionId]
+    );
+    if (!revRows || revRows.length === 0) {
+      throw new Error("此申請不存在或已被其他管理員處理");
+    }
+    const rev = revRows[0];
+    const proposed = typeof rev.proposedData === "string"
+      ? JSON.parse(rev.proposedData)
+      : rev.proposedData;
+
+    // Build SET clause from proposedData whitelist
+    const allowedFields = BASIC_DATA_FIELDS as readonly string[];
+    const setClauses: string[] = [];
+    const setValues: any[] = [];
+    for (const field of allowedFields) {
+      if (field in proposed) {
+        const val = proposed[field];
+        // JSON fields
+        if (field === "industry" || field === "subIndustry" || field === "mfgModes") {
+          setClauses.push(`\`${field}\` = ?`);
+          setValues.push(JSON.stringify(Array.isArray(val) ? val : []));
+        } else if (field === "foundedYear") {
+          // Coerce to int — guards against stale string values from old data
+          const yr = val !== null && val !== undefined ? Math.floor(Number(val)) : null;
+          setClauses.push(`\`${field}\` = ?`);
+          setValues.push(yr !== null && !isNaN(yr) ? yr : null);
+        } else {
+          setClauses.push(`\`${field}\` = ?`);
+          setValues.push(val ?? null);
+        }
+      }
+    }
+
+    if (setClauses.length > 0) {
+      await conn.execute(
+        `UPDATE factories SET ${setClauses.join(", ")}, updatedAt = NOW() WHERE id = ?`,
+        [...setValues, rev.factoryId]
+      );
+    }
+
+    await conn.execute(
+      "UPDATE factoryRevisions SET status = 'approved', reviewedBy = ?, reviewedAt = NOW() WHERE id = ?",
+      [adminId, revisionId]
+    );
+
+    // Fetch factory info for notification (within transaction, no lock needed)
+    const [factoryRows]: any = await conn.execute(
+      "SELECT id, name, ownerId FROM factories WHERE id = ?",
+      [rev.factoryId]
+    );
+    const factory = factoryRows?.[0];
+
+    const [userRows]: any = factory ? await conn.execute(
+      "SELECT email, name FROM users WHERE id = ?",
+      [factory.ownerId]
+    ) : [[]];
+    const owner = userRows?.[0];
+
+    await conn.commit();
+    return {
+      factoryId: rev.factoryId,
+      ownerId: factory?.ownerId ?? 0,
+      factoryName: factory?.name ?? "",
+      ownerEmail: owner?.email ?? null,
+      ownerName: owner?.name ?? null,
+      proposedData: proposed,
+    };
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
+export async function rejectRevisionAtomic(revisionId: number, adminId: number, reason: string): Promise<{
+  factoryId: number;
+  ownerId: number;
+  factoryName: string;
+  ownerEmail: string | null;
+  ownerName: string | null;
+}> {
+  await getDb();
+  const pool = _pool;
+  if (!pool) throw new Error("DB not available");
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [revRows]: any = await conn.execute(
+      "SELECT * FROM factoryRevisions WHERE id = ? AND status = 'pending' FOR UPDATE",
+      [revisionId]
+    );
+    if (!revRows || revRows.length === 0) {
+      throw new Error("此申請不存在或已被其他管理員處理");
+    }
+    const rev = revRows[0];
+    await conn.execute(
+      "UPDATE factoryRevisions SET status = 'rejected', rejectionReason = ?, reviewedBy = ?, reviewedAt = NOW() WHERE id = ?",
+      [reason, adminId, revisionId]
+    );
+    const [factoryRows]: any = await conn.execute(
+      "SELECT id, name, ownerId FROM factories WHERE id = ?",
+      [rev.factoryId]
+    );
+    const factory = factoryRows?.[0];
+    const [userRows]: any = factory ? await conn.execute(
+      "SELECT email, name FROM users WHERE id = ?",
+      [factory.ownerId]
+    ) : [[]];
+    const owner = userRows?.[0];
+    await conn.commit();
+    return {
+      factoryId: rev.factoryId,
+      ownerId: factory?.ownerId ?? 0,
+      factoryName: factory?.name ?? "",
+      ownerEmail: owner?.email ?? null,
+      ownerName: owner?.name ?? null,
+    };
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
+export async function rejectRevision(revisionId: number, adminId: number, reason: string): Promise<{
+  factoryId: number;
+  factoryName: string;
+  ownerEmail: string | null;
+  ownerName: string | null;
+}> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+
+  const rows = await db.select().from(factoryRevisions)
+    .where(and(eq(factoryRevisions.id, revisionId), eq(factoryRevisions.status, "pending")))
+    .limit(1);
+  if (rows.length === 0) throw new Error("此申請不存在或已被其他管理員處理");
+  const rev = rows[0];
+
+  await db.update(factoryRevisions).set({
+    status: "rejected",
+    rejectionReason: reason,
+    reviewedBy: adminId,
+    reviewedAt: new Date(),
+  } as any).where(eq(factoryRevisions.id, revisionId));
+
+  const factory = await getFactoryById(rev.factoryId);
+  const owner = factory ? await getUserById(factory.ownerId) : undefined;
+  return {
+    factoryId: rev.factoryId,
+    factoryName: factory?.name ?? "",
+    ownerEmail: owner?.email ?? null,
+    ownerName: owner?.name ?? null,
+  };
+}
+
+export async function getAdminPendingRevisions(page = 1, pageSize = 20) {
+  const db = await getDb();
+  if (!db) return { items: [], total: 0 };
+
+  const [countResult] = await db.select({ count: sql<number>`COUNT(*)` })
+    .from(factoryRevisions)
+    .where(eq(factoryRevisions.status, "pending"));
+  const total = Number(countResult?.count ?? 0);
+
+  const rows = await db.select({
+    id: factoryRevisions.id,
+    factoryId: factoryRevisions.factoryId,
+    factoryName: factories.name,
+    submittedBy: factoryRevisions.submittedBy,
+    submitterName: users.name,
+    originalData: factoryRevisions.originalData,
+    proposedData: factoryRevisions.proposedData,
+    revisionReason: factoryRevisions.revisionReason,
+    status: factoryRevisions.status,
+    submittedAt: factoryRevisions.submittedAt,
+  }).from(factoryRevisions)
+    .innerJoin(factories, eq(factoryRevisions.factoryId, factories.id))
+    .innerJoin(users, eq(factoryRevisions.submittedBy, users.id))
+    .where(eq(factoryRevisions.status, "pending"))
+    .orderBy(asc(factoryRevisions.submittedAt))
+    .limit(pageSize).offset((page - 1) * pageSize);
+
+  return { items: rows, total };
+}
+
+export async function getPendingRevisionCount(): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const [result] = await db.select({ count: sql<number>`COUNT(*)` })
+    .from(factoryRevisions)
+    .where(eq(factoryRevisions.status, "pending"));
+  return Number(result?.count ?? 0);
+}
+
+// Returns the most recent revision (any status) for a factory — used to show pending/rejected banners.
+// The frontend displays a banner only if status is 'pending' or 'rejected'; 'approved' is ignored.
+export async function getLatestRevisionByFactory(factoryId: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select().from(factoryRevisions)
+    .where(eq(factoryRevisions.factoryId, factoryId))
+    .orderBy(desc(factoryRevisions.id))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+export async function getRevisionById(revisionId: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select().from(factoryRevisions)
+    .where(eq(factoryRevisions.id, revisionId))
+    .limit(1);
+  return rows[0] ?? null;
 }

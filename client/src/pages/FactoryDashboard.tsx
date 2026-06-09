@@ -76,7 +76,7 @@ export default function FactoryDashboard() {
   });
   const firstCoManaged = coManagedList?.[0];
   const { data: coManagedFactory, isLoading: coManagedFactoryLoading } = trpc.factory.getById.useQuery(
-    { id: firstCoManaged?.factoryId ?? 0 },
+    { id: firstCoManaged?.factoryId ?? 0, includeRevision: true },
     { enabled: !!firstCoManaged?.factoryId }
   );
 
@@ -256,7 +256,7 @@ export default function FactoryDashboard() {
           </TabsList>
 
           <TabsContent value="info">
-            <FactoryInfoForm factory={factory} isOwner={isOwner} />
+            <FactoryInfoForm factory={factory} isOwner={isOwner} latestRevision={(factory as any).latestRevision ?? null} />
           </TabsContent>
           <TabsContent value="photos">
             <PhotoManager factoryId={factory.id} />
@@ -297,7 +297,7 @@ const OPERATION_STATUS_OPTIONS = [
   { value: "full",   label: "產線滿載", dot: "bg-red-500" },
 ] as const;
 
-function FactoryInfoForm({ factory, isOwner = true }: { factory: any; isOwner?: boolean }) {
+function FactoryInfoForm({ factory, isOwner = true, latestRevision = null }: { factory: any; isOwner?: boolean; latestRevision?: any }) {
   const [name, setName] = useState(factory.name);
   const [industry, setIndustry] = useState<string[]>(() => {
     const raw = (factory as any).industry;
@@ -326,7 +326,11 @@ function FactoryInfoForm({ factory, isOwner = true }: { factory: any; isOwner?: 
   const [avatarUploading, setAvatarUploading] = useState(false);
   const avatarInputRef = useRef<HTMLInputElement>(null);
 
-  // Snapshot of saved form values for dirty detection (avatar excluded — it saves immediately on upload)
+  // Snapshot of saved form values for dirty detection.
+  // avatarUrl is included here. For draft/rejected, it is updated in handleAvatarChange immediately
+  // after upload succeeds (savedToDb: true), so the button does not stay dirty after a save.
+  // For approved, it is NOT updated on upload (savedToDb: false), so isDirty correctly stays true
+  // until the revision is submitted.
   const initialForm = useRef({
     name: factory.name as string,
     industry: Array.isArray(factory.industry) ? [...factory.industry as string[]] : typeof factory.industry === 'string' && factory.industry ? [factory.industry as string] : [] as string[],
@@ -346,6 +350,7 @@ function FactoryInfoForm({ factory, isOwner = true }: { factory: any; isOwner?: 
     weekdayHours: ((factory as any).weekdayHours ?? "") as string,
     weekendHours: ((factory as any).weekendHours ?? "") as string,
     businessNote: ((factory as any).businessNote ?? "") as string,
+    avatarUrl: (factory.avatarUrl ?? null) as string | null,
   });
 
   const arrEq = (a: string[], b: string[]) =>
@@ -369,22 +374,44 @@ function FactoryInfoForm({ factory, isOwner = true }: { factory: any; isOwner?: 
     operationStatus !== initialForm.current.operationStatus ||
     weekdayHours !== initialForm.current.weekdayHours ||
     weekendHours !== initialForm.current.weekendHours ||
-    businessNote !== initialForm.current.businessNote;
+    businessNote !== initialForm.current.businessNote ||
+    (avatarUrl ?? null) !== (initialForm.current.avatarUrl ?? null);
+
+  const [revisionDialogOpen, setRevisionDialogOpen] = useState(false);
+  const [revisionReason, setRevisionReason] = useState("");
 
   const utils = trpc.useUtils();
   const updateFactory = trpc.factory.update.useMutation({
     onError: (err) => toast.error(err.message),
   });
   const uploadAvatarMut = trpc.factory.uploadAvatar.useMutation();
-  const submitForReview = trpc.factory.submitForReview.useMutation({
+  const submitForReviewMut = trpc.factory.submitForReview.useMutation({
     onSuccess: () => { toast.success("已送出審核！請等待管理員審核"); utils.factory.getMine.invalidate(); },
     onError: (err) => toast.error(err.message),
   });
+  const submitRevisionMut = trpc.factory.submitRevision.useMutation({
+    onSuccess: () => {
+      toast.success("修改申請已送出，請等待管理員審核");
+      setRevisionDialogOpen(false);
+      setRevisionReason("");
+      if (isOwner) {
+        utils.factory.getMine.invalidate();
+      } else {
+        utils.factory.getById.invalidate({ id: factory.id, includeRevision: true });
+      }
+    },
+    onError: (err) => toast.error(err.message),
+  });
 
-  const isLocked = factory.status === 'pending';
+  const hasPendingRevision = latestRevision?.status === 'pending';
+  const hasRejectedRevision = latestRevision?.status === 'rejected';
+
+  // isBasicDataLocked: only applies to basic data form + avatar; NOT products/photos
+  const isBasicDataLocked = factory.status === 'pending' || hasPendingRevision;
+  const isLocked = isBasicDataLocked; // alias for existing code below
 
   const toggleMode = (mode: string) => {
-    if (isLocked) return;
+    if (isBasicDataLocked) return;
     setMfgModes(prev => prev.includes(mode) ? prev.filter(m => m !== mode) : [...prev, mode]);
   };
 
@@ -401,27 +428,67 @@ function FactoryInfoForm({ factory, isOwner = true }: { factory: any; isOwner?: 
     try {
       const base64 = await compressImage(file);
       setAvatarPreview(base64);
-      const { url } = await uploadAvatarMut.mutateAsync({ base64, mimeType: "image/jpeg" });
-      setAvatarUrl(url);
-      setAvatarPreview(url);
-      await utils.factory.getMine.invalidate();
+      const result = await uploadAvatarMut.mutateAsync({ base64, mimeType: "image/jpeg", factoryId: factory.id });
+      setAvatarUrl(result.url);
+      setAvatarPreview(result.url);
+      if ((result as any).savedToDb !== false) {
+        // draft/rejected: server saved immediately → sync initialForm so isDirty resets to false
+        initialForm.current = { ...initialForm.current, avatarUrl: result.url ?? null };
+        if (isOwner) {
+          await utils.factory.getMine.invalidate();
+        } else {
+          await utils.factory.getById.invalidate({ id: factory.id, includeRevision: true });
+        }
+      }
+      // approved: savedToDb is false — URL stays staged in avatarUrl state for the revision submission
     } catch {
       toast.error("圖片上傳失敗，請重試");
-      setAvatarPreview(null);
-      setAvatarUrl(null);
+      setAvatarPreview(factory.avatarUrl ?? null);
+      setAvatarUrl(factory.avatarUrl ?? null);
     } finally {
       setAvatarUploading(false);
     }
   };
 
+  const buildProposedData = () => ({
+    name,
+    industry: industry.length > 0 ? industry : factory.industry,
+    subIndustry: subIndustry,
+    mfgModes,
+    region,
+    description: description || null,
+    capitalLevel,
+    foundedYear: foundedYear ? parseInt(foundedYear) : null,
+    ownerName: ownerName || null,
+    contactPersonName: contactPersonName || null,
+    phone: phone || null,
+    website: website || null,
+    contactEmail: contactEmail || null,
+    address,
+    operationStatus,
+    weekdayHours: weekdayHours || null,
+    weekendHours: weekendHours || null,
+    businessNote: businessNote || null,
+    avatarUrl: avatarUrl || factory.avatarUrl || null,
+  });
+
   const handleSave = () => {
     if (!isDirty) return;
     if (avatarUploading) { toast.error("圖片上傳中，請稍候"); return; }
     if (foundedYear && foundedYear.length !== 4) { toast.error("成立年份請輸入4位數西元年"); return; }
+
+    if (factory.status === 'approved') {
+      // Open revision dialog for approved factories
+      setRevisionDialogOpen(true);
+      return;
+    }
+
+    // draft / rejected → direct update
     const snapshot = {
       name, industry: [...industry], subIndustry: [...subIndustry], mfgModes: [...mfgModes],
       region, description, capitalLevel, foundedYear, ownerName, contactPersonName, phone, website, contactEmail,
       address, operationStatus, weekdayHours, weekendHours, businessNote,
+      avatarUrl: avatarUrl ?? null,
     };
     updateFactory.mutate({
       id: factory.id, name,
@@ -448,15 +515,110 @@ function FactoryInfoForm({ factory, isOwner = true }: { factory: any; isOwner?: 
     });
   };
 
+  const handleSubmitRevision = () => {
+    const trimmed = revisionReason.trim();
+    if (trimmed.length < 2) {
+      toast.error("修改原因至少需要 2 個字");
+      return;
+    }
+    if (trimmed.length > 200) {
+      toast.error("修改原因不可超過 200 個字");
+      return;
+    }
+    submitRevisionMut.mutate({
+      factoryId: factory.id,
+      proposedData: buildProposedData(),
+      revisionReason: trimmed,
+    });
+  };
+
   return (
-    <Card>
+    <>
+      {/* ── 修改申請 Dialog ── */}
+      <Dialog open={revisionDialogOpen} onOpenChange={setRevisionDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>提交基本資料修改申請</DialogTitle>
+            <DialogDescription>
+              已上線工廠的基本資料變更需要管理員審核。填寫修改原因後送出申請，審核通過後資料才會更新至公開頁面。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 py-2">
+            <Label>修改原因（必填，2 至 200 字）</Label>
+            <Textarea
+              value={revisionReason}
+              onChange={e => { if (e.target.value.length <= 200) setRevisionReason(e.target.value); }}
+              placeholder="例：公司搬遷更新地址、增加新產業分類…"
+              rows={3}
+            />
+            <div className="flex items-center justify-between">
+              {revisionReason.trim().length > 0 && revisionReason.trim().length < 2 && (
+                <p className="text-xs text-red-500">至少需要 2 個字</p>
+              )}
+              {revisionReason.trim().length === 0 && <p className="text-xs text-red-500">修改原因為必填</p>}
+              <p className="text-xs text-muted-foreground ml-auto">{revisionReason.trim().length} / 200</p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRevisionDialogOpen(false)} disabled={submitRevisionMut.isPending}>取消</Button>
+            <Button
+              onClick={handleSubmitRevision}
+              disabled={submitRevisionMut.isPending || revisionReason.trim().length < 2}
+              className="bg-orange-500 hover:bg-orange-600 text-white"
+            >
+              {submitRevisionMut.isPending ? "送出中..." : "確認送出申請"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Card>
       <CardHeader>
         <CardTitle>基本資料</CardTitle>
         <CardDescription>
-          {isLocked ? "審核中，資料暫時無法修改" : "這些資料會顯示在您的工廠公開頁面，請確保資訊正確"}
+          {factory.status === 'pending'
+            ? "首次申請審核中，資料暫時無法修改"
+            : hasPendingRevision
+            ? "修改申請審核中，待審核完成後可再次修改"
+            : factory.status === 'approved'
+            ? "已上線工廠的基本資料變更需提交修改申請由管理員審核"
+            : "這些資料會顯示在您的工廠公開頁面，請確保資訊正確"}
         </CardDescription>
       </CardHeader>
       <CardContent className="divide-y divide-border">
+
+        {/* ── 修改申請審核中 Banner ── */}
+        {hasPendingRevision && (
+          <div className="py-4 px-4 bg-yellow-50 border border-yellow-200 rounded-lg flex items-start gap-2 text-yellow-800 mb-2">
+            <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm font-medium">基本資料修改申請審核中</p>
+              <p className="text-xs text-yellow-700 mt-0.5">您於 {new Date(latestRevision.submittedAt).toLocaleDateString('zh-TW')} 提交的修改申請正在審核中，審核期間無法提交新的修改申請。</p>
+            </div>
+          </div>
+        )}
+
+        {/* ── 修改申請被拒絕 Banner（只在沒有 pending 申請時顯示） ── */}
+        {!hasPendingRevision && hasRejectedRevision && (
+          <div className="py-4 px-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-2 text-red-800 mb-2">
+            <XCircle className="w-5 h-5 shrink-0 mt-0.5" />
+            <div className="space-y-0.5">
+              <p className="text-sm font-medium">基本資料修改申請未通過</p>
+              <p className="text-xs text-red-700">
+                拒絕原因：{latestRevision.rejectionReason ?? '（未說明）'}
+              </p>
+              {latestRevision.reviewedAt && (
+                <p className="text-xs text-red-600">
+                  審核時間：{new Date(latestRevision.reviewedAt).toLocaleDateString('zh-TW')}
+                </p>
+              )}
+              {latestRevision.revisionReason && (
+                <p className="text-xs text-red-600">原申請原因：{latestRevision.revisionReason}</p>
+              )}
+              <p className="text-xs text-red-600 mt-1">您可修改後重新提交修改申請。</p>
+            </div>
+          </div>
+        )}
 
         {/* ── 大頭貼 ── */}
         {!isLocked && (
@@ -753,10 +915,10 @@ function FactoryInfoForm({ factory, isOwner = true }: { factory: any; isOwner?: 
                     <AlertDialogCancel>取消</AlertDialogCancel>
                     <AlertDialogAction
                       className="bg-blue-600 hover:bg-blue-700"
-                      onClick={() => submitForReview.mutate(undefined)}
-                      disabled={submitForReview.isPending}
+                      onClick={() => submitForReviewMut.mutate(undefined)}
+                      disabled={submitForReviewMut.isPending}
                     >
-                      {submitForReview.isPending ? "送出中..." : "確認送出"}
+                      {submitForReviewMut.isPending ? "送出中..." : "確認送出"}
                     </AlertDialogAction>
                   </AlertDialogFooter>
                 </AlertDialogContent>
@@ -764,19 +926,23 @@ function FactoryInfoForm({ factory, isOwner = true }: { factory: any; isOwner?: 
             )}
             <Button
               onClick={handleSave}
-              disabled={!isDirty || updateFactory.isPending}
+              disabled={!isDirty || updateFactory.isPending || submitRevisionMut.isPending}
               className={
                 isDirty
                   ? "bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white border-0"
                   : "bg-gray-200 text-gray-400 cursor-not-allowed border-0"
               }
             >
-              <Save className="w-4 h-4 mr-1" />{updateFactory.isPending ? "儲存中..." : "儲存變更"}
+              <Save className="w-4 h-4 mr-1" />
+              {factory.status === 'approved'
+                ? (isDirty ? "提交修改申請" : "無修改")
+                : (updateFactory.isPending ? "儲存中..." : "儲存變更")}
             </Button>
           </div>
         )}
       </CardContent>
     </Card>
+    </>
   );
 }
 

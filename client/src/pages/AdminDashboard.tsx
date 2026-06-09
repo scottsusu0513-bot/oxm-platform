@@ -4,8 +4,12 @@ import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { AlertCircle, BarChart3, Users, Factory, Zap, MessageSquare, Star, ArrowLeft, ShieldCheck, Shield, HeadphonesIcon, Megaphone, Eye, Send } from "lucide-react";
+import { AlertCircle, BarChart3, Users, Factory, Zap, MessageSquare, Star, ArrowLeft, ShieldCheck, Shield, HeadphonesIcon, Megaphone, Eye, Send, CheckCircle, XCircle } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
 import { useState } from "react";
@@ -46,7 +50,7 @@ function AdminDashboardContent() {
     { enabled: isAdmin }
   );
 
-  // 以下三個：切到對應 Tab 才載入
+  // 以下：切到對應 Tab 才載入
   const approvedFactoriesQuery = trpc.admin.getApprovedFactories.useQuery(
     { page: 1, pageSize: 10 },
     { enabled: isAdmin && activeTab === 'approved' }
@@ -62,12 +66,22 @@ function AdminDashboardContent() {
     { enabled: isAdmin && activeTab === 'ads' }
   );
 
+  const pendingRevisionsQuery = trpc.admin.getPendingRevisions.useQuery(
+    { page: 1, pageSize: 20 },
+    { enabled: isAdmin && activeTab === 'revisions' }
+  );
+
   const adminNotifQuery = trpc.admin.getAdminNotifications.useQuery(undefined, { enabled: isAdmin });
 
   const approveMutation = trpc.admin.approveFactory.useMutation();
   const rejectMutation = trpc.admin.rejectFactory.useMutation();
   const setCertifiedMutation = trpc.admin.setCertified.useMutation();
+  const approveRevisionMutation = trpc.admin.approveRevision.useMutation();
+  const rejectRevisionMutation = trpc.admin.rejectRevision.useMutation();
   const utils = trpc.useUtils();
+
+  const [revisionRejectId, setRevisionRejectId] = useState<number | null>(null);
+  const [revisionRejectReason, setRevisionRejectReason] = useState("");
 
   const stats = statsQuery.data;
   const viewStats = viewStatsQuery.data;
@@ -278,10 +292,16 @@ function AdminDashboardContent() {
 
         {/* Tab 懶載入 */}
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="mb-6">
+          <TabsList className="mb-6 flex flex-wrap h-auto gap-1">
             <TabsTrigger value="overview" className="gap-1.5">
-              待審核
+              首次申請
               {hasPendingFactories && (
+                <span className="inline-block h-2 w-2 rounded-full bg-orange-500 shrink-0" />
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="revisions" className="gap-1.5">
+              修改申請
+              {(pendingRevisionsQuery.data?.total ?? 0) > 0 && activeTab !== 'revisions' && (
                 <span className="inline-block h-2 w-2 rounded-full bg-orange-500 shrink-0" />
               )}
             </TabsTrigger>
@@ -315,6 +335,150 @@ function AdminDashboardContent() {
                         </Button>
                       </div>
                     ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* 修改申請 Tab */}
+          <TabsContent value="revisions">
+            {/* Reject Dialog */}
+            <Dialog open={revisionRejectId !== null} onOpenChange={(open) => { if (!open) { setRevisionRejectId(null); setRevisionRejectReason(""); } }}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>拒絕修改申請</DialogTitle>
+                  <DialogDescription>請填寫拒絕原因，此原因將寄送給工廠管理者。</DialogDescription>
+                </DialogHeader>
+                <div className="space-y-2 py-2">
+                  <Label>拒絕原因</Label>
+                  <Textarea
+                    value={revisionRejectReason}
+                    onChange={e => setRevisionRejectReason(e.target.value)}
+                    placeholder="請說明拒絕原因…"
+                    rows={3}
+                    maxLength={500}
+                  />
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => { setRevisionRejectId(null); setRevisionRejectReason(""); }}>取消</Button>
+                  <Button
+                    variant="destructive"
+                    disabled={!revisionRejectReason.trim() || rejectRevisionMutation.isPending}
+                    onClick={async () => {
+                      if (!revisionRejectId || !revisionRejectReason.trim()) return;
+                      try {
+                        await rejectRevisionMutation.mutateAsync({ revisionId: revisionRejectId, reason: revisionRejectReason.trim() });
+                        toast.success("已拒絕修改申請");
+                        setRevisionRejectId(null);
+                        setRevisionRejectReason("");
+                        utils.admin.getPendingRevisions.invalidate();
+                        utils.admin.getPendingCount.invalidate();
+                      } catch (err: any) {
+                        toast.error(err.message || "拒絕失敗");
+                      }
+                    }}
+                  >
+                    {rejectRevisionMutation.isPending ? "送出中..." : "確認拒絕"}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>基本資料修改申請</CardTitle>
+                <CardDescription>已上線工廠提交的基本資料修改申請，需審核後才會更新至公開頁面</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {pendingRevisionsQuery.isLoading ? (
+                  <div>載入中...</div>
+                ) : (pendingRevisionsQuery.data?.items.length ?? 0) === 0 ? (
+                  <div className="text-gray-500">目前沒有待審核的修改申請</div>
+                ) : (
+                  <div className="space-y-6">
+                    {pendingRevisionsQuery.data?.items.map((rev) => {
+                      const original = (rev.originalData as Record<string, any>) ?? {};
+                      const proposed = (rev.proposedData as Record<string, any>) ?? {};
+                      const changedFields = Object.keys(proposed).filter(k => {
+                        const o = original[k];
+                        const p = proposed[k];
+                        return JSON.stringify(o) !== JSON.stringify(p);
+                      });
+                      return (
+                        <div key={rev.id} className="border rounded-lg p-4 space-y-3">
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <p className="font-semibold">{rev.factoryName}</p>
+                              <p className="text-sm text-gray-500">提交者：{rev.submitterName} · {new Date(rev.submittedAt).toLocaleDateString('zh-TW')}</p>
+                              {rev.revisionReason && <p className="text-sm text-gray-600 mt-1">申請原因：{rev.revisionReason}</p>}
+                            </div>
+                            <Badge variant="secondary" className="shrink-0">待審核</Badge>
+                          </div>
+
+                          {/* Diff display */}
+                          <div className="space-y-2">
+                            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">修改內容 ({changedFields.length} 個欄位)</p>
+                            {changedFields.length === 0 ? (
+                              <p className="text-sm text-gray-400">（無變更欄位）</p>
+                            ) : (
+                              <div className="space-y-2">
+                                {changedFields.map(field => {
+                                  const oldVal = original[field];
+                                  const newVal = proposed[field];
+                                  const isAvatar = field === 'avatarUrl';
+                                  const isArray = Array.isArray(oldVal) || Array.isArray(newVal);
+                                  return (
+                                    <div key={field} className="grid grid-cols-[auto_1fr_1fr] gap-2 text-sm border-l-2 border-orange-300 pl-3">
+                                      <span className="text-xs text-gray-400 pt-0.5 w-24 shrink-0">{field}</span>
+                                      <div className="bg-red-50 rounded px-2 py-1 text-red-700 min-h-[28px]">
+                                        {isAvatar && oldVal ? <img src={oldVal} alt="舊" className="w-12 h-12 rounded object-cover" /> :
+                                         isArray ? (oldVal as string[] ?? []).join('、') || '（空）' :
+                                         String(oldVal ?? '（空）')}
+                                      </div>
+                                      <div className="bg-green-50 rounded px-2 py-1 text-green-700 min-h-[28px]">
+                                        {isAvatar && newVal ? <img src={newVal} alt="新" className="w-12 h-12 rounded object-cover" /> :
+                                         isArray ? (newVal as string[] ?? []).join('、') || '（空）' :
+                                         String(newVal ?? '（空）')}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="flex gap-2 pt-1">
+                            <Button
+                              size="sm"
+                              className="bg-green-600 hover:bg-green-700 text-white gap-1"
+                              disabled={approveRevisionMutation.isPending}
+                              onClick={async () => {
+                                try {
+                                  await approveRevisionMutation.mutateAsync({ revisionId: rev.id });
+                                  toast.success("已通過修改申請");
+                                  utils.admin.getPendingRevisions.invalidate();
+                                  utils.admin.getPendingCount.invalidate();
+                                } catch (err: any) {
+                                  toast.error(err.message || "操作失敗");
+                                }
+                              }}
+                            >
+                              <CheckCircle className="w-4 h-4" />通過
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="destructive"
+                              className="gap-1"
+                              disabled={rejectRevisionMutation.isPending}
+                              onClick={() => { setRevisionRejectId(rev.id); setRevisionRejectReason(""); }}
+                            >
+                              <XCircle className="w-4 h-4" />拒絕
+                            </Button>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </CardContent>
