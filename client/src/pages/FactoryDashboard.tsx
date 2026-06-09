@@ -14,9 +14,11 @@ import { AppLoading } from "@/components/AppLoading";
 import { trpc } from "@/lib/trpc";
 import { compressImage } from "@/lib/compressImage";
 import { INDUSTRIES, INDUSTRY_OPTIONS, TAIWAN_REGIONS, CAPITAL_OPTIONS, MFG_MODE_OPTIONS } from "@shared/constants";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useLocation, useSearch, Link } from "wouter";
 import { toast } from "sonner";
+import { usePullToRefresh } from "@/hooks/usePullToRefresh";
+import { PullToRefreshIndicator } from "@/components/PullToRefreshIndicator";
 import {
   Factory, Package, MessageCircle, Settings, Plus, Pencil, Trash2, Save, Star, AlertTriangle, ImagePlus, X, ArrowLeft, Camera, Send, CheckCircle, Clock, XCircle, Wrench, Images, ChevronDown, Megaphone, Users, UserMinus, ClipboardList
 } from "lucide-react";
@@ -94,6 +96,29 @@ export default function FactoryDashboard() {
   );
 
   const utils = trpc.useUtils();
+  const [activeTab, setActiveTab] = useState(initialTab);
+  // Separate dirty refs per child — prevents one tab overwriting another's dirty state
+  const infoDirtyRef = useRef(false);
+  const productDirtyRef = useRef(false);
+  const photoDirtyRef = useRef(false);
+
+  const handleRefresh = useCallback(async () => {
+    if (infoDirtyRef.current || productDirtyRef.current || photoDirtyRef.current) {
+      toast("您有尚未儲存的變更，請先儲存或放棄後再重新整理");
+      return;
+    }
+    if (!factory?.id) return;
+    await Promise.all([
+      utils.factory.getMine.invalidate(),
+      utils.factory.getPhotos.invalidate({ factoryId: factory.id }),
+      utils.product.getByFactory.invalidate({ factoryId: factory.id }),
+      utils.chat.factoryConversations.invalidate({ factoryId: factory.id }),
+      utils.review.getByFactory.invalidate({ factoryId: factory.id }),
+      utils.chat.unreadCount.invalidate(),
+      utils.notification.getAppBadgeCount.invalidate(),
+    ]);
+  }, [utils, factory?.id]);
+  const { pullY, phase } = usePullToRefresh({ onRefresh: handleRefresh });
 
   const REVIEW_SEEN_KEY = 'oxm_reviews_seen';
   const [reviewSeenAt, setReviewSeenAt] = useState<number>(() => {
@@ -128,6 +153,7 @@ export default function FactoryDashboard() {
 
   return (
     <div className="min-h-screen bg-background">
+      <PullToRefreshIndicator pullY={pullY} phase={phase} />
       <Navbar />
       <div className="container py-6">
         <Button variant="outline" onClick={() => navigate("/")} className="mb-4 flex items-center gap-2">
@@ -217,7 +243,7 @@ export default function FactoryDashboard() {
           </div>
         )}
 
-        <Tabs defaultValue={initialTab}>
+        <Tabs defaultValue={initialTab} onValueChange={setActiveTab}>
           <TabsList className="flex flex-wrap h-auto gap-1 mb-4 bg-white/80 p-1">
             <TabsTrigger value="info" className="gap-1.5 text-xs sm:text-sm">
               <Settings className="w-3.5 h-3.5 shrink-0" />
@@ -256,13 +282,13 @@ export default function FactoryDashboard() {
           </TabsList>
 
           <TabsContent value="info">
-            <FactoryInfoForm factory={factory} isOwner={isOwner} latestRevision={(factory as any).latestRevision ?? null} />
+            <FactoryInfoForm factory={factory} isOwner={isOwner} latestRevision={(factory as any).latestRevision ?? null} onDirtyChange={(d) => { infoDirtyRef.current = d; }} />
           </TabsContent>
           <TabsContent value="photos">
-            <PhotoManager factoryId={factory.id} />
+            <PhotoManager factoryId={factory.id} onDirtyChange={(d) => { photoDirtyRef.current = d; }} />
           </TabsContent>
           <TabsContent value="products">
-            <ProductManager factoryId={factory.id} products={factory.products} isPending={isPending} />
+            <ProductManager factoryId={factory.id} products={factory.products} isPending={isPending} onDirtyChange={(d) => { productDirtyRef.current = d; }} />
           </TabsContent>
           <TabsContent value="messages">
             <ConversationList conversations={convs ?? []} />
@@ -297,7 +323,7 @@ const OPERATION_STATUS_OPTIONS = [
   { value: "full",   label: "產線滿載", dot: "bg-red-500" },
 ] as const;
 
-function FactoryInfoForm({ factory, isOwner = true, latestRevision = null }: { factory: any; isOwner?: boolean; latestRevision?: any }) {
+function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDirtyChange }: { factory: any; isOwner?: boolean; latestRevision?: any; onDirtyChange?: (dirty: boolean) => void }) {
   const [name, setName] = useState(factory.name);
   const [industry, setIndustry] = useState<string[]>(() => {
     const raw = (factory as any).industry;
@@ -376,6 +402,8 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null }: { f
     weekendHours !== initialForm.current.weekendHours ||
     businessNote !== initialForm.current.businessNote ||
     (avatarUrl ?? null) !== (initialForm.current.avatarUrl ?? null);
+
+  useEffect(() => { onDirtyChange?.(isDirty); }, [isDirty, onDirtyChange]);
 
   const [revisionDialogOpen, setRevisionDialogOpen] = useState(false);
   const [revisionReason, setRevisionReason] = useState("");
@@ -947,10 +975,11 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null }: { f
 }
 
 // ===== Photo Manager =====
-function PhotoManager({ factoryId }: { factoryId: number }) {
+function PhotoManager({ factoryId, onDirtyChange }: { factoryId: number; onDirtyChange?: (dirty: boolean) => void }) {
   const utils = trpc.useUtils();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
+  useEffect(() => { onDirtyChange?.(uploading); }, [uploading, onDirtyChange]);
   const [editCaptionId, setEditCaptionId] = useState<number | null>(null);
   const [captionDraft, setCaptionDraft] = useState("");
 
@@ -1129,15 +1158,20 @@ function CategoryManager({ factoryId }: { factoryId: number }) {
 }
 
 // ===== Product Manager =====
-function ProductManager({ factoryId, products, isPending }: { factoryId: number; products: any[]; isPending: boolean }) {
+function ProductManager({ factoryId, products, isPending, onDirtyChange }: { factoryId: number; products: any[]; isPending: boolean; onDirtyChange?: (dirty: boolean) => void }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState<number | null>(null);
+  useEffect(() => { onDirtyChange?.(showAdd || editId !== null); }, [showAdd, editId, onDirtyChange]);
   const [filterCat, setFilterCat] = useState<number | null | "all">("all");
   const utils = trpc.useUtils();
   const { data: categories = [] } = trpc.category.getByFactory.useQuery({ factoryId });
 
   const deleteMut = trpc.product.delete.useMutation({
-    onSuccess: () => { toast.success("產品已刪除"); utils.factory.getMine.invalidate(); },
+    onSuccess: () => {
+      toast.success("產品已刪除");
+      utils.factory.getMine.invalidate();
+      utils.product.getByFactory.invalidate({ factoryId });
+    },
     onError: (err) => toast.error(err.message),
   });
 
@@ -1182,7 +1216,7 @@ function ProductManager({ factoryId, products, isPending }: { factoryId: number;
           </div>
         )}
         {showAdd && !isPending && (
-          <ProductForm factoryId={factoryId} categories={categories} onDone={() => { setShowAdd(false); utils.factory.getMine.invalidate(); }} />
+          <ProductForm factoryId={factoryId} categories={categories} onDone={() => { setShowAdd(false); utils.factory.getMine.invalidate(); utils.product.getByFactory.invalidate({ factoryId }); }} />
         )}
         {visibleProducts.length === 0 && !showAdd ? (
           <p className="text-center text-muted-foreground py-8">
@@ -1193,7 +1227,7 @@ function ProductManager({ factoryId, products, isPending }: { factoryId: number;
             {visibleProducts.map(p => (
               <div key={p.id}>
                 {editId === p.id ? (
-                  <ProductForm factoryId={factoryId} product={p} categories={categories} onDone={() => { setEditId(null); utils.factory.getMine.invalidate(); }} />
+                  <ProductForm factoryId={factoryId} product={p} categories={categories} onDone={() => { setEditId(null); utils.factory.getMine.invalidate(); utils.product.getByFactory.invalidate({ factoryId }); }} />
                 ) : (
                   <div className="flex items-center justify-between p-4 rounded-lg border">
                     <div className="flex gap-3 items-start flex-1">
@@ -1406,7 +1440,12 @@ function ConversationList({ conversations }: { conversations: any[] }) {
   const utils = trpc.useUtils();
   const [, navigate] = useLocation();
   const deleteMut = trpc.chat.deleteConversation.useMutation({
-    onSuccess: () => { toast.success("對話已刪除"); utils.chat.factoryConversations.invalidate(); },
+    onSuccess: () => {
+      toast.success("對話已刪除");
+      utils.chat.factoryConversations.invalidate();
+      utils.chat.unreadCount.invalidate();
+      utils.notification.getAppBadgeCount.invalidate();
+    },
     onError: (err) => toast.error(err.message),
   });
 
@@ -1481,6 +1520,8 @@ function ReviewList({ reviews, factoryId }: { reviews: any[], factoryId: number 
       setReplyingId(null);
       setReplyText("");
       utils.review.myReviews.invalidate();
+      utils.review.getByFactory.invalidate({ factoryId });
+      utils.review.unreadCount.invalidate();
     },
     onError: (err) => toast.error(err.message),
   });

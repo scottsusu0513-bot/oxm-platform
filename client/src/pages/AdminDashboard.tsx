@@ -12,7 +12,9 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
-import { useState } from "react";
+import { usePullToRefresh } from "@/hooks/usePullToRefresh";
+import { PullToRefreshIndicator } from "@/components/PullToRefreshIndicator";
+import { useState, useCallback } from "react";
 
 export default function AdminDashboard() {
   const { user, loading: authLoading } = useAuth();
@@ -80,8 +82,23 @@ function AdminDashboardContent() {
   const rejectRevisionMutation = trpc.admin.rejectRevision.useMutation();
   const utils = trpc.useUtils();
 
+  const handleRefresh = useCallback(async () => {
+    const base = [
+      utils.admin.getStats.invalidate(),
+      utils.admin.getPendingFactories.invalidate(),
+      utils.admin.getAdminNotifications.invalidate(),
+      utils.admin.getPendingCount.invalidate(),
+    ];
+    const tabSpecific: Promise<void>[] = [];
+    if (activeTab === 'approved') tabSpecific.push(utils.admin.getApprovedFactories.invalidate());
+    if (activeTab === 'users') tabSpecific.push(utils.admin.getUsers.invalidate());
+    if (activeTab === 'ads') tabSpecific.push(utils.admin.getAds.invalidate());
+    if (activeTab === 'revisions') tabSpecific.push(utils.admin.getPendingRevisions.invalidate());
+    await Promise.all([...base, ...tabSpecific]);
+  }, [utils, activeTab]);
   const [revisionRejectId, setRevisionRejectId] = useState<number | null>(null);
   const [revisionRejectReason, setRevisionRejectReason] = useState("");
+  const { pullY, phase } = usePullToRefresh({ onRefresh: handleRefresh, disabled: revisionRejectId !== null });
 
   const stats = statsQuery.data;
   const viewStats = viewStatsQuery.data;
@@ -121,6 +138,7 @@ function AdminDashboardContent() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-orange-50 to-amber-50 px-4 pb-4 md:px-8 md:pb-8 admin-page-top">
+      <PullToRefreshIndicator pullY={pullY} phase={phase} />
       <div className="max-w-7xl mx-auto">
         <div className="flex items-center justify-between mb-8">
           <h1 className="text-3xl font-bold text-gray-900">管理員儀表板</h1>

@@ -83,26 +83,57 @@ function AppBadgeSyncer() {
     clearBadge().catch(() => {});
   }, [user, isNative]);
 
-  // App 回到前景時重新取得 badge count
+  // App 回到前景時重新同步所有通知相關 cache
   useEffect(() => {
     if (!isNative) return;
     let cleanup: (() => void) | undefined;
     import("@capacitor/app").then(async ({ App: CapApp }) => {
       const handle = await CapApp.addListener("appStateChange", ({ isActive }) => {
-        if (isActive) utils.notification.getAppBadgeCount.invalidate();
+        if (!isActive) return;
+        utils.notification.getAppBadgeCount.invalidate();
+        utils.chat.unreadCount.invalidate();
+        utils.chat.myConversations.invalidate();
+        utils.review.unreadCount.invalidate();
+        // Admin queries are enabled-gated, safe to call unconditionally
+        utils.admin.getPendingCount.invalidate();
+        utils.admin.getAdminNotifications.invalidate();
       });
       cleanup = () => handle.remove();
     }).catch(() => {});
     return () => { cleanup?.(); };
   }, [isNative, utils]);
 
-  // 收到前景 FCM 通知時重新 sync
+  // 收到前景 FCM 通知時重新同步訊息相關 cache
   useEffect(() => {
     if (!isNative) return;
     let cleanup: (() => void) | undefined;
     import("@capacitor-firebase/messaging").then(async ({ FirebaseMessaging }) => {
-      const handle = await FirebaseMessaging.addListener("notificationReceived", () => {
+      const handle = await FirebaseMessaging.addListener("notificationReceived", (notification) => {
+        const type = (notification?.notification?.data as any)?.type ?? '';
+        // Always: sync badge + unread + conversations (covers chat_message and any unknown type)
         utils.notification.getAppBadgeCount.invalidate();
+        utils.chat.unreadCount.invalidate();
+        utils.chat.myConversations.invalidate();
+        if (type === 'factory_approved' || type === 'factory_rejected') {
+          utils.factory.getMine.invalidate();
+          utils.factory.getCoManagedFactories.invalidate();
+        }
+        if (type === 'revision_approved' || type === 'revision_rejected') {
+          utils.factory.getMine.invalidate();
+          utils.admin.getPendingCount.invalidate();
+          utils.admin.getAdminNotifications.invalidate();
+        }
+        if (type === 'inquiry_batch') {
+          utils.inquiryBatch.listMine.invalidate();
+        }
+        if (type === 'review_reply') {
+          utils.review.unreadCount.invalidate();
+          utils.review.myReviews.invalidate();
+        }
+        if (type === 'admin_announcement') {
+          utils.admin.getPendingCount.invalidate();
+          utils.admin.getAdminNotifications.invalidate();
+        }
       });
       cleanup = () => handle.remove();
     }).catch(() => {});

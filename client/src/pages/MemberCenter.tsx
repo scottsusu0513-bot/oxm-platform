@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { AppLoading } from "@/components/AppLoading";
@@ -21,6 +21,8 @@ import {
 import { Link } from "wouter";
 import { StatusTimeline } from "@/components/StatusTimeline";
 import { initPushNotifications } from "@/lib/pushNotifications";
+import { usePullToRefresh } from "@/hooks/usePullToRefresh";
+import { PullToRefreshIndicator } from "@/components/PullToRefreshIndicator";
 
 const STATUS_LABELS: Record<string, { label: string; color: string }> = {
   pending:    { label: "已寄出",  color: "bg-gray-100 text-gray-700" },
@@ -84,6 +86,15 @@ const NOTIFICATION_ROWS = [
 export default function MemberCenter() {
   const { user, loading: authLoading } = useAuth();
   const [, setLocation] = useLocation();
+  const utils = trpc.useUtils();
+  const handleRefresh = useCallback(async () => {
+    await Promise.all([
+      utils.auth.me.invalidate(),
+      utils.review.myReviews.invalidate(),
+      utils.report.myReports.invalidate(),
+    ]);
+  }, [utils]);
+  const { pullY, phase } = usePullToRefresh({ onRefresh: handleRefresh });
 
   if (authLoading) return <AppLoading />;
   if (!user) {
@@ -93,6 +104,7 @@ export default function MemberCenter() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-orange-50 to-amber-50 px-4 pb-4 md:px-8 md:pb-8 admin-page-top">
+      <PullToRefreshIndicator pullY={pullY} phase={phase} />
       <div className="max-w-4xl mx-auto">
         <div className="flex items-center gap-4 mb-6">
           <Button variant="outline" size="sm" onClick={() => window.history.back()} className="gap-2">
@@ -346,11 +358,22 @@ function ReviewsTab() {
 
   const { data, isLoading } = trpc.review.myReviews.useQuery({ page: 1, pageSize: 50 });
   const updateMutation = trpc.review.update.useMutation({
-    onSuccess: () => { toast.success("評價已更新"); setEditId(null); utils.review.myReviews.invalidate(); },
+    onSuccess: (_, vars) => {
+      toast.success("評價已更新");
+      setEditId(null);
+      utils.review.myReviews.invalidate();
+      const factoryId = data?.items?.find((r: any) => r.id === vars.id)?.factoryId;
+      if (factoryId) utils.review.getByFactory.invalidate({ factoryId });
+    },
     onError: (e) => toast.error(e.message),
   });
   const deleteMutation = trpc.review.delete.useMutation({
-    onSuccess: () => { toast.success("評價已刪除"); utils.review.myReviews.invalidate(); },
+    onSuccess: (_, vars) => {
+      toast.success("評價已刪除");
+      const factoryId = data?.items?.find((r: any) => r.id === vars.id)?.factoryId;
+      utils.review.myReviews.invalidate();
+      if (factoryId) utils.review.getByFactory.invalidate({ factoryId });
+    },
     onError: (e) => toast.error(e.message),
   });
 

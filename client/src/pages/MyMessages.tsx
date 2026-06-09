@@ -7,9 +7,11 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
 import { Link, useLocation } from "wouter";
 import { performLogin } from "@/const";
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { MessageCircle, ArrowLeft, Trash2, Inbox, ShoppingCart, ChevronDown, ChevronRight, Pencil, Check, X } from "lucide-react";
 import { toast } from "sonner";
+import { usePullToRefresh } from "@/hooks/usePullToRefresh";
+import { PullToRefreshIndicator } from "@/components/PullToRefreshIndicator";
 
 // ── 一般訊息列表 ──────────────────────────────────────────────────────────
 function UserConversationList({ conversations }: { conversations: any[] }) {
@@ -237,6 +239,7 @@ export default function MyMessages() {
   const { user, isAuthenticated, loading } = useAuth();
   const [, navigate] = useLocation();
   const [tab, setTab] = useState<"general" | "inquiry">("general");
+  const utils = trpc.useUtils();
 
   const { data: userConvs } = trpc.chat.myConversations.useQuery(undefined, {
     enabled: isAuthenticated,
@@ -247,6 +250,15 @@ export default function MyMessages() {
     enabled: isAuthenticated && tab === "inquiry",
     refetchInterval: 30000,
   });
+
+  const handleRefresh = useCallback(async () => {
+    await Promise.all([
+      utils.chat.myConversations.invalidate(),
+      utils.inquiryBatch.listMine.invalidate(),
+      utils.chat.unreadCount.invalidate(),
+    ]);
+  }, [utils]);
+  const { pullY, phase } = usePullToRefresh({ onRefresh: handleRefresh });
 
   if (!isAuthenticated && !loading) {
     return (
@@ -264,6 +276,7 @@ export default function MyMessages() {
 
   return (
     <div className="min-h-screen bg-background">
+      <PullToRefreshIndicator pullY={pullY} phase={phase} />
       <Navbar />
       <div className="container py-6 max-w-3xl">
         <Button variant="ghost" size="sm" className="mb-4" onClick={() => navigate("/")}>

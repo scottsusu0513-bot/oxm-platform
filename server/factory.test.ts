@@ -404,3 +404,73 @@ describe("favorite.getByUser", () => {
     expect(Array.isArray(result.items)).toBe(true);
   }, 15000);
 });
+
+describe("chat.markConversationRead", () => {
+  it("requires authentication", async () => {
+    const ctx = createPublicContext();
+    const caller = appRouter.createCaller(ctx);
+    await expect(caller.chat.markConversationRead({ conversationId: 1 })).rejects.toThrow();
+  });
+
+  it("rejects non-integer conversationId", async () => {
+    const ctx = createAuthContext();
+    const caller = appRouter.createCaller(ctx);
+    await expect(
+      (caller.chat.markConversationRead as any)({ conversationId: 1.5 })
+    ).rejects.toThrow();
+  });
+
+  it("rejects zero conversationId", async () => {
+    const ctx = createAuthContext();
+    const caller = appRouter.createCaller(ctx);
+    await expect(
+      (caller.chat.markConversationRead as any)({ conversationId: 0 })
+    ).rejects.toThrow();
+  });
+
+  it("rejects negative conversationId", async () => {
+    const ctx = createAuthContext();
+    const caller = appRouter.createCaller(ctx);
+    await expect(
+      (caller.chat.markConversationRead as any)({ conversationId: -1 })
+    ).rejects.toThrow();
+  });
+
+  it("throws NOT_FOUND for non-existent conversation", async () => {
+    const ctx = createAuthContext();
+    const caller = appRouter.createCaller(ctx);
+    await expect(caller.chat.markConversationRead({ conversationId: 999999 })).rejects.toThrow();
+  }, 15000);
+});
+
+describe("chat.unreadCount (co-manager)", () => {
+  it("returns factoryCount as number for user without factory", async () => {
+    const ctx = createAuthContext({ id: 999888, openId: "no-factory-user" });
+    const caller = appRouter.createCaller(ctx);
+    const result = await caller.chat.unreadCount();
+    expect(typeof result.factoryCount).toBe("number");
+    expect(result.factoryCount).toBe(0);
+  }, 15000);
+
+  it("returns non-negative userCount", async () => {
+    const ctx = createAuthContext();
+    const caller = appRouter.createCaller(ctx);
+    const result = await caller.chat.unreadCount();
+    expect(result.userCount).toBeGreaterThanOrEqual(0);
+  }, 15000);
+
+  it("returns non-negative factoryCount", async () => {
+    const ctx = createAuthContext();
+    const caller = appRouter.createCaller(ctx);
+    const result = await caller.chat.unreadCount();
+    expect(result.factoryCount).toBeGreaterThanOrEqual(0);
+  }, 15000);
+
+  it("returns both counts as integers", async () => {
+    const ctx = createAuthContext();
+    const caller = appRouter.createCaller(ctx);
+    const result = await caller.chat.unreadCount();
+    expect(Number.isInteger(result.userCount)).toBe(true);
+    expect(Number.isInteger(result.factoryCount)).toBe(true);
+  }, 15000);
+});

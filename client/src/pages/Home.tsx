@@ -17,9 +17,11 @@ import {
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useLocation, Link } from "wouter";
 import { allPosts } from "@/lib/blog";
+import { usePullToRefresh } from "@/hooks/usePullToRefresh";
+import { PullToRefreshIndicator } from "@/components/PullToRefreshIndicator";
 
 const ANNOUNCEMENT_TYPE_CONFIG: Record<string, { label: string; className: string; Icon: any }> = {
   update:      { label: "版本更新", className: "bg-blue-100 text-blue-700",  Icon: Zap },
@@ -317,8 +319,20 @@ export default function Home() {
     navigate(`/search?${params.toString()}`);
   };
 
+  const utils = trpc.useUtils();
+  const handleRefresh = useCallback(async () => {
+    await Promise.all([
+      utils.announcement.list.invalidate(),
+      utils.factory.getCoManagedFactories.invalidate(),
+      utils.chat.unreadCount.invalidate(),
+      utils.notification.getAppBadgeCount.invalidate(),
+    ]);
+  }, [utils]);
+  const { pullY, phase } = usePullToRefresh({ onRefresh: handleRefresh });
+
   return (
     <div className="min-h-screen bg-background animate-page-enter">
+      <PullToRefreshIndicator pullY={pullY} phase={phase} />
       <Helmet>
         <title>OXM｜台灣傳統產業資源媒合平台｜工廠、設備與供應鏈服務</title>
         <meta name="description" content="OXM 整合台灣傳統產業商家與供應鏈資源，協助使用者快速找到工廠、OEM/ODM 代工、工業設備、材料、包裝印刷與產業服務，讓找廠商、找資源、送詢價更有效率。" />

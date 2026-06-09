@@ -774,6 +774,87 @@ export default function ChatPage() {
   const isCoMgr = !!meta?.isCoMgr;
   const isFactorySide = isFactoryOwner || isCoMgr;
 
+  // Refs to avoid stale closures inside mutation callbacks
+  const isFactorySideRef = useRef(isFactorySide);
+  useEffect(() => { isFactorySideRef.current = isFactorySide; }, [isFactorySide]);
+
+  // Optimistic mark-read mutation
+  const markReadMut = trpc.chat.markConversationRead.useMutation({
+    onMutate: async ({ conversationId: convId }) => {
+      await utils.chat.unreadCount.cancel();
+      await utils.chat.myConversations.cancel();
+      const prevUnread = utils.chat.unreadCount.getData();
+      const prevConvs = utils.chat.myConversations.getData();
+
+      const conv = prevConvs?.find((c: any) => c.id === convId);
+      const convUnread: number = conv?.unreadCount ?? 0;
+
+      if (convUnread > 0) {
+        utils.chat.myConversations.setData(undefined, (prev: any) =>
+          prev?.map((c: any) => c.id === convId ? { ...c, unreadCount: 0 } : c) ?? prev
+        );
+        utils.chat.unreadCount.setData(undefined, (prev: any) => {
+          if (!prev) return prev;
+          const side = isFactorySideRef.current ? 'factoryCount' : 'userCount';
+          return { ...prev, [side]: Math.max(0, (prev[side] ?? 0) - convUnread) };
+        });
+      }
+
+      return { prevUnread, prevConvs };
+    },
+    onError: (_err, _vars, ctx) => {
+      if (ctx?.prevUnread !== undefined) utils.chat.unreadCount.setData(undefined, ctx.prevUnread);
+      if (ctx?.prevConvs !== undefined) utils.chat.myConversations.setData(undefined, ctx.prevConvs);
+    },
+    onSettled: () => {
+      utils.chat.unreadCount.invalidate();
+      utils.chat.myConversations.invalidate();
+      utils.notification.getAppBadgeCount.invalidate();
+      utils.inquiryBatch.listMine.invalidate();
+    },
+  });
+
+  // in-flight guard: stores conversationId of the currently pending markRead request
+  const markReadInFlightRef = useRef<number | null>(null);
+  // Track the last known unreadCount for the current conversation to detect new arrivals
+  const lastSeenUnreadRef = useRef<number>(0);
+
+  useEffect(() => {
+    if (!conversationId || !isAuthenticated) {
+      markReadInFlightRef.current = null;
+      lastSeenUnreadRef.current = 0;
+      return;
+    }
+
+    // Get current unreadCount from myConversations cache
+    const convs = utils.chat.myConversations.getData();
+    const conv = convs?.find((c: any) => c.id === conversationId);
+    const currentUnread: number = conv?.unreadCount ?? 0;
+
+    // Trigger mark-read when:
+    // 1. Entering a new conversation (conversationId changed)
+    // 2. Staying in same conversation and new unread messages arrived (currentUnread increased from 0)
+    const isNewConv = markReadInFlightRef.current !== conversationId;
+    const hasNewMessages = !isNewConv && currentUnread > 0 && currentUnread > lastSeenUnreadRef.current;
+
+    if (!isNewConv && !hasNewMessages) return;
+    if (markReadInFlightRef.current === conversationId && currentUnread === 0) return;
+
+    lastSeenUnreadRef.current = currentUnread;
+    markReadInFlightRef.current = conversationId;
+
+    markReadMut.mutate({ conversationId }, {
+      onSettled: () => {
+        // Clear in-flight only for this conversation to allow future re-triggers
+        if (markReadInFlightRef.current === conversationId) {
+          markReadInFlightRef.current = null;
+        }
+      },
+    });
+  // deps: conversationId triggers on nav; msgs triggers on new polling messages; isAuthenticated on auth change
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversationId, isAuthenticated, msgs]);
+
   useEffect(() => {
     if (existingConv) navigate(`/chat/${existingConv.id}`, { replace: true });
   }, [existingConv, navigate]);

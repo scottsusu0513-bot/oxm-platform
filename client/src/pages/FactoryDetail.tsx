@@ -11,13 +11,15 @@ import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { performLogin } from "@/const";
 import { useRoute, useLocation } from "wouter";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { toast } from "sonner";
 import {
   Star, MapPin, Phone, Globe, Calendar, Building2, DollarSign,
   MessageCircle, Package, Check, X, ArrowLeft, Send, Heart, Wrench, Factory as FactoryIcon, Flag, Clock, ChevronLeft, ChevronRight, Images, CheckCircle, Share2
 } from "lucide-react";
 import { isNativeApp } from "@/lib/platform";
+import { usePullToRefresh } from "@/hooks/usePullToRefresh";
+import { PullToRefreshIndicator } from "@/components/PullToRefreshIndicator";
 
 function ProductImageCarousel({ images, onImageClick }: { images: string[]; onImageClick?: (images: string[], index: number) => void }) {
   const [idx, setIdx] = useState(0);
@@ -95,6 +97,22 @@ export default function FactoryDetail() {
   const [showReportDialog, setShowReportDialog] = useState(false);
   const [reportReason, setReportReason] = useState("");
   const utils = trpc.useUtils();
+  const handleRefresh = useCallback(async () => {
+    await Promise.all([
+      utils.factory.getById.invalidate({ id: factoryId }),
+      utils.factory.getPhotos.invalidate({ factoryId }),
+      utils.review.getByFactory.invalidate({ factoryId }),
+      utils.review.getMyReviewForFactory.invalidate({ factoryId }),
+      utils.favorite.isLiked.invalidate({ factoryId }),
+      utils.favorite.getByUser.invalidate(),
+      utils.category.getByFactory.invalidate({ factoryId }),
+      utils.product.getByFactory.invalidate({ factoryId }),
+    ]);
+  }, [utils, factoryId]);
+  const { pullY, phase } = usePullToRefresh({
+    onRefresh: handleRefresh,
+    disabled: !factoryId || lightboxIndex !== null || showReportDialog,
+  });
   const submitReport = trpc.report.create.useMutation({
     onSuccess: () => {
       toast.success("檢舉已送出，我們會盡快處理");
@@ -186,6 +204,7 @@ export default function FactoryDetail() {
     onSuccess: (data) => {
       setIsFav(data.isFavorited);
       toast.success(data.isFavorited ? "已加入收藏" : "已取消收藏");
+      utils.favorite.getByUser.invalidate();
     },
     onError: () => toast.error("操作失敗"),
   });
@@ -287,6 +306,7 @@ export default function FactoryDetail() {
 
   return (
     <div className="min-h-screen bg-background animate-page-enter">
+      <PullToRefreshIndicator pullY={pullY} phase={phase} />
       <Helmet>
         <title>{metaTitle}</title>
         <meta name="description" content={metaDesc} />

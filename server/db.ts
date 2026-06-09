@@ -574,6 +574,35 @@ export async function getUnreadCountForFactory(factoryId: number) {
   return Number(result?.count ?? 0);
 }
 
+// 取得使用者作為工廠側（owner + co-manager）所有工廠的未讀訊息總數，避免 N+1 query。
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// _dbOverride: 僅供測試注入；正式路徑不得傳入
+export async function getUnreadCountForUser(userId: number, _dbOverride?: any): Promise<number> {
+  const db = _dbOverride ?? await getDb();
+  if (!db) return 0;
+  // Gather all factory IDs where user is owner or active co-manager (deduped via Set)
+  const [ownedRows, coMgrRows] = await Promise.all([
+    db.select({ id: factories.id }).from(factories).where(eq(factories.ownerId, userId)),
+    db.select({ factoryId: factoryCoManagers.factoryId })
+      .from(factoryCoManagers)
+      .where(and(eq(factoryCoManagers.userId, userId), isNull(factoryCoManagers.removedAt))),
+  ]);
+  const factoryIds = Array.from(new Set([
+    ...(ownedRows as { id: number }[]).map(r => r.id),
+    ...(coMgrRows as { factoryId: number }[]).map(r => r.factoryId),
+  ]));
+  if (factoryIds.length === 0) return 0;
+  // One query: count unread buyer messages across all managed factories
+  const factoryConvs = (await db.select({ id: conversations.id })
+    .from(conversations)
+    .where(inArray(conversations.factoryId, factoryIds))) as { id: number }[];
+  if (factoryConvs.length === 0) return 0;
+  const convIds = factoryConvs.map(c => c.id);
+  const [result] = await db.select({ count: sql<number>`COUNT(*)` }).from(messages)
+    .where(and(inArray(messages.conversationId, convIds), eq(messages.senderRole, "user"), eq(messages.isRead, false)));
+  return Number(result?.count ?? 0);
+}
+
 // 取得單一對話的未讀計數（對於某個讀者）
 export async function getUnreadCountForConversation(conversationId: number, readerId: number) {
   const db = await getDb();

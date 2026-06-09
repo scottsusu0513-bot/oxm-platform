@@ -946,7 +946,6 @@ export const appRouter = router({
       const isCoMgr = !isFactoryOwner && !!factory && await db.isActiveCoManager(factory.id, ctx.user.id);
       if (conv.userId !== ctx.user.id && !isFactoryOwner && !isCoMgr && ctx.user.role !== 'admin') throw new Error("無權限");
       try {
-        await db.markMessagesAsRead(input.conversationId, ctx.user.id);
         return await db.getMessagesByConversation(input.conversationId, input.page);
       } catch (error) {
         console.error("[getMessages] DB query failed", {
@@ -956,6 +955,23 @@ export const appRouter = router({
         });
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: '訊息載入失敗，請稍後再試' });
       }
+    }),
+
+    // Explicit mark-read mutation — replaces the former side-effect inside getMessages.
+    // Idempotent: marking an already-read conversation is a no-op.
+    markConversationRead: protectedProcedure.input(z.object({
+      conversationId: z.number().int().positive(),
+    })).mutation(async ({ ctx, input }) => {
+      const conv = await db.getConversationById(input.conversationId);
+      if (!conv) throw new TRPCError({ code: 'NOT_FOUND', message: '對話不存在' });
+      const factory = await db.getFactoryById(conv.factoryId);
+      const isFactoryOwner = factory?.ownerId === ctx.user.id;
+      const isCoMgr = !isFactoryOwner && !!factory && await db.isActiveCoManager(factory.id, ctx.user.id);
+      if (conv.userId !== ctx.user.id && !isFactoryOwner && !isCoMgr) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: '無法標記此對話已讀' });
+      }
+      await db.markMessagesAsRead(input.conversationId, ctx.user.id);
+      return { conversationId: input.conversationId };
     }),
 
     // 取得對話的 metadata（工廠名稱、產品名稱，用於 ChatPage 預填）
@@ -1264,8 +1280,7 @@ export const appRouter = router({
         db.getUnreadAdminMessageCount(ctx.user.id),
       ]);
       const userCount = regularCount + adminCount;
-      const factory = await db.getFactoryByOwnerId(ctx.user.id);
-      const factoryCount = factory ? await db.getUnreadCountForFactory(factory.id) : 0;
+      const factoryCount = await db.getUnreadCountForUser(ctx.user.id);
       return { userCount, factoryCount };
     }),
 
