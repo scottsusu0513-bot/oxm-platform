@@ -18,7 +18,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useLocation, useSearch, Link } from "wouter";
 import { toast } from "sonner";
 import { usePullToRefresh } from "@/hooks/usePullToRefresh";
-import { PullToRefreshIndicator } from "@/components/PullToRefreshIndicator";
+import { NativePullToRefreshLayout } from "@/components/NativePullToRefreshLayout";
 import {
   Factory, Package, MessageCircle, Settings, Plus, Pencil, Trash2, Save, Star, AlertTriangle, ImagePlus, X, ArrowLeft, Camera, Send, CheckCircle, Clock, XCircle, Wrench, Images, ChevronDown, Megaphone, Users, UserMinus, ClipboardList
 } from "lucide-react";
@@ -152,8 +152,7 @@ export default function FactoryDashboard() {
   const isPending = factory.status === 'pending';
 
   return (
-    <div className="min-h-screen bg-background">
-      <PullToRefreshIndicator pullY={pullY} phase={phase} />
+    <NativePullToRefreshLayout pullY={pullY} phase={phase} className="min-h-screen bg-background">
       <Navbar />
       <div className="container py-6">
         <Button variant="outline" onClick={() => navigate("/")} className="mb-4 flex items-center gap-2">
@@ -312,7 +311,7 @@ export default function FactoryDashboard() {
 
         {isOwner && <CoManagerPanel factoryId={factory.id} />}
       </div>
-    </div>
+    </NativePullToRefreshLayout>
   );
 }
 

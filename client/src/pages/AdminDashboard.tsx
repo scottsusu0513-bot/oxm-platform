@@ -13,7 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
 import { usePullToRefresh } from "@/hooks/usePullToRefresh";
-import { PullToRefreshIndicator } from "@/components/PullToRefreshIndicator";
+import { NativePullToRefreshLayout } from "@/components/NativePullToRefreshLayout";
 import { useState, useCallback } from "react";
 
 export default function AdminDashboard() {
@@ -137,8 +137,7 @@ function AdminDashboardContent() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-orange-50 to-amber-50 px-4 pb-4 md:px-8 md:pb-8 admin-page-top">
-      <PullToRefreshIndicator pullY={pullY} phase={phase} />
+    <NativePullToRefreshLayout pullY={pullY} phase={phase} className="min-h-screen bg-gradient-to-br from-orange-50 to-amber-50 px-4 pb-4 md:px-8 md:pb-8 admin-page-top">
       <div className="max-w-7xl mx-auto">
         <div className="flex items-center justify-between mb-8">
           <h1 className="text-3xl font-bold text-gray-900">管理員儀表板</h1>
@@ -629,6 +628,6 @@ function AdminDashboardContent() {
           </TabsContent>
         </Tabs>
       </div>
-    </div>
+    </NativePullToRefreshLayout>
   );
 }

@@ -21,7 +21,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useLocation, Link } from "wouter";
 import { allPosts } from "@/lib/blog";
 import { usePullToRefresh } from "@/hooks/usePullToRefresh";
-import { PullToRefreshIndicator } from "@/components/PullToRefreshIndicator";
+import { NativePullToRefreshLayout } from "@/components/NativePullToRefreshLayout";
 
 const ANNOUNCEMENT_TYPE_CONFIG: Record<string, { label: string; className: string; Icon: any }> = {
   update:      { label: "版本更新", className: "bg-blue-100 text-blue-700",  Icon: Zap },
@@ -331,8 +331,7 @@ export default function Home() {
   const { pullY, phase } = usePullToRefresh({ onRefresh: handleRefresh });
 
   return (
-    <div className="min-h-screen bg-background animate-page-enter">
-      <PullToRefreshIndicator pullY={pullY} phase={phase} />
+    <NativePullToRefreshLayout pullY={pullY} phase={phase} className="min-h-screen bg-background animate-page-enter">
       <Helmet>
         <title>OXM｜台灣傳統產業資源媒合平台｜工廠、設備與供應鏈服務</title>
         <meta name="description" content="OXM 整合台灣傳統產業商家與供應鏈資源，協助使用者快速找到工廠、OEM/ODM 代工、工業設備、材料、包裝印刷與產業服務，讓找廠商、找資源、送詢價更有效率。" />
@@ -826,6 +825,6 @@ export default function Home() {
           <p className="text-xs text-gray-600">&copy; {new Date().getFullYear()} OXM. All rights reserved.</p>
         </div>
       </footer>
-    </div>
+    </NativePullToRefreshLayout>
   );
 }

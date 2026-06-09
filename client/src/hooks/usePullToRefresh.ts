@@ -5,10 +5,14 @@ import {
   PTR_MAX_PULL as MAX_PULL,
   PTR_RESISTANCE as RESIST,
   PTR_DIRECTION_RATIO as DIR_LOCK_RATIO,
+  PTR_REFRESH_HOLD,
+  PTR_SETTLE_MS,
   computePullDistance,
   determineGestureDirection,
   shouldTriggerRefresh,
 } from "@/lib/pullToRefreshLogic";
+
+export type PullPhase = "idle" | "pulling" | "ready" | "refreshing" | "settling";
 
 interface Options {
   onRefresh: () => Promise<void>;
@@ -17,20 +21,20 @@ interface Options {
 }
 
 export interface PullState {
-  pullY: number;             // 0..MAX_PULL (visual)
-  phase: "idle" | "pulling" | "ready" | "refreshing";
+  pullY: number;             // 0..MAX_PULL (visual position)
+  phase: PullPhase;
 }
 
 export function usePullToRefresh({ onRefresh, disabled, containerRef }: Options): PullState {
   const [pullY, setPullY] = useState(0);
-  const [phase, setPhase] = useState<PullState["phase"]>("idle");
+  const [phase, setPhase] = useState<PullPhase>("idle");
 
   // All gesture state lives in refs — no stale closure issues
   const startYRef = useRef<number | null>(null);
   const startXRef = useRef<number | null>(null);
   const directionLockedRef = useRef<"vertical" | "horizontal" | null>(null);
-  const pullYRef = useRef(0);       // mirrors pullY state for use inside event handlers
-  const phaseRef = useRef<PullState["phase"]>("idle");
+  const pullYRef = useRef(0);
+  const phaseRef = useRef<PullPhase>("idle");
   const isRefreshingRef = useRef(false);
   const onRefreshRef = useRef(onRefresh);
   const disabledRef = useRef(disabled ?? false);
@@ -39,7 +43,6 @@ export function usePullToRefresh({ onRefresh, disabled, containerRef }: Options)
       window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
   );
 
-  // Keep refs in sync with the latest props so handlers never see stale values
   useEffect(() => { onRefreshRef.current = onRefresh; }, [onRefresh]);
   useEffect(() => { disabledRef.current = disabled ?? false; }, [disabled]);
 
@@ -56,31 +59,44 @@ export function usePullToRefresh({ onRefresh, disabled, containerRef }: Options)
       directionLockedRef.current = null;
     }
 
-    function resetPull() {
+    // Animate pullY back to 0 with a CSS transition, then go idle.
+    // onDone is called after the transition completes (used to unblock new gestures).
+    function settle(onDone?: () => void) {
+      phaseRef.current = "settling";
       pullYRef.current = 0;
-      phaseRef.current = "idle";
       setPullY(0);
-      setPhase("idle");
+      setPhase("settling");
+      const delay = reducedMotion.current ? 50 : PTR_SETTLE_MS + 50;
+      setTimeout(() => {
+        if (phaseRef.current === "settling") {
+          phaseRef.current = "idle";
+          setPhase("idle");
+        }
+        onDone?.();
+      }, delay);
     }
 
     async function triggerRefresh() {
       if (isRefreshingRef.current) return;
       isRefreshingRef.current = true;
+      // Snap content to hold position (with CSS transition from layout)
+      const holdY = reducedMotion.current ? 0 : PTR_REFRESH_HOLD;
       phaseRef.current = "refreshing";
+      pullYRef.current = holdY;
+      setPullY(holdY);
       setPhase("refreshing");
-      const visual = reducedMotion.current ? 0 : THRESHOLD;
-      pullYRef.current = visual;
-      setPullY(visual);
       try {
         await onRefreshRef.current();
+      } catch {
+        // refresh failure: still settle cleanly
       } finally {
-        isRefreshingRef.current = false;
-        resetPull();
+        settle(() => {
+          isRefreshingRef.current = false;
+        });
       }
     }
 
     const onTouchStart = (e: TouchEvent) => {
-      // Ignore multi-touch
       if (e.touches.length > 1) return;
       if (isRefreshingRef.current || disabledRef.current) return;
       const scrollTop =
@@ -94,10 +110,9 @@ export function usePullToRefresh({ onRefresh, disabled, containerRef }: Options)
     };
 
     const onTouchMove = (e: TouchEvent) => {
-      // Cancel gesture if a second finger joins mid-drag
       if (e.touches.length > 1) {
         resetGesture();
-        resetPull();
+        settle();
         return;
       }
       if (startYRef.current === null || isRefreshingRef.current || disabledRef.current) return;
@@ -105,33 +120,29 @@ export function usePullToRefresh({ onRefresh, disabled, containerRef }: Options)
       const deltaY = e.touches[0].clientY - startYRef.current;
       const deltaX = e.touches[0].clientX - (startXRef.current ?? e.touches[0].clientX);
 
-      // Direction lock: first significant movement decides axis
       if (directionLockedRef.current === null) {
         const dir = determineGestureDirection(deltaY, deltaX);
         if (dir !== null) directionLockedRef.current = dir;
       }
 
-      // If locked as horizontal, abandon gesture
       if (directionLockedRef.current === "horizontal") {
         resetGesture();
-        resetPull();
+        settle();
         return;
       }
 
-      // Wait until vertical lock is established
       if (directionLockedRef.current !== "vertical") return;
 
-      // Ignore upward drag
       if (deltaY <= 0) {
         resetGesture();
-        resetPull();
+        settle();
         return;
       }
 
       e.preventDefault();
 
       const visual = computePullDistance(deltaY);
-      const newPhase: PullState["phase"] = shouldTriggerRefresh(visual) ? "ready" : "pulling";
+      const newPhase: PullPhase = shouldTriggerRefresh(visual) ? "ready" : "pulling";
       pullYRef.current = visual;
       phaseRef.current = newPhase;
       setPullY(visual);
@@ -140,18 +151,18 @@ export function usePullToRefresh({ onRefresh, disabled, containerRef }: Options)
 
     const onTouchEnd = () => {
       if (startYRef.current === null) return;
-      const shouldTrigger = phaseRef.current === "ready" || shouldTriggerRefresh(pullYRef.current);
+      const shouldRefresh = phaseRef.current === "ready" || shouldTriggerRefresh(pullYRef.current);
       resetGesture();
-      if (shouldTrigger) {
+      if (shouldRefresh) {
         triggerRefresh();
       } else {
-        resetPull();
+        settle();
       }
     };
 
     const onTouchCancel = () => {
       resetGesture();
-      if (!isRefreshingRef.current) resetPull();
+      if (!isRefreshingRef.current) settle();
     };
 
     target.addEventListener("touchstart", onTouchStart, { passive: true });
@@ -165,9 +176,11 @@ export function usePullToRefresh({ onRefresh, disabled, containerRef }: Options)
       target.removeEventListener("touchend", onTouchEnd);
       target.removeEventListener("touchcancel", onTouchCancel);
     };
-    // containerRef is intentionally excluded — it's a stable ref object
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isNative]);
 
   return { pullY, phase };
 }
+
+// Re-export constants used by usePullToRefresh so consumers don't need two imports
+export { THRESHOLD as PTR_THRESHOLD, MAX_PULL as PTR_MAX_PULL, RESIST, DIR_LOCK_RATIO };

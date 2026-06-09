@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import { isNativeApp } from "@/lib/platform";
 import { usePullToRefresh } from "@/hooks/usePullToRefresh";
-import { PullToRefreshIndicator } from "@/components/PullToRefreshIndicator";
+import { NativePullToRefreshLayout } from "@/components/NativePullToRefreshLayout";
 
 function ProductImageCarousel({ images, onImageClick }: { images: string[]; onImageClick?: (images: string[], index: number) => void }) {
   const [idx, setIdx] = useState(0);
@@ -305,8 +305,8 @@ export default function FactoryDetail() {
   });
 
   return (
-    <div className="min-h-screen bg-background animate-page-enter">
-      <PullToRefreshIndicator pullY={pullY} phase={phase} />
+    <>
+      <NativePullToRefreshLayout pullY={pullY} phase={phase} className="min-h-screen bg-background animate-page-enter">
       <Helmet>
         <title>{metaTitle}</title>
         <meta name="description" content={metaDesc} />
@@ -825,7 +825,8 @@ export default function FactoryDetail() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-      {/* Floating Chat Button */}
+      </NativePullToRefreshLayout>
+      {/* Floating Chat Button — rendered outside the transform wrapper so it stays viewport-fixed */}
       <button
         onClick={() => handleChat()}
         className="fixed bottom-6 right-6 w-14 h-14 bg-primary text-primary-foreground rounded-full shadow-lg hover:shadow-xl transition-all flex items-center justify-center z-50 hover:scale-105"
@@ -833,6 +834,6 @@ export default function FactoryDetail() {
       >
         <MessageCircle className="w-6 h-6" />
       </button>
-    </div>
+    </>
   );
 }

@@ -11,7 +11,7 @@ import { useState, useCallback } from "react";
 import { MessageCircle, ArrowLeft, Trash2, Inbox, ShoppingCart, ChevronDown, ChevronRight, Pencil, Check, X } from "lucide-react";
 import { toast } from "sonner";
 import { usePullToRefresh } from "@/hooks/usePullToRefresh";
-import { PullToRefreshIndicator } from "@/components/PullToRefreshIndicator";
+import { NativePullToRefreshLayout } from "@/components/NativePullToRefreshLayout";
 
 // ── 一般訊息列表 ──────────────────────────────────────────────────────────
 function UserConversationList({ conversations }: { conversations: any[] }) {
@@ -275,8 +275,7 @@ export default function MyMessages() {
   }
 
   return (
-    <div className="min-h-screen bg-background">
-      <PullToRefreshIndicator pullY={pullY} phase={phase} />
+    <NativePullToRefreshLayout pullY={pullY} phase={phase} className="min-h-screen bg-background">
       <Navbar />
       <div className="container py-6 max-w-3xl">
         <Button variant="ghost" size="sm" className="mb-4" onClick={() => navigate("/")}>
@@ -311,7 +310,7 @@ export default function MyMessages() {
         {tab === "general" && <UserConversationList conversations={userConvs ?? []} />}
         {tab === "inquiry" && <InquiryBatchList batches={batches ?? []} />}
       </div>
-    </div>
+    </NativePullToRefreshLayout>
   );
 }
 

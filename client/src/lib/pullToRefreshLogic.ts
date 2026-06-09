@@ -2,6 +2,8 @@ export const PTR_THRESHOLD = 72;
 export const PTR_MAX_PULL = 120;
 export const PTR_RESISTANCE = 0.45;
 export const PTR_DIRECTION_RATIO = 1.2;
+export const PTR_REFRESH_HOLD = 60;  // px: content rests here while data loads
+export const PTR_SETTLE_MS = 260;    // ms: ease-out return animation
 
 export function computePullDistance(deltaY: number): number {
   return Math.min(deltaY * PTR_RESISTANCE, PTR_MAX_PULL);

@@ -22,7 +22,7 @@ import { Link } from "wouter";
 import { StatusTimeline } from "@/components/StatusTimeline";
 import { initPushNotifications } from "@/lib/pushNotifications";
 import { usePullToRefresh } from "@/hooks/usePullToRefresh";
-import { PullToRefreshIndicator } from "@/components/PullToRefreshIndicator";
+import { NativePullToRefreshLayout } from "@/components/NativePullToRefreshLayout";
 
 const STATUS_LABELS: Record<string, { label: string; color: string }> = {
   pending:    { label: "已寄出",  color: "bg-gray-100 text-gray-700" },
@@ -103,8 +103,7 @@ export default function MemberCenter() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-orange-50 to-amber-50 px-4 pb-4 md:px-8 md:pb-8 admin-page-top">
-      <PullToRefreshIndicator pullY={pullY} phase={phase} />
+    <NativePullToRefreshLayout pullY={pullY} phase={phase} className="min-h-screen bg-gradient-to-br from-orange-50 to-amber-50 px-4 pb-4 md:px-8 md:pb-8 admin-page-top">
       <div className="max-w-4xl mx-auto">
         <div className="flex items-center gap-4 mb-6">
           <Button variant="outline" size="sm" onClick={() => window.history.back()} className="gap-2">
@@ -155,7 +154,7 @@ export default function MemberCenter() {
           </Link>
         </div>
       </div>
-    </div>
+    </NativePullToRefreshLayout>
   );
 }
 
