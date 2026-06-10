@@ -94,7 +94,7 @@ export default function MemberCenter() {
       utils.report.myReports.invalidate(),
     ]);
   }, [utils]);
-  const { pullY, phase } = usePullToRefresh({ onRefresh: handleRefresh });
+  const { contentRef, indicatorRef, iconRef, phase } = usePullToRefresh({ onRefresh: handleRefresh });
 
   if (authLoading) return <AppLoading />;
   if (!user) {
@@ -103,7 +103,7 @@ export default function MemberCenter() {
   }
 
   return (
-    <NativePullToRefreshLayout pullY={pullY} phase={phase} className="min-h-screen bg-gradient-to-br from-orange-50 to-amber-50 px-4 pb-4 md:px-8 md:pb-8 admin-page-top">
+    <NativePullToRefreshLayout contentRef={contentRef} indicatorRef={indicatorRef} iconRef={iconRef} phase={phase} className="min-h-screen bg-gradient-to-br from-orange-50 to-amber-50 px-4 pb-4 md:px-8 md:pb-8 admin-page-top">
       <div className="max-w-4xl mx-auto">
         <div className="flex items-center gap-4 mb-6">
           <Button variant="outline" size="sm" onClick={() => window.history.back()} className="gap-2">

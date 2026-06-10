@@ -118,7 +118,7 @@ export default function FactoryDashboard() {
       utils.notification.getAppBadgeCount.invalidate(),
     ]);
   }, [utils, factory?.id]);
-  const { pullY, phase } = usePullToRefresh({ onRefresh: handleRefresh });
+  const { contentRef, indicatorRef, iconRef, phase } = usePullToRefresh({ onRefresh: handleRefresh });
 
   const REVIEW_SEEN_KEY = 'oxm_reviews_seen';
   const [reviewSeenAt, setReviewSeenAt] = useState<number>(() => {
@@ -152,7 +152,7 @@ export default function FactoryDashboard() {
   const isPending = factory.status === 'pending';
 
   return (
-    <NativePullToRefreshLayout pullY={pullY} phase={phase} className="min-h-screen bg-background">
+    <NativePullToRefreshLayout contentRef={contentRef} indicatorRef={indicatorRef} iconRef={iconRef} phase={phase} className="min-h-screen bg-background">
       <Navbar />
       <div className="container py-6">
         <Button variant="outline" onClick={() => navigate("/")} className="mb-4 flex items-center gap-2">

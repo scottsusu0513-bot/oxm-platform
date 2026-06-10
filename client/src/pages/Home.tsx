@@ -328,10 +328,10 @@ export default function Home() {
       utils.notification.getAppBadgeCount.invalidate(),
     ]);
   }, [utils]);
-  const { pullY, phase } = usePullToRefresh({ onRefresh: handleRefresh });
+  const { contentRef, indicatorRef, iconRef, phase } = usePullToRefresh({ onRefresh: handleRefresh });
 
   return (
-    <NativePullToRefreshLayout pullY={pullY} phase={phase} className="min-h-screen bg-background animate-page-enter">
+    <NativePullToRefreshLayout contentRef={contentRef} indicatorRef={indicatorRef} iconRef={iconRef} phase={phase} className="min-h-screen bg-background animate-page-enter">
       <Helmet>
         <title>OXM｜台灣傳統產業資源媒合平台｜工廠、設備與供應鏈服務</title>
         <meta name="description" content="OXM 整合台灣傳統產業商家與供應鏈資源，協助使用者快速找到工廠、OEM/ODM 代工、工業設備、材料、包裝印刷與產業服務，讓找廠商、找資源、送詢價更有效率。" />

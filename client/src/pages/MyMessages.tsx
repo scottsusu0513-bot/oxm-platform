@@ -258,7 +258,7 @@ export default function MyMessages() {
       utils.chat.unreadCount.invalidate(),
     ]);
   }, [utils]);
-  const { pullY, phase } = usePullToRefresh({ onRefresh: handleRefresh });
+  const { contentRef, indicatorRef, iconRef, phase } = usePullToRefresh({ onRefresh: handleRefresh });
 
   if (!isAuthenticated && !loading) {
     return (
@@ -275,7 +275,7 @@ export default function MyMessages() {
   }
 
   return (
-    <NativePullToRefreshLayout pullY={pullY} phase={phase} className="min-h-screen bg-background">
+    <NativePullToRefreshLayout contentRef={contentRef} indicatorRef={indicatorRef} iconRef={iconRef} phase={phase} className="min-h-screen bg-background">
       <Navbar />
       <div className="container py-6 max-w-3xl">
         <Button variant="ghost" size="sm" className="mb-4" onClick={() => navigate("/")}>

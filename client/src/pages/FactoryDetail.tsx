@@ -109,7 +109,7 @@ export default function FactoryDetail() {
       utils.product.getByFactory.invalidate({ factoryId }),
     ]);
   }, [utils, factoryId]);
-  const { pullY, phase } = usePullToRefresh({
+  const { contentRef, indicatorRef, iconRef, phase } = usePullToRefresh({
     onRefresh: handleRefresh,
     disabled: !factoryId || lightboxIndex !== null || showReportDialog,
   });
@@ -306,7 +306,7 @@ export default function FactoryDetail() {
 
   return (
     <>
-      <NativePullToRefreshLayout pullY={pullY} phase={phase} className="min-h-screen bg-background animate-page-enter">
+      <NativePullToRefreshLayout contentRef={contentRef} indicatorRef={indicatorRef} iconRef={iconRef} phase={phase} className="min-h-screen bg-background animate-page-enter">
       <Helmet>
         <title>{metaTitle}</title>
         <meta name="description" content={metaDesc} />
