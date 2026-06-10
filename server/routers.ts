@@ -772,6 +772,12 @@ export const appRouter = router({
       images: z.array(z.string()).max(3).optional(),
     })).mutation(async ({ ctx, input }) => {
       await assertFactoryManager(input.factoryId, ctx.user.id);
+      if (input.categoryId != null) {
+        const cats = await db.getCategoriesByFactoryId(input.factoryId);
+        if (!cats.some((c) => c.id === input.categoryId)) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "分類不屬於此工廠" });
+        }
+      }
       const id = await db.createProduct(input);
       return { id };
     }),
@@ -791,6 +797,12 @@ export const appRouter = router({
     })).mutation(async ({ ctx, input }) => {
       await assertFactoryManager(input.factoryId, ctx.user.id);
       const { id, factoryId, ...data } = input;
+      if (data.categoryId != null) {
+        const cats = await db.getCategoriesByFactoryId(factoryId);
+        if (!cats.some((c) => c.id === data.categoryId)) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "分類不屬於此工廠" });
+        }
+      }
       await db.updateProduct(id, factoryId, data);
       return { success: true };
     }),

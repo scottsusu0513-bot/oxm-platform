@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -1088,74 +1088,6 @@ function PhotoManager({ factoryId, onDirtyChange }: { factoryId: number; onDirty
   );
 }
 
-// ===== Category Manager =====
-function CategoryManager({ factoryId }: { factoryId: number }) {
-  const utils = trpc.useUtils();
-  const [newName, setNewName] = useState("");
-  const [editId, setEditId] = useState<number | null>(null);
-  const [editName, setEditName] = useState("");
-
-  const { data: categories = [] } = trpc.category.getByFactory.useQuery({ factoryId });
-  const invalidate = () => utils.category.getByFactory.invalidate({ factoryId });
-
-  const createMut = trpc.category.create.useMutation({
-    onSuccess: () => { invalidate(); setNewName(""); toast.success("分類已新增"); },
-    onError: e => toast.error(e.message),
-  });
-  const updateMut = trpc.category.update.useMutation({
-    onSuccess: () => { invalidate(); setEditId(null); },
-    onError: e => toast.error(e.message),
-  });
-  const deleteMut = trpc.category.delete.useMutation({
-    onSuccess: () => { invalidate(); utils.factory.getMine.invalidate(); toast.success("分類已刪除，產品移至未分類"); },
-    onError: e => toast.error(e.message),
-  });
-
-  return (
-    <div className="mb-6">
-      <h3 className="text-sm font-semibold mb-3">分類管理</h3>
-      <div className="flex flex-wrap gap-2 mb-3">
-        {categories.map(cat => (
-          <div key={cat.id} className="flex items-center gap-1 bg-muted rounded-full px-3 py-1">
-            {editId === cat.id ? (
-              <>
-                <input
-                  className="text-sm bg-transparent outline-none w-24"
-                  value={editName}
-                  onChange={e => setEditName(e.target.value)}
-                  onKeyDown={e => { if (e.key === "Enter") updateMut.mutate({ id: cat.id, name: editName, factoryId }); if (e.key === "Escape") setEditId(null); }}
-                  autoFocus
-                />
-                <button onClick={() => updateMut.mutate({ id: cat.id, name: editName, factoryId })} className="text-primary hover:text-primary/80"><Save className="w-3 h-3" /></button>
-                <button onClick={() => setEditId(null)} className="text-muted-foreground hover:text-foreground"><X className="w-3 h-3" /></button>
-              </>
-            ) : (
-              <>
-                <span className="text-sm">{cat.name}</span>
-                <button onClick={() => { setEditId(cat.id); setEditName(cat.name); }} className="text-muted-foreground hover:text-foreground ml-1"><Pencil className="w-3 h-3" /></button>
-                <button onClick={() => deleteMut.mutate({ id: cat.id, factoryId })} className="text-muted-foreground hover:text-destructive"><X className="w-3 h-3" /></button>
-              </>
-            )}
-          </div>
-        ))}
-        {categories.length < 20 && (
-          <form onSubmit={e => { e.preventDefault(); if (newName.trim()) createMut.mutate({ name: newName, factoryId }); }} className="flex items-center gap-1">
-            <input
-              className="text-sm border rounded-full px-3 py-1 w-28 outline-none focus:ring-1 focus:ring-primary"
-              placeholder="新增分類..."
-              value={newName}
-              onChange={e => setNewName(e.target.value)}
-            />
-            {newName.trim() && (
-              <Button type="submit" size="sm" variant="ghost" className="h-7 px-2"><Plus className="w-3 h-3" /></Button>
-            )}
-          </form>
-        )}
-      </div>
-    </div>
-  );
-}
-
 // ===== Product Manager =====
 function ProductManager({ factoryId, products, isPending, onDirtyChange }: { factoryId: number; products: any[]; isPending: boolean; onDirtyChange?: (dirty: boolean) => void }) {
   const [showAdd, setShowAdd] = useState(false);
@@ -1194,7 +1126,6 @@ function ProductManager({ factoryId, products, isPending, onDirtyChange }: { fac
         )}
       </CardHeader>
       <CardContent>
-        {!isPending && <CategoryManager factoryId={factoryId} />}
         {isPending && (
           <div className="p-3 bg-yellow-50 border border-yellow-200 rounded text-sm text-yellow-800 mb-4">
             審核期間無法新增或修改產品
@@ -1215,7 +1146,7 @@ function ProductManager({ factoryId, products, isPending, onDirtyChange }: { fac
           </div>
         )}
         {showAdd && !isPending && (
-          <ProductForm factoryId={factoryId} categories={categories} onDone={() => { setShowAdd(false); utils.factory.getMine.invalidate(); utils.product.getByFactory.invalidate({ factoryId }); }} />
+          <ProductForm factoryId={factoryId} onDone={() => { setShowAdd(false); utils.factory.getMine.invalidate(); utils.product.getByFactory.invalidate({ factoryId }); }} />
         )}
         {visibleProducts.length === 0 && !showAdd ? (
           <p className="text-center text-muted-foreground py-8">
@@ -1226,7 +1157,7 @@ function ProductManager({ factoryId, products, isPending, onDirtyChange }: { fac
             {visibleProducts.map(p => (
               <div key={p.id}>
                 {editId === p.id ? (
-                  <ProductForm factoryId={factoryId} product={p} categories={categories} onDone={() => { setEditId(null); utils.factory.getMine.invalidate(); utils.product.getByFactory.invalidate({ factoryId }); }} />
+                  <ProductForm factoryId={factoryId} product={p} onDone={() => { setEditId(null); utils.factory.getMine.invalidate(); utils.product.getByFactory.invalidate({ factoryId }); }} />
                 ) : (
                   <div className="flex items-center justify-between p-4 rounded-lg border">
                     <div className="flex gap-3 items-start flex-1">
@@ -1275,9 +1206,17 @@ function ProductManager({ factoryId, products, isPending, onDirtyChange }: { fac
 }
 
 // ===== Product Form =====
-function ProductForm({ factoryId, product, categories = [], onDone }: { factoryId: number; product?: any; categories?: any[]; onDone: () => void }) {
+function ProductForm({ factoryId, product, onDone }: { factoryId: number; product?: any; onDone: () => void }) {
+  const utils = trpc.useUtils();
+  const { data: categories = [] } = trpc.category.getByFactory.useQuery({ factoryId });
+
   const [name, setName] = useState(product?.name ?? "");
+  // selectValue drives the <Select> UI; "" = placeholder (new product, unset)
+  const initSelect = product?.categoryId ? String(product.categoryId) : product ? "none" : "";
+  const [selectValue, setSelectValue] = useState(initSelect);
   const [categoryId, setCategoryId] = useState<number | null>(product?.categoryId ?? null);
+  const [showNewCategory, setShowNewCategory] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState("");
   const [priceType, setPriceType] = useState<"range" | "fixed" | "market">(product?.priceType ?? "range");
   const [priceMin, setPriceMin] = useState(product?.priceMin ? formatNumber(product.priceMin) : "");
   const [priceMax, setPriceMax] = useState(product?.priceMax ? formatNumber(product.priceMax) : "");
@@ -1292,6 +1231,44 @@ function ProductForm({ factoryId, product, categories = [], onDone }: { factoryI
   const createMut = trpc.product.create.useMutation({ onSuccess: () => { toast.success("產品已新增"); onDone(); }, onError: e => toast.error(e.message) });
   const updateMut = trpc.product.update.useMutation({ onSuccess: () => { toast.success("產品已更新"); onDone(); }, onError: e => toast.error(e.message) });
   const uploadMut = trpc.product.uploadImage.useMutation();
+  const createCategoryMut = trpc.category.create.useMutation({
+    onSuccess: (result, variables) => {
+      utils.category.getByFactory.setData({ factoryId }, (old) =>
+        old ? [...old, { id: result.id, factoryId, name: variables.name, sortOrder: old.length, createdAt: new Date() }] : old
+      );
+      setCategoryId(result.id);
+      setSelectValue(String(result.id));
+      setShowNewCategory(false);
+      setNewCategoryName("");
+      toast.success("分類已建立");
+      utils.category.getByFactory.invalidate({ factoryId });
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const handleCategorySelectChange = (value: string) => {
+    if (value === "__new__") {
+      setSelectValue("__new__");
+      setShowNewCategory(true);
+    } else {
+      setSelectValue(value);
+      setCategoryId(value === "none" || value === "" ? null : Number(value));
+      setShowNewCategory(false);
+    }
+  };
+
+  const handleCancelNewCategory = () => {
+    setShowNewCategory(false);
+    setNewCategoryName("");
+    setSelectValue(categoryId === null ? (product ? "none" : "") : String(categoryId));
+  };
+
+  const handleSaveNewCategory = () => {
+    const trimmed = newCategoryName.trim();
+    if (!trimmed) { toast.error("請輸入分類名稱"); return; }
+    if ((categories as any[]).some((c) => c.name === trimmed)) { toast.error("此分類名稱已存在"); return; }
+    createCategoryMut.mutate({ name: trimmed, factoryId });
+  };
 
   const handlePriceChange = (setter: (v: string) => void) => (e: React.ChangeEvent<HTMLInputElement>) => {
     const raw = e.target.value.replace(/[^\d.]/g, "");
@@ -1334,20 +1311,52 @@ function ProductForm({ factoryId, product, categories = [], onDone }: { factoryI
     <form onSubmit={handleSubmit} className="p-4 rounded-lg border bg-muted/20 space-y-3">
       <div><Label>產品名稱 *</Label><Input value={name} onChange={e => setName(e.target.value)} required /></div>
 
-      {categories.length > 0 && (
-        <div>
-          <Label>產品分類</Label>
-          <Select value={categoryId === null ? "none" : String(categoryId)} onValueChange={v => setCategoryId(v === "none" ? null : Number(v))}>
-            <SelectTrigger className="mt-1"><SelectValue placeholder="選擇分類（選填）" /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="none">未分類</SelectItem>
-              {categories.map(cat => (
-                <SelectItem key={cat.id} value={String(cat.id)}>{cat.name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      )}
+      {/* 商品分類 — 永遠顯示；包含「＋ 新增商品分類」選項 */}
+      <div>
+        <Label>商品分類</Label>
+        <Select value={selectValue} onValueChange={handleCategorySelectChange}>
+          <SelectTrigger className="mt-1">
+            <SelectValue placeholder="請選擇商品分類" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="none">未分類</SelectItem>
+            {(categories as any[]).map((cat) => (
+              <SelectItem key={cat.id} value={String(cat.id)}>{cat.name}</SelectItem>
+            ))}
+            <SelectSeparator />
+            <SelectItem value="__new__" className="text-primary font-medium">
+              ＋ 新增商品分類
+            </SelectItem>
+          </SelectContent>
+        </Select>
+
+        {showNewCategory && (
+          <div className="mt-2 p-3 border rounded-lg bg-muted/30 space-y-2">
+            <Input
+              placeholder="輸入分類名稱"
+              value={newCategoryName}
+              onChange={e => setNewCategoryName(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === "Enter") { e.preventDefault(); handleSaveNewCategory(); }
+                if (e.key === "Escape") handleCancelNewCategory();
+              }}
+              maxLength={100}
+              autoFocus
+            />
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                size="sm"
+                onClick={handleSaveNewCategory}
+                disabled={createCategoryMut.isPending || !newCategoryName.trim()}
+              >
+                {createCategoryMut.isPending ? "儲存中…" : "儲存分類"}
+              </Button>
+              <Button type="button" variant="ghost" size="sm" onClick={handleCancelNewCategory}>取消</Button>
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* 價格模式選擇 */}
       <div>

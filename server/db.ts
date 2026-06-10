@@ -1557,8 +1557,9 @@ export async function getCategoriesByFactoryId(factoryId: number) {
 export async function createCategory(factoryId: number, name: string) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
-  const existing = await db.select({ id: productCategories.id }).from(productCategories).where(eq(productCategories.factoryId, factoryId));
+  const existing = await db.select({ id: productCategories.id, name: productCategories.name }).from(productCategories).where(eq(productCategories.factoryId, factoryId));
   if (existing.length >= 20) throw new Error("分類最多 20 個");
+  if (existing.some(c => c.name === name)) throw new Error("此分類名稱已存在");
   const result = await db.insert(productCategories).values({ factoryId, name, sortOrder: existing.length });
   return result[0].insertId;
 }
