@@ -1,7 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
 import { Link, useLocation } from "wouter";
-import { Factory, MessageCircle, User, LogOut, LayoutDashboard, Menu, X, UserPlus, Search, Settings, Heart, UserCircle, ChevronDown, FileText, ScrollText } from "lucide-react";
+import { Factory, MessageCircle, User, LogOut, LayoutDashboard, Menu, X, UserPlus, Search, Settings, Heart, UserCircle, ChevronDown, FileText, ScrollText, Store } from "lucide-react";
 import UnverifiedEmailHint from "@/components/UnverifiedEmailHint";
 import { useState, useEffect } from "react";
 import { useAuth } from "@/_core/hooks/useAuth";
@@ -96,6 +96,15 @@ export default function Navbar() {
             <Button variant={location.startsWith("/search") ? "secondary" : "ghost"} size="sm">
               <Search className="w-4 h-4 mr-1" />
               搜尋工廠
+            </Button>
+          </Link>
+          <Link href="/community">
+            <Button variant={location.startsWith("/community") ? "secondary" : "ghost"} size="sm" className="gap-1">
+              <Store className="w-4 h-4" />
+              商案討論區
+              <span className="text-[10px] leading-none px-1.5 py-0.5 rounded-full bg-violet-100 dark:bg-violet-950 text-violet-600 dark:text-violet-400 font-medium">
+                即將推出
+              </span>
             </Button>
           </Link>
           {isAuthenticated && (
@@ -226,6 +235,15 @@ export default function Navbar() {
         >
           <Link href="/search" onClick={() => setMobileOpen(false)}>
             <Button variant="ghost" className="w-full justify-start"><Search className="w-4 h-4 mr-2" />搜尋工廠</Button>
+          </Link>
+          <Link href="/community" onClick={() => setMobileOpen(false)}>
+            <Button variant="ghost" className="w-full justify-start">
+              <Store className="w-4 h-4 mr-2" />
+              商案討論區
+              <span className="ml-auto text-[10px] px-1.5 py-0.5 rounded-full bg-violet-100 dark:bg-violet-950 text-violet-600 dark:text-violet-400 font-medium">
+                即將推出
+              </span>
+            </Button>
           </Link>
           {isAuthenticated && (
             <>
