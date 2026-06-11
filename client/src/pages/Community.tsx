@@ -6,12 +6,10 @@ import { INDUSTRY_SLUGS } from "@shared/constants";
 import CommunityComingSoon from "@/components/community/CommunityComingSoon";
 import CommunityBoardLayout from "@/components/community/CommunityBoardLayout";
 import { AppLoading } from "@/components/AppLoading";
+import { trpc } from "@/lib/trpc";
 
 const CommunityPost = lazy(() => import("@/components/community/CommunityPost"));
 const CommunityNotifications = lazy(() => import("@/components/community/CommunityNotifications"));
-
-// First slug from INDUSTRY_SLUGS — matches INDUSTRIES[0] = "紡織"
-const DEFAULT_SPACE_CODE = Object.values(INDUSTRY_SLUGS)[0] ?? "textile";
 
 const VALID_SPACE_CODES = new Set<string>([
   ...Object.values(INDUSTRY_SLUGS),
@@ -35,6 +33,22 @@ function Redirect({ to }: { to: string }) {
   return <AppLoading />;
 }
 
+// Personalised default: queries the user's factory industry and redirects accordingly.
+// Falls back to cross-industry if the user has no qualifying factory.
+// Only rendered for the bare /community path — never called for explicit sub-paths.
+function DefaultSpaceRedirector() {
+  const { data, isLoading } = trpc.community.getDefaultSpace.useQuery();
+  const [, navigate] = useLocation();
+
+  useEffect(() => {
+    if (!isLoading && data) {
+      navigate(`/community/${data.spaceCode}/discussions`, { replace: true });
+    }
+  }, [isLoading, data, navigate]);
+
+  return <AppLoading />;
+}
+
 export default function Community() {
   const [location] = useLocation();
   const { user, loading } = useAuth();
@@ -49,9 +63,9 @@ export default function Community() {
   const seg1 = segments[1] ?? null; // "discussions" | "bids" | legacy numericPostId | null
   const seg2 = segments[2] ?? null; // numericPostId (new route: /spaceCode/discussions/:id)
 
-  // /community → redirect to default discussions
+  // /community → personalised default (waits for factory query, no flash)
   if (!seg0) {
-    return <Redirect to={`/community/${DEFAULT_SPACE_CODE}/discussions`} />;
+    return <DefaultSpaceRedirector />;
   }
 
   // /community/notifications
@@ -71,7 +85,6 @@ export default function Community() {
   }
 
   // Backward compat: /community/:spaceCode/:numericPostId (old URL format)
-  // seg1 is a number and not a known section keyword
   const legacyPostId = parseInt(seg1, 10);
   if (!isNaN(legacyPostId) && !VALID_SECTIONS.has(seg1)) {
     return <Redirect to={`/community/${spaceCode}/discussions/${legacyPostId}`} />;
@@ -91,9 +104,9 @@ export default function Community() {
 
   // /community/:spaceCode/discussions or /community/:spaceCode/bids
   if (seg1 === "discussions" || seg1 === "bids") {
-    // Guard: unknown spaceCode → redirect to default
+    // Unknown spaceCode → redirect to cross-industry
     if (!VALID_SPACE_CODES.has(spaceCode)) {
-      return <Redirect to={`/community/${DEFAULT_SPACE_CODE}/discussions`} />;
+      return <Redirect to={`/community/${COMMUNITY_CROSS_INDUSTRY_SLUG}/discussions`} />;
     }
     return <CommunityBoardLayout spaceCode={spaceCode} section={seg1} />;
   }

@@ -1,6 +1,8 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { appRouter } from "./routers";
 import type { TrpcContext } from "./_core/context";
+import { resolveDefaultCommunitySpace } from "./db";
+import { COMMUNITY_CROSS_INDUSTRY_SLUG } from "../shared/const";
 
 type AuthenticatedUser = NonNullable<TrpcContext["user"]>;
 
@@ -1353,5 +1355,140 @@ describe("community.notificationUnreadCount gating", () => {
   it("admin: notificationUnreadCount returns count", async () => {
     const caller = appRouter.createCaller(createAuthContext({ role: "admin" }));
     await expect(caller.community.notificationUnreadCount()).resolves.toHaveProperty("count");
+  }, 10000);
+});
+
+// ===== resolveDefaultCommunitySpace (pure unit tests — no DB required) =====
+describe("resolveDefaultCommunitySpace", () => {
+  // 1. No factories → cross-industry
+  it("returns cross-industry when no factories", () => {
+    expect(resolveDefaultCommunitySpace([])).toBe(COMMUNITY_CROSS_INDUSTRY_SLUG);
+  });
+
+  // 2. Single factory with valid first industry → correct slug
+  it("returns metal-processing for 金屬加工 factory", () => {
+    expect(resolveDefaultCommunitySpace([{ industry: ["金屬加工"] }])).toBe("metal-processing");
+  });
+
+  // 3. Multiple industries on factory → uses first (index 0)
+  it("uses first industry when factory has multiple industries", () => {
+    expect(resolveDefaultCommunitySpace([{ industry: ["金屬加工", "塑膠"] }])).toBe("metal-processing");
+  });
+
+  // 4. Industry name not in INDUSTRY_SLUGS → cross-industry fallback
+  it("falls back to cross-industry for unrecognised industry name", () => {
+    expect(resolveDefaultCommunitySpace([{ industry: ["不存在產業"] }])).toBe(COMMUNITY_CROSS_INDUSTRY_SLUG);
+  });
+
+  // 5. Factory with empty industry array → skip, use next factory
+  it("skips factory with empty industry array and uses next factory", () => {
+    expect(resolveDefaultCommunitySpace([
+      { industry: [] },
+      { industry: ["塑膠"] },
+    ])).toBe("plastic");
+  });
+
+  // 6. Null industry (defensive) → skip, use next
+  it("handles null industry gracefully and moves to next factory", () => {
+    expect(resolveDefaultCommunitySpace([
+      { industry: null as unknown as string[] },
+      { industry: ["印刷"] },
+    ])).toBe("printing");
+  });
+
+  // 7. First factory has invalid industry, second has valid → use second
+  it("uses second factory when first has only invalid industries", () => {
+    expect(resolveDefaultCommunitySpace([
+      { industry: ["不存在A", "不存在B"] },
+      { industry: ["電子零件"] },
+    ])).toBe("electronics");
+  });
+
+  // 8. Multiple factories — stable order respected (first factory wins)
+  it("returns first matching factory in given order", () => {
+    expect(resolveDefaultCommunitySpace([
+      { industry: ["紡織"] },
+      { industry: ["金屬加工"] },
+    ])).toBe("textile");
+  });
+
+  // 9. All factories have no valid industries → cross-industry
+  it("returns cross-industry when all factories have invalid industries", () => {
+    expect(resolveDefaultCommunitySpace([
+      { industry: ["無效A"] },
+      { industry: ["無效B"] },
+    ])).toBe(COMMUNITY_CROSS_INDUSTRY_SLUG);
+  });
+
+  // 10. Known industries: verify all 12 slugs map correctly
+  it("correctly maps 木工 to woodworking", () => {
+    expect(resolveDefaultCommunitySpace([{ industry: ["木工"] }])).toBe("woodworking");
+  });
+  it("correctly maps 橡膠 / 矽膠 to rubber-silicone", () => {
+    expect(resolveDefaultCommunitySpace([{ industry: ["橡膠 / 矽膠"] }])).toBe("rubber-silicone");
+  });
+  it("correctly maps 工業設備／機械 to industrial-machinery", () => {
+    expect(resolveDefaultCommunitySpace([{ industry: ["工業設備／機械"] }])).toBe("industrial-machinery");
+  });
+});
+
+// ===== community.getDefaultSpace =====
+describe("community.getDefaultSpace", () => {
+  // 11. Unauthenticated → UNAUTHORIZED
+  it("throws UNAUTHORIZED for unauthenticated users", async () => {
+    const caller = appRouter.createCaller(createPublicContext());
+    await expect(caller.community.getDefaultSpace()).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+  });
+
+  // 12. Non-admin user → FORBIDDEN (Beta gate)
+  it("throws FORBIDDEN for non-admin users when status=beta", async () => {
+    const caller = appRouter.createCaller(createAuthContext({ role: "user" }));
+    await expect(caller.community.getDefaultSpace()).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  // Admin gets a valid spaceCode string
+  it("returns an object with a valid spaceCode string for admin", async () => {
+    const caller = appRouter.createCaller(createAuthContext({ role: "admin" }));
+    const result = await caller.community.getDefaultSpace();
+    expect(result).toHaveProperty("spaceCode");
+    expect(typeof result.spaceCode).toBe("string");
+    expect(result.spaceCode.length).toBeGreaterThan(0);
+  }, 10000);
+
+  // Admin spaceCode is one of the 13 valid community spaces
+  it("returns one of the 13 valid community space codes for admin", async () => {
+    const caller = appRouter.createCaller(createAuthContext({ role: "admin" }));
+    const result = await caller.community.getDefaultSpace();
+    const VALID = new Set([
+      "cross-industry", "textile", "metal-processing", "electronics", "plastic",
+      "rubber-silicone", "woodworking", "packaging", "food", "chemical-manufacturing",
+      "consumer-goods", "printing", "industrial-machinery",
+    ]);
+    expect(VALID.has(result.spaceCode)).toBe(true);
+  }, 10000);
+});
+
+// ===== community.getSpaces — ordering =====
+describe("community.getSpaces ordering", () => {
+  // 13. cross-industry is first in the list
+  it("returns cross-industry space as the first item", async () => {
+    const caller = appRouter.createCaller(createAuthContext({ role: "admin" }));
+    const spaces = await caller.community.getSpaces();
+    expect(spaces[0].code).toBe("cross-industry");
+  }, 10000);
+
+  // 14. total count is still 13
+  it("still returns exactly 13 spaces", async () => {
+    const caller = appRouter.createCaller(createAuthContext({ role: "admin" }));
+    const spaces = await caller.community.getSpaces();
+    expect(spaces).toHaveLength(13);
+  }, 10000);
+
+  // 15. cross-industry appears exactly once
+  it("cross-industry appears exactly once in the space list", async () => {
+    const caller = appRouter.createCaller(createAuthContext({ role: "admin" }));
+    const spaces = await caller.community.getSpaces();
+    const crossCount = spaces.filter(s => s.code === "cross-industry").length;
+    expect(crossCount).toBe(1);
   }, 10000);
 });

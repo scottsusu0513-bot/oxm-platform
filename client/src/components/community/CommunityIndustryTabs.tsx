@@ -9,10 +9,10 @@ interface Props {
 }
 
 const TABS: Array<{ name: string; slug: string }> = [
+  { name: COMMUNITY_CROSS_INDUSTRY_NAME, slug: COMMUNITY_CROSS_INDUSTRY_SLUG },
   ...Array.from(INDUSTRY_OPTIONS)
     .map(name => ({ name, slug: INDUSTRY_SLUGS[name] ?? "" }))
     .filter(t => t.slug !== ""),
-  { name: COMMUNITY_CROSS_INDUSTRY_NAME, slug: COMMUNITY_CROSS_INDUSTRY_SLUG },
 ];
 
 export default function CommunityIndustryTabs({ activeSpaceCode }: Props) {

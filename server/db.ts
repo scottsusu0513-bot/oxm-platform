@@ -27,8 +27,8 @@ import {
   type CommunityReaction, type CommunityMention, type CommunityNotification,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
-import { ADJACENT_REGIONS } from "../shared/constants";
-import { COMMUNITY_FEATURE_STATUS } from "../shared/const";
+import { ADJACENT_REGIONS, INDUSTRY_SLUGS } from "../shared/constants";
+import { COMMUNITY_FEATURE_STATUS, COMMUNITY_CROSS_INDUSTRY_SLUG } from "../shared/const";
 import type { AISearchIntent } from './semantic-search';
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -3744,6 +3744,49 @@ export async function getCommunityAuthorIdentityOptions(userId: number): Promise
   }
 
   return identities;
+}
+
+// Pure function: given an ordered factory list (owner-first, then co-managers, each sorted by id ASC),
+// returns the first valid Community spaceCode derived from factory industries, or cross-industry as fallback.
+export function resolveDefaultCommunitySpace(
+  orderedFactories: Array<{ industry: string[] | null }>
+): string {
+  for (const factory of orderedFactories) {
+    const industries: string[] = Array.isArray(factory.industry) ? factory.industry : [];
+    for (const ind of industries) {
+      const slug = INDUSTRY_SLUGS[ind];
+      if (slug) return slug;
+    }
+  }
+  return COMMUNITY_CROSS_INDUSTRY_SLUG;
+}
+
+// Returns the default Community spaceCode for a user based on their approved factories.
+// Stable ordering: owner factories first (sorted by id ASC), then active co-managed factories (sorted by id ASC).
+// Falls back to cross-industry if no approved factory has a recognisable industry.
+export async function getUserDefaultCommunitySpace(userId: number): Promise<string> {
+  const db = await getDb();
+  if (!db) return COMMUNITY_CROSS_INDUSTRY_SLUG;
+
+  // Owner's approved factory (ownerId is unique so at most 1 row), stable by id ASC
+  const ownedRows = await db
+    .select({ id: factories.id, industry: factories.industry })
+    .from(factories)
+    .where(and(eq(factories.ownerId, userId), eq(factories.status, "approved")))
+    .orderBy(asc(factories.id));
+
+  // Active co-managed approved factories, stable by factoryId ASC
+  const coMgrRows = await db
+    .select({ id: factories.id, industry: factories.industry })
+    .from(factoryCoManagers)
+    .innerJoin(
+      factories,
+      and(eq(factories.id, factoryCoManagers.factoryId), eq(factories.status, "approved"))
+    )
+    .where(and(eq(factoryCoManagers.userId, userId), isNull(factoryCoManagers.removedAt)))
+    .orderBy(asc(factories.id));
+
+  return resolveDefaultCommunitySpace([...ownedRows, ...coMgrRows]);
 }
 
 export interface CommunityPostWithMeta extends CommunityPost {

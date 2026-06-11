@@ -2651,7 +2651,7 @@ export const appRouter = router({
       for (const [name, slug] of Object.entries(INDUSTRY_SLUGS)) {
         slugToName[slug] = name;
       }
-      const allSpaceCodes = [...Object.values(INDUSTRY_SLUGS), COMMUNITY_CROSS_INDUSTRY_SLUG];
+      const allSpaceCodes = [COMMUNITY_CROSS_INDUSTRY_SLUG, ...Object.values(INDUSTRY_SLUGS)];
       const stats = await db.getCommunitySpaceStats(allSpaceCodes);
       return allSpaceCodes.map((code) => ({
         code,
@@ -2702,6 +2702,15 @@ export const appRouter = router({
       checkCommunityRead(ctx.user);
       const factories = await db.getCommunityAuthorIdentityOptions(ctx.user.id);
       return { identities: factories };
+    }),
+
+    // Returns the personalised default spaceCode for the /community entry redirect.
+    // Uses the user's first approved factory's first valid industry (owner > co-manager, stable by id ASC).
+    // Falls back to cross-industry if no qualifying factory or industry is found.
+    getDefaultSpace: protectedProcedure.query(async ({ ctx }) => {
+      checkCommunityRead(ctx.user);
+      const spaceCode = await db.getUserDefaultCommunitySpace(ctx.user.id);
+      return { spaceCode };
     }),
 
     // Upload post image (max 8 MB, max 6 per post enforced on frontend)
