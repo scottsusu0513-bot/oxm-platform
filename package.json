@@ -14,7 +14,8 @@
     "format": "prettier --write .",
     "test": "vitest run",
     "db:push": "drizzle-kit migrate",
-    "cleanup:expired-pdfs": "tsx scripts/cleanup-expired-pdfs.ts"
+    "cleanup:expired-pdfs": "tsx scripts/cleanup-expired-pdfs.ts",
+    "cleanup:community-images": "tsx scripts/cleanup-community-images.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.89.0",

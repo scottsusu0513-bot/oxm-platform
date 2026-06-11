@@ -1,4 +1,4 @@
-import { COOKIE_NAME, THIRTY_DAYS_MS } from "@shared/const";
+import { COOKIE_NAME, THIRTY_DAYS_MS, COMMUNITY_FEATURE_STATUS } from "@shared/const";
 import { sdk } from "./_core/sdk";
 import { enhanceSearchKeyword, getSearchIntent } from './semantic-search';
 import { sendNewInquiryEmail, sendFactoryApprovedEmail, sendFactoryRejectedEmail, sendFactorySubmittedEmail, sendReportEmail, sendSupportTicketEmail, sendReviewReplyEmail, sendNewMessageNotificationEmail, sendReportStatusUpdateEmail, sendTicketStatusUpdateEmail, sendMessageReplyNotificationEmail, sendEmailVerificationEmail, sendAdminBroadcastEmail, sendRevisionSubmittedEmail, sendRevisionApprovedEmail, sendRevisionRejectedEmail } from './email';
@@ -12,7 +12,7 @@ import * as db from "./db";
 import { notifyOwner } from "./_core/notification";
 import { storagePut, storagePresignedUrl } from "./storage";
 import { validateImageUpload } from "./_core/security";
-import { INDUSTRY_OPTIONS, TAIWAN_REGIONS, CAPITAL_OPTIONS } from "../shared/constants";
+import { INDUSTRY_OPTIONS, TAIWAN_REGIONS, CAPITAL_OPTIONS, INDUSTRY_SLUGS } from "../shared/constants";
 import { nanoid } from "nanoid";
 import { factories, conversations, reviews, reports } from "../drizzle/schema";
 import { desc, eq, and, sql } from "drizzle-orm";
@@ -58,6 +58,78 @@ const FactoryBasicDataSchema = z.object({
   businessNote: z.string().nullable(),
   avatarUrl: z.string().nullable(),
 }).partial();
+
+// ===== 商案討論區 helpers =====
+// Valid space codes: 12 industry slugs + "cross-industry"
+const COMMUNITY_CROSS_INDUSTRY_SLUG = "cross-industry" as const;
+
+// Returns the expected URL prefix for community post images uploaded via uploadPostImage.
+// The key pattern is community-posts/{userId}/{nanoid}.{ext}
+// If S3 is not configured, returns null and validation is skipped (dev/test env).
+function getCommunityImageUrlPrefix(userId: number): string | null {
+  const base = process.env.AWS_S3_PUBLIC_BASE_URL?.replace(/\/+$/, "")
+    ?? (process.env.AWS_S3_BUCKET
+      ? `https://${process.env.AWS_S3_BUCKET}.s3.${process.env.AWS_REGION ?? "ap-southeast-1"}.amazonaws.com`
+      : null);
+  if (!base) return null;
+  return `${base}/community-posts/${userId}/`;
+}
+
+function assertCommunityImagesOwned(images: string[], userId: number): void {
+  if (images.length === 0) return;
+  const s3Bucket = process.env.AWS_S3_BUCKET;
+  const s3Region = process.env.AWS_REGION ?? "ap-southeast-1";
+  const s3PublicBase = process.env.AWS_S3_PUBLIC_BASE_URL?.replace(/\/+$/, "");
+  if (!s3Bucket && !s3PublicBase) {
+    if (process.env.NODE_ENV === "production") {
+      throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "圖片儲存服務未設定，無法提交圖片" });
+    }
+    return; // dev/test only: S3 not configured, skip validation
+  }
+  const expectedOrigin = s3PublicBase
+    ? new URL(s3PublicBase).origin
+    : `https://${s3Bucket}.s3.${s3Region}.amazonaws.com`;
+  const expectedPathPrefix = `/community-posts/${userId}/`;
+  for (const urlStr of images) {
+    let parsed: URL;
+    try { parsed = new URL(urlStr); } catch {
+      throw new TRPCError({ code: "FORBIDDEN", message: "只能使用透過平台上傳的圖片" });
+    }
+    if (parsed.origin !== expectedOrigin) {
+      throw new TRPCError({ code: "FORBIDDEN", message: "只能使用透過平台上傳的圖片" });
+    }
+    const decodedPath = decodeURIComponent(parsed.pathname);
+    if (decodedPath.includes("/..") || !decodedPath.startsWith(expectedPathPrefix)) {
+      throw new TRPCError({ code: "FORBIDDEN", message: "只能使用透過平台上傳的圖片" });
+    }
+  }
+}
+const VALID_SPACE_CODES = new Set<string>([
+  ...Object.values(INDUSTRY_SLUGS),
+  COMMUNITY_CROSS_INDUSTRY_SLUG,
+]);
+
+type TrpcUserCtx = { role: "user" | "admin"; id: number } | null | undefined;
+
+function checkCommunityRead(user: TrpcUserCtx): void {
+  if (COMMUNITY_FEATURE_STATUS === "coming_soon" || COMMUNITY_FEATURE_STATUS === "maintenance") {
+    throw new TRPCError({ code: "FORBIDDEN", message: "商案討論區尚未開放" });
+  }
+  if (COMMUNITY_FEATURE_STATUS === "beta" && user?.role !== "admin") {
+    throw new TRPCError({ code: "FORBIDDEN", message: "此功能目前僅限管理員內測使用" });
+  }
+}
+
+function checkCommunityWrite(user: TrpcUserCtx): void {
+  if (!user) throw new TRPCError({ code: "UNAUTHORIZED" });
+  checkCommunityRead(user);
+}
+
+function assertValidSpaceCode(spaceCode: string): void {
+  if (!VALID_SPACE_CODES.has(spaceCode)) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "無效的討論區代碼" });
+  }
+}
 
 export const appRouter = router({
   system: systemRouter,
@@ -2213,6 +2285,54 @@ export const appRouter = router({
       });
       return { targetUserId, ...result };
     }),
+
+    // ===== 商案討論區後台管理 =====
+    community: router({
+      hidePost: adminProcedure
+        .input(z.object({ postId: z.number().int(), hidden: z.boolean() }))
+        .mutation(async ({ input }) => {
+          const post = await db.getCommunityPostById(input.postId);
+          if (!post) throw new TRPCError({ code: "NOT_FOUND", message: "找不到貼文" });
+          await db.adminSetCommunityPostFlags(input.postId, { isHidden: input.hidden });
+          return { success: true };
+        }),
+
+      lockPost: adminProcedure
+        .input(z.object({ postId: z.number().int(), locked: z.boolean() }))
+        .mutation(async ({ input }) => {
+          const post = await db.getCommunityPostById(input.postId);
+          if (!post) throw new TRPCError({ code: "NOT_FOUND", message: "找不到貼文" });
+          await db.adminSetCommunityPostFlags(input.postId, { isLocked: input.locked });
+          return { success: true };
+        }),
+
+      pinPost: adminProcedure
+        .input(z.object({ postId: z.number().int(), pinned: z.boolean() }))
+        .mutation(async ({ input }) => {
+          const post = await db.getCommunityPostById(input.postId);
+          if (!post) throw new TRPCError({ code: "NOT_FOUND", message: "找不到貼文" });
+          await db.adminSetCommunityPostFlags(input.postId, { isPinned: input.pinned });
+          return { success: true };
+        }),
+
+      hideComment: adminProcedure
+        .input(z.object({ commentId: z.number().int(), hidden: z.boolean() }))
+        .mutation(async ({ input }) => {
+          const comment = await db.getCommunityCommentById(input.commentId);
+          if (!comment) throw new TRPCError({ code: "NOT_FOUND", message: "找不到留言" });
+          await db.adminSetCommunityCommentHidden(input.commentId, input.hidden);
+          return { success: true };
+        }),
+
+      deletePost: adminProcedure
+        .input(z.object({ postId: z.number().int() }))
+        .mutation(async ({ input }) => {
+          const post = await db.getCommunityPostById(input.postId);
+          if (!post) throw new TRPCError({ code: "NOT_FOUND", message: "找不到貼文" });
+          await db.adminHardDeleteCommunityPost(input.postId);
+          return { success: true };
+        }),
+    }),
   }),
 
   // ===== 廣告 =====
@@ -2510,6 +2630,332 @@ export const appRouter = router({
           total,
           breakdown: { userUnread, factoryUnread, reviewUnread, pendingAdminCount },
         };
+      }),
+  }),
+
+  // ===== 商案討論區 =====
+  community: router({
+    // Space list with post counts (13 spaces)
+    getSpaces: publicProcedure.query(async ({ ctx }) => {
+      checkCommunityRead(ctx.user);
+      const slugToName: Record<string, string> = {};
+      for (const [name, slug] of Object.entries(INDUSTRY_SLUGS)) {
+        slugToName[slug] = name;
+      }
+      const allSpaceCodes = [...Object.values(INDUSTRY_SLUGS), COMMUNITY_CROSS_INDUSTRY_SLUG];
+      const stats = await db.getCommunitySpaceStats(allSpaceCodes);
+      return allSpaceCodes.map((code) => ({
+        code,
+        name: code === COMMUNITY_CROSS_INDUSTRY_SLUG ? "跨產業交流區" : (slugToName[code] ?? code),
+        postCount: stats[code] ?? 0,
+      }));
+    }),
+
+    // Paginated posts for a space
+    listPosts: publicProcedure
+      .input(z.object({
+        spaceCode: z.string().min(1).max(60),
+        page: z.number().int().min(1).default(1),
+        pageSize: z.number().int().min(1).max(50).default(20),
+      }))
+      .query(async ({ ctx, input }) => {
+        checkCommunityRead(ctx.user);
+        assertValidSpaceCode(input.spaceCode);
+        return db.listCommunityPosts(input.spaceCode, input.page, input.pageSize);
+      }),
+
+    // Single post with comments
+    getPost: publicProcedure
+      .input(z.object({ postId: z.number().int() }))
+      .query(async ({ ctx, input }) => {
+        checkCommunityRead(ctx.user);
+        const post = await db.getCommunityPostById(input.postId);
+        if (!post) throw new TRPCError({ code: "NOT_FOUND", message: "找不到此貼文" });
+        // Non-admins cannot see hidden or deleted posts
+        if (ctx.user?.role !== "admin") {
+          if (post.isHidden || post.deletedAt) {
+            throw new TRPCError({ code: "NOT_FOUND", message: "找不到此貼文" });
+          }
+        }
+        const comments = await db.getCommunityCommentsByPost(input.postId);
+        const pinnedProductIds = (post.pinnedProductIds ?? []) as number[];
+        const pinnedProducts = await db.getProductsByIds(pinnedProductIds);
+        return { post, comments, pinnedProducts };
+      }),
+
+    // Author identity options (user + any owned/co-managed approved factories)
+    getMyIdentityOptions: protectedProcedure.query(async ({ ctx }) => {
+      checkCommunityRead(ctx.user);
+      const factories = await db.getCommunityAuthorIdentityOptions(ctx.user.id);
+      return { identities: factories };
+    }),
+
+    // Upload post image (max 8 MB, max 6 per post enforced on frontend)
+    uploadPostImage: protectedProcedure
+      .input(z.object({
+        base64: z.string().max(12 * 1024 * 1024),
+        mimeType: z.enum(["image/jpeg", "image/png", "image/webp"]).default("image/jpeg"),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        checkCommunityWrite(ctx.user);
+        const base64Data = input.base64.includes(",") ? input.base64.split(",")[1] : input.base64;
+        const buffer = Buffer.from(base64Data, "base64");
+        if (buffer.byteLength > 8 * 1024 * 1024) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "圖片不得超過 8MB" });
+        }
+        const validation = await validateImageUpload(buffer);
+        if (!validation.valid) throw new TRPCError({ code: "BAD_REQUEST", message: validation.error ?? "圖片格式不正確" });
+        const ext = input.mimeType.includes("png") ? "png" : input.mimeType.includes("webp") ? "webp" : "jpg";
+        const key = `community-posts/${ctx.user.id}/${nanoid()}.${ext}`;
+        const { url } = await storagePut(key, buffer, input.mimeType);
+        return { url };
+      }),
+
+    // Create a post
+    createPost: protectedProcedure
+      .input(z.object({
+        spaceCode: z.string().min(1).max(60),
+        title: z.string().min(1).max(200).trim(),
+        content: z.string().min(1).max(10000).trim(),
+        images: z.array(z.string().url()).max(6).default([]),
+        // max 5 products; front-end sends [] when no factory or no products selected
+        pinnedProductIds: z.array(z.number().int().positive()).max(5).default([]),
+        commentsEnabled: z.boolean().default(true),
+        // Front-end must pass the auto-resolved or user-selected factoryId; undefined = personal
+        authorFactoryId: z.number().int().positive().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        checkCommunityWrite(ctx.user);
+        assertValidSpaceCode(input.spaceCode);
+        assertCommunityImagesOwned(input.images, ctx.user.id);
+
+        // Enforce author identity rules: resolve which factoryId to actually use
+        const identityOptions = await db.getCommunityAuthorIdentityOptions(ctx.user.id);
+        const factoryOptions = identityOptions.filter(o => o.type === "factory") as
+          Array<{ type: "factory"; factoryId: number; label: string; role: string }>;
+
+        let resolvedFactoryId: number | null = null;
+
+        if (factoryOptions.length === 0) {
+          // No qualified factories → must post as personal
+          if (input.authorFactoryId != null) {
+            throw new TRPCError({ code: "FORBIDDEN", message: "您目前沒有符合資格的工廠，只能以個人身分發文" });
+          }
+          resolvedFactoryId = null;
+        } else if (factoryOptions.length === 1) {
+          // Exactly 1 qualified factory → auto-assign, input is ignored but validated if provided
+          const only = factoryOptions[0].factoryId;
+          if (input.authorFactoryId != null && input.authorFactoryId !== only) {
+            throw new TRPCError({ code: "FORBIDDEN", message: "無效的工廠身分" });
+          }
+          resolvedFactoryId = only;
+        } else {
+          // Multiple qualified factories → must specify one; no personal option
+          if (input.authorFactoryId == null) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "請選擇代表工廠" });
+          }
+          if (!factoryOptions.some(f => f.factoryId === input.authorFactoryId)) {
+            throw new TRPCError({ code: "FORBIDDEN", message: "無效的代表工廠" });
+          }
+          resolvedFactoryId = input.authorFactoryId;
+        }
+
+        // Validate pinnedProductIds: personal post cannot have products; products must belong to resolvedFactoryId
+        const dedupedProductIds = Array.from(new Set(input.pinnedProductIds));
+        if (dedupedProductIds.length > 0) {
+          if (resolvedFactoryId == null) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "個人貼文不能附加工廠商品" });
+          }
+          const factoryProducts = await db.getProductsByFactoryId(resolvedFactoryId);
+          const validIds = new Set(factoryProducts.map(p => p.id));
+          const invalid = dedupedProductIds.find(id => !validIds.has(id));
+          if (invalid != null) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: `商品 ID ${invalid} 不存在或不屬於此工廠` });
+          }
+        }
+
+        const resolvedFactory = factoryOptions.find(f => f.factoryId === resolvedFactoryId);
+        const postId = await db.createCommunityPost({
+          spaceCode: input.spaceCode,
+          authorUserId: ctx.user.id,
+          authorFactoryId: resolvedFactoryId,
+          authorNameSnapshot: ctx.user.name ?? "",
+          authorFactoryNameSnapshot: resolvedFactory?.label ?? null,
+          authorRoleSnapshot: resolvedFactory?.role ?? null,
+          title: input.title,
+          content: input.content,
+          images: input.images,
+          pinnedProductIds: dedupedProductIds,
+          commentsEnabled: input.commentsEnabled,
+        });
+        return { postId };
+      }),
+
+    // Edit a post (author only; cannot change spaceCode, authorUserId, authorFactoryId)
+    updatePost: protectedProcedure
+      .input(z.object({
+        postId: z.number().int(),
+        title: z.string().min(1).max(200).trim().optional(),
+        content: z.string().min(1).max(10000).trim().optional(),
+        images: z.array(z.string().url()).max(6).optional(),
+        pinnedProductIds: z.array(z.number().int().positive()).max(5).optional(),
+        commentsEnabled: z.boolean().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        checkCommunityWrite(ctx.user);
+        const post = await db.getCommunityPostById(input.postId);
+        if (!post || post.deletedAt) throw new TRPCError({ code: "NOT_FOUND", message: "找不到此貼文" });
+        if (post.authorUserId !== ctx.user.id && ctx.user.role !== "admin") {
+          throw new TRPCError({ code: "FORBIDDEN", message: "無權限編輯此貼文" });
+        }
+        if (post.isLocked && ctx.user.role !== "admin") {
+          throw new TRPCError({ code: "FORBIDDEN", message: "此貼文已鎖定，無法編輯" });
+        }
+        if (input.images !== undefined) {
+          assertCommunityImagesOwned(input.images, ctx.user.id);
+        }
+
+        // Validate pinnedProductIds if being updated
+        if (input.pinnedProductIds !== undefined) {
+          const dedupedIds = Array.from(new Set(input.pinnedProductIds));
+          if (dedupedIds.length > 0) {
+            if (post.authorFactoryId == null) {
+              throw new TRPCError({ code: "BAD_REQUEST", message: "個人貼文不能附加工廠商品" });
+            }
+            const factoryProducts = await db.getProductsByFactoryId(post.authorFactoryId);
+            const validIds = new Set(factoryProducts.map(p => p.id));
+            const invalid = dedupedIds.find(id => !validIds.has(id));
+            if (invalid != null) {
+              throw new TRPCError({ code: "BAD_REQUEST", message: `商品 ID ${invalid} 不存在或不屬於此工廠` });
+            }
+            input = { ...input, pinnedProductIds: dedupedIds };
+          }
+        }
+
+        const { postId, ...updates } = input;
+        await db.updateCommunityPost(postId, updates);
+        return { success: true };
+      }),
+
+    // Soft delete a post (author only)
+    deletePost: protectedProcedure
+      .input(z.object({ postId: z.number().int() }))
+      .mutation(async ({ ctx, input }) => {
+        checkCommunityWrite(ctx.user);
+        const post = await db.getCommunityPostById(input.postId);
+        if (!post || post.deletedAt) throw new TRPCError({ code: "NOT_FOUND", message: "找不到此貼文" });
+        if (post.authorUserId !== ctx.user.id && ctx.user.role !== "admin") {
+          throw new TRPCError({ code: "FORBIDDEN", message: "無權限刪除此貼文" });
+        }
+        await db.softDeleteCommunityPost(input.postId);
+        return { success: true };
+      }),
+
+    // Create a comment or a reply
+    createComment: protectedProcedure
+      .input(z.object({
+        postId: z.number().int(),
+        content: z.string().min(1).max(5000).trim(),
+        parentCommentId: z.number().int().positive().optional(),
+        replyToUserId: z.number().int().positive().optional(),
+        // Front-end passes the auto-resolved or user-selected factoryId
+        authorFactoryId: z.number().int().positive().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        checkCommunityWrite(ctx.user);
+        const post = await db.getCommunityPostById(input.postId);
+        if (!post || post.deletedAt || post.isHidden) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "找不到此貼文" });
+        }
+        if (post.isLocked && ctx.user.role !== "admin") {
+          throw new TRPCError({ code: "FORBIDDEN", message: "此貼文已鎖定，無法留言" });
+        }
+        if (!post.commentsEnabled && ctx.user.role !== "admin") {
+          throw new TRPCError({ code: "FORBIDDEN", message: "作者已關閉此貼文的留言功能" });
+        }
+
+        // Enforce 2-layer depth limit
+        if (input.parentCommentId != null) {
+          const parent = await db.getCommunityCommentById(input.parentCommentId);
+          if (!parent || parent.postId !== input.postId) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "無效的父留言" });
+          }
+          if (parent.parentCommentId != null) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "只允許兩層留言結構，不可回覆第二層留言" });
+          }
+        }
+
+        // Enforce author identity rules (same as createPost)
+        const identityOptions = await db.getCommunityAuthorIdentityOptions(ctx.user.id);
+        const factoryOptions = identityOptions.filter(o => o.type === "factory") as
+          Array<{ type: "factory"; factoryId: number; label: string; role: string }>;
+
+        let resolvedFactoryId: number | null = null;
+        if (factoryOptions.length === 0) {
+          if (input.authorFactoryId != null) {
+            throw new TRPCError({ code: "FORBIDDEN", message: "您目前沒有符合資格的工廠" });
+          }
+          resolvedFactoryId = null;
+        } else if (factoryOptions.length === 1) {
+          const only = factoryOptions[0].factoryId;
+          if (input.authorFactoryId != null && input.authorFactoryId !== only) {
+            throw new TRPCError({ code: "FORBIDDEN", message: "無效的工廠身分" });
+          }
+          resolvedFactoryId = only;
+        } else {
+          if (input.authorFactoryId == null) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "請選擇代表工廠" });
+          }
+          if (!factoryOptions.some(f => f.factoryId === input.authorFactoryId)) {
+            throw new TRPCError({ code: "FORBIDDEN", message: "無效的代表工廠" });
+          }
+          resolvedFactoryId = input.authorFactoryId;
+        }
+
+        const resolvedFactory = factoryOptions.find(f => f.factoryId === resolvedFactoryId);
+        const commentId = await db.createCommunityComment({
+          postId: input.postId,
+          authorUserId: ctx.user.id,
+          authorFactoryId: resolvedFactoryId,
+          authorNameSnapshot: ctx.user.name ?? "",
+          authorFactoryNameSnapshot: resolvedFactory?.label ?? null,
+          authorRoleSnapshot: resolvedFactory?.role ?? null,
+          content: input.content,
+          parentCommentId: input.parentCommentId ?? null,
+          replyToUserId: input.replyToUserId ?? null,
+        });
+        return { commentId };
+      }),
+
+    // Edit a comment (author only)
+    updateComment: protectedProcedure
+      .input(z.object({
+        commentId: z.number().int(),
+        content: z.string().min(1).max(5000).trim(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        checkCommunityWrite(ctx.user);
+        const comment = await db.getCommunityCommentById(input.commentId);
+        if (!comment || comment.deletedAt) throw new TRPCError({ code: "NOT_FOUND", message: "找不到此留言" });
+        if (comment.authorUserId !== ctx.user.id && ctx.user.role !== "admin") {
+          throw new TRPCError({ code: "FORBIDDEN", message: "無權限編輯此留言" });
+        }
+        await db.updateCommunityComment(input.commentId, input.content);
+        return { success: true };
+      }),
+
+    // Soft delete a comment (author only)
+    deleteComment: protectedProcedure
+      .input(z.object({ commentId: z.number().int() }))
+      .mutation(async ({ ctx, input }) => {
+        checkCommunityWrite(ctx.user);
+        const comment = await db.getCommunityCommentById(input.commentId);
+        if (!comment || comment.deletedAt) throw new TRPCError({ code: "NOT_FOUND", message: "找不到此留言" });
+        if (comment.authorUserId !== ctx.user.id && ctx.user.role !== "admin") {
+          throw new TRPCError({ code: "FORBIDDEN", message: "無權限刪除此留言" });
+        }
+        await db.softDeleteCommunityComment(input.commentId);
+        return { success: true };
       }),
   }),
 

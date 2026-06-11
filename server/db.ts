@@ -1,4 +1,4 @@
-import { eq, and, like, desc, asc, sql, inArray, or, isNull, gt } from "drizzle-orm";
+import { eq, and, like, desc, asc, sql, inArray, or, isNull, gt, isNotNull } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
 import { createHash } from "crypto";
@@ -18,7 +18,9 @@ import {
   userAuthAccounts, emailVerificationTokens,
   pushNotificationTokens,
   factoryRevisions,
-  type Factory, type InsertFactory, type Product, type InsertProduct, type Favorite, type InsertFavorite
+  communityPosts, communityComments,
+  type Factory, type InsertFactory, type Product, type InsertProduct, type Favorite, type InsertFavorite,
+  type CommunityPost, type CommunityComment,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 import { ADJACENT_REGIONS } from "../shared/constants";
@@ -464,6 +466,13 @@ export async function getProductsByFactoryId(factoryId: number) {
   const db = await getDb();
   if (!db) return [];
   return db.select().from(products).where(eq(products.factoryId, factoryId)).orderBy(asc(products.name)).limit(100);
+}
+
+export async function getProductsByIds(ids: number[]) {
+  if (ids.length === 0) return [];
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(products).where(inArray(products.id, ids));
 }
 
 export async function getProductById(id: number) {
@@ -3693,5 +3702,348 @@ export async function getRevisionById(revisionId: number) {
   const rows = await db.select().from(factoryRevisions)
     .where(eq(factoryRevisions.id, revisionId))
     .limit(1);
+  return rows[0] ?? null;
+}
+
+// ===== 商案討論區 DB helpers =====
+
+export type CommunityAuthorIdentity =
+  | { type: "user"; label: string }
+  | { type: "factory"; factoryId: number; label: string; role: "owner" | "co_manager" };
+
+// Returns all identity options a user can choose from when creating a post.
+// Only includes approved factories.
+export async function getCommunityAuthorIdentityOptions(userId: number): Promise<CommunityAuthorIdentity[]> {
+  const db = await getDb();
+  if (!db) return [{ type: "user", label: "" }];
+
+  const identities: CommunityAuthorIdentity[] = [];
+
+  // Owned factory (if approved)
+  const ownedRows = await db.select({ id: factories.id, name: factories.name, status: factories.status })
+    .from(factories)
+    .where(and(eq(factories.ownerId, userId), eq(factories.status, "approved")))
+    .limit(1);
+  if (ownedRows.length > 0) {
+    identities.push({ type: "factory", factoryId: ownedRows[0].id, label: ownedRows[0].name, role: "owner" });
+  }
+
+  // Co-managed factories (approved, active)
+  const coMgrRows = await db
+    .select({ id: factories.id, name: factories.name })
+    .from(factoryCoManagers)
+    .innerJoin(factories, and(eq(factories.id, factoryCoManagers.factoryId), eq(factories.status, "approved")))
+    .where(and(eq(factoryCoManagers.userId, userId), isNull(factoryCoManagers.removedAt)));
+  for (const row of coMgrRows) {
+    identities.push({ type: "factory", factoryId: row.id, label: row.name, role: "co_manager" });
+  }
+
+  return identities;
+}
+
+export interface CommunityPostWithMeta extends CommunityPost {
+  authorName: string | null;
+  authorFactoryName: string | null;
+  commentCount: number;
+}
+
+export interface CommunityCommentWithMeta extends CommunityComment {
+  authorName: string | null;
+  authorFactoryName: string | null;
+  replyToUserName: string | null;
+  replies?: CommunityCommentWithMeta[];
+}
+
+// Returns post counts per spaceCode (for space list homepage)
+export async function getCommunitySpaceStats(spaceCodes: string[]): Promise<Record<string, number>> {
+  const db = await getDb();
+  if (!db || spaceCodes.length === 0) return {};
+  const rows = await db
+    .select({ spaceCode: communityPosts.spaceCode, count: sql<number>`COUNT(*)` })
+    .from(communityPosts)
+    .where(and(
+      inArray(communityPosts.spaceCode, spaceCodes),
+      isNull(communityPosts.deletedAt),
+      eq(communityPosts.isHidden, false),
+    ))
+    .groupBy(communityPosts.spaceCode);
+  const result: Record<string, number> = {};
+  for (const row of rows) result[row.spaceCode] = Number(row.count);
+  return result;
+}
+
+// Paginated posts for a space (public-facing, excludes hidden/deleted)
+export async function listCommunityPosts(
+  spaceCode: string,
+  page = 1,
+  pageSize = 20,
+): Promise<{ items: CommunityPostWithMeta[]; total: number }> {
+  const db = await getDb();
+  if (!db) return { items: [], total: 0 };
+
+  const where = and(
+    eq(communityPosts.spaceCode, spaceCode),
+    isNull(communityPosts.deletedAt),
+    eq(communityPosts.isHidden, false),
+  );
+
+  const [countResult] = await db.select({ count: sql<number>`COUNT(*)` })
+    .from(communityPosts).where(where);
+  const total = Number(countResult?.count ?? 0);
+
+  const rows = await db
+    .select({
+      post: communityPosts,
+      authorName: users.name,
+      factoryName: factories.name,
+    })
+    .from(communityPosts)
+    .leftJoin(users, eq(users.id, communityPosts.authorUserId))
+    .leftJoin(factories, eq(factories.id, communityPosts.authorFactoryId))
+    .where(where)
+    .orderBy(desc(communityPosts.isPinned), desc(communityPosts.createdAt))
+    .limit(pageSize)
+    .offset((page - 1) * pageSize);
+
+  // Fetch comment counts
+  const postIds = rows.map(r => r.post.id);
+  const commentCountMap: Record<number, number> = {};
+  if (postIds.length > 0) {
+    const ccRows = await db
+      .select({ postId: communityComments.postId, count: sql<number>`COUNT(*)` })
+      .from(communityComments)
+      .where(and(inArray(communityComments.postId, postIds), isNull(communityComments.deletedAt)))
+      .groupBy(communityComments.postId);
+    for (const r of ccRows) commentCountMap[r.postId] = Number(r.count);
+  }
+
+  const items: CommunityPostWithMeta[] = rows.map(r => ({
+    ...r.post,
+    authorName: r.post.authorUserId == null
+      ? "已刪除的使用者"
+      : (r.authorName ?? r.post.authorNameSnapshot ?? null),
+    authorFactoryName: r.post.authorUserId == null
+      ? null
+      : (r.factoryName ?? r.post.authorFactoryNameSnapshot ?? null),
+    commentCount: commentCountMap[r.post.id] ?? 0,
+  }));
+  return { items, total };
+}
+
+// Single post (public-facing, throws if hidden/deleted)
+export async function getCommunityPostById(postId: number): Promise<CommunityPostWithMeta | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db
+    .select({ post: communityPosts, authorName: users.name, factoryName: factories.name })
+    .from(communityPosts)
+    .leftJoin(users, eq(users.id, communityPosts.authorUserId))
+    .leftJoin(factories, eq(factories.id, communityPosts.authorFactoryId))
+    .where(eq(communityPosts.id, postId))
+    .limit(1);
+  if (!rows[0]) return null;
+  const r = rows[0];
+  const [ccResult] = await db
+    .select({ count: sql<number>`COUNT(*)` })
+    .from(communityComments)
+    .where(and(eq(communityComments.postId, postId), isNull(communityComments.deletedAt)));
+  return {
+    ...r.post,
+    authorName: r.post.authorUserId == null
+      ? "已刪除的使用者"
+      : (r.authorName ?? r.post.authorNameSnapshot ?? null),
+    authorFactoryName: r.post.authorUserId == null
+      ? null
+      : (r.factoryName ?? r.post.authorFactoryNameSnapshot ?? null),
+    commentCount: Number(ccResult?.count ?? 0),
+  };
+}
+
+// Comments for a post, structured as top-level + nested replies.
+// Soft-deleted comments are INCLUDED so parent context is preserved for nested replies.
+// Their content/author is cleared so clients can render "此留言已刪除".
+export async function getCommunityCommentsByPost(postId: number): Promise<CommunityCommentWithMeta[]> {
+  const db = await getDb();
+  if (!db) return [];
+
+  const replyToUsers = db.select({ id: users.id, name: users.name }).from(users).as("replyToUsers");
+
+  const rows = await db
+    .select({
+      comment: communityComments,
+      authorName: users.name,
+      factoryName: factories.name,
+      replyToUserName: replyToUsers.name,
+    })
+    .from(communityComments)
+    .leftJoin(users, eq(users.id, communityComments.authorUserId))
+    .leftJoin(factories, eq(factories.id, communityComments.authorFactoryId))
+    .leftJoin(replyToUsers, eq(replyToUsers.id, communityComments.replyToUserId))
+    .where(eq(communityComments.postId, postId))  // includes soft-deleted
+    .orderBy(asc(communityComments.createdAt));
+
+  const all: CommunityCommentWithMeta[] = rows.map(r => {
+    const isDeleted = r.comment.deletedAt != null;
+    const userGone = r.comment.authorUserId == null;
+    return {
+      ...r.comment,
+      // Sanitize deleted comment content so no data leaks
+      content: isDeleted ? "" : r.comment.content,
+      authorName: isDeleted
+        ? null
+        : userGone
+          ? "已刪除的使用者"
+          : (r.authorName ?? r.comment.authorNameSnapshot ?? null),
+      authorFactoryName: isDeleted || userGone
+        ? null
+        : (r.factoryName ?? r.comment.authorFactoryNameSnapshot ?? null),
+      replyToUserName: r.replyToUserName ?? null,
+      replies: [],
+    };
+  });
+
+  const byId = new Map(all.map(c => [c.id, c]));
+  const topLevel: CommunityCommentWithMeta[] = [];
+  for (const c of all) {
+    if (c.parentCommentId == null) {
+      topLevel.push(c);
+    } else {
+      const parent = byId.get(c.parentCommentId);
+      if (parent) {
+        parent.replies ??= [];
+        parent.replies.push(c);
+      } else {
+        topLevel.push(c); // orphaned reply (parent was physically deleted) — show at top level
+      }
+    }
+  }
+  return topLevel;
+}
+
+export async function createCommunityPost(input: {
+  spaceCode: string;
+  authorUserId: number;
+  authorFactoryId?: number | null;
+  authorNameSnapshot: string;
+  authorFactoryNameSnapshot?: string | null;
+  authorRoleSnapshot?: string | null;
+  title: string;
+  content: string;
+  images?: string[];
+  pinnedProductIds?: number[];
+  commentsEnabled?: boolean;
+}): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  const [result] = await db.insert(communityPosts).values({
+    spaceCode: input.spaceCode,
+    authorUserId: input.authorUserId,
+    authorFactoryId: input.authorFactoryId ?? null,
+    authorNameSnapshot: input.authorNameSnapshot,
+    authorFactoryNameSnapshot: input.authorFactoryNameSnapshot ?? null,
+    authorRoleSnapshot: input.authorRoleSnapshot ?? null,
+    title: input.title,
+    content: input.content,
+    images: input.images ?? [],
+    pinnedProductIds: input.pinnedProductIds ?? [],
+    commentsEnabled: input.commentsEnabled ?? true,
+  });
+  return (result as unknown as { insertId: number }).insertId;
+}
+
+export async function updateCommunityPost(postId: number, input: {
+  title?: string;
+  content?: string;
+  images?: string[];
+  pinnedProductIds?: number[];
+  commentsEnabled?: boolean;
+}): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(communityPosts)
+    .set({ ...input })
+    .where(eq(communityPosts.id, postId));
+}
+
+export async function softDeleteCommunityPost(postId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(communityPosts)
+    .set({ deletedAt: new Date() })
+    .where(eq(communityPosts.id, postId));
+}
+
+export async function createCommunityComment(input: {
+  postId: number;
+  authorUserId: number;
+  authorFactoryId?: number | null;
+  authorNameSnapshot: string;
+  authorFactoryNameSnapshot?: string | null;
+  authorRoleSnapshot?: string | null;
+  content: string;
+  parentCommentId?: number | null;
+  replyToUserId?: number | null;
+}): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  const [result] = await db.insert(communityComments).values({
+    postId: input.postId,
+    authorUserId: input.authorUserId,
+    authorFactoryId: input.authorFactoryId ?? null,
+    authorNameSnapshot: input.authorNameSnapshot,
+    authorFactoryNameSnapshot: input.authorFactoryNameSnapshot ?? null,
+    authorRoleSnapshot: input.authorRoleSnapshot ?? null,
+    content: input.content,
+    parentCommentId: input.parentCommentId ?? null,
+    replyToUserId: input.replyToUserId ?? null,
+  });
+  return (result as unknown as { insertId: number }).insertId;
+}
+
+export async function updateCommunityComment(commentId: number, content: string): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(communityComments).set({ content }).where(eq(communityComments.id, commentId));
+}
+
+export async function softDeleteCommunityComment(commentId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(communityComments)
+    .set({ deletedAt: new Date() })
+    .where(eq(communityComments.id, commentId));
+}
+
+export async function adminSetCommunityPostFlags(
+  postId: number,
+  flags: { isHidden?: boolean; isLocked?: boolean; isPinned?: boolean },
+): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  const updates: Partial<CommunityPost> = {};
+  if (flags.isHidden !== undefined) updates.isHidden = flags.isHidden;
+  if (flags.isLocked !== undefined) updates.isLocked = flags.isLocked;
+  if (flags.isPinned !== undefined) updates.isPinned = flags.isPinned;
+  if (Object.keys(updates).length === 0) return;
+  await db.update(communityPosts).set(updates).where(eq(communityPosts.id, postId));
+}
+
+export async function adminSetCommunityCommentHidden(commentId: number, isHidden: boolean): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(communityComments).set({ isHidden }).where(eq(communityComments.id, commentId));
+}
+
+export async function adminHardDeleteCommunityPost(postId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.delete(communityPosts).where(eq(communityPosts.id, postId));
+}
+
+export async function getCommunityCommentById(commentId: number): Promise<CommunityComment | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select().from(communityComments)
+    .where(eq(communityComments.id, commentId)).limit(1);
   return rows[0] ?? null;
 }

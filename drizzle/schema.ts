@@ -1,4 +1,5 @@
 import { int, mysqlEnum, mysqlTable, text, timestamp, varchar, boolean, decimal, json, uniqueIndex, index, date } from "drizzle-orm/mysql-core";
+import type { AnyMySqlColumn } from "drizzle-orm/mysql-core";
 import { sql } from "drizzle-orm";
 
 // ===== 使用者表 =====
@@ -519,3 +520,56 @@ export const pushNotificationTokens = mysqlTable("pushNotificationTokens", {
 }));
 
 export type PushNotificationToken = typeof pushNotificationTokens.$inferSelect;
+
+// ===== 商案討論區：貼文表 =====
+// authorUserId nullable + ON DELETE SET NULL：帳號刪除後貼文保留。
+// 快照欄位保存發布當下的作者名稱，避免帳號刪除後顯示空白。
+export const communityPosts = mysqlTable("communityPosts", {
+  id: int("id").autoincrement().primaryKey(),
+  spaceCode: varchar("spaceCode", { length: 50 }).notNull(),
+  authorUserId: int("authorUserId").references(() => users.id, { onDelete: "set null" }),
+  authorFactoryId: int("authorFactoryId").references(() => factories.id, { onDelete: "set null" }),
+  authorNameSnapshot: varchar("authorNameSnapshot", { length: 100 }).notNull().default(""),
+  authorFactoryNameSnapshot: varchar("authorFactoryNameSnapshot", { length: 200 }),
+  authorRoleSnapshot: varchar("authorRoleSnapshot", { length: 50 }),
+  title: varchar("title", { length: 200 }).notNull(),
+  content: text("content").notNull(),
+  images: json("images").$type<string[]>().default([]),
+  pinnedProductIds: json("pinnedProductIds").$type<number[]>().default([]),
+  commentsEnabled: boolean("commentsEnabled").notNull().default(true),
+  isPinned: boolean("isPinned").notNull().default(false),
+  isLocked: boolean("isLocked").notNull().default(false),
+  isHidden: boolean("isHidden").notNull().default(false),
+  deletedAt: timestamp("deletedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (t) => ({
+  spaceIdx: index("cp_space_idx").on(t.spaceCode, t.createdAt),
+  authorUserIdx: index("cp_author_user_idx").on(t.authorUserId),
+}));
+
+export type CommunityPost = typeof communityPosts.$inferSelect;
+
+// ===== 商案討論區：留言表 =====
+// 同 communityPosts，authorUserId nullable，帳號刪除後留言保留。
+export const communityComments = mysqlTable("communityComments", {
+  id: int("id").autoincrement().primaryKey(),
+  postId: int("postId").notNull().references(() => communityPosts.id, { onDelete: "cascade" }),
+  authorUserId: int("authorUserId").references(() => users.id, { onDelete: "set null" }),
+  authorFactoryId: int("authorFactoryId").references(() => factories.id, { onDelete: "set null" }),
+  authorNameSnapshot: varchar("authorNameSnapshot", { length: 100 }).notNull().default(""),
+  authorFactoryNameSnapshot: varchar("authorFactoryNameSnapshot", { length: 200 }),
+  authorRoleSnapshot: varchar("authorRoleSnapshot", { length: 50 }),
+  content: text("content").notNull(),
+  parentCommentId: int("parentCommentId").references((): AnyMySqlColumn => communityComments.id, { onDelete: "set null" }),
+  replyToUserId: int("replyToUserId").references(() => users.id, { onDelete: "set null" }),
+  isHidden: boolean("isHidden").notNull().default(false),
+  deletedAt: timestamp("deletedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (t) => ({
+  postIdx: index("cc_post_idx").on(t.postId, t.createdAt),
+  parentIdx: index("cc_parent_idx").on(t.parentCommentId),
+}));
+
+export type CommunityComment = typeof communityComments.$inferSelect;
