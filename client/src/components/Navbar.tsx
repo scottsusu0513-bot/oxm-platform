@@ -1,7 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
 import { Link, useLocation } from "wouter";
-import { Factory, MessageCircle, User, LogOut, LayoutDashboard, Menu, X, UserPlus, Search, Settings, Heart, UserCircle, ChevronDown, FileText, ScrollText, Store } from "lucide-react";
+import { Factory, MessageCircle, User, LogOut, LayoutDashboard, Menu, X, UserPlus, Search, Settings, Heart, UserCircle, ChevronDown, FileText, ScrollText, Store, Bell } from "lucide-react";
 import { COMMUNITY_FEATURE_STATUS, COMMUNITY_PUBLIC_ENTRY_ENABLED } from "@shared/const";
 import UnverifiedEmailHint from "@/components/UnverifiedEmailHint";
 import { useState, useEffect } from "react";
@@ -62,6 +62,12 @@ export default function Navbar() {
   );
   const reviewUnread = reviewUnreadQuery.data?.count ?? 0;
 
+  const communityNotifQuery = trpc.community.notificationUnreadCount.useQuery(undefined, {
+    enabled: isAuthenticated && user?.role === 'admin' && COMMUNITY_PUBLIC_ENTRY_ENABLED,
+    refetchInterval: 60000,
+  });
+  const communityUnread = communityNotifQuery.data?.count ?? 0;
+
   // 次管理者：無 isFactoryOwner 但有 co-managed factories → 也顯示工廠後台按鈕
   const coManagedQuery = trpc.factory.getCoManagedFactories.useQuery(undefined, {
     enabled: isAuthenticated && !user?.isFactoryOwner,
@@ -80,7 +86,7 @@ export default function Navbar() {
 
   const showEmailHint = isAuthenticated && user && !user.primaryEmailVerifiedAt;
   // 手機版漢堡按鈕紅點：選單內任一項目有未讀通知時顯示
-  const hasAnyNotification = isAuthenticated && (userUnread > 0 || showFactoryBadge || pendingCount > 0 || hasAdminNotification);
+  const hasAnyNotification = isAuthenticated && (userUnread > 0 || showFactoryBadge || pendingCount > 0 || hasAdminNotification || communityUnread > 0);
 
   return (
     <>
@@ -109,6 +115,14 @@ export default function Navbar() {
                     {COMMUNITY_FEATURE_STATUS === "beta" ? "內測中" : "即將推出"}
                   </span>
                 )}
+              </Button>
+            </Link>
+          )}
+          {isAuthenticated && user?.role === 'admin' && communityUnread > 0 && (
+            <Link href="/community/notifications">
+              <Button variant={location.startsWith("/community/notifications") ? "secondary" : "ghost"} size="sm" className="relative">
+                <Bell className="w-4 h-4" />
+                <span className="pointer-events-none absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-orange-500 ring-2 ring-background" />
               </Button>
             </Link>
           )}
@@ -281,15 +295,26 @@ export default function Navbar() {
                 </Link>
               ) : null}
               {user?.role === "admin" && (
-                <Link href="/admin" onClick={() => setMobileOpen(false)}>
-                  <Button variant="ghost" className="w-full justify-start relative">
-                    <Settings className="w-4 h-4 mr-2" />
-                    管理員
-                    {(pendingCount > 0 || hasAdminNotification) && (
-                      <span className="ml-auto h-2.5 w-2.5 rounded-full bg-orange-500 shrink-0" />
-                    )}
-                  </Button>
-                </Link>
+                <>
+                  <Link href="/community/notifications" onClick={() => setMobileOpen(false)}>
+                    <Button variant="ghost" className="w-full justify-start relative">
+                      <Bell className="w-4 h-4 mr-2" />
+                      討論區通知
+                      {communityUnread > 0 && (
+                        <span className="ml-auto h-2.5 w-2.5 rounded-full bg-orange-500 shrink-0" />
+                      )}
+                    </Button>
+                  </Link>
+                  <Link href="/admin" onClick={() => setMobileOpen(false)}>
+                    <Button variant="ghost" className="w-full justify-start relative">
+                      <Settings className="w-4 h-4 mr-2" />
+                      管理員
+                      {(pendingCount > 0 || hasAdminNotification) && (
+                        <span className="ml-auto h-2.5 w-2.5 rounded-full bg-orange-500 shrink-0" />
+                      )}
+                    </Button>
+                  </Link>
+                </>
               )}
               <Link href="/member" onClick={() => setMobileOpen(false)}>
                 <Button variant="ghost" className="w-full justify-start"><UserCircle className="w-4 h-4 mr-2" />會員中心</Button>

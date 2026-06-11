@@ -25,6 +25,9 @@ import {
 } from "@/components/ui/dropdown-menu";
 import type { CommunityCommentWithMeta } from "@/lib/community-types";
 import CommunityImageUploader from "./CommunityImageUploader";
+import CommunityReactionButton from "./CommunityReactionButton";
+import CommunityContentFollowButton from "./CommunityContentFollowButton";
+import MentionTextarea, { type MentionInput } from "./MentionTextarea";
 
 interface Props {
   spaceCode: string;
@@ -97,6 +100,13 @@ function CommentItem({ comment, isAdmin, currentUserId, onReply, onEdit, onDelet
         {!isDeleted && (
           <div className="flex items-center gap-1 shrink-0">
             {currentUserId && !comment.isHidden && (
+              <CommunityReactionButton
+                targetType="comment"
+                targetId={comment.id}
+                disabled={!currentUserId}
+              />
+            )}
+            {currentUserId && !comment.isHidden && (
               <Button
                 variant="ghost"
                 size="sm"
@@ -167,9 +177,11 @@ export default function CommunityPost({ spaceCode, postId }: Props) {
   const utils = trpc.useUtils();
 
   const [commentText, setCommentText] = useState("");
+  const [commentMentions, setCommentMentions] = useState<MentionInput[]>([]);
   const [replyTo, setReplyTo] = useState<{ parentCommentId: number; replyToUserId: number | null; label: string } | null>(null);
   const [editingComment, setEditingComment] = useState<{ id: number; content: string } | null>(null);
   const [editingPost, setEditingPost] = useState<{ title: string; content: string; commentsEnabled: boolean; images: string[]; isUploading: boolean } | null>(null);
+  const [editingPostMentions, setEditingPostMentions] = useState<MentionInput[]>([]);
 
   const { data, isLoading, isError } = trpc.community.getPost.useQuery({ postId });
 
@@ -178,6 +190,7 @@ export default function CommunityPost({ spaceCode, postId }: Props) {
   const createCommentMut = trpc.community.createComment.useMutation({
     onSuccess: () => {
       setCommentText("");
+      setCommentMentions([]);
       setReplyTo(null);
       utils.community.getPost.invalidate({ postId });
       toast.success("留言已送出");
@@ -205,6 +218,7 @@ export default function CommunityPost({ spaceCode, postId }: Props) {
   const updatePostMut = trpc.community.updatePost.useMutation({
     onSuccess: () => {
       setEditingPost(null);
+      setEditingPostMentions([]);
       utils.community.getPost.invalidate({ postId });
       toast.success("貼文已更新");
     },
@@ -265,6 +279,7 @@ export default function CommunityPost({ spaceCode, postId }: Props) {
       content: commentText.trim(),
       parentCommentId: replyTo?.parentCommentId,
       replyToUserId: replyTo?.replyToUserId ?? undefined,
+      mentions: commentMentions,
     });
   };
 
@@ -285,6 +300,7 @@ export default function CommunityPost({ spaceCode, postId }: Props) {
       content: editingPost.content.trim(),
       commentsEnabled: editingPost.commentsEnabled,
       images: editingPost.images,
+      mentions: editingPostMentions.map(m => ({ type: m.type, id: m.id })),
     });
   };
 
@@ -342,7 +358,7 @@ export default function CommunityPost({ spaceCode, postId }: Props) {
             <div className="space-y-3">
               <div className="flex items-center justify-between mb-1">
                 <span className="text-sm font-medium text-muted-foreground">編輯貼文</span>
-                <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => setEditingPost(null)}>
+                <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => { setEditingPost(null); setEditingPostMentions([]); }}>
                   <X className="w-3.5 h-3.5" />
                 </Button>
               </div>
@@ -353,13 +369,15 @@ export default function CommunityPost({ spaceCode, postId }: Props) {
                 maxLength={200}
                 className="text-base font-bold"
               />
-              <Textarea
+              <MentionTextarea
                 value={editingPost.content}
-                onChange={(e) => setEditingPost({ ...editingPost, content: e.target.value })}
-                placeholder="內容"
+                onChange={(v) => setEditingPost({ ...editingPost, content: v })}
+                mentions={editingPostMentions}
+                onMentionsChange={setEditingPostMentions}
+                placeholder="內容… 輸入 @ 可提及工廠或使用者（最多 10 個）"
                 rows={8}
-                className="resize-none text-sm"
-                maxLength={10000}
+                disabled={updatePostMut.isPending}
+                className="text-sm"
               />
               <div className="space-y-1.5">
                 <Label className="text-sm">附加圖片（最多 6 張）</Label>
@@ -381,7 +399,7 @@ export default function CommunityPost({ spaceCode, postId }: Props) {
                 </Label>
               </div>
               <div className="flex gap-2 justify-end">
-                <Button variant="outline" size="sm" onClick={() => setEditingPost(null)} disabled={updatePostMut.isPending}>取消</Button>
+                <Button variant="outline" size="sm" onClick={() => { setEditingPost(null); setEditingPostMentions([]); }} disabled={updatePostMut.isPending}>取消</Button>
                 <Button
                   size="sm"
                   onClick={handleSavePost}
@@ -426,6 +444,21 @@ export default function CommunityPost({ spaceCode, postId }: Props) {
                   </div>
                 )}
 
+                {/* Reaction + Follow row */}
+                <div className="flex items-center gap-2 mt-4 pt-3 border-t border-border">
+                  {user && (
+                    <CommunityReactionButton
+                      targetType="post"
+                      targetId={post.id}
+                    />
+                  )}
+                  {user && (
+                    <div className="ml-auto">
+                      <CommunityContentFollowButton contentId={post.id} />
+                    </div>
+                  )}
+                </div>
+
                 {/* Pinned products */}
                 {data.pinnedProducts && data.pinnedProducts.length > 0 && (
                   <div className="mt-4 border-t border-border pt-4">
@@ -463,7 +496,7 @@ export default function CommunityPost({ spaceCode, postId }: Props) {
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
                     {isPostAuthor && !isLocked && (
-                      <DropdownMenuItem onClick={() => setEditingPost({ title: post.title, content: post.content, commentsEnabled: post.commentsEnabled, images: (post.images ?? []) as string[], isUploading: false })}>
+                      <DropdownMenuItem onClick={() => { setEditingPost({ title: post.title, content: post.content, commentsEnabled: post.commentsEnabled, images: (post.images ?? []) as string[], isUploading: false }); setEditingPostMentions((data.postMentions ?? []).map(m => ({ type: m.type, id: m.id }))); }}>
                         <Pencil className="w-3.5 h-3.5 mr-2" />
                         編輯貼文
                       </DropdownMenuItem>
@@ -573,12 +606,15 @@ export default function CommunityPost({ spaceCode, postId }: Props) {
                 </div>
               ) : (
                 <div className="flex gap-2 items-end">
-                  <Textarea
+                  <MentionTextarea
                     value={commentText}
-                    onChange={(e) => setCommentText(e.target.value)}
-                    placeholder={replyTo ? `回覆 ${replyTo.label}...` : "留言..."}
+                    onChange={setCommentText}
+                    mentions={commentMentions}
+                    onMentionsChange={setCommentMentions}
+                    postId={postId}
+                    placeholder={replyTo ? `回覆 ${replyTo.label}…（輸入 @ 提及他人）` : "留言…（輸入 @ 提及他人）"}
                     rows={2}
-                    className="text-sm resize-none flex-1"
+                    disabled={createCommentMut.isPending}
                     onKeyDown={(e) => {
                       if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) handleSubmitComment();
                     }}

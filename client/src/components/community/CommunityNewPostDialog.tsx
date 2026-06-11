@@ -8,7 +8,6 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -22,6 +21,7 @@ import {
 import { toast } from "sonner";
 import { Loader2, ShoppingBag } from "lucide-react";
 import CommunityImageUploader from "./CommunityImageUploader";
+import MentionTextarea, { type MentionInput } from "./MentionTextarea";
 
 interface Props {
   spaceCode: string;
@@ -33,6 +33,7 @@ interface Props {
 export default function CommunityNewPostDialog({ spaceCode, spaceName, onClose, onCreated }: Props) {
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
+  const [mentions, setMentions] = useState<MentionInput[]>([]);
   const [commentsEnabled, setCommentsEnabled] = useState(true);
   const [images, setImages] = useState<string[]>([]);
   const [isUploading, setIsUploading] = useState(false);
@@ -106,6 +107,7 @@ export default function CommunityNewPostDialog({ spaceCode, spaceName, onClose, 
       images,
       pinnedProductIds: selectedProductIds,
       authorFactoryId,
+      mentions: mentions.map(m => ({ type: m.type, id: m.id })),
     });
   };
 
@@ -160,13 +162,14 @@ export default function CommunityNewPostDialog({ spaceCode, spaceName, onClose, 
           {/* Content */}
           <div className="space-y-1.5">
             <Label className="text-sm">內容 *</Label>
-            <Textarea
+            <MentionTextarea
               value={content}
-              onChange={(e) => setContent(e.target.value)}
-              placeholder="詳細說明..."
+              onChange={setContent}
+              mentions={mentions}
+              onMentionsChange={setMentions}
+              placeholder="詳細說明… 輸入 @ 可提及工廠或使用者（最多 10 個）"
               rows={6}
-              className="resize-none"
-              maxLength={10000}
+              disabled={createPostMut.isPending}
             />
             <p className="text-xs text-muted-foreground text-right">{content.length} / 10000</p>
           </div>

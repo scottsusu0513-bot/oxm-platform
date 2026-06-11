@@ -8,6 +8,7 @@ import { AppLoading } from "@/components/AppLoading";
 const CommunityHome = lazy(() => import("@/components/community/CommunityHome"));
 const CommunitySpace = lazy(() => import("@/components/community/CommunitySpace"));
 const CommunityPost = lazy(() => import("@/components/community/CommunityPost"));
+const CommunityNotifications = lazy(() => import("@/components/community/CommunityNotifications"));
 
 // Resolves which content is accessible based on feature status and user role
 function canAccessCommunity(role: "user" | "admin" | undefined): boolean {
@@ -36,7 +37,9 @@ export default function Community() {
 
   return (
     <Suspense fallback={<AppLoading />}>
-      {postId && spaceCode ? (
+      {spaceCode === "notifications" ? (
+        <CommunityNotifications />
+      ) : postId && spaceCode ? (
         <CommunityPost spaceCode={spaceCode} postId={postId} />
       ) : spaceCode ? (
         <CommunitySpace spaceCode={spaceCode} />

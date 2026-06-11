@@ -19,11 +19,16 @@ import {
   pushNotificationTokens,
   factoryRevisions,
   communityPosts, communityComments,
+  communityBoardFollows, factoryFollows, communityContentFollows,
+  communityReactions, communityMentions, communityNotifications,
   type Factory, type InsertFactory, type Product, type InsertProduct, type Favorite, type InsertFavorite,
   type CommunityPost, type CommunityComment,
+  type CommunityBoardFollow, type FactoryFollow, type CommunityContentFollow,
+  type CommunityReaction, type CommunityMention, type CommunityNotification,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 import { ADJACENT_REGIONS } from "../shared/constants";
+import { COMMUNITY_FEATURE_STATUS } from "../shared/const";
 import type { AISearchIntent } from './semantic-search';
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -4046,4 +4051,652 @@ export async function getCommunityCommentById(commentId: number): Promise<Commun
   const rows = await db.select().from(communityComments)
     .where(eq(communityComments.id, commentId)).limit(1);
   return rows[0] ?? null;
+}
+
+// ===== Community Board Follows =====
+
+export async function getBoardFollowStatus(userId: number, spaceCode: string): Promise<CommunityBoardFollow | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select().from(communityBoardFollows)
+    .where(and(eq(communityBoardFollows.userId, userId), eq(communityBoardFollows.spaceCode, spaceCode)))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+export async function followBoard(userId: number, spaceCode: string, notifyNewDiscussions = true): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  await db.insert(communityBoardFollows)
+    .values({ userId, spaceCode, notifyNewDiscussions })
+    .onDuplicateKeyUpdate({ set: { notifyNewDiscussions, updatedAt: new Date() } });
+}
+
+export async function unfollowBoard(userId: number, spaceCode: string): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.delete(communityBoardFollows)
+    .where(and(eq(communityBoardFollows.userId, userId), eq(communityBoardFollows.spaceCode, spaceCode)));
+}
+
+/**
+ * Filters candidate user IDs to only those eligible to receive Community notifications
+ * based on the current COMMUNITY_FEATURE_STATUS.
+ *
+ * - coming_soon / maintenance: no notifications
+ * - beta: only role='admin', not deleted
+ * - live: any non-deleted user
+ *
+ * Also excludes `excludeActorId` to prevent self-notifications.
+ */
+export async function filterCommunityEligibleRecipientIds(
+  candidateIds: number[],
+  excludeActorId?: number,
+): Promise<number[]> {
+  if (COMMUNITY_FEATURE_STATUS === "coming_soon" || COMMUNITY_FEATURE_STATUS === "maintenance") {
+    return [];
+  }
+  const unique = Array.from(new Set(
+    excludeActorId != null
+      ? candidateIds.filter(id => id !== excludeActorId)
+      : candidateIds,
+  ));
+  if (unique.length === 0) return [];
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.select({ id: users.id })
+    .from(users)
+    .where(and(
+      inArray(users.id, unique),
+      isNull(users.deletedAt),
+      COMMUNITY_FEATURE_STATUS === "beta" ? eq(users.role, "admin") : undefined,
+    ));
+  return rows.map(r => r.id);
+}
+
+export async function getBoardFollowerUserIds(spaceCode: string): Promise<number[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.select({ userId: communityBoardFollows.userId })
+    .from(communityBoardFollows)
+    .where(and(
+      eq(communityBoardFollows.spaceCode, spaceCode),
+      eq(communityBoardFollows.notifyNewDiscussions, true),
+    ));
+  const allIds = rows.map(r => r.userId);
+  return filterCommunityEligibleRecipientIds(allIds);
+}
+
+// ===== Factory Follows =====
+
+export async function getFactoryFollowStatus(userId: number, factoryId: number): Promise<FactoryFollow | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select().from(factoryFollows)
+    .where(and(eq(factoryFollows.userId, userId), eq(factoryFollows.factoryId, factoryId)))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+export async function followFactory(userId: number, factoryId: number, notifyNewDiscussions = true): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  await db.insert(factoryFollows)
+    .values({ userId, factoryId, notifyNewDiscussions })
+    .onDuplicateKeyUpdate({ set: { notifyNewDiscussions, updatedAt: new Date() } });
+}
+
+export async function unfollowFactory(userId: number, factoryId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.delete(factoryFollows)
+    .where(and(eq(factoryFollows.userId, userId), eq(factoryFollows.factoryId, factoryId)));
+}
+
+export async function getFactoryFollowerUserIds(factoryId: number): Promise<number[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.select({ userId: factoryFollows.userId })
+    .from(factoryFollows)
+    .where(and(
+      eq(factoryFollows.factoryId, factoryId),
+      eq(factoryFollows.notifyNewDiscussions, true),
+    ));
+  const allIds = rows.map(r => r.userId);
+  return filterCommunityEligibleRecipientIds(allIds);
+}
+
+// ===== Content Follows =====
+
+export async function getContentFollowStatus(userId: number, contentType: string, contentId: number): Promise<CommunityContentFollow | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select().from(communityContentFollows)
+    .where(and(
+      eq(communityContentFollows.userId, userId),
+      eq(communityContentFollows.contentType, contentType),
+      eq(communityContentFollows.contentId, contentId),
+    ))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+export async function followContent(userId: number, contentType: string, contentId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  await db.insert(communityContentFollows)
+    .values({ userId, contentType, contentId })
+    .onDuplicateKeyUpdate({ set: { userId } }); // no-op on duplicate
+}
+
+export async function unfollowContent(userId: number, contentType: string, contentId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.delete(communityContentFollows)
+    .where(and(
+      eq(communityContentFollows.userId, userId),
+      eq(communityContentFollows.contentType, contentType),
+      eq(communityContentFollows.contentId, contentId),
+    ));
+}
+
+export async function getContentFollowerUserIds(contentType: string, contentId: number): Promise<number[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.select({ userId: communityContentFollows.userId })
+    .from(communityContentFollows)
+    .where(and(
+      eq(communityContentFollows.contentType, contentType),
+      eq(communityContentFollows.contentId, contentId),
+    ));
+  return rows.map(r => r.userId);
+}
+
+// ===== Reactions =====
+
+export async function toggleReaction(
+  userId: number,
+  targetType: string,
+  targetId: number,
+  reactionType: string,
+): Promise<{ added: boolean }> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  const existing = await db.select({ id: communityReactions.id })
+    .from(communityReactions)
+    .where(and(
+      eq(communityReactions.userId, userId),
+      eq(communityReactions.targetType, targetType),
+      eq(communityReactions.targetId, targetId),
+      eq(communityReactions.reactionType, reactionType),
+    ))
+    .limit(1);
+  if (existing.length > 0) {
+    await db.delete(communityReactions)
+      .where(and(
+        eq(communityReactions.userId, userId),
+        eq(communityReactions.targetType, targetType),
+        eq(communityReactions.targetId, targetId),
+        eq(communityReactions.reactionType, reactionType),
+      ));
+    return { added: false };
+  }
+  try {
+    await db.insert(communityReactions).values({ userId, targetType, targetId, reactionType });
+    return { added: true };
+  } catch (err: any) {
+    // Concurrent insert hit the UNIQUE constraint — row is now in DB (added by the other request)
+    if (err?.code === "ER_DUP_ENTRY") return { added: true };
+    throw err;
+  }
+}
+
+export async function getReactionSummary(
+  targetType: string,
+  targetId: number,
+  viewerUserId?: number,
+): Promise<{ count: number; viewerReacted: boolean }> {
+  const db = await getDb();
+  if (!db) return { count: 0, viewerReacted: false };
+  const [countRow] = await db.select({ count: sql<number>`COUNT(*)` })
+    .from(communityReactions)
+    .where(and(
+      eq(communityReactions.targetType, targetType),
+      eq(communityReactions.targetId, targetId),
+    ));
+  const count = Number(countRow?.count ?? 0);
+  let viewerReacted = false;
+  if (viewerUserId != null) {
+    const viewerRow = await db.select({ id: communityReactions.id })
+      .from(communityReactions)
+      .where(and(
+        eq(communityReactions.userId, viewerUserId),
+        eq(communityReactions.targetType, targetType),
+        eq(communityReactions.targetId, targetId),
+      ))
+      .limit(1);
+    viewerReacted = viewerRow.length > 0;
+  }
+  return { count, viewerReacted };
+}
+
+export async function getReactionSummaryBatch(
+  items: { targetType: string; targetId: number }[],
+  viewerUserId?: number,
+): Promise<Map<string, { count: number; viewerReacted: boolean }>> {
+  const result = new Map<string, { count: number; viewerReacted: boolean }>();
+  if (items.length === 0) return result;
+  const db = await getDb();
+  if (!db) return result;
+
+  // Build individual conditions for each (targetType, targetId) pair
+  const conditions = items.map(item =>
+    and(eq(communityReactions.targetType, item.targetType), eq(communityReactions.targetId, item.targetId))
+  );
+  const orCondition = conditions.length === 1 ? conditions[0]! : or(...conditions as [typeof conditions[0], ...typeof conditions])!;
+
+  const rows = await db.select({
+    targetType: communityReactions.targetType,
+    targetId: communityReactions.targetId,
+    userId: communityReactions.userId,
+  })
+    .from(communityReactions)
+    .where(orCondition);
+
+  // Aggregate counts and viewer reactions
+  for (const row of rows) {
+    const key = `${row.targetType}:${row.targetId}`;
+    const existing = result.get(key) ?? { count: 0, viewerReacted: false };
+    existing.count += 1;
+    if (viewerUserId != null && row.userId === viewerUserId) {
+      existing.viewerReacted = true;
+    }
+    result.set(key, existing);
+  }
+  return result;
+}
+
+// ===== Mentions =====
+
+export async function createMentions(
+  sourceType: string,
+  sourceId: number,
+  mentions: Array<{ userId?: number; factoryId?: number }>,
+): Promise<void> {
+  if (mentions.length === 0) return;
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  const values = mentions
+    .filter(m => m.userId != null || m.factoryId != null)
+    .map(m => ({
+      sourceType,
+      sourceId,
+      mentionedUserId: m.userId ?? null,
+      mentionedFactoryId: m.factoryId ?? null,
+    }));
+  if (values.length === 0) return;
+  // INSERT IGNORE via onDuplicateKeyUpdate no-op
+  for (const value of values) {
+    await db.insert(communityMentions)
+      .values(value)
+      .onDuplicateKeyUpdate({ set: { sourceType: value.sourceType } }); // no-op on duplicate
+  }
+}
+
+export async function getMentionsBySource(
+  sourceType: string,
+  sourceId: number,
+): Promise<Array<{ mentionedUserId: number | null; mentionedFactoryId: number | null }>> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select({
+    mentionedUserId: communityMentions.mentionedUserId,
+    mentionedFactoryId: communityMentions.mentionedFactoryId,
+  })
+    .from(communityMentions)
+    .where(and(
+      eq(communityMentions.sourceType, sourceType),
+      eq(communityMentions.sourceId, sourceId),
+    ));
+}
+
+/**
+ * Syncs mentions for a source. Returns newly-added mentions for notification purposes.
+ * Deletes removed mentions; inserts new ones; does not touch unchanged mentions.
+ */
+export async function syncMentionsBySource(
+  sourceType: string,
+  sourceId: number,
+  newMentions: Array<{ userId?: number; factoryId?: number }>,
+): Promise<Array<{ userId?: number; factoryId?: number }>> {
+  const existing = await getMentionsBySource(sourceType, sourceId);
+
+  const toKey = (m: { userId?: number | null; factoryId?: number | null }) =>
+    m.userId != null ? `u:${m.userId}` : `f:${m.factoryId}`;
+
+  const existingMap = new Map(existing.map(m => [
+    toKey({ userId: m.mentionedUserId, factoryId: m.mentionedFactoryId }),
+    m,
+  ]));
+  const newMap = new Map(newMentions
+    .filter(m => m.userId != null || m.factoryId != null)
+    .map(m => [toKey(m), m]),
+  );
+
+  const added = Array.from(newMap.entries())
+    .filter(([k]) => !existingMap.has(k))
+    .map(([, m]) => m);
+
+  const removedKeys = Array.from(existingMap.keys()).filter(k => !newMap.has(k));
+
+  const db = await getDb();
+  if (!db) return [];
+
+  for (const key of removedKeys) {
+    const row = existingMap.get(key)!;
+    if (row.mentionedUserId != null) {
+      await db.delete(communityMentions).where(and(
+        eq(communityMentions.sourceType, sourceType),
+        eq(communityMentions.sourceId, sourceId),
+        eq(communityMentions.mentionedUserId, row.mentionedUserId),
+      ));
+    } else if (row.mentionedFactoryId != null) {
+      await db.delete(communityMentions).where(and(
+        eq(communityMentions.sourceType, sourceType),
+        eq(communityMentions.sourceId, sourceId),
+        eq(communityMentions.mentionedFactoryId, row.mentionedFactoryId),
+      ));
+    }
+  }
+
+  for (const m of added) {
+    await db.insert(communityMentions)
+      .values({
+        sourceType,
+        sourceId,
+        mentionedUserId: m.userId ?? null,
+        mentionedFactoryId: m.factoryId ?? null,
+      })
+      .onDuplicateKeyUpdate({ set: { sourceType } });
+  }
+
+  return added;
+}
+
+// ===== Co-managers (helper for notification fan-out) =====
+
+export async function getActiveCoManagerUserIds(factoryId: number): Promise<number[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.select({ userId: factoryCoManagers.userId })
+    .from(factoryCoManagers)
+    .where(and(
+      eq(factoryCoManagers.factoryId, factoryId),
+      isNull(factoryCoManagers.removedAt),
+    ));
+  return rows.map(r => r.userId);
+}
+
+// ===== Community Notifications =====
+
+export interface CreateCommunityNotificationInput {
+  recipientUserId: number;
+  actorUserId?: number | null;
+  actorFactoryId?: number | null;
+  eventType: string;
+  eventGroup: string;
+  postId?: number | null;
+  commentId?: number | null;
+  spaceCode?: string | null;
+  titleSnapshot?: string | null;
+  actorNameSnapshot: string;
+  actorFactoryNameSnapshot?: string | null;
+  message: string;
+  dedupeKey: string;
+}
+
+export async function createCommunityNotification(input: CreateCommunityNotificationInput): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.insert(communityNotifications)
+    .values({
+      recipientUserId: input.recipientUserId,
+      actorUserId: input.actorUserId ?? null,
+      actorFactoryId: input.actorFactoryId ?? null,
+      eventType: input.eventType,
+      eventGroup: input.eventGroup,
+      postId: input.postId ?? null,
+      commentId: input.commentId ?? null,
+      spaceCode: input.spaceCode ?? null,
+      titleSnapshot: input.titleSnapshot ?? null,
+      actorNameSnapshot: input.actorNameSnapshot,
+      actorFactoryNameSnapshot: input.actorFactoryNameSnapshot ?? null,
+      message: input.message,
+      dedupeKey: input.dedupeKey,
+    })
+    .onDuplicateKeyUpdate({ set: { dedupeKey: input.dedupeKey } }); // no-op on dedupe collision
+}
+
+export async function createCommunityNotificationsBatch(inputs: CreateCommunityNotificationInput[]): Promise<void> {
+  if (inputs.length === 0) return;
+  const db = await getDb();
+  if (!db) return;
+  // Process in batches; on duplicate dedupeKey silently skip
+  for (const input of inputs) {
+    try {
+      await db.insert(communityNotifications)
+        .values({
+          recipientUserId: input.recipientUserId,
+          actorUserId: input.actorUserId ?? null,
+          actorFactoryId: input.actorFactoryId ?? null,
+          eventType: input.eventType,
+          eventGroup: input.eventGroup,
+          postId: input.postId ?? null,
+          commentId: input.commentId ?? null,
+          spaceCode: input.spaceCode ?? null,
+          titleSnapshot: input.titleSnapshot ?? null,
+          actorNameSnapshot: input.actorNameSnapshot,
+          actorFactoryNameSnapshot: input.actorFactoryNameSnapshot ?? null,
+          message: input.message,
+          dedupeKey: input.dedupeKey,
+        })
+        .onDuplicateKeyUpdate({ set: { dedupeKey: input.dedupeKey } }); // no-op on duplicate
+    } catch {
+      // swallow individual insert errors so one failure doesn't abort the batch
+    }
+  }
+}
+
+export async function listCommunityNotifications(
+  recipientUserId: number,
+  page: number,
+  pageSize: number,
+): Promise<{ items: CommunityNotification[]; total: number }> {
+  const db = await getDb();
+  if (!db) return { items: [], total: 0 };
+  const offset = (page - 1) * pageSize;
+  const items = await db.select().from(communityNotifications)
+    .where(and(
+      eq(communityNotifications.recipientUserId, recipientUserId),
+      isNull(communityNotifications.deletedAt),
+    ))
+    .orderBy(desc(communityNotifications.createdAt))
+    .limit(pageSize)
+    .offset(offset);
+  const [countRow] = await db.select({ count: sql<number>`COUNT(*)` })
+    .from(communityNotifications)
+    .where(and(
+      eq(communityNotifications.recipientUserId, recipientUserId),
+      isNull(communityNotifications.deletedAt),
+    ));
+  return { items, total: Number(countRow?.count ?? 0) };
+}
+
+export async function getCommunityNotificationUnreadCount(recipientUserId: number): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const [row] = await db.select({ count: sql<number>`COUNT(*)` })
+    .from(communityNotifications)
+    .where(and(
+      eq(communityNotifications.recipientUserId, recipientUserId),
+      eq(communityNotifications.isRead, false),
+      isNull(communityNotifications.deletedAt),
+    ));
+  return Number(row?.count ?? 0);
+}
+
+export async function markCommunityNotificationRead(notificationId: number, recipientUserId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(communityNotifications)
+    .set({ isRead: true, readAt: new Date() })
+    .where(and(
+      eq(communityNotifications.id, notificationId),
+      eq(communityNotifications.recipientUserId, recipientUserId),
+    ));
+}
+
+export async function markAllCommunityNotificationsRead(recipientUserId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(communityNotifications)
+    .set({ isRead: true, readAt: new Date() })
+    .where(and(
+      eq(communityNotifications.recipientUserId, recipientUserId),
+      eq(communityNotifications.isRead, false),
+    ));
+}
+
+// ===== Mention search targets =====
+
+export interface MentionTarget {
+  type: "factory" | "user";
+  id: number;
+  displayName: string;
+  avatarUrl?: string | null;
+}
+
+export async function searchMentionTargets(
+  query: string,
+  viewerUserId: number,
+  postId?: number,
+): Promise<MentionTarget[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const pattern = `%${query}%`;
+
+  // Factories: approved, name LIKE query, limit 10
+  const factoryRows = await db.select({
+    id: factories.id,
+    name: factories.name,
+    avatarUrl: factories.avatarUrl,
+  })
+    .from(factories)
+    .where(and(
+      eq(factories.status, "approved"),
+      like(factories.name, pattern),
+    ))
+    .limit(10);
+
+  const results: MentionTarget[] = factoryRows.map(f => ({
+    type: "factory" as const,
+    id: f.id,
+    displayName: f.name ?? "",
+    avatarUrl: f.avatarUrl ?? null,
+  }));
+
+  // Post participants: users who commented on this post, matching query, limit 5
+  if (postId != null) {
+    const participantRows = await db.select({
+      id: users.id,
+      name: users.name,
+    })
+      .from(communityComments)
+      .innerJoin(users, eq(communityComments.authorUserId, users.id))
+      .where(and(
+        eq(communityComments.postId, postId),
+        isNull(communityComments.deletedAt),
+        isNotNull(communityComments.authorUserId),
+        like(users.name, pattern),
+      ))
+      .groupBy(users.id, users.name)
+      .limit(5);
+
+    const existingFactoryIds = new Set(results.map(r => r.type === "factory" ? r.id : null));
+    for (const p of participantRows) {
+      // Avoid duplicates and don't include the viewer themselves
+      if (p.id === viewerUserId) continue;
+      results.push({
+        type: "user" as const,
+        id: p.id,
+        displayName: p.name ?? "",
+        avatarUrl: null,
+      });
+    }
+  }
+
+  return results.slice(0, 15);
+}
+
+// ===== Notification fan-out helper for new community posts =====
+
+export async function buildNewPostNotifications(input: {
+  postId: number;
+  spaceCode: string;
+  spaceName: string;
+  authorUserId: number;
+  authorFactoryId?: number | null;
+  titleSnapshot: string;
+  actorNameSnapshot: string;
+  actorFactoryNameSnapshot?: string | null;
+}): Promise<CreateCommunityNotificationInput[]> {
+  const notifications: CreateCommunityNotificationInput[] = [];
+  const notifiedUserIds = new Set<number>();
+  const actorDisplay = input.actorFactoryNameSnapshot ?? input.actorNameSnapshot;
+
+  // 1. Factory followers FIRST (more specific message; takes priority over board notification)
+  if (input.authorFactoryId != null) {
+    const factoryFollowers = await getFactoryFollowerUserIds(input.authorFactoryId);
+    for (const recipientUserId of factoryFollowers) {
+      if (recipientUserId === input.authorUserId) continue;
+      notifiedUserIds.add(recipientUserId);
+      notifications.push({
+        recipientUserId,
+        actorUserId: input.authorUserId,
+        actorFactoryId: input.authorFactoryId,
+        eventType: "followed_factory_new_discussion",
+        eventGroup: "follow",
+        postId: input.postId,
+        spaceCode: input.spaceCode,
+        titleSnapshot: input.titleSnapshot,
+        actorNameSnapshot: input.actorNameSnapshot,
+        actorFactoryNameSnapshot: input.actorFactoryNameSnapshot ?? null,
+        message: `您追蹤的工廠 ${actorDisplay} 在「${input.spaceName}」看板發布了新討論：${input.titleSnapshot}`,
+        dedupeKey: `factory:${input.authorFactoryId}:post:${input.postId}:r:${recipientUserId}`,
+      });
+    }
+  }
+
+  // 2. Board followers — skip those already notified via factory follow
+  const boardFollowers = await getBoardFollowerUserIds(input.spaceCode);
+  for (const recipientUserId of boardFollowers) {
+    if (recipientUserId === input.authorUserId) continue;
+    if (notifiedUserIds.has(recipientUserId)) continue;
+    notifications.push({
+      recipientUserId,
+      actorUserId: input.authorUserId,
+      actorFactoryId: input.authorFactoryId ?? null,
+      eventType: "board_new_discussion",
+      eventGroup: "follow",
+      postId: input.postId,
+      spaceCode: input.spaceCode,
+      titleSnapshot: input.titleSnapshot,
+      actorNameSnapshot: input.actorNameSnapshot,
+      actorFactoryNameSnapshot: input.actorFactoryNameSnapshot ?? null,
+      message: `${actorDisplay} 在您追蹤的「${input.spaceName}」看板發布了新討論：${input.titleSnapshot}`,
+      dedupeKey: `board:${input.spaceCode}:post:${input.postId}:r:${recipientUserId}`,
+    });
+  }
+
+  return notifications;
 }

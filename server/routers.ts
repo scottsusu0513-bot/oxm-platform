@@ -109,6 +109,15 @@ const VALID_SPACE_CODES = new Set<string>([
   COMMUNITY_CROSS_INDUSTRY_SLUG,
 ]);
 
+// Reverse mapping: slug → display name (for notifications)
+const SPACE_CODE_TO_NAME: Record<string, string> = {
+  ...Object.fromEntries(Object.entries(INDUSTRY_SLUGS).map(([name, slug]) => [slug, name])),
+  [COMMUNITY_CROSS_INDUSTRY_SLUG]: "跨產業交流區",
+};
+function getSpaceName(spaceCode: string): string {
+  return SPACE_CODE_TO_NAME[spaceCode] ?? spaceCode;
+}
+
 type TrpcUserCtx = { role: "user" | "admin"; id: number } | null | undefined;
 
 function checkCommunityRead(user: TrpcUserCtx): void {
@@ -2680,7 +2689,12 @@ export const appRouter = router({
         const comments = await db.getCommunityCommentsByPost(input.postId);
         const pinnedProductIds = (post.pinnedProductIds ?? []) as number[];
         const pinnedProducts = await db.getProductsByIds(pinnedProductIds);
-        return { post, comments, pinnedProducts };
+        const mentionRows = await db.getMentionsBySource("post", input.postId);
+        const postMentions = mentionRows.map(m => ({
+          type: m.mentionedUserId != null ? ("user" as const) : ("factory" as const),
+          id: (m.mentionedUserId ?? m.mentionedFactoryId)!,
+        }));
+        return { post, comments, pinnedProducts, postMentions };
       }),
 
     // Author identity options (user + any owned/co-managed approved factories)
@@ -2718,11 +2732,13 @@ export const appRouter = router({
         title: z.string().min(1).max(200).trim(),
         content: z.string().min(1).max(10000).trim(),
         images: z.array(z.string().url()).max(6).default([]),
-        // max 5 products; front-end sends [] when no factory or no products selected
         pinnedProductIds: z.array(z.number().int().positive()).max(5).default([]),
         commentsEnabled: z.boolean().default(true),
-        // Front-end must pass the auto-resolved or user-selected factoryId; undefined = personal
         authorFactoryId: z.number().int().positive().optional(),
+        mentions: z.array(z.object({
+          type: z.enum(["user", "factory"]),
+          id: z.number().int().positive(),
+        })).max(10).default([]),
       }))
       .mutation(async ({ ctx, input }) => {
         checkCommunityWrite(ctx.user);
@@ -2788,6 +2804,80 @@ export const appRouter = router({
           pinnedProductIds: dedupedProductIds,
           commentsEnabled: input.commentsEnabled,
         });
+
+        // Fan-out: follow notifications + mention notifications (best-effort)
+        try {
+          // 1. Save mention relations
+          const dedupedMentions = Array.from(
+            new Map(input.mentions.map(m => [`${m.type}:${m.id}`, m])).values(),
+          );
+          if (dedupedMentions.length > 0) {
+            await db.createMentions(
+              "post", postId,
+              dedupedMentions.map(m => m.type === "user" ? { userId: m.id } : { factoryId: m.id }),
+            );
+          }
+
+          // 2. Board+factory follower notifications
+          const followNotifInputs = await db.buildNewPostNotifications({
+            postId,
+            spaceCode: input.spaceCode,
+            spaceName: getSpaceName(input.spaceCode),
+            authorUserId: ctx.user.id,
+            authorFactoryId: resolvedFactoryId,
+            titleSnapshot: input.title,
+            actorNameSnapshot: ctx.user.name ?? "",
+            actorFactoryNameSnapshot: resolvedFactory?.label ?? null,
+          });
+          await db.createCommunityNotificationsBatch(followNotifInputs);
+
+          // 3. Mention notifications
+          if (dedupedMentions.length > 0) {
+            const actorName = resolvedFactory?.label ?? ctx.user.name ?? "";
+            type CommunityEventType = "community_mention";
+            const mentionNotifInputs: Parameters<typeof db.createCommunityNotificationsBatch>[0] = [];
+
+            // Collect all candidate recipient IDs from user + factory mentions
+            const candidateMap = new Map<number, CommunityEventType>();
+            for (const m of dedupedMentions) {
+              if (m.type === "user") {
+                if (m.id !== ctx.user.id) candidateMap.set(m.id, "community_mention");
+              } else {
+                const factory = await db.getFactoryById(m.id);
+                if (!factory || factory.status !== "approved") continue;
+                const ownerIds = factory.ownerId != null ? [factory.ownerId] : [];
+                const coManagerIds = await db.getActiveCoManagerUserIds(m.id);
+                for (const uid of [...ownerIds, ...coManagerIds]) {
+                  if (uid !== ctx.user.id) candidateMap.set(uid, "community_mention");
+                }
+              }
+            }
+
+            const eligibleIds = await db.filterCommunityEligibleRecipientIds(
+              Array.from(candidateMap.keys()), ctx.user.id,
+            );
+            for (const recipientUserId of eligibleIds) {
+              mentionNotifInputs.push({
+                recipientUserId,
+                actorUserId: ctx.user.id,
+                actorFactoryId: resolvedFactoryId ?? null,
+                eventType: "community_mention",
+                eventGroup: "mention",
+                postId,
+                spaceCode: input.spaceCode,
+                titleSnapshot: input.title,
+                actorNameSnapshot: ctx.user.name ?? "",
+                actorFactoryNameSnapshot: resolvedFactory?.label ?? null,
+                message: `${actorName} 在貼文中提及了您`,
+                dedupeKey: `mention:post:${postId}:r:${recipientUserId}`,
+              });
+            }
+            await db.createCommunityNotificationsBatch(mentionNotifInputs);
+          }
+        } catch (err) {
+          console.error("[community.createPost] notification fan-out error", err);
+        }
+
         return { postId };
       }),
 
@@ -2800,6 +2890,10 @@ export const appRouter = router({
         images: z.array(z.string().url()).max(6).optional(),
         pinnedProductIds: z.array(z.number().int().positive()).max(5).optional(),
         commentsEnabled: z.boolean().optional(),
+        mentions: z.array(z.object({
+          type: z.enum(["user", "factory"]),
+          id: z.number().int().positive(),
+        })).max(10).optional(),
       }))
       .mutation(async ({ ctx, input }) => {
         checkCommunityWrite(ctx.user);
@@ -2832,8 +2926,67 @@ export const appRouter = router({
           }
         }
 
-        const { postId, ...updates } = input;
-        await db.updateCommunityPost(postId, updates);
+        const { postId, mentions, ...updates } = input;
+        if (Object.keys(updates).length > 0) {
+          await db.updateCommunityPost(postId, updates);
+        }
+
+        // Sync mentions and notify only newly-added ones (best-effort)
+        if (mentions !== undefined) {
+          try {
+            const dedupedNew = Array.from(
+              new Map(mentions.map(m => [`${m.type}:${m.id}`, m])).values(),
+            );
+            const addedMentions = await db.syncMentionsBySource(
+              "post", postId,
+              dedupedNew.map(m => m.type === "user" ? { userId: m.id } : { factoryId: m.id }),
+            );
+
+            if (addedMentions.length > 0) {
+              const actorName = post.authorFactoryNameSnapshot ?? ctx.user.name ?? "";
+              const mentionNotifInputs: Parameters<typeof db.createCommunityNotificationsBatch>[0] = [];
+              const candidateMap = new Map<number, true>();
+
+              for (const m of addedMentions) {
+                if (m.userId != null) {
+                  if (m.userId !== ctx.user.id) candidateMap.set(m.userId, true);
+                } else if (m.factoryId != null) {
+                  const factory = await db.getFactoryById(m.factoryId);
+                  if (!factory || factory.status !== "approved") continue;
+                  const ownerIds = factory.ownerId != null ? [factory.ownerId] : [];
+                  const coManagerIds = await db.getActiveCoManagerUserIds(m.factoryId);
+                  for (const uid of [...ownerIds, ...coManagerIds]) {
+                    if (uid !== ctx.user.id) candidateMap.set(uid, true);
+                  }
+                }
+              }
+
+              const eligibleIds = await db.filterCommunityEligibleRecipientIds(
+                Array.from(candidateMap.keys()), ctx.user.id,
+              );
+              for (const recipientUserId of eligibleIds) {
+                mentionNotifInputs.push({
+                  recipientUserId,
+                  actorUserId: ctx.user.id,
+                  actorFactoryId: post.authorFactoryId ?? null,
+                  eventType: "community_mention",
+                  eventGroup: "mention",
+                  postId,
+                  spaceCode: post.spaceCode,
+                  titleSnapshot: post.title,
+                  actorNameSnapshot: ctx.user.name ?? "",
+                  actorFactoryNameSnapshot: post.authorFactoryNameSnapshot ?? null,
+                  message: `${actorName} 在貼文中提及了您`,
+                  dedupeKey: `mention:post:${postId}:edit:r:${recipientUserId}`,
+                });
+              }
+              await db.createCommunityNotificationsBatch(mentionNotifInputs);
+            }
+          } catch (err) {
+            console.error("[community.updatePost] mention sync error", err);
+          }
+        }
+
         return { success: true };
       }),
 
@@ -2860,6 +3013,11 @@ export const appRouter = router({
         replyToUserId: z.number().int().positive().optional(),
         // Front-end passes the auto-resolved or user-selected factoryId
         authorFactoryId: z.number().int().positive().optional(),
+        // Mentions extracted from content (max 5)
+        mentions: z.array(z.object({
+          type: z.enum(["user", "factory"]),
+          id: z.number().int().positive(),
+        })).max(5).default([]),
       }))
       .mutation(async ({ ctx, input }) => {
         checkCommunityWrite(ctx.user);
@@ -2924,6 +3082,134 @@ export const appRouter = router({
           parentCommentId: input.parentCommentId ?? null,
           replyToUserId: input.replyToUserId ?? null,
         });
+
+        // Post-comment side-effects (best-effort, never fail comment creation)
+        try {
+          // 1. Save mentions
+          if (input.mentions.length > 0) {
+            await db.createMentions(
+              "comment",
+              commentId,
+              input.mentions.map(m => m.type === "user" ? { userId: m.id } : { factoryId: m.id }),
+            );
+          }
+
+          // 2. Auto-follow the post content for the commenter
+          await db.followContent(ctx.user.id, "discussion", input.postId);
+
+          // 3. Build reply + mention notifications
+          const actorName = resolvedFactory?.label ?? ctx.user.name ?? "";
+          const mentionedUserIds = new Set(
+            input.mentions.filter(m => m.type === "user").map(m => m.id),
+          );
+
+          type CommunityEventType = "community_post_reply" | "community_comment_reply" | "community_mention" | "community_reply_and_mention";
+          // Notification recipients map: userId → eventType
+          const notifMap = new Map<number, CommunityEventType>();
+
+          // Reply notification: post author (if not the commenter themselves)
+          if (post.authorUserId != null && post.authorUserId !== ctx.user.id) {
+            const isMentioned = mentionedUserIds.has(post.authorUserId);
+            notifMap.set(
+              post.authorUserId,
+              isMentioned ? "community_reply_and_mention" : "community_post_reply",
+            );
+          }
+
+          // Reply notification: parent comment author (if this is a nested reply)
+          if (input.parentCommentId != null) {
+            const parentComment = await db.getCommunityCommentById(input.parentCommentId);
+            if (parentComment?.authorUserId != null && parentComment.authorUserId !== ctx.user.id) {
+              const isMentioned = mentionedUserIds.has(parentComment.authorUserId);
+              const current = notifMap.get(parentComment.authorUserId);
+              if (!current || current === "community_post_reply") {
+                notifMap.set(
+                  parentComment.authorUserId,
+                  isMentioned ? "community_reply_and_mention" : "community_comment_reply",
+                );
+              }
+            }
+          }
+
+          // Mention-only notifications for directly mentioned users not already covered
+          for (const mentionedUserId of Array.from(mentionedUserIds)) {
+            if (mentionedUserId === ctx.user.id) continue;
+            if (!notifMap.has(mentionedUserId)) {
+              notifMap.set(mentionedUserId, "community_mention");
+            }
+          }
+
+          // Factory mentions → notify factory owner + active co-managers (deduplicated)
+          const mentionedFactoryIds = new Set(
+            input.mentions.filter(m => m.type === "factory").map(m => m.id),
+          );
+          for (const factoryId of Array.from(mentionedFactoryIds)) {
+            // Get factory owner
+            const factory = await db.getFactoryById(factoryId);
+            const factoryOwnerIds = factory?.ownerId != null ? [factory.ownerId] : [];
+            // Get active co-managers
+            const coManagerIds = await db.getActiveCoManagerUserIds(factoryId);
+            const candidateIds = Array.from(new Set([...factoryOwnerIds, ...coManagerIds]));
+            for (const candidateId of candidateIds) {
+              if (candidateId === ctx.user.id) continue; // don't notify self
+              if (!notifMap.has(candidateId)) {
+                notifMap.set(candidateId, "community_mention");
+              } else {
+                // Upgrade reply to reply_and_mention
+                const current = notifMap.get(candidateId);
+                if (current === "community_post_reply" || current === "community_comment_reply") {
+                  notifMap.set(candidateId, "community_reply_and_mention");
+                }
+              }
+            }
+          }
+
+          // Filter all recipients through beta/live eligibility gate
+          const eligibleRecipientIds = await db.filterCommunityEligibleRecipientIds(
+            Array.from(notifMap.keys()), ctx.user.id,
+          );
+          const eligibleSet = new Set(eligibleRecipientIds);
+
+          // Build notification inputs
+          const notifInputs: Parameters<typeof db.createCommunityNotificationsBatch>[0] = [];
+          for (const [recipientUserId, eventType] of Array.from(notifMap.entries())) {
+            if (!eligibleSet.has(recipientUserId)) continue;
+            const isReply = eventType === "community_post_reply" || eventType === "community_comment_reply" || eventType === "community_reply_and_mention";
+            const isMention = eventType === "community_mention" || eventType === "community_reply_and_mention";
+            let message: string;
+            if (eventType === "community_reply_and_mention") {
+              message = `${actorName} 在討論中回覆並提及了您`;
+            } else if (eventType === "community_mention") {
+              message = `${actorName} 在討論中提及了您`;
+            } else if (eventType === "community_comment_reply") {
+              message = `${actorName} 回覆了您的留言`;
+            } else {
+              message = `${actorName} 在您的討論中留言`;
+            }
+            const dedupeKey = (eventType === "community_reply_and_mention" || eventType === "community_mention")
+              ? (isReply ? `rmention:c:${commentId}:r:${recipientUserId}` : `mention:comment:${commentId}:r:${recipientUserId}`)
+              : `reply:c:${commentId}:r:${recipientUserId}`;
+            notifInputs.push({
+              recipientUserId,
+              actorUserId: ctx.user.id,
+              actorFactoryId: resolvedFactoryId ?? null,
+              eventType,
+              eventGroup: isMention ? "mention" : "reply",
+              postId: input.postId,
+              commentId,
+              spaceCode: post.spaceCode,
+              titleSnapshot: post.title,
+              actorNameSnapshot: actorName,
+              actorFactoryNameSnapshot: resolvedFactory?.label ?? null,
+              message,
+              dedupeKey,
+            });
+          }
+          await db.createCommunityNotificationsBatch(notifInputs);
+        } catch (err) {
+          console.error("[community.createComment] post-comment side-effects error", err);
+        }
+
         return { commentId };
       }),
 
@@ -2957,6 +3243,170 @@ export const appRouter = router({
         await db.softDeleteCommunityComment(input.commentId);
         return { success: true };
       }),
+
+    // ===== Phase 2A: Board follows =====
+
+    boardFollowStatus: protectedProcedure
+      .input(z.object({ spaceCode: z.string().min(1).max(60) }))
+      .query(async ({ ctx, input }) => {
+        checkCommunityRead(ctx.user);
+        assertValidSpaceCode(input.spaceCode);
+        const row = await db.getBoardFollowStatus(ctx.user.id, input.spaceCode);
+        return { following: !!row, notifyNewDiscussions: row?.notifyNewDiscussions ?? true };
+      }),
+
+    followBoard: protectedProcedure
+      .input(z.object({ spaceCode: z.string(), notifyNewDiscussions: z.boolean().default(true) }))
+      .mutation(async ({ ctx, input }) => {
+        checkCommunityWrite(ctx.user);
+        assertValidSpaceCode(input.spaceCode);
+        await db.followBoard(ctx.user.id, input.spaceCode, input.notifyNewDiscussions);
+        return { success: true };
+      }),
+
+    unfollowBoard: protectedProcedure
+      .input(z.object({ spaceCode: z.string() }))
+      .mutation(async ({ ctx, input }) => {
+        checkCommunityWrite(ctx.user);
+        await db.unfollowBoard(ctx.user.id, input.spaceCode);
+        return { success: true };
+      }),
+
+    // ===== Phase 2A: Factory follows =====
+
+    factoryFollowStatus: protectedProcedure
+      .input(z.object({ factoryId: z.number().int().positive() }))
+      .query(async ({ ctx, input }) => {
+        checkCommunityRead(ctx.user);
+        const row = await db.getFactoryFollowStatus(ctx.user.id, input.factoryId);
+        return { following: !!row, notifyNewDiscussions: row?.notifyNewDiscussions ?? true };
+      }),
+
+    followFactory: protectedProcedure
+      .input(z.object({ factoryId: z.number().int().positive(), notifyNewDiscussions: z.boolean().default(true) }))
+      .mutation(async ({ ctx, input }) => {
+        checkCommunityWrite(ctx.user);
+        const factory = await db.getFactoryById(input.factoryId);
+        if (!factory || factory.status !== "approved") {
+          throw new TRPCError({ code: "NOT_FOUND", message: "找不到此工廠" });
+        }
+        await db.followFactory(ctx.user.id, input.factoryId, input.notifyNewDiscussions);
+        return { success: true };
+      }),
+
+    unfollowFactory: protectedProcedure
+      .input(z.object({ factoryId: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        checkCommunityWrite(ctx.user);
+        await db.unfollowFactory(ctx.user.id, input.factoryId);
+        return { success: true };
+      }),
+
+    // ===== Phase 2A: Content follows =====
+
+    contentFollowStatus: protectedProcedure
+      .input(z.object({ contentType: z.enum(["discussion", "bid"]), contentId: z.number().int().positive() }))
+      .query(async ({ ctx, input }) => {
+        checkCommunityRead(ctx.user);
+        const row = await db.getContentFollowStatus(ctx.user.id, input.contentType, input.contentId);
+        return { following: !!row };
+      }),
+
+    followContent: protectedProcedure
+      .input(z.object({ contentType: z.enum(["discussion", "bid"]), contentId: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        checkCommunityWrite(ctx.user);
+        await db.followContent(ctx.user.id, input.contentType, input.contentId);
+        return { success: true };
+      }),
+
+    unfollowContent: protectedProcedure
+      .input(z.object({ contentType: z.enum(["discussion", "bid"]), contentId: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        checkCommunityWrite(ctx.user);
+        await db.unfollowContent(ctx.user.id, input.contentType, input.contentId);
+        return { success: true };
+      }),
+
+    // ===== Phase 2A: Reactions =====
+
+    toggleReaction: protectedProcedure
+      .input(z.object({
+        targetType: z.enum(["post", "comment"]),
+        targetId: z.number().int().positive(),
+        reactionType: z.enum(["helpful"]),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        checkCommunityWrite(ctx.user);
+        if (input.targetType === "post") {
+          const post = await db.getCommunityPostById(input.targetId);
+          if (!post || post.deletedAt || post.isHidden) {
+            throw new TRPCError({ code: "NOT_FOUND" });
+          }
+        } else {
+          const comment = await db.getCommunityCommentById(input.targetId);
+          if (!comment || comment.deletedAt || comment.isHidden) {
+            throw new TRPCError({ code: "NOT_FOUND" });
+          }
+        }
+        const result = await db.toggleReaction(ctx.user.id, input.targetType, input.targetId, input.reactionType);
+        return result;
+      }),
+
+    reactionSummary: publicProcedure
+      .input(z.object({
+        targetType: z.enum(["post", "comment"]),
+        targetId: z.number().int().positive(),
+        reactionType: z.enum(["helpful"]),
+      }))
+      .query(async ({ ctx, input }) => {
+        checkCommunityRead(ctx.user);
+        return db.getReactionSummary(input.targetType, input.targetId, ctx.user?.id);
+      }),
+
+    // ===== Phase 2A: Mention search =====
+
+    searchMentionTargets: protectedProcedure
+      .input(z.object({
+        query: z.string().min(1).max(50),
+        postId: z.number().int().positive().optional(),
+      }))
+      .query(async ({ ctx, input }) => {
+        checkCommunityRead(ctx.user);
+        return db.searchMentionTargets(input.query, ctx.user.id, input.postId);
+      }),
+
+    // ===== Phase 2A: Notifications =====
+
+    notificationUnreadCount: protectedProcedure.query(async ({ ctx }) => {
+      checkCommunityRead(ctx.user);
+      const count = await db.getCommunityNotificationUnreadCount(ctx.user.id);
+      return { count };
+    }),
+
+    notificationList: protectedProcedure
+      .input(z.object({
+        page: z.number().int().min(1).default(1),
+        pageSize: z.number().int().min(1).max(50).default(20),
+      }))
+      .query(async ({ ctx, input }) => {
+        checkCommunityRead(ctx.user);
+        return db.listCommunityNotifications(ctx.user.id, input.page, input.pageSize);
+      }),
+
+    notificationMarkRead: protectedProcedure
+      .input(z.object({ notificationId: z.number().int() }))
+      .mutation(async ({ ctx, input }) => {
+        checkCommunityWrite(ctx.user);
+        await db.markCommunityNotificationRead(input.notificationId, ctx.user.id);
+        return { success: true };
+      }),
+
+    notificationMarkAllRead: protectedProcedure.mutation(async ({ ctx }) => {
+      checkCommunityWrite(ctx.user);
+      await db.markAllCommunityNotificationsRead(ctx.user.id);
+      return { success: true };
+    }),
   }),
 
 });

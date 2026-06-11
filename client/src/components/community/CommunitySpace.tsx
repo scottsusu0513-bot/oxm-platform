@@ -10,6 +10,7 @@ import { INDUSTRY_SLUGS } from "@shared/constants";
 import { formatDistanceToNow } from "date-fns";
 import { zhTW } from "date-fns/locale";
 import CommunityNewPostDialog from "./CommunityNewPostDialog";
+import CommunityBoardFollowButton from "./CommunityBoardFollowButton";
 
 interface Props {
   spaceCode: string;
@@ -62,14 +63,17 @@ export default function CommunitySpace({ spaceCode }: Props) {
             )}
           </div>
           {user && (
-            <Button
-              size="sm"
-              className="bg-gradient-to-r from-orange-500 to-amber-500 text-white border-0"
-              onClick={() => setShowNewPost(true)}
-            >
-              <PlusCircle className="w-4 h-4 mr-1.5" />
-              發文
-            </Button>
+            <div className="flex items-center gap-2">
+              <CommunityBoardFollowButton spaceCode={spaceCode} />
+              <Button
+                size="sm"
+                className="bg-gradient-to-r from-orange-500 to-amber-500 text-white border-0"
+                onClick={() => setShowNewPost(true)}
+              >
+                <PlusCircle className="w-4 h-4 mr-1.5" />
+                發文
+              </Button>
+            </div>
           )}
         </div>
 

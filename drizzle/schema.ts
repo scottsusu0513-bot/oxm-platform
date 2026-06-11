@@ -573,3 +573,119 @@ export const communityComments = mysqlTable("communityComments", {
 }));
 
 export type CommunityComment = typeof communityComments.$inferSelect;
+
+// ===== 商案討論區：看板追蹤 =====
+export const communityBoardFollows = mysqlTable("communityBoardFollows", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull().references(() => users.id, { onDelete: "cascade" }),
+  spaceCode: varchar("spaceCode", { length: 50 }).notNull(),
+  notifyNewDiscussions: boolean("notifyNewDiscussions").notNull().default(true),
+  notifyNewBids: boolean("notifyNewBids").notNull().default(false),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (t) => ({
+  userSpaceUq: uniqueIndex("cbf_user_space_uq").on(t.userId, t.spaceCode),
+  spaceIdx: index("cbf_space_idx").on(t.spaceCode),
+  userIdx: index("cbf_user_idx").on(t.userId),
+}));
+
+export type CommunityBoardFollow = typeof communityBoardFollows.$inferSelect;
+
+// ===== 工廠追蹤 =====
+export const factoryFollows = mysqlTable("factoryFollows", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull().references(() => users.id, { onDelete: "cascade" }),
+  factoryId: int("factoryId").notNull().references(() => factories.id, { onDelete: "cascade" }),
+  notifyNewDiscussions: boolean("notifyNewDiscussions").notNull().default(true),
+  notifyNewBids: boolean("notifyNewBids").notNull().default(false),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (t) => ({
+  userFactoryUq: uniqueIndex("ff_user_factory_uq").on(t.userId, t.factoryId),
+  factoryIdx: index("ff_factory_idx").on(t.factoryId),
+  userIdx: index("ff_user_idx").on(t.userId),
+}));
+
+export type FactoryFollow = typeof factoryFollows.$inferSelect;
+
+// ===== 商案討論區：內容追蹤 =====
+export const communityContentFollows = mysqlTable("communityContentFollows", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull().references(() => users.id, { onDelete: "cascade" }),
+  contentType: varchar("contentType", { length: 20 }).notNull().default("discussion"),
+  contentId: int("contentId").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  userContentUq: uniqueIndex("ccf_user_content_uq").on(t.userId, t.contentType, t.contentId),
+  contentIdx: index("ccf_content_idx").on(t.contentType, t.contentId),
+  userIdx: index("ccf_user_idx").on(t.userId),
+}));
+
+export type CommunityContentFollow = typeof communityContentFollows.$inferSelect;
+
+// ===== 商案討論區：反應（Reaction） =====
+export const communityReactions = mysqlTable("communityReactions", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull().references(() => users.id, { onDelete: "cascade" }),
+  targetType: varchar("targetType", { length: 20 }).notNull(),
+  targetId: int("targetId").notNull(),
+  reactionType: varchar("reactionType", { length: 20 }).notNull().default("helpful"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  userTargetUq: uniqueIndex("cr_user_target_uq").on(t.userId, t.targetType, t.targetId, t.reactionType),
+  targetIdx: index("cr_target_idx").on(t.targetType, t.targetId),
+  userIdx: index("cr_user_idx").on(t.userId),
+}));
+
+export type CommunityReaction = typeof communityReactions.$inferSelect;
+
+// ===== 商案討論區：提及 =====
+export const communityMentions = mysqlTable("communityMentions", {
+  id: int("id").autoincrement().primaryKey(),
+  sourceType: varchar("sourceType", { length: 20 }).notNull(),
+  sourceId: int("sourceId").notNull(),
+  mentionedUserId: int("mentionedUserId").references(() => users.id, { onDelete: "cascade" }),
+  mentionedFactoryId: int("mentionedFactoryId").references(() => factories.id, { onDelete: "cascade" }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  sourceIdx: index("cm_source_idx").on(t.sourceType, t.sourceId),
+  userIdx: index("cm_user_idx").on(t.mentionedUserId),
+  factoryIdx: index("cm_factory_idx").on(t.mentionedFactoryId),
+  // MySQL allows multiple NULLs in unique indexes
+  sourceUserUq: uniqueIndex("cm_source_user_uq").on(t.sourceType, t.sourceId, t.mentionedUserId),
+  sourceFactoryUq: uniqueIndex("cm_source_factory_uq").on(t.sourceType, t.sourceId, t.mentionedFactoryId),
+}));
+
+export type CommunityMention = typeof communityMentions.$inferSelect;
+
+// ===== 商案討論區：通知 =====
+export const communityNotifications = mysqlTable("communityNotifications", {
+  id: int("id").autoincrement().primaryKey(),
+  recipientUserId: int("recipientUserId").notNull().references(() => users.id, { onDelete: "cascade" }),
+  // actorUserId / actorFactoryId: no FK — actor may be deleted, notification kept
+  actorUserId: int("actorUserId"),
+  actorFactoryId: int("actorFactoryId"),
+  eventType: varchar("eventType", { length: 50 }).notNull(),
+  eventGroup: varchar("eventGroup", { length: 50 }).notNull(),
+  // postId / commentId: no FK — post may be hard deleted
+  postId: int("postId"),
+  commentId: int("commentId"),
+  spaceCode: varchar("spaceCode", { length: 50 }),
+  titleSnapshot: varchar("titleSnapshot", { length: 200 }),
+  actorNameSnapshot: varchar("actorNameSnapshot", { length: 100 }).notNull().default(""),
+  actorFactoryNameSnapshot: varchar("actorFactoryNameSnapshot", { length: 200 }),
+  message: text("message").notNull(),
+  dedupeKey: varchar("dedupeKey", { length: 200 }).notNull(),
+  isRead: boolean("isRead").notNull().default(false),
+  readAt: timestamp("readAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  deletedAt: timestamp("deletedAt"),
+}, (t) => ({
+  dedupeUq: uniqueIndex("cn_dedupe_uq").on(t.dedupeKey),
+  recipientUnreadIdx: index("cn_recipient_unread_idx").on(t.recipientUserId, t.isRead, t.createdAt),
+  recipientCreatedIdx: index("cn_recipient_created_idx").on(t.recipientUserId, t.createdAt),
+  postIdx: index("cn_post_idx").on(t.postId),
+  commentIdx: index("cn_comment_idx").on(t.commentId),
+}));
+
+export type CommunityNotification = typeof communityNotifications.$inferSelect;
