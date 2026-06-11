@@ -103,6 +103,8 @@ jspm_packages/
 # Temporary folders
 tmp/
 temp/
+_tmp_*.cjs
+_backup_*.json
 
 # Database
 *.db

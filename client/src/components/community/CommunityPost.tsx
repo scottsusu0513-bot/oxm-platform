@@ -228,7 +228,7 @@ export default function CommunityPost({ spaceCode, postId }: Props) {
   const deletePostMut = trpc.community.deletePost.useMutation({
     onSuccess: () => {
       toast.success("貼文已刪除");
-      navigate(`/community/${spaceCode}`);
+      navigate(`/community/${spaceCode}/discussions`);
     },
     onError: (e) => toast.error(e.message),
   });
@@ -267,7 +267,7 @@ export default function CommunityPost({ spaceCode, postId }: Props) {
   const adminDeletePostMut = trpc.admin.community.deletePost.useMutation({
     onSuccess: () => {
       toast.success("貼文已永久刪除");
-      navigate(`/community/${spaceCode}`);
+      navigate(`/community/${spaceCode}/discussions`);
     },
     onError: (e) => toast.error(e.message),
   });
@@ -322,7 +322,7 @@ export default function CommunityPost({ spaceCode, postId }: Props) {
         <div className="container py-16 text-center">
           <AlertTriangle className="w-8 h-8 mx-auto mb-3 text-muted-foreground" />
           <p className="text-muted-foreground">找不到此貼文</p>
-          <Link href={`/community/${spaceCode}`}>
+          <Link href={`/community/${spaceCode}/discussions`}>
             <Button variant="outline" size="sm" className="mt-4">回到討論列表</Button>
           </Link>
         </div>
@@ -348,7 +348,7 @@ export default function CommunityPost({ spaceCode, postId }: Props) {
         <div className="flex items-center gap-2 text-sm text-muted-foreground mb-6">
           <Link href="/community" className="hover:text-foreground transition-colors">商案討論區</Link>
           <ChevronLeft className="w-3 h-3 rotate-180" />
-          <Link href={`/community/${spaceCode}`} className="hover:text-foreground transition-colors">{spaceName}</Link>
+          <Link href={`/community/${spaceCode}/discussions`} className="hover:text-foreground transition-colors">{spaceName}</Link>
         </div>
 
         {/* Post header */}

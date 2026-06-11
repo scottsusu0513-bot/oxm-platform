@@ -9,6 +9,7 @@ export const NOT_ADMIN_ERR_MSG = 'You do not have required permission (10002)';
 export type CommunityFeatureStatus = "coming_soon" | "beta" | "live" | "maintenance";
 export const COMMUNITY_FEATURE_STATUS: CommunityFeatureStatus = "beta";
 export const COMMUNITY_CROSS_INDUSTRY_NAME = "跨產業交流區" as const;
+export const COMMUNITY_CROSS_INDUSTRY_SLUG = "cross-industry" as const;
 // Controls public UI entry points (Navbar, menus, etc.).
 // Set to false to hide all public entries while keeping /community route + API functional for internal testing.
 export const COMMUNITY_PUBLIC_ENTRY_ENABLED = false;
