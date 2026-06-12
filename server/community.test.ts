@@ -1,7 +1,7 @@
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import { appRouter } from "./routers";
 import type { TrpcContext } from "./_core/context";
-import { resolveDefaultCommunitySpace } from "./db";
+import { resolveDefaultCommunitySpace, approveCommunityBid, rejectCommunityBid, withdrawCommunityBid, softDeleteCommunityBid, getCommunityBidIndustries, listCommunityBidReviewHistory, updateCommunityBid, getCommunityBidById } from "./db";
 import { COMMUNITY_CROSS_INDUSTRY_SLUG } from "../shared/const";
 
 type AuthenticatedUser = NonNullable<TrpcContext["user"]>;
@@ -1491,4 +1491,800 @@ describe("community.getSpaces ordering", () => {
     const crossCount = spaces.filter(s => s.code === "cross-industry").length;
     expect(crossCount).toBe(1);
   }, 10000);
+});
+
+// ===== Phase 3A: Community Bids ??access control =====
+describe("community.createBid access control", () => {
+  // 1. Unauthenticated ??UNAUTHORIZED
+  it("unauthenticated user throws UNAUTHORIZED", async () => {
+    const caller = appRouter.createCaller(createPublicContext());
+    await expect(caller.community.createBid({
+      spaceCode: "textile", title: "T", description: "D", durationHours: 24, images: [],
+    })).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+  });
+
+  // 2. Non-admin user in beta ??FORBIDDEN
+  it("non-admin user throws FORBIDDEN in beta", async () => {
+    const caller = appRouter.createCaller(createAuthContext({ role: "user" }));
+    await expect(caller.community.createBid({
+      spaceCode: "textile", title: "T", description: "D", durationHours: 24, images: [],
+    })).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  // 3. Invalid spaceCode ??BAD_REQUEST
+  it("invalid spaceCode throws BAD_REQUEST", async () => {
+    const caller = appRouter.createCaller(createAuthContext({ role: "admin" }));
+    await expect(caller.community.createBid({
+      spaceCode: "invalid-xyz", title: "T", description: "D", durationHours: 24, images: [],
+    })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  // 4. durationHours = 0 ??zod rejects (min 1)
+  it("durationHours=0 rejected by zod (min 1)", async () => {
+    const caller = appRouter.createCaller(createAuthContext({ role: "admin" }));
+    await expect(caller.community.createBid({
+      spaceCode: "textile", title: "T", description: "D", durationHours: 0, images: [],
+    })).rejects.toThrow();
+  });
+
+  // 5. durationHours = 169 ??zod rejects (max 168)
+  it("durationHours=169 rejected by zod (max 168)", async () => {
+    const caller = appRouter.createCaller(createAuthContext({ role: "admin" }));
+    await expect(caller.community.createBid({
+      spaceCode: "textile", title: "T", description: "D", durationHours: 169, images: [],
+    })).rejects.toThrow();
+  });
+
+  // 6. cross-industry bid with no target industries ??BAD_REQUEST
+  it("cross-industry bid without targetIndustrySpaceCodes throws BAD_REQUEST", async () => {
+    const caller = appRouter.createCaller(createAuthContext({ role: "admin" }));
+    await expect(caller.community.createBid({
+      spaceCode: "cross-industry", title: "T", description: "D", durationHours: 24,
+      images: [], targetIndustrySpaceCodes: [],
+    })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  // 7. budgetMin > budgetMax ??BAD_REQUEST
+  it("budgetMin > budgetMax throws BAD_REQUEST", async () => {
+    const caller = appRouter.createCaller(createAuthContext({ role: "admin" }));
+    await expect(caller.community.createBid({
+      spaceCode: "textile", title: "T", description: "D", durationHours: 24,
+      images: [], budgetMin: 5000, budgetMax: 1000,
+    })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+});
+
+// ===== Phase 3A: Community Bids ??admin CRUD integration =====
+describe("community bid: full admin create?→ubmit?→pprove lifecycle", () => {
+  const adminCtx = () => createAuthContext({ role: "admin" });
+
+  // 8. Admin can create a bid (draft) and retrieve it
+  it("admin creates draft bid and getBid returns correct fields", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    const { bidId } = await caller.community.createBid({
+      spaceCode: "textile",
+      title: "Phase 3A integration: draft bid",
+      description: "Needs 500 meters of polyester",
+      quantity: "500m",
+      sampleRequired: true,
+      durationHours: 72,
+      images: [],
+    });
+    expect(bidId).toBeGreaterThan(0);
+
+    const { bid } = await caller.community.getBid({ bidId });
+    expect(bid.status).toBe("draft");
+    expect(bid.title).toBe("Phase 3A integration: draft bid");
+    expect(bid.sampleRequired).toBe(true);
+    expect(bid.durationHours).toBe(72);
+    expect(bid.publishedAt).toBeNull();
+    expect(bid.deadline).toBeNull();
+
+    // cleanup
+    await caller.community.cancelBid({ bidId }).catch(() => {}); // won't work on draft, that's OK
+  }, 30000);
+
+  // 9. Submit draft ??pending_review
+  it("submit changes status from draft to pending_review", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    const { bidId } = await caller.community.createBid({
+      spaceCode: "textile",
+      title: "Phase 3A integration: submit test",
+      description: "Submit flow",
+      durationHours: 24,
+      images: [],
+    });
+    await caller.community.submitBid({ bidId });
+    const { bid } = await caller.community.getBid({ bidId });
+    expect(bid.status).toBe("pending_review");
+  }, 30000);
+
+  // 10. Approve pending_review ??active; publishedAt + deadline set
+  // Uses db.approveCommunityBid directly since adminProcedure enforces whitelist-based access
+  // (same pattern as existing admin.community.hidePost test which always throws in test env)
+  it("approve sets status=active and computes publishedAt + deadline", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    const { bidId } = await caller.community.createBid({
+      spaceCode: "textile",
+      title: "Phase 3A integration: approve test",
+      description: "Approve flow",
+      durationHours: 48,
+      images: [],
+    });
+    await caller.community.submitBid({ bidId });
+    const before = Date.now();
+    await approveCommunityBid(bidId, 1, "Test Admin");
+    const after = Date.now();
+
+    const { bid } = await caller.community.getBid({ bidId });
+    expect(bid.status).toBe("active");
+    expect(bid.publishedAt).not.toBeNull();
+    expect(bid.deadline).not.toBeNull();
+    const publishedMs = new Date(bid.publishedAt!).getTime();
+    const deadlineMs = new Date(bid.deadline!).getTime();
+    expect(publishedMs).toBeGreaterThanOrEqual(before - 1000);
+    expect(publishedMs).toBeLessThanOrEqual(after + 1000);
+    // deadline = publishedAt + 48h (簣5s tolerance)
+    expect(deadlineMs - publishedMs).toBeGreaterThanOrEqual(48 * 3600 * 1000 - 5000);
+    expect(deadlineMs - publishedMs).toBeLessThanOrEqual(48 * 3600 * 1000 + 5000);
+  }, 30000);
+
+  // 11. Reject pending_review ??rejected; rejectionReason stored
+  it("reject sets status=rejected and stores reason", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    const { bidId } = await caller.community.createBid({
+      spaceCode: "textile",
+      title: "Phase 3A integration: reject test",
+      description: "Reject flow",
+      durationHours: 24,
+      images: [],
+    });
+    await caller.community.submitBid({ bidId });
+    await rejectCommunityBid(bidId, 1, "Test Admin", "內容不符合規範");
+
+    const { bid } = await caller.community.getBid({ bidId });
+    expect(bid.status).toBe("rejected");
+    expect(bid.rejectionReason).toBe("內容不符合規範");
+  }, 30000);
+
+  // 12. Rejected bid can be re-edited and re-submitted
+  it("rejected bid can be updated and re-submitted", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    const { bidId } = await caller.community.createBid({
+      spaceCode: "textile",
+      title: "Phase 3A integration: resubmit test",
+      description: "Resubmit flow",
+      durationHours: 24,
+      images: [],
+    });
+    await caller.community.submitBid({ bidId });
+    await rejectCommunityBid(bidId, 1, "Test Admin", "請補充數量");
+
+    await caller.community.updateBid({ bidId, quantity: "2000 units" });
+    const { bid: updated } = await caller.community.getBid({ bidId });
+    expect(updated.quantity).toBe("2000 units");
+
+    await caller.community.submitBid({ bidId });
+    const { bid: resubmitted } = await caller.community.getBid({ bidId });
+    expect(resubmitted.status).toBe("pending_review");
+  }, 30000);
+});
+
+// ===== Phase 3A: Community Bids ??status machine guards =====
+describe("community bid: status machine guards", () => {
+  const adminCtx = () => createAuthContext({ role: "admin" });
+
+  // 13. Cannot submit already-pending bid
+  it("cannot submit a bid already in pending_review", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    const { bidId } = await caller.community.createBid({
+      spaceCode: "packaging", title: "Guard test 1", description: "D", durationHours: 24, images: [],
+    });
+    await caller.community.submitBid({ bidId });
+    await expect(caller.community.submitBid({ bidId }))
+      .rejects.toMatchObject({ code: "FORBIDDEN" });
+  }, 30000);
+
+  // 14. Cannot edit an active bid (uses db.approveCommunityBid since adminProcedure enforces whitelist)
+  it("cannot edit an active bid", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    const { bidId } = await caller.community.createBid({
+      spaceCode: "packaging", title: "Guard test 2", description: "D", durationHours: 24, images: [],
+    });
+    await caller.community.submitBid({ bidId });
+    await approveCommunityBid(bidId, 1, "Test Admin");
+    await expect(caller.community.updateBid({ bidId, title: "Changed" }))
+      .rejects.toMatchObject({ code: "FORBIDDEN" });
+  }, 30000);
+
+  // 15. Duplicate approve throws CONFLICT (conditional UPDATE guard)
+  it("cannot approve an already-active bid — throws CONFLICT", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    const { bidId } = await caller.community.createBid({
+      spaceCode: "packaging", title: "Guard test 3", description: "D", durationHours: 24, images: [],
+    });
+    await caller.community.submitBid({ bidId });
+    await approveCommunityBid(bidId, 1, "Test Admin");
+    // Second approve: status is now 'active', not 'pending_review' — conditional UPDATE returns affectedRows=0
+    await expect(approveCommunityBid(bidId, 1, "Test Admin")).rejects.toThrow();
+    // Status unchanged
+    const { bid } = await caller.community.getBid({ bidId });
+    expect(bid.status).toBe("active");
+  }, 30000);
+
+  // 16. Cancel active bid ??cancelled
+  it("author can cancel active bid", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    const { bidId } = await caller.community.createBid({
+      spaceCode: "packaging", title: "Guard test 4", description: "D", durationHours: 24, images: [],
+    });
+    await caller.community.submitBid({ bidId });
+    await approveCommunityBid(bidId, 1, "Test Admin");
+    await caller.community.cancelBid({ bidId });
+    const { bid } = await caller.community.getBid({ bidId });
+    expect(bid.status).toBe("cancelled");
+  }, 30000);
+
+  // 17. Cannot cancel a draft
+  it("cannot cancel a draft bid", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    const { bidId } = await caller.community.createBid({
+      spaceCode: "packaging", title: "Guard test 5", description: "D", durationHours: 24, images: [],
+    });
+    await expect(caller.community.cancelBid({ bidId }))
+      .rejects.toMatchObject({ code: "FORBIDDEN" });
+  }, 30000);
+});
+
+// ===== Phase 3A: Community Bids ??visibility =====
+describe("community bid: visibility rules", () => {
+  const adminCtx = () => createAuthContext({ role: "admin" });
+
+  // 18. Non-owner admin can see draft via getBid
+  it("admin can always see bids regardless of status", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    const { bidId } = await caller.community.createBid({
+      spaceCode: "textile", title: "Visibility test", description: "D", durationHours: 24, images: [],
+    });
+    const { bid } = await caller.community.getBid({ bidId });
+    expect(bid.status).toBe("draft");
+  }, 30000);
+
+  // 19. listBids only returns active bids
+  it("listBids returns only active status bids", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    const result = await caller.community.listBids({ spaceCode: "textile", page: 1, pageSize: 50 });
+    expect(result.bids.every(b => b.status === "active")).toBe(true);
+  }, 10000);
+
+  // 20. getMyBids returns all own bids including drafts
+  it("getMyBids includes own draft bids", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    const { bidId } = await caller.community.createBid({
+      spaceCode: "textile", title: "MyBids draft", description: "D", durationHours: 24, images: [],
+    });
+    const result = await caller.community.getMyBids({ page: 1, pageSize: 50 });
+    const found = result.bids.find(b => b.id === bidId);
+    expect(found).toBeDefined();
+    expect(found!.status).toBe("draft");
+  }, 15000);
+
+  // 21. pendingBidCount is 0 for non-admin
+  it("pendingBidCount returns 0 for non-admin user", async () => {
+    const caller = appRouter.createCaller(createAuthContext({ role: "user" }));
+    // In beta, non-admin gets FORBIDDEN before even reaching the pendingBidCount check
+    await expect(caller.community.pendingBidCount())
+      .rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  // 22. pendingBidCount is a non-negative number for admin
+  it("pendingBidCount returns non-negative number for admin", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    const result = await caller.community.pendingBidCount();
+    expect(result.count).toBeGreaterThanOrEqual(0);
+  }, 10000);
+});
+
+// ===== Phase 3A: Community Bids ??cross-industry =====
+describe("community bid: cross-industry target industries", () => {
+  const adminCtx = () => createAuthContext({ role: "admin" });
+
+  // 23. Cross-industry bid with valid target industries is created
+  it("cross-industry bid with valid targets is created and targetIndustries returned", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    const { bidId } = await caller.community.createBid({
+      spaceCode: "cross-industry",
+      title: "Cross-industry test",
+      description: "Need multiple industries",
+      durationHours: 24,
+      images: [],
+      targetIndustrySpaceCodes: ["textile", "electronics"],
+    });
+    const { bid, targetIndustries } = await caller.community.getBid({ bidId });
+    expect(bid.spaceCode).toBe("cross-industry");
+    expect(targetIndustries).toContain("textile");
+    expect(targetIndustries).toContain("electronics");
+    expect(targetIndustries).toHaveLength(2);
+  }, 30000);
+
+  // 24. cross-industry as target industry is rejected (BAD_REQUEST)
+  it("cross-industry itself as a target industry is BAD_REQUEST", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    await expect(caller.community.createBid({
+      spaceCode: "cross-industry",
+      title: "Bad target",
+      description: "D",
+      durationHours: 24,
+      images: [],
+      targetIndustrySpaceCodes: ["cross-industry"],
+    })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+});
+
+// ===== Phase 3A: Community Bids ??admin review panel =====
+describe("admin.community bid review", () => {
+  const adminCtx = () => createAuthContext({ role: "admin" });
+
+  // 25. admin.community.listPendingBids ??adminProcedure enforces whitelist-based access.
+  // Same as existing admin.community.hidePost test: even admin context throws in test env without whitelist entry.
+  it("listPendingBids throws for admin context without whitelist (same as other adminProcedure endpoints)", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    await expect(caller.admin.community.listPendingBids({ page: 1, pageSize: 20 }))
+      .rejects.toThrow();
+  }, 10000);
+
+  // 26. Non-admin cannot call admin.community.approveBid
+  it("non-admin cannot call approveBid (throws)", async () => {
+    const caller = appRouter.createCaller(createAuthContext({ role: "user" }));
+    await expect(caller.admin.community.approveBid({ bidId: 1 })).rejects.toThrow();
+  });
+
+  // 27. Non-admin cannot call admin.community.rejectBid
+  it("non-admin cannot call rejectBid (throws)", async () => {
+    const caller = appRouter.createCaller(createAuthContext({ role: "user" }));
+    await expect(caller.admin.community.rejectBid({ bidId: 1, reason: "no" })).rejects.toThrow();
+  });
+
+  // 28. rejectBid with empty reason — zod rejects (min 1)
+  it("rejectBid with empty reason string throws zod error", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    await expect(caller.admin.community.rejectBid({ bidId: 1, reason: "" })).rejects.toThrow();
+  });
+});
+
+// ===== Phase 3A: Audit — concurrency / state machine guards =====
+describe("community bid: concurrency and state machine guards (audit)", () => {
+  const adminCtx = () => createAuthContext({ role: "admin" });
+
+  // 29. Duplicate reject throws CONFLICT on second call
+  it("duplicate reject throws CONFLICT (conditional UPDATE guard)", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    const { bidId } = await caller.community.createBid({
+      spaceCode: "textile", title: "Dup reject test", description: "D", durationHours: 24, images: [],
+    });
+    await caller.community.submitBid({ bidId });
+    await rejectCommunityBid(bidId, 1, "Test Admin", "初次退回");
+    // Second reject: status is now 'rejected', not 'pending_review' → should throw
+    await expect(rejectCommunityBid(bidId, 1, "Test Admin", "重複退回")).rejects.toThrow();
+    const { bid } = await caller.community.getBid({ bidId });
+    expect(bid.status).toBe("rejected");
+  }, 30000);
+
+  // 30. cancelBid on draft throws FORBIDDEN (router guard) and DB conditional UPDATE returns 0
+  it("cancelBid concurrency guard: cannot cancel non-active status", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    const { bidId } = await caller.community.createBid({
+      spaceCode: "textile", title: "Cancel guard test", description: "D", durationHours: 24, images: [],
+    });
+    // draft → cancel should fail via router FORBIDDEN
+    await expect(caller.community.cancelBid({ bidId })).rejects.toMatchObject({ code: "FORBIDDEN" });
+  }, 15000);
+
+  // 31. submitBid idempotency: cannot re-submit a pending_review bid
+  it("cannot submit a bid already in pending_review", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    const { bidId } = await caller.community.createBid({
+      spaceCode: "textile", title: "Submit guard test", description: "D", durationHours: 24, images: [],
+    });
+    await caller.community.submitBid({ bidId });
+    // Already in pending_review — should throw FORBIDDEN (router status guard)
+    await expect(caller.community.submitBid({ bidId })).rejects.toMatchObject({ code: "FORBIDDEN" });
+  }, 15000);
+});
+
+// ===== Phase 3A: Audit — cross-industry validation =====
+describe("community bid: cross-industry validation (audit)", () => {
+  const adminCtx = () => createAuthContext({ role: "admin" });
+
+  // 32. More than 5 target industries → BAD_REQUEST (max 5)
+  it("more than 5 cross-industry targets throws BAD_REQUEST", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    await expect(caller.community.createBid({
+      spaceCode: "cross-industry",
+      title: "Too many targets",
+      description: "D",
+      durationHours: 24,
+      images: [],
+      targetIndustrySpaceCodes: ["textile", "electronics", "packaging", "metal", "plastics", "automotive"],
+    })).rejects.toThrow(); // zod max(5) throws
+  });
+
+  // 33. Non-cross-industry bid with targetIndustrySpaceCodes throws BAD_REQUEST
+  it("non-cross-industry bid cannot have target industries", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    await expect(caller.community.createBid({
+      spaceCode: "textile",
+      title: "Bad target for regular",
+      description: "D",
+      durationHours: 24,
+      images: [],
+      targetIndustrySpaceCodes: ["electronics"],
+    })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  }, 10000);
+
+  // 34. Duplicate target industries in createBid → BAD_REQUEST
+  it("duplicate target industries are rejected with BAD_REQUEST", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    await expect(caller.community.createBid({
+      spaceCode: "cross-industry",
+      title: "Dup industries",
+      description: "D",
+      durationHours: 24,
+      images: [],
+      targetIndustrySpaceCodes: ["textile", "textile"],
+    })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  }, 10000);
+
+  // 35. Cross-industry update relation sync: change targets, old ones removed
+  it("updateBid replaces target industries (old removed, new inserted)", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    const { bidId } = await caller.community.createBid({
+      spaceCode: "cross-industry",
+      title: "Target sync test",
+      description: "D",
+      durationHours: 24,
+      images: [],
+      targetIndustrySpaceCodes: ["textile", "electronics"],
+    });
+    let industries = await getCommunityBidIndustries(bidId);
+    expect(industries.sort()).toEqual(["electronics", "textile"].sort());
+
+    // Update to different targets (use valid slugs: packaging, metal-processing, consumer-goods)
+    await caller.community.updateBid({
+      bidId,
+      targetIndustrySpaceCodes: ["packaging", "metal-processing", "consumer-goods"],
+    });
+    industries = await getCommunityBidIndustries(bidId);
+    expect(industries.sort()).toEqual(["consumer-goods", "metal-processing", "packaging"].sort());
+    expect(industries).not.toContain("textile");
+    expect(industries).not.toContain("electronics");
+  }, 30000);
+
+  // 36. submitBid re-validates cross-industry: cleared targets → BAD_REQUEST at submit time
+  it("submitBid re-validates: cross-industry bid with no targets cannot be submitted", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    const { bidId } = await caller.community.createBid({
+      spaceCode: "cross-industry",
+      title: "Re-validate targets",
+      description: "D",
+      durationHours: 24,
+      images: [],
+      targetIndustrySpaceCodes: ["textile"],
+    });
+    // Manually clear the target industries (simulates race condition or direct DB manipulation)
+    const { default: mysql } = await import("mysql2/promise");
+    const conn = await mysql.createConnection(process.env.DATABASE_URL!);
+    await conn.execute("DELETE FROM `communityBidIndustries` WHERE `bidId` = ?", [bidId]);
+    await conn.end();
+    // submitBid should catch missing targets
+    await expect(caller.community.submitBid({ bidId })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  }, 30000);
+});
+
+// ===== Phase 3A: Audit — withdraw and delete =====
+describe("community bid: withdraw and delete (audit)", () => {
+  const adminCtx = () => createAuthContext({ role: "admin" });
+
+  // 37. Author can withdraw a pending_review bid back to draft
+  it("withdrawBid: pending_review → draft with history entry", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    const { bidId } = await caller.community.createBid({
+      spaceCode: "textile", title: "Withdraw test", description: "D", durationHours: 24, images: [],
+    });
+    await caller.community.submitBid({ bidId });
+    const { bid: pending } = await caller.community.getBid({ bidId });
+    expect(pending.status).toBe("pending_review");
+
+    await caller.community.withdrawBid({ bidId });
+    const { bid: withdrawn, reviewHistory } = await caller.community.getBid({ bidId });
+    expect(withdrawn.status).toBe("draft");
+    const wEntry = reviewHistory.find(e => e.action === "withdrawn");
+    expect(wEntry).toBeDefined();
+    expect(wEntry!.bidStatusBefore).toBe("pending_review");
+    expect(wEntry!.bidStatusAfter).toBe("draft");
+  }, 30000);
+
+  // 38. withdrawBid on draft throws FORBIDDEN (not in pending_review)
+  it("withdrawBid on a draft throws FORBIDDEN", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    const { bidId } = await caller.community.createBid({
+      spaceCode: "textile", title: "Withdraw guard test", description: "D", durationHours: 24, images: [],
+    });
+    await expect(caller.community.withdrawBid({ bidId })).rejects.toMatchObject({ code: "FORBIDDEN" });
+  }, 15000);
+
+  // 39. Author can delete a draft bid
+  it("deleteBid: soft-deletes a draft bid", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    const { bidId } = await caller.community.createBid({
+      spaceCode: "textile", title: "Delete test", description: "D", durationHours: 24, images: [],
+    });
+    await caller.community.deleteBid({ bidId });
+    // getBid returns NOT_FOUND after soft delete
+    await expect(caller.community.getBid({ bidId })).rejects.toMatchObject({ code: "NOT_FOUND" });
+  }, 20000);
+
+  // 40. deleteBid on active bid throws FORBIDDEN
+  it("deleteBid on active bid throws FORBIDDEN", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    const { bidId } = await caller.community.createBid({
+      spaceCode: "textile", title: "Delete active guard", description: "D", durationHours: 24, images: [],
+    });
+    await caller.community.submitBid({ bidId });
+    await approveCommunityBid(bidId, 1, "Test Admin");
+    await expect(caller.community.deleteBid({ bidId })).rejects.toMatchObject({ code: "FORBIDDEN" });
+  }, 30000);
+});
+
+// ===== Phase 3A: Audit — review history snapshot =====
+describe("community bid: review history actorNameSnapshot (audit)", () => {
+  const adminCtx = () => createAuthContext({ role: "admin" });
+
+  // 41. Full lifecycle produces review history with actorNameSnapshot and status transitions
+  it("review history entries have actorNameSnapshot and correct status transitions", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    const { bidId } = await caller.community.createBid({
+      spaceCode: "textile", title: "History snapshot test", description: "D", durationHours: 24, images: [],
+    });
+    await caller.community.submitBid({ bidId });
+    await rejectCommunityBid(bidId, 1, "Test Reviewer", "需要修改");
+    await caller.community.updateBid({ bidId, description: "Updated D" });
+    await caller.community.submitBid({ bidId });
+    await approveCommunityBid(bidId, 1, "Test Reviewer");
+
+    const { reviewHistory } = await caller.community.getBid({ bidId });
+    expect(reviewHistory.length).toBeGreaterThanOrEqual(3);
+
+    const submitted = reviewHistory.filter(e => e.action === "submitted");
+    const rejected = reviewHistory.find(e => e.action === "rejected");
+    const approved = reviewHistory.find(e => e.action === "approved");
+
+    expect(submitted.length).toBeGreaterThanOrEqual(1);
+    expect(submitted[0].actorNameSnapshot).toBe("Test User"); // ctx.user.name from createAuthContext
+    expect(submitted[0].bidStatusBefore).toBe("draft");
+    expect(submitted[0].bidStatusAfter).toBe("pending_review");
+
+    expect(rejected).toBeDefined();
+    expect(rejected!.actorNameSnapshot).toBe("Test Reviewer");
+    expect(rejected!.bidStatusBefore).toBe("pending_review");
+    expect(rejected!.bidStatusAfter).toBe("rejected");
+
+    expect(approved).toBeDefined();
+    expect(approved!.actorNameSnapshot).toBe("Test Reviewer");
+    expect(approved!.bidStatusBefore).toBe("pending_review");
+    expect(approved!.bidStatusAfter).toBe("active");
+  }, 60000);
+});
+
+// ===== Phase 3A: Audit — deadline precision =====
+describe("community bid: deadline precision (audit)", () => {
+  const adminCtx = () => createAuthContext({ role: "admin" });
+
+  // 42. Fixed-time deadline calculation: publishedAt + durationHours * 3600s exactly
+  it("approve at fixed system time produces exact deadline = publishedAt + durationHours*3600000ms", async () => {
+    vi.useFakeTimers();
+    const fixedNow = new Date("2026-07-01T12:00:00.000Z");
+    vi.setSystemTime(fixedNow);
+
+    const caller = appRouter.createCaller(adminCtx());
+    let bidId: number;
+    try {
+      const { bidId: id } = await caller.community.createBid({
+        spaceCode: "textile", title: "Deadline precision test", description: "D", durationHours: 48, images: [],
+      });
+      bidId = id;
+      await caller.community.submitBid({ bidId });
+      await approveCommunityBid(bidId, 1, "Test Admin");
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const { bid } = await caller.community.getBid({ bidId });
+    expect(bid.status).toBe("active");
+    expect(bid.publishedAt).not.toBeNull();
+    expect(bid.deadline).not.toBeNull();
+
+    const pubMs = new Date(bid.publishedAt!).getTime();
+    const dlMs = new Date(bid.deadline!).getTime();
+    const expectedGap = 48 * 3600 * 1000;
+    // MySQL TIMESTAMP precision is 1 second, so allow ±1000ms
+    expect(Math.abs(dlMs - pubMs - expectedGap)).toBeLessThan(1000);
+  }, 60000);
+});
+
+// ===== Phase 3A: Audit — listBids industry isolation =====
+describe("community bid: listBids industry isolation (audit)", () => {
+  const adminCtx = () => createAuthContext({ role: "admin" });
+
+  // 43. listBids only returns bids for the requested spaceCode
+  it("listBids returns only bids matching the requested spaceCode", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    // Create an active bid in 'textile'
+    const { bidId: textileBidId } = await caller.community.createBid({
+      spaceCode: "textile", title: "Textile isolation test", description: "D", durationHours: 24, images: [],
+    });
+    await caller.community.submitBid({ bidId: textileBidId });
+    await approveCommunityBid(textileBidId, 1, "Test Admin");
+
+    // Create an active bid in 'electronics'
+    const { bidId: electronicsBidId } = await caller.community.createBid({
+      spaceCode: "electronics", title: "Electronics isolation test", description: "D", durationHours: 24, images: [],
+    });
+    await caller.community.submitBid({ bidId: electronicsBidId });
+    await approveCommunityBid(electronicsBidId, 1, "Test Admin");
+
+    const textileResult = await caller.community.listBids({ spaceCode: "textile", page: 1, pageSize: 50 });
+    const electronicsResult = await caller.community.listBids({ spaceCode: "electronics", page: 1, pageSize: 50 });
+
+    expect(textileResult.bids.every(b => b.spaceCode === "textile")).toBe(true);
+    expect(electronicsResult.bids.every(b => b.spaceCode === "electronics")).toBe(true);
+
+    const textileIds = textileResult.bids.map(b => b.id);
+    const electronicsIds = electronicsResult.bids.map(b => b.id);
+    expect(textileIds).toContain(textileBidId);
+    expect(textileIds).not.toContain(electronicsBidId);
+    expect(electronicsIds).toContain(electronicsBidId);
+    expect(electronicsIds).not.toContain(textileBidId);
+  }, 60000);
+});
+
+// ===== Phase 3A: Audit — concurrent approveBid safety =====
+describe("community bid: concurrent approveBid safety (audit)", () => {
+  const adminCtx = () => createAuthContext({ role: "admin" });
+
+  // 44. Two simultaneous approveBid calls: exactly 1 succeeds, 1 CONFLICT; only 1 history entry; publishedAt set once
+  it("Promise.allSettled two concurrent approveBid: only 1 history entry; bid active with single publishedAt", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+
+    const { bidId } = await caller.community.createBid({
+      spaceCode: "textile",
+      title: "Concurrent approve test",
+      description: "D",
+      durationHours: 24,
+      images: [],
+      pinnedProductIds: [],
+    });
+    await caller.community.submitBid({ bidId });
+
+    // Two concurrent approvals
+    const results = await Promise.allSettled([
+      approveCommunityBid(bidId, 1, "Admin A"),
+      approveCommunityBid(bidId, 1, "Admin B"),
+    ]);
+
+    const fulfilled = results.filter(r => r.status === "fulfilled");
+    const rejected = results.filter(r => r.status === "rejected");
+    // Exactly one should win
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+
+    // Bid is active
+    const { bid } = await caller.community.getBid({ bidId });
+    expect(bid.status).toBe("active");
+
+    // publishedAt and deadline set exactly once
+    expect(bid.publishedAt).not.toBeNull();
+    expect(bid.deadline).not.toBeNull();
+
+    // Only 1 approved history entry
+    const history = await listCommunityBidReviewHistory(bidId);
+    const approvedEntries = history.filter(h => h.action === "approved");
+    expect(approvedEntries).toHaveLength(1);
+  }, 60000);
+});
+
+// ===== Phase 3A: Audit — stale pinnedProductIds on submitBid =====
+describe("community bid: stale pinnedProductIds handling on submitBid (audit)", () => {
+  const adminCtx = () => createAuthContext({ role: "admin" });
+
+  // 45. Stale (non-existent) product IDs are stripped and removedProductCount reflects the count
+  it("submitBid strips non-existent pinnedProductIds and returns removedProductCount > 0", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+
+    const { bidId } = await caller.community.createBid({
+      spaceCode: "textile",
+      title: "Stale product strip test",
+      description: "D",
+      durationHours: 24,
+      images: [],
+      pinnedProductIds: [],
+    });
+
+    // Directly inject a non-existent product ID into the bid (bypasses form validation)
+    await updateCommunityBid(bidId, { pinnedProductIds: [999999] });
+
+    const result = await caller.community.submitBid({ bidId });
+    expect(result.success).toBe(true);
+    expect(result.removedProductCount).toBe(1);
+
+    // Bid is now pending_review with empty pinnedProductIds
+    const bid = await getCommunityBidById(bidId);
+    expect(bid?.status).toBe("pending_review");
+    expect((bid?.pinnedProductIds as number[]).length).toBe(0);
+  }, 60000);
+
+  // 46. Valid product IDs (no factory in test context = personal bid): all stripped, returns count
+  it("submitBid with multiple stale IDs strips all and returns correct count", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+
+    const { bidId } = await caller.community.createBid({
+      spaceCode: "textile",
+      title: "Multi-stale product test",
+      description: "D",
+      durationHours: 24,
+      images: [],
+      pinnedProductIds: [],
+    });
+
+    // Inject 3 non-existent product IDs
+    await updateCommunityBid(bidId, { pinnedProductIds: [888881, 888882, 888883] });
+
+    const result = await caller.community.submitBid({ bidId });
+    expect(result.success).toBe(true);
+    expect(result.removedProductCount).toBe(3);
+
+    const bid = await getCommunityBidById(bidId);
+    expect((bid?.pinnedProductIds as number[]).length).toBe(0);
+  }, 60000);
+
+  // 47. No stale products: removedProductCount = 0 and submission proceeds normally
+  it("submitBid with no pinnedProductIds returns removedProductCount = 0", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+
+    const { bidId } = await caller.community.createBid({
+      spaceCode: "textile",
+      title: "No product test",
+      description: "D",
+      durationHours: 24,
+      images: [],
+      pinnedProductIds: [],
+    });
+
+    const result = await caller.community.submitBid({ bidId });
+    expect(result.success).toBe(true);
+    expect(result.removedProductCount).toBe(0);
+  }, 60000);
+
+  // 48. All stale products stripped — bid still submits (not blocked)
+  it("submitBid with all stale products still succeeds — stale items do not block submission", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+
+    const { bidId } = await caller.community.createBid({
+      spaceCode: "textile",
+      title: "All stale — still submittable",
+      description: "D",
+      durationHours: 24,
+      images: [],
+      pinnedProductIds: [],
+    });
+
+    await updateCommunityBid(bidId, { pinnedProductIds: [777771, 777772] });
+
+    const result = await caller.community.submitBid({ bidId });
+    expect(result.success).toBe(true);
+    expect(result.removedProductCount).toBe(2);
+
+    const bid = await getCommunityBidById(bidId);
+    expect(bid?.status).toBe("pending_review");
+  }, 60000);
 });

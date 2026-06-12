@@ -10,6 +10,7 @@ import { trpc } from "@/lib/trpc";
 
 const CommunityPost = lazy(() => import("@/components/community/CommunityPost"));
 const CommunityNotifications = lazy(() => import("@/components/community/CommunityNotifications"));
+const CommunityBidDetail = lazy(() => import("@/components/community/CommunityBidDetail"));
 
 const VALID_SPACE_CODES = new Set<string>([
   ...Object.values(INDUSTRY_SLUGS),
@@ -97,6 +98,18 @@ export default function Community() {
       return (
         <Suspense fallback={<AppLoading />}>
           <CommunityPost spaceCode={spaceCode} postId={postId} />
+        </Suspense>
+      );
+    }
+  }
+
+  // /community/:spaceCode/bids/:bidId
+  if (seg1 === "bids" && seg2) {
+    const bidId = parseInt(seg2, 10);
+    if (!isNaN(bidId)) {
+      return (
+        <Suspense fallback={<AppLoading />}>
+          <CommunityBidDetail spaceCode={spaceCode} bidId={bidId} />
         </Suspense>
       );
     }

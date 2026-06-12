@@ -21,10 +21,12 @@ import {
   communityPosts, communityComments,
   communityBoardFollows, factoryFollows, communityContentFollows,
   communityReactions, communityMentions, communityNotifications,
+  communityBids, communityBidIndustries, communityBidReviewHistory,
   type Factory, type InsertFactory, type Product, type InsertProduct, type Favorite, type InsertFavorite,
   type CommunityPost, type CommunityComment,
   type CommunityBoardFollow, type FactoryFollow, type CommunityContentFollow,
   type CommunityReaction, type CommunityMention, type CommunityNotification,
+  type CommunityBid, type CommunityBidReviewHistory,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 import { ADJACENT_REGIONS, INDUSTRY_SLUGS } from "../shared/constants";
@@ -4742,4 +4744,297 @@ export async function buildNewPostNotifications(input: {
   }
 
   return notifications;
+}
+
+// ===== Phase 3A: Community Bids =====
+
+export type CreateBidInput = {
+  spaceCode: string;
+  authorUserId: number;
+  authorFactoryId: number | null;
+  authorNameSnapshot: string;
+  authorFactoryNameSnapshot: string | null;
+  authorRoleSnapshot: string | null;
+  title: string;
+  description: string;
+  quantity: string | null;
+  material: string | null;
+  specifications: string | null;
+  sampleRequired: boolean;
+  desiredDeliveryDate: string | null;
+  deliveryLocation: string | null;
+  budgetMin: number | null;
+  budgetMax: number | null;
+  images: string[];
+  pinnedProductIds: number[];
+  durationHours: number;
+  targetIndustrySpaceCodes?: string[];
+};
+
+export async function createCommunityBid(input: CreateBidInput): Promise<number> {
+  const db_ = await getDb();
+  if (!db_) throw new Error("DB not available");
+  const [result] = await db_.insert(communityBids).values({
+    spaceCode: input.spaceCode,
+    authorUserId: input.authorUserId,
+    authorFactoryId: input.authorFactoryId,
+    authorNameSnapshot: input.authorNameSnapshot,
+    authorFactoryNameSnapshot: input.authorFactoryNameSnapshot,
+    authorRoleSnapshot: input.authorRoleSnapshot,
+    title: input.title,
+    description: input.description,
+    quantity: input.quantity,
+    material: input.material,
+    specifications: input.specifications,
+    sampleRequired: input.sampleRequired,
+    desiredDeliveryDate: input.desiredDeliveryDate,
+    deliveryLocation: input.deliveryLocation,
+    budgetMin: input.budgetMin,
+    budgetMax: input.budgetMax,
+    images: input.images,
+    pinnedProductIds: input.pinnedProductIds,
+    durationHours: input.durationHours,
+    status: "draft",
+  });
+  const bidId = (result as any).insertId as number;
+
+  if (input.targetIndustrySpaceCodes && input.targetIndustrySpaceCodes.length > 0) {
+    await db_.insert(communityBidIndustries).values(
+      input.targetIndustrySpaceCodes.map(sc => ({ bidId, spaceCode: sc })),
+    );
+  }
+
+  return bidId;
+}
+
+export type UpdateBidInput = Partial<Omit<CreateBidInput, "spaceCode" | "authorUserId" | "authorFactoryId" | "authorNameSnapshot" | "authorFactoryNameSnapshot" | "authorRoleSnapshot">>;
+
+export async function updateCommunityBid(bidId: number, input: UpdateBidInput): Promise<void> {
+  const db_ = await getDb();
+  if (!db_) throw new Error("DB not available");
+
+  const { targetIndustrySpaceCodes, images, pinnedProductIds, ...rest } = input;
+  const updateFields: Record<string, unknown> = { ...rest };
+  if (images !== undefined) updateFields.images = images;
+  if (pinnedProductIds !== undefined) updateFields.pinnedProductIds = pinnedProductIds;
+
+  if (Object.keys(updateFields).length > 0) {
+    await db_.update(communityBids).set(updateFields).where(eq(communityBids.id, bidId));
+  }
+
+  if (targetIndustrySpaceCodes !== undefined) {
+    await db_.delete(communityBidIndustries).where(eq(communityBidIndustries.bidId, bidId));
+    if (targetIndustrySpaceCodes.length > 0) {
+      await db_.insert(communityBidIndustries).values(
+        targetIndustrySpaceCodes.map(sc => ({ bidId, spaceCode: sc })),
+      );
+    }
+  }
+}
+
+export async function getCommunityBidById(bidId: number): Promise<CommunityBid | null> {
+  const db_ = await getDb();
+  if (!db_) return null;
+  const rows = await db_.select().from(communityBids).where(eq(communityBids.id, bidId)).limit(1);
+  return rows[0] ?? null;
+}
+
+export async function getCommunityBidIndustries(bidId: number): Promise<string[]> {
+  const db_ = await getDb();
+  if (!db_) return [];
+  const rows = await db_.select({ spaceCode: communityBidIndustries.spaceCode })
+    .from(communityBidIndustries)
+    .where(eq(communityBidIndustries.bidId, bidId));
+  return rows.map(r => r.spaceCode);
+}
+
+// Helper: raw pool for conditional UPDATE with affectedRows check
+async function getRawPool(): Promise<mysql.Pool> {
+  if (!_pool) await getDb();
+  if (!_pool) throw new Error("DB not available");
+  return _pool;
+}
+
+// mysql2 pool.execute() converts Date objects using the local timezone, which can corrupt UTC
+// timestamps on systems not in UTC. Pass UTC strings directly to avoid this.
+function toSqlUtc(d: Date): string {
+  return d.toISOString().slice(0, 19).replace("T", " ");
+}
+
+export async function submitCommunityBidForReview(bidId: number, actorUserId: number, actorName: string): Promise<void> {
+  const db_ = await getDb();
+  if (!db_) throw new Error("DB not available");
+  const bid = await getCommunityBidById(bidId);
+  const statusBefore = bid?.status ?? "draft";
+  const pool = await getRawPool();
+  const [header] = await pool.execute<mysql.ResultSetHeader>(
+    'UPDATE `communityBids` SET `status` = ? WHERE `id` = ? AND (`status` = ? OR `status` = ?)',
+    ['pending_review', bidId, 'draft', 'rejected'],
+  );
+  if (header.affectedRows === 0) {
+    throw Object.assign(new Error("狀態不符合，無法提交審核"), { code: "CONFLICT" });
+  }
+  await db_.insert(communityBidReviewHistory).values({
+    bidId,
+    actorUserId,
+    actorNameSnapshot: actorName,
+    action: "submitted",
+    bidStatusBefore: statusBefore,
+    bidStatusAfter: "pending_review",
+  });
+}
+
+export async function approveCommunityBid(bidId: number, reviewerUserId: number, reviewerName: string): Promise<void> {
+  const db_ = await getDb();
+  if (!db_) throw new Error("DB not available");
+  const bid = await getCommunityBidById(bidId);
+  if (!bid) throw Object.assign(new Error("找不到此需求"), { code: "NOT_FOUND" });
+  const publishedAt = new Date();
+  const deadline = new Date(publishedAt.getTime() + bid.durationHours * 60 * 60 * 1000);
+  const pool = await getRawPool();
+  const [header] = await pool.execute<mysql.ResultSetHeader>(
+    'UPDATE `communityBids` SET `status` = ?, `publishedAt` = ?, `deadline` = ?, ' +
+    '`rejectionReason` = NULL, `reviewedByUserId` = ?, `reviewedAt` = ? ' +
+    'WHERE `id` = ? AND `status` = ?',
+    ['active', toSqlUtc(publishedAt), toSqlUtc(deadline), reviewerUserId, toSqlUtc(publishedAt), bidId, 'pending_review'],
+  );
+  if (header.affectedRows === 0) {
+    throw Object.assign(new Error("審核狀態已被更新，請重新整理後再試"), { code: "CONFLICT" });
+  }
+  await db_.insert(communityBidReviewHistory).values({
+    bidId,
+    actorUserId: reviewerUserId,
+    actorNameSnapshot: reviewerName,
+    action: "approved",
+    bidStatusBefore: "pending_review",
+    bidStatusAfter: "active",
+  });
+}
+
+export async function rejectCommunityBid(bidId: number, reviewerUserId: number, reviewerName: string, reason: string): Promise<void> {
+  const db_ = await getDb();
+  if (!db_) throw new Error("DB not available");
+  const now = new Date();
+  const pool = await getRawPool();
+  const [header] = await pool.execute<mysql.ResultSetHeader>(
+    'UPDATE `communityBids` SET `status` = ?, `rejectionReason` = ?, `reviewedByUserId` = ?, `reviewedAt` = ? ' +
+    'WHERE `id` = ? AND `status` = ?',
+    ['rejected', reason, reviewerUserId, toSqlUtc(now), bidId, 'pending_review'],
+  );
+  if (header.affectedRows === 0) {
+    throw Object.assign(new Error("審核狀態已被更新，請重新整理後再試"), { code: "CONFLICT" });
+  }
+  await db_.insert(communityBidReviewHistory).values({
+    bidId,
+    actorUserId: reviewerUserId,
+    actorNameSnapshot: reviewerName,
+    action: "rejected",
+    reason,
+    bidStatusBefore: "pending_review",
+    bidStatusAfter: "rejected",
+  });
+}
+
+export async function cancelCommunityBid(bidId: number): Promise<void> {
+  const pool = await getRawPool();
+  const [header] = await pool.execute<mysql.ResultSetHeader>(
+    'UPDATE `communityBids` SET `status` = ? WHERE `id` = ? AND `status` = ?',
+    ['cancelled', bidId, 'active'],
+  );
+  if (header.affectedRows === 0) {
+    throw Object.assign(new Error("只有進行中的需求可以取消"), { code: "CONFLICT" });
+  }
+}
+
+export async function withdrawCommunityBid(bidId: number, actorUserId: number, actorName: string): Promise<void> {
+  const db_ = await getDb();
+  if (!db_) throw new Error("DB not available");
+  const pool = await getRawPool();
+  const [header] = await pool.execute<mysql.ResultSetHeader>(
+    'UPDATE `communityBids` SET `status` = ? WHERE `id` = ? AND `status` = ?',
+    ['draft', bidId, 'pending_review'],
+  );
+  if (header.affectedRows === 0) {
+    throw Object.assign(new Error("只有待審核中的需求可以撤回"), { code: "CONFLICT" });
+  }
+  await db_.insert(communityBidReviewHistory).values({
+    bidId,
+    actorUserId,
+    actorNameSnapshot: actorName,
+    action: "withdrawn",
+    bidStatusBefore: "pending_review",
+    bidStatusAfter: "draft",
+  });
+}
+
+export async function softDeleteCommunityBid(bidId: number): Promise<void> {
+  const pool = await getRawPool();
+  const now = new Date();
+  const [header] = await pool.execute<mysql.ResultSetHeader>(
+    'UPDATE `communityBids` SET `deletedAt` = ? WHERE `id` = ? AND (`status` = ? OR `status` = ?) AND `deletedAt` IS NULL',
+    [toSqlUtc(now), bidId, 'draft', 'rejected'],
+  );
+  if (header.affectedRows === 0) {
+    throw Object.assign(new Error("只有草稿或退回狀態的需求可以刪除"), { code: "CONFLICT" });
+  }
+}
+
+export type ListBidsFilter = {
+  spaceCode?: string;
+  status?: CommunityBid["status"];
+  authorUserId?: number;
+  page: number;
+  pageSize: number;
+};
+
+export async function listCommunityBids(filter: ListBidsFilter): Promise<{
+  bids: (CommunityBid & { targetIndustries: string[] })[];
+  total: number;
+}> {
+  const db_ = await getDb();
+  if (!db_) return { bids: [], total: 0 };
+
+  const conditions = [];
+  if (filter.spaceCode) conditions.push(eq(communityBids.spaceCode, filter.spaceCode));
+  if (filter.status) conditions.push(eq(communityBids.status, filter.status));
+  if (filter.authorUserId !== undefined) conditions.push(eq(communityBids.authorUserId, filter.authorUserId));
+  conditions.push(isNull(communityBids.deletedAt));
+
+  const where = conditions.length > 0 ? and(...conditions) : undefined;
+  const offset = (filter.page - 1) * filter.pageSize;
+
+  const [rows, countRows] = await Promise.all([
+    db_.select().from(communityBids)
+      .where(where)
+      .orderBy(desc(communityBids.createdAt))
+      .limit(filter.pageSize)
+      .offset(offset),
+    db_.select({ count: sql<number>`count(*)` }).from(communityBids).where(where),
+  ]);
+
+  const total = Number(countRows[0]?.count ?? 0);
+
+  const bidsWithIndustries = await Promise.all(rows.map(async bid => ({
+    ...bid,
+    targetIndustries: await getCommunityBidIndustries(bid.id),
+  })));
+
+  return { bids: bidsWithIndustries, total };
+}
+
+export async function listCommunityBidReviewHistory(bidId: number): Promise<CommunityBidReviewHistory[]> {
+  const db_ = await getDb();
+  if (!db_) return [];
+  return db_.select().from(communityBidReviewHistory)
+    .where(eq(communityBidReviewHistory.bidId, bidId))
+    .orderBy(asc(communityBidReviewHistory.createdAt));
+}
+
+export async function countPendingCommunityBids(): Promise<number> {
+  const db_ = await getDb();
+  if (!db_) return 0;
+  const rows = await db_.select({ count: sql<number>`count(*)` })
+    .from(communityBids)
+    .where(and(eq(communityBids.status, "pending_review"), isNull(communityBids.deletedAt)));
+  return Number(rows[0]?.count ?? 0);
 }

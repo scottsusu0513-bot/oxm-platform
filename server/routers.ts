@@ -2341,6 +2341,89 @@ export const appRouter = router({
           await db.adminHardDeleteCommunityPost(input.postId);
           return { success: true };
         }),
+
+      listPendingBids: adminProcedure
+        .input(z.object({
+          page: z.number().int().min(1).default(1),
+          pageSize: z.number().int().min(1).max(50).default(20),
+        }))
+        .query(async ({ input }) => {
+          return db.listCommunityBids({ status: "pending_review", page: input.page, pageSize: input.pageSize });
+        }),
+
+      approveBid: adminProcedure
+        .input(z.object({ bidId: z.number().int() }))
+        .mutation(async ({ ctx, input }) => {
+          const bid = await db.getCommunityBidById(input.bidId);
+          if (!bid || bid.deletedAt) throw new TRPCError({ code: "NOT_FOUND", message: "找不到此需求" });
+          if (bid.status !== "pending_review") {
+            throw new TRPCError({ code: "FORBIDDEN", message: "只有待審核狀態可以通過審核" });
+          }
+          // Re-validate completeness before approving
+          if (!bid.title?.trim() || !bid.description?.trim()) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "需求缺少必填欄位（標題或說明），無法通過審核" });
+          }
+          if (bid.spaceCode === COMMUNITY_CROSS_INDUSTRY_SLUG) {
+            const targets = await db.getCommunityBidIndustries(input.bidId);
+            if (targets.length === 0) {
+              throw new TRPCError({ code: "BAD_REQUEST", message: "跨產業需求缺少目標產業，無法通過審核" });
+            }
+          }
+          await db.approveCommunityBid(input.bidId, ctx.user!.id, ctx.user!.name ?? "管理員");
+          // Notify author
+          if (bid.authorUserId != null) {
+            try {
+              await db.createCommunityNotificationsBatch([{
+                recipientUserId: bid.authorUserId,
+                actorUserId: ctx.user!.id,
+                actorFactoryId: null,
+                eventType: "bid_review_approved",
+                eventGroup: "bid_review",
+                postId: null,
+                commentId: null,
+                spaceCode: bid.spaceCode,
+                titleSnapshot: bid.title,
+                actorNameSnapshot: "管理員",
+                actorFactoryNameSnapshot: null,
+                message: `您的需求「${bid.title}」已通過審核，現在開放廠商接案`,
+                dedupeKey: `bid:${bid.id}:approved:r:${bid.authorUserId}`,
+              }]);
+            } catch { /* best-effort */ }
+          }
+          return { success: true };
+        }),
+
+      rejectBid: adminProcedure
+        .input(z.object({ bidId: z.number().int(), reason: z.string().min(1).max(1000).trim() }))
+        .mutation(async ({ ctx, input }) => {
+          const bid = await db.getCommunityBidById(input.bidId);
+          if (!bid || bid.deletedAt) throw new TRPCError({ code: "NOT_FOUND", message: "找不到此需求" });
+          if (bid.status !== "pending_review") {
+            throw new TRPCError({ code: "FORBIDDEN", message: "只有待審核狀態可以退回" });
+          }
+          await db.rejectCommunityBid(input.bidId, ctx.user!.id, ctx.user!.name ?? "管理員", input.reason);
+          // Notify author
+          if (bid.authorUserId != null) {
+            try {
+              await db.createCommunityNotificationsBatch([{
+                recipientUserId: bid.authorUserId,
+                actorUserId: ctx.user!.id,
+                actorFactoryId: null,
+                eventType: "bid_review_rejected",
+                eventGroup: "bid_review",
+                postId: null,
+                commentId: null,
+                spaceCode: bid.spaceCode,
+                titleSnapshot: bid.title,
+                actorNameSnapshot: "管理員",
+                actorFactoryNameSnapshot: null,
+                message: `您的需求「${bid.title}」審核未通過：${input.reason}`,
+                dedupeKey: `bid:${bid.id}:rejected:r:${bid.authorUserId}`,
+              }]);
+            } catch { /* best-effort */ }
+          }
+          return { success: true };
+        }),
     }),
   }),
 
@@ -3415,6 +3498,332 @@ export const appRouter = router({
       checkCommunityWrite(ctx.user);
       await db.markAllCommunityNotificationsRead(ctx.user.id);
       return { success: true };
+    }),
+
+    // ===== Phase 3A: Community Bids =====
+
+    // 1 ≤ durationHours ≤ 168 (7 days)
+    createBid: protectedProcedure
+      .input(z.object({
+        spaceCode: z.string().min(1).max(60),
+        title: z.string().min(1).max(200).trim(),
+        description: z.string().min(1).max(10000).trim(),
+        quantity: z.string().max(200).trim().nullable().optional(),
+        material: z.string().max(200).trim().nullable().optional(),
+        specifications: z.string().max(5000).trim().nullable().optional(),
+        sampleRequired: z.boolean().default(false),
+        desiredDeliveryDate: z.string().max(100).trim().nullable().optional(),
+        deliveryLocation: z.string().max(200).trim().nullable().optional(),
+        budgetMin: z.number().int().positive().nullable().optional(),
+        budgetMax: z.number().int().positive().nullable().optional(),
+        images: z.array(z.string().url()).max(6).default([]),
+        pinnedProductIds: z.array(z.number().int().positive()).max(5).default([]),
+        durationHours: z.number().int().min(1).max(168),
+        authorFactoryId: z.number().int().positive().optional(),
+        targetIndustrySpaceCodes: z.array(z.string().min(1).max(60)).max(5).default([]),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        checkCommunityWrite(ctx.user);
+        assertValidSpaceCode(input.spaceCode);
+        assertCommunityImagesOwned(input.images, ctx.user.id);
+        if (input.budgetMin != null && input.budgetMax != null && input.budgetMin > input.budgetMax) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "預算下限不可高於上限" });
+        }
+
+        const identityOptions = await db.getCommunityAuthorIdentityOptions(ctx.user.id);
+        const factoryOptions = identityOptions.filter(o => o.type === "factory") as
+          Array<{ type: "factory"; factoryId: number; label: string; role: string }>;
+        let resolvedFactoryId: number | null = null;
+        if (factoryOptions.length === 0) {
+          resolvedFactoryId = null;
+        } else if (factoryOptions.length === 1) {
+          const only = factoryOptions[0].factoryId;
+          if (input.authorFactoryId != null && input.authorFactoryId !== only) {
+            throw new TRPCError({ code: "FORBIDDEN", message: "無效的工廠身分" });
+          }
+          resolvedFactoryId = only;
+        } else {
+          if (input.authorFactoryId == null) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "請選擇代表工廠" });
+          }
+          if (!factoryOptions.some(f => f.factoryId === input.authorFactoryId)) {
+            throw new TRPCError({ code: "FORBIDDEN", message: "無效的代表工廠" });
+          }
+          resolvedFactoryId = input.authorFactoryId;
+        }
+
+        // Non-cross-industry bids must not specify target industries
+        if (input.spaceCode !== COMMUNITY_CROSS_INDUSTRY_SLUG && input.targetIndustrySpaceCodes.length > 0) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "非跨產業需求不可設定目標產業" });
+        }
+        // Cross-industry bids must specify 1–5 valid target industries (no duplicates, no cross-industry itself)
+        if (input.spaceCode === COMMUNITY_CROSS_INDUSTRY_SLUG) {
+          if (input.targetIndustrySpaceCodes.length === 0) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "跨產業需求需至少選擇一個目標產業" });
+          }
+          const unique = Array.from(new Set(input.targetIndustrySpaceCodes));
+          if (unique.length !== input.targetIndustrySpaceCodes.length) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "目標產業不可重複" });
+          }
+          for (const sc of unique) {
+            if (!VALID_SPACE_CODES.has(sc) || sc === COMMUNITY_CROSS_INDUSTRY_SLUG) {
+              throw new TRPCError({ code: "BAD_REQUEST", message: "無效的目標產業代碼" });
+            }
+          }
+        }
+
+        // Validate pinnedProductIds: personal bid cannot have products; must belong to resolved factory
+        const dedupedProductIds = Array.from(new Set(input.pinnedProductIds));
+        if (dedupedProductIds.length > 0) {
+          if (resolvedFactoryId == null) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "個人競標需求不能附加工廠商品" });
+          }
+          const factoryProducts = await db.getProductsByFactoryId(resolvedFactoryId);
+          const validIds = new Set(factoryProducts.map(p => p.id));
+          const invalid = dedupedProductIds.find(id => !validIds.has(id));
+          if (invalid != null) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: `商品 ID ${invalid} 不存在或不屬於此工廠` });
+          }
+        }
+
+        const resolvedFactory = factoryOptions.find(f => f.factoryId === resolvedFactoryId);
+        const bidId = await db.createCommunityBid({
+          spaceCode: input.spaceCode,
+          authorUserId: ctx.user.id,
+          authorFactoryId: resolvedFactoryId,
+          authorNameSnapshot: ctx.user.name ?? "",
+          authorFactoryNameSnapshot: resolvedFactory?.label ?? null,
+          authorRoleSnapshot: resolvedFactory?.role ?? null,
+          title: input.title,
+          description: input.description,
+          quantity: input.quantity ?? null,
+          material: input.material ?? null,
+          specifications: input.specifications ?? null,
+          sampleRequired: input.sampleRequired,
+          desiredDeliveryDate: input.desiredDeliveryDate ?? null,
+          deliveryLocation: input.deliveryLocation ?? null,
+          budgetMin: input.budgetMin ?? null,
+          budgetMax: input.budgetMax ?? null,
+          images: input.images,
+          pinnedProductIds: dedupedProductIds,
+          durationHours: input.durationHours,
+          targetIndustrySpaceCodes: input.targetIndustrySpaceCodes,
+        });
+        return { bidId };
+      }),
+
+    updateBid: protectedProcedure
+      .input(z.object({
+        bidId: z.number().int(),
+        title: z.string().min(1).max(200).trim().optional(),
+        description: z.string().min(1).max(10000).trim().optional(),
+        quantity: z.string().max(200).trim().nullable().optional(),
+        material: z.string().max(200).trim().nullable().optional(),
+        specifications: z.string().max(5000).trim().nullable().optional(),
+        sampleRequired: z.boolean().optional(),
+        desiredDeliveryDate: z.string().max(100).trim().nullable().optional(),
+        deliveryLocation: z.string().max(200).trim().nullable().optional(),
+        budgetMin: z.number().int().positive().nullable().optional(),
+        budgetMax: z.number().int().positive().nullable().optional(),
+        images: z.array(z.string().url()).max(6).optional(),
+        pinnedProductIds: z.array(z.number().int().positive()).max(5).optional(),
+        durationHours: z.number().int().min(1).max(168).optional(),
+        targetIndustrySpaceCodes: z.array(z.string().min(1).max(60)).max(5).optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        checkCommunityWrite(ctx.user);
+        const bid = await db.getCommunityBidById(input.bidId);
+        if (!bid || bid.deletedAt) throw new TRPCError({ code: "NOT_FOUND", message: "找不到此需求" });
+        if (bid.authorUserId !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN", message: "無權限編輯此需求" });
+        if (bid.status !== "draft" && bid.status !== "rejected") {
+          throw new TRPCError({ code: "FORBIDDEN", message: "只有草稿或退回狀態的需求可以編輯" });
+        }
+        if (input.images !== undefined) {
+          assertCommunityImagesOwned(input.images, ctx.user.id);
+        }
+        if (input.budgetMin != null && input.budgetMax != null && input.budgetMin > input.budgetMax) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "預算下限不可高於上限" });
+        }
+        if (input.targetIndustrySpaceCodes !== undefined) {
+          if (bid.spaceCode !== COMMUNITY_CROSS_INDUSTRY_SLUG && input.targetIndustrySpaceCodes.length > 0) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "非跨產業需求不可設定目標產業" });
+          }
+          if (bid.spaceCode === COMMUNITY_CROSS_INDUSTRY_SLUG) {
+            if (input.targetIndustrySpaceCodes.length === 0) {
+              throw new TRPCError({ code: "BAD_REQUEST", message: "跨產業需求需至少選擇一個目標產業" });
+            }
+            const unique = Array.from(new Set(input.targetIndustrySpaceCodes));
+            if (unique.length !== input.targetIndustrySpaceCodes.length) {
+              throw new TRPCError({ code: "BAD_REQUEST", message: "目標產業不可重複" });
+            }
+            for (const sc of unique) {
+              if (!VALID_SPACE_CODES.has(sc) || sc === COMMUNITY_CROSS_INDUSTRY_SLUG) {
+                throw new TRPCError({ code: "BAD_REQUEST", message: "無效的目標產業代碼" });
+              }
+            }
+          }
+        }
+        // Validate pinnedProductIds update: must belong to bid's authorFactory
+        let dedupedUpdatedProductIds: number[] | undefined;
+        if (input.pinnedProductIds !== undefined) {
+          dedupedUpdatedProductIds = Array.from(new Set(input.pinnedProductIds));
+          if (dedupedUpdatedProductIds.length > 0) {
+            if (bid.authorFactoryId == null) {
+              throw new TRPCError({ code: "BAD_REQUEST", message: "個人競標需求不能附加工廠商品" });
+            }
+            const factoryProducts = await db.getProductsByFactoryId(bid.authorFactoryId);
+            const validIds = new Set(factoryProducts.map(p => p.id));
+            const invalid = dedupedUpdatedProductIds.find(id => !validIds.has(id));
+            if (invalid != null) {
+              throw new TRPCError({ code: "BAD_REQUEST", message: `商品 ID ${invalid} 不存在或不屬於此工廠` });
+            }
+          }
+        }
+        const { bidId, pinnedProductIds: _pp, ...updates } = input;
+        await db.updateCommunityBid(bidId, { ...updates, ...(dedupedUpdatedProductIds !== undefined ? { pinnedProductIds: dedupedUpdatedProductIds } : {}) });
+        return { success: true };
+      }),
+
+    submitBid: protectedProcedure
+      .input(z.object({ bidId: z.number().int() }))
+      .mutation(async ({ ctx, input }) => {
+        checkCommunityWrite(ctx.user);
+        requireVerifiedEmail(ctx.user);
+        const bid = await db.getCommunityBidById(input.bidId);
+        if (!bid || bid.deletedAt) throw new TRPCError({ code: "NOT_FOUND", message: "找不到此需求" });
+        if (bid.authorUserId !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN", message: "無權限提交此需求" });
+        if (bid.status !== "draft" && bid.status !== "rejected") {
+          throw new TRPCError({ code: "FORBIDDEN", message: "只有草稿或退回狀態的需求可以提交審核" });
+        }
+        // Re-validate authorFactoryId still approved
+        if (bid.authorFactoryId != null) {
+          const factory = await db.getFactoryById(bid.authorFactoryId);
+          if (!factory || factory.status !== "approved") {
+            throw new TRPCError({ code: "FORBIDDEN", message: "代表工廠不符合條件，請重新建立需求" });
+          }
+        }
+        // Re-validate cross-industry targets
+        if (bid.spaceCode === COMMUNITY_CROSS_INDUSTRY_SLUG) {
+          const targets = await db.getCommunityBidIndustries(input.bidId);
+          if (targets.length === 0) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "跨產業需求需至少選擇一個目標產業" });
+          }
+        }
+        // Re-validate pinnedProductIds: strip deleted/unavailable products; reject cross-factory ones
+        const existingProductIds = (bid.pinnedProductIds ?? []) as number[];
+        let removedProductCount = 0;
+        if (existingProductIds.length > 0) {
+          if (bid.authorFactoryId == null) {
+            // Personal bid somehow has products — strip all (shouldn't happen, but guard)
+            await db.updateCommunityBid(input.bidId, { pinnedProductIds: [] });
+            removedProductCount = existingProductIds.length;
+          } else {
+            const factoryProducts = await db.getProductsByFactoryId(bid.authorFactoryId);
+            const validIds = new Set(factoryProducts.map(p => p.id));
+            // Any ID not in factory's product list is either deleted or cross-factory — strip it
+            const survivingIds = existingProductIds.filter(id => validIds.has(id));
+            removedProductCount = existingProductIds.length - survivingIds.length;
+            if (removedProductCount > 0) {
+              await db.updateCommunityBid(input.bidId, { pinnedProductIds: survivingIds });
+            }
+          }
+        }
+        await db.submitCommunityBidForReview(input.bidId, ctx.user.id, ctx.user.name ?? "");
+        return { success: true, removedProductCount };
+      }),
+
+    withdrawBid: protectedProcedure
+      .input(z.object({ bidId: z.number().int() }))
+      .mutation(async ({ ctx, input }) => {
+        checkCommunityWrite(ctx.user);
+        const bid = await db.getCommunityBidById(input.bidId);
+        if (!bid || bid.deletedAt) throw new TRPCError({ code: "NOT_FOUND", message: "找不到此需求" });
+        if (bid.authorUserId !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN", message: "無權限撤回此需求" });
+        if (bid.status !== "pending_review") {
+          throw new TRPCError({ code: "FORBIDDEN", message: "只有待審核中的需求可以撤回" });
+        }
+        await db.withdrawCommunityBid(input.bidId, ctx.user.id, ctx.user.name ?? "");
+        return { success: true };
+      }),
+
+    deleteBid: protectedProcedure
+      .input(z.object({ bidId: z.number().int() }))
+      .mutation(async ({ ctx, input }) => {
+        checkCommunityWrite(ctx.user);
+        const bid = await db.getCommunityBidById(input.bidId);
+        if (!bid || bid.deletedAt) throw new TRPCError({ code: "NOT_FOUND", message: "找不到此需求" });
+        if (bid.authorUserId !== ctx.user.id && ctx.user.role !== "admin") {
+          throw new TRPCError({ code: "FORBIDDEN", message: "無權限刪除此需求" });
+        }
+        if (bid.status !== "draft" && bid.status !== "rejected") {
+          throw new TRPCError({ code: "FORBIDDEN", message: "只有草稿或退回狀態的需求可以刪除" });
+        }
+        await db.softDeleteCommunityBid(input.bidId);
+        return { success: true };
+      }),
+
+    cancelBid: protectedProcedure
+      .input(z.object({ bidId: z.number().int() }))
+      .mutation(async ({ ctx, input }) => {
+        checkCommunityWrite(ctx.user);
+        const bid = await db.getCommunityBidById(input.bidId);
+        if (!bid || bid.deletedAt) throw new TRPCError({ code: "NOT_FOUND", message: "找不到此需求" });
+        if (bid.authorUserId !== ctx.user.id && ctx.user.role !== "admin") {
+          throw new TRPCError({ code: "FORBIDDEN", message: "無權限取消此需求" });
+        }
+        if (bid.status !== "active") {
+          throw new TRPCError({ code: "FORBIDDEN", message: "只有進行中的需求可以取消" });
+        }
+        await db.cancelCommunityBid(input.bidId);
+        return { success: true };
+      }),
+
+    listBids: protectedProcedure
+      .input(z.object({
+        spaceCode: z.string().min(1).max(60),
+        page: z.number().int().min(1).default(1),
+        pageSize: z.number().int().min(1).max(50).default(20),
+      }))
+      .query(async ({ ctx, input }) => {
+        checkCommunityRead(ctx.user);
+        assertValidSpaceCode(input.spaceCode);
+        return db.listCommunityBids({ spaceCode: input.spaceCode, status: "active", page: input.page, pageSize: input.pageSize });
+      }),
+
+    getMyBids: protectedProcedure
+      .input(z.object({
+        page: z.number().int().min(1).default(1),
+        pageSize: z.number().int().min(1).max(50).default(20),
+      }))
+      .query(async ({ ctx, input }) => {
+        checkCommunityRead(ctx.user);
+        return db.listCommunityBids({ authorUserId: ctx.user.id, page: input.page, pageSize: input.pageSize });
+      }),
+
+    getBid: protectedProcedure
+      .input(z.object({ bidId: z.number().int() }))
+      .query(async ({ ctx, input }) => {
+        checkCommunityRead(ctx.user);
+        const bid = await db.getCommunityBidById(input.bidId);
+        if (!bid || bid.deletedAt) throw new TRPCError({ code: "NOT_FOUND", message: "找不到此需求" });
+        const isOwner = bid.authorUserId === ctx.user.id;
+        const isAdmin = ctx.user.role === "admin";
+        // Only owner or admin can see non-active states
+        if (!isOwner && !isAdmin && bid.status !== "active") {
+          throw new TRPCError({ code: "NOT_FOUND", message: "找不到此需求" });
+        }
+        const targetIndustries = await db.getCommunityBidIndustries(input.bidId);
+        const reviewHistory = isAdmin ? await db.listCommunityBidReviewHistory(input.bidId) : [];
+        const pinnedProductIdsArr = (bid.pinnedProductIds ?? []) as number[];
+        const pinnedProducts = pinnedProductIdsArr.length > 0 ? await db.getProductsByIds(pinnedProductIdsArr) : [];
+        return { bid, targetIndustries, reviewHistory, pinnedProducts };
+      }),
+
+    pendingBidCount: protectedProcedure.query(async ({ ctx }) => {
+      checkCommunityRead(ctx.user);
+      if (ctx.user.role !== "admin") return { count: 0 };
+      const count = await db.countPendingCommunityBids();
+      return { count };
     }),
   }),
 

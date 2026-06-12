@@ -689,3 +689,84 @@ export const communityNotifications = mysqlTable("communityNotifications", {
 }));
 
 export type CommunityNotification = typeof communityNotifications.$inferSelect;
+
+// ===== 商案討論區：競標 =====
+// status machine: draft → pending_review → active (approved) | rejected → (edit) → pending_review
+//                 active → cancelled | ended
+export const communityBids = mysqlTable("communityBids", {
+  id: int("id").autoincrement().primaryKey(),
+  spaceCode: varchar("spaceCode", { length: 50 }).notNull(),
+  authorUserId: int("authorUserId").references(() => users.id, { onDelete: "set null" }),
+  authorFactoryId: int("authorFactoryId").references(() => factories.id, { onDelete: "set null" }),
+  authorNameSnapshot: varchar("authorNameSnapshot", { length: 100 }).notNull().default(""),
+  authorFactoryNameSnapshot: varchar("authorFactoryNameSnapshot", { length: 200 }),
+  authorRoleSnapshot: varchar("authorRoleSnapshot", { length: 50 }),
+  title: varchar("title", { length: 200 }).notNull(),
+  description: text("description").notNull(),
+  quantity: varchar("quantity", { length: 200 }),
+  material: varchar("material", { length: 200 }),
+  specifications: text("specifications"),
+  sampleRequired: boolean("sampleRequired").notNull().default(false),
+  desiredDeliveryDate: varchar("desiredDeliveryDate", { length: 100 }),
+  deliveryLocation: varchar("deliveryLocation", { length: 200 }),
+  budgetMin: int("budgetMin"),
+  budgetMax: int("budgetMax"),
+  images: json("images").$type<string[]>().notNull().default([]),
+  pinnedProductIds: json("pinnedProductIds").$type<number[]>().notNull().default([]),
+  durationHours: int("durationHours").notNull(),
+  status: mysqlEnum("status", ["draft", "pending_review", "rejected", "active", "cancelled", "ended"]).notNull().default("draft"),
+  publishedAt: timestamp("publishedAt"),
+  // deadline = publishedAt + durationHours; stored denormalized for efficient deadline queries
+  deadline: timestamp("deadline"),
+  // Latest rejection reason (full history in communityBidReviewHistory)
+  rejectionReason: varchar("rejectionReason", { length: 1000 }),
+  // No FK: stored for audit even if the admin account is later deleted
+  reviewedByUserId: int("reviewedByUserId"),
+  reviewedAt: timestamp("reviewedAt"),
+  deletedAt: timestamp("deletedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (t) => ({
+  spaceStatusIdx: index("cb_space_status_idx").on(t.spaceCode, t.status, t.createdAt),
+  authorUserIdx: index("cb_author_user_idx").on(t.authorUserId),
+  statusIdx: index("cb_status_idx").on(t.status, t.publishedAt),
+  deadlineIdx: index("cb_deadline_idx").on(t.deadline),
+}));
+
+export type CommunityBid = typeof communityBids.$inferSelect;
+
+// ===== 商案討論區：競標跨產業關聯 =====
+// Cross-industry bids (spaceCode = "cross-industry") list target industries here.
+// Regular bids leave this table empty — spaceCode already implies the industry.
+export const communityBidIndustries = mysqlTable("communityBidIndustries", {
+  id: int("id").autoincrement().primaryKey(),
+  bidId: int("bidId").notNull().references(() => communityBids.id, { onDelete: "cascade" }),
+  spaceCode: varchar("spaceCode", { length: 50 }).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  bidSpaceUq: uniqueIndex("cbi_bid_space_uq").on(t.bidId, t.spaceCode),
+  spaceIdx: index("cbi_space_idx").on(t.spaceCode),
+}));
+
+export type CommunityBidIndustry = typeof communityBidIndustries.$inferSelect;
+
+// ===== 商案討論區：競標審核歷史 =====
+// Immutable audit trail.
+// actorUserId: nullable FK with ON DELETE SET NULL — record survives admin account deletion.
+// actorNameSnapshot: name captured at the time of action; guarantees auditability even after account deletion.
+// bidStatusBefore / bidStatusAfter: full state transition for compliance traceability.
+export const communityBidReviewHistory = mysqlTable("communityBidReviewHistory", {
+  id: int("id").autoincrement().primaryKey(),
+  bidId: int("bidId").notNull().references(() => communityBids.id, { onDelete: "cascade" }),
+  actorUserId: int("actorUserId").references(() => users.id, { onDelete: "set null" }),
+  actorNameSnapshot: varchar("actorNameSnapshot", { length: 100 }).notNull().default(""),
+  action: mysqlEnum("action", ["submitted", "approved", "rejected", "withdrawn"]).notNull(),
+  reason: varchar("reason", { length: 1000 }),
+  bidStatusBefore: varchar("bidStatusBefore", { length: 30 }).notNull().default(""),
+  bidStatusAfter: varchar("bidStatusAfter", { length: 30 }).notNull().default(""),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  bidIdx: index("cbrh_bid_idx").on(t.bidId),
+}));
+
+export type CommunityBidReviewHistory = typeof communityBidReviewHistory.$inferSelect;
