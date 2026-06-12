@@ -3,6 +3,7 @@ import { useLocation, Link } from "wouter";
 import { ArrowLeft, Gavel, Edit2, CheckCircle, XCircle, Clock, Loader2, AlertTriangle, ShoppingBag } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
+import { COMMUNITY_CROSS_INDUSTRY_SLUG, COMMUNITY_CROSS_INDUSTRY_NAME } from "@shared/const";
 import { INDUSTRY_SLUGS } from "@shared/constants";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -15,10 +16,10 @@ import { toast } from "sonner";
 import CommunityBidForm from "./CommunityBidForm";
 import type { CommunityBid } from "../../../../drizzle/schema";
 
-// Slug → display name reverse map
-const SLUG_TO_INDUSTRY: Record<string, string> = Object.fromEntries(
-  Object.entries(INDUSTRY_SLUGS).map(([name, slug]) => [slug, name])
-);
+const SPACE_CODE_TO_NAME: Record<string, string> = {
+  ...Object.fromEntries(Object.entries(INDUSTRY_SLUGS).map(([name, slug]) => [slug, name])),
+  [COMMUNITY_CROSS_INDUSTRY_SLUG]: COMMUNITY_CROSS_INDUSTRY_NAME,
+};
 
 type BidStatus = CommunityBid["status"];
 
@@ -119,7 +120,7 @@ export default function CommunityBidDetail({ spaceCode, bidId }: Props) {
     );
   }
 
-  const { bid, targetIndustries, reviewHistory, pinnedProducts } = data;
+  const { bid, reviewHistory, pinnedProducts } = data;
   const isOwner = bid.authorUserId === user?.id;
   const isAdmin = user?.role === "admin";
 
@@ -212,12 +213,7 @@ export default function CommunityBidDetail({ spaceCode, bidId }: Props) {
                 }
               />
               <InfoRow label="開放時長" value={`${bid.durationHours} 小時`} />
-              {targetIndustries.length > 0 && (
-                <InfoRow
-                  label="目標產業"
-                  value={targetIndustries.map(sc => SLUG_TO_INDUSTRY[sc] ?? sc).join("、")}
-                />
-              )}
+              <InfoRow label="所屬產業" value={SPACE_CODE_TO_NAME[spaceCode] ?? spaceCode} />
             </dl>
           </section>
 
@@ -440,7 +436,6 @@ export default function CommunityBidDetail({ spaceCode, bidId }: Props) {
             budgetMin: bid.budgetMin?.toString(),
             budgetMax: bid.budgetMax?.toString(),
             durationHours: bid.durationHours,
-            targetIndustrySpaceCodes: targetIndustries,
             images: (bid.images ?? []) as string[],
             pinnedProductIds: (bid.pinnedProductIds ?? []) as number[],
           }}

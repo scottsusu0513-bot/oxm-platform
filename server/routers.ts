@@ -2363,12 +2363,6 @@ export const appRouter = router({
           if (!bid.title?.trim() || !bid.description?.trim()) {
             throw new TRPCError({ code: "BAD_REQUEST", message: "需求缺少必填欄位（標題或說明），無法通過審核" });
           }
-          if (bid.spaceCode === COMMUNITY_CROSS_INDUSTRY_SLUG) {
-            const targets = await db.getCommunityBidIndustries(input.bidId);
-            if (targets.length === 0) {
-              throw new TRPCError({ code: "BAD_REQUEST", message: "跨產業需求缺少目標產業，無法通過審核" });
-            }
-          }
           await db.approveCommunityBid(input.bidId, ctx.user!.id, ctx.user!.name ?? "管理員");
           // Notify author
           if (bid.authorUserId != null) {
@@ -3520,7 +3514,6 @@ export const appRouter = router({
         pinnedProductIds: z.array(z.number().int().positive()).max(5).default([]),
         durationHours: z.number().int().min(1).max(168),
         authorFactoryId: z.number().int().positive().optional(),
-        targetIndustrySpaceCodes: z.array(z.string().min(1).max(60)).max(5).default([]),
       }))
       .mutation(async ({ ctx, input }) => {
         checkCommunityWrite(ctx.user);
@@ -3550,26 +3543,6 @@ export const appRouter = router({
             throw new TRPCError({ code: "FORBIDDEN", message: "無效的代表工廠" });
           }
           resolvedFactoryId = input.authorFactoryId;
-        }
-
-        // Non-cross-industry bids must not specify target industries
-        if (input.spaceCode !== COMMUNITY_CROSS_INDUSTRY_SLUG && input.targetIndustrySpaceCodes.length > 0) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: "非跨產業需求不可設定目標產業" });
-        }
-        // Cross-industry bids must specify 1–5 valid target industries (no duplicates, no cross-industry itself)
-        if (input.spaceCode === COMMUNITY_CROSS_INDUSTRY_SLUG) {
-          if (input.targetIndustrySpaceCodes.length === 0) {
-            throw new TRPCError({ code: "BAD_REQUEST", message: "跨產業需求需至少選擇一個目標產業" });
-          }
-          const unique = Array.from(new Set(input.targetIndustrySpaceCodes));
-          if (unique.length !== input.targetIndustrySpaceCodes.length) {
-            throw new TRPCError({ code: "BAD_REQUEST", message: "目標產業不可重複" });
-          }
-          for (const sc of unique) {
-            if (!VALID_SPACE_CODES.has(sc) || sc === COMMUNITY_CROSS_INDUSTRY_SLUG) {
-              throw new TRPCError({ code: "BAD_REQUEST", message: "無效的目標產業代碼" });
-            }
-          }
         }
 
         // Validate pinnedProductIds: personal bid cannot have products; must belong to resolved factory
@@ -3607,7 +3580,6 @@ export const appRouter = router({
           images: input.images,
           pinnedProductIds: dedupedProductIds,
           durationHours: input.durationHours,
-          targetIndustrySpaceCodes: input.targetIndustrySpaceCodes,
         });
         return { bidId };
       }),
@@ -3628,7 +3600,6 @@ export const appRouter = router({
         images: z.array(z.string().url()).max(6).optional(),
         pinnedProductIds: z.array(z.number().int().positive()).max(5).optional(),
         durationHours: z.number().int().min(1).max(168).optional(),
-        targetIndustrySpaceCodes: z.array(z.string().min(1).max(60)).max(5).optional(),
       }))
       .mutation(async ({ ctx, input }) => {
         checkCommunityWrite(ctx.user);
@@ -3643,25 +3614,6 @@ export const appRouter = router({
         }
         if (input.budgetMin != null && input.budgetMax != null && input.budgetMin > input.budgetMax) {
           throw new TRPCError({ code: "BAD_REQUEST", message: "預算下限不可高於上限" });
-        }
-        if (input.targetIndustrySpaceCodes !== undefined) {
-          if (bid.spaceCode !== COMMUNITY_CROSS_INDUSTRY_SLUG && input.targetIndustrySpaceCodes.length > 0) {
-            throw new TRPCError({ code: "BAD_REQUEST", message: "非跨產業需求不可設定目標產業" });
-          }
-          if (bid.spaceCode === COMMUNITY_CROSS_INDUSTRY_SLUG) {
-            if (input.targetIndustrySpaceCodes.length === 0) {
-              throw new TRPCError({ code: "BAD_REQUEST", message: "跨產業需求需至少選擇一個目標產業" });
-            }
-            const unique = Array.from(new Set(input.targetIndustrySpaceCodes));
-            if (unique.length !== input.targetIndustrySpaceCodes.length) {
-              throw new TRPCError({ code: "BAD_REQUEST", message: "目標產業不可重複" });
-            }
-            for (const sc of unique) {
-              if (!VALID_SPACE_CODES.has(sc) || sc === COMMUNITY_CROSS_INDUSTRY_SLUG) {
-                throw new TRPCError({ code: "BAD_REQUEST", message: "無效的目標產業代碼" });
-              }
-            }
-          }
         }
         // Validate pinnedProductIds update: must belong to bid's authorFactory
         let dedupedUpdatedProductIds: number[] | undefined;
@@ -3700,13 +3652,6 @@ export const appRouter = router({
           const factory = await db.getFactoryById(bid.authorFactoryId);
           if (!factory || factory.status !== "approved") {
             throw new TRPCError({ code: "FORBIDDEN", message: "代表工廠不符合條件，請重新建立需求" });
-          }
-        }
-        // Re-validate cross-industry targets
-        if (bid.spaceCode === COMMUNITY_CROSS_INDUSTRY_SLUG) {
-          const targets = await db.getCommunityBidIndustries(input.bidId);
-          if (targets.length === 0) {
-            throw new TRPCError({ code: "BAD_REQUEST", message: "跨產業需求需至少選擇一個目標產業" });
           }
         }
         // Re-validate pinnedProductIds: strip deleted/unavailable products; reject cross-factory ones

@@ -1535,13 +1535,12 @@ describe("community.createBid access control", () => {
     })).rejects.toThrow();
   });
 
-  // 6. cross-industry bid with no target industries ??BAD_REQUEST
-  it("cross-industry bid without targetIndustrySpaceCodes throws BAD_REQUEST", async () => {
+  // 6. cross-industry bid without target industries succeeds (no longer required)
+  it("cross-industry bid without targetIndustrySpaceCodes succeeds", async () => {
     const caller = appRouter.createCaller(createAuthContext({ role: "admin" }));
     await expect(caller.community.createBid({
-      spaceCode: "cross-industry", title: "T", description: "D", durationHours: 24,
-      images: [], targetIndustrySpaceCodes: [],
-    })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+      spaceCode: "cross-industry", title: "T", description: "D", durationHours: 24, images: [],
+    })).resolves.toHaveProperty("bidId");
   });
 
   // 7. budgetMin > budgetMax ??BAD_REQUEST
@@ -1785,40 +1784,39 @@ describe("community bid: visibility rules", () => {
   }, 10000);
 });
 
-// ===== Phase 3A: Community Bids ??cross-industry =====
-describe("community bid: cross-industry target industries", () => {
+// ===== Phase 3A: Community Bids — spaceCode fixed per board =====
+describe("community bid: spaceCode fixed per board", () => {
   const adminCtx = () => createAuthContext({ role: "admin" });
 
-  // 23. Cross-industry bid with valid target industries is created
-  it("cross-industry bid with valid targets is created and targetIndustries returned", async () => {
+  // 23. Textile bid has correct spaceCode, targetIndustries is always empty
+  it("textile bid has spaceCode=textile and targetIndustries is empty", async () => {
     const caller = appRouter.createCaller(adminCtx());
     const { bidId } = await caller.community.createBid({
-      spaceCode: "cross-industry",
-      title: "Cross-industry test",
-      description: "Need multiple industries",
+      spaceCode: "textile",
+      title: "Textile test",
+      description: "Need textile processing",
       durationHours: 24,
       images: [],
-      targetIndustrySpaceCodes: ["textile", "electronics"],
     });
     const { bid, targetIndustries } = await caller.community.getBid({ bidId });
-    expect(bid.spaceCode).toBe("cross-industry");
-    expect(targetIndustries).toContain("textile");
-    expect(targetIndustries).toContain("electronics");
-    expect(targetIndustries).toHaveLength(2);
+    expect(bid.spaceCode).toBe("textile");
+    expect(targetIndustries).toEqual([]);
   }, 30000);
 
-  // 24. cross-industry as target industry is rejected (BAD_REQUEST)
-  it("cross-industry itself as a target industry is BAD_REQUEST", async () => {
+  // 24. metal-processing bid has correct spaceCode and targetIndustries is empty
+  it("metal-processing bid has spaceCode=metal-processing and targetIndustries is empty", async () => {
     const caller = appRouter.createCaller(adminCtx());
-    await expect(caller.community.createBid({
-      spaceCode: "cross-industry",
-      title: "Bad target",
-      description: "D",
+    const { bidId } = await caller.community.createBid({
+      spaceCode: "metal-processing",
+      title: "Metal test",
+      description: "Need metal processing",
       durationHours: 24,
       images: [],
-      targetIndustrySpaceCodes: ["cross-industry"],
-    })).rejects.toMatchObject({ code: "BAD_REQUEST" });
-  });
+    });
+    const { bid, targetIndustries } = await caller.community.getBid({ bidId });
+    expect(bid.spaceCode).toBe("metal-processing");
+    expect(targetIndustries).toEqual([]);
+  }, 30000);
 });
 
 // ===== Phase 3A: Community Bids ??admin review panel =====
@@ -1892,93 +1890,82 @@ describe("community bid: concurrency and state machine guards (audit)", () => {
   }, 15000);
 });
 
-// ===== Phase 3A: Audit — cross-industry validation =====
-describe("community bid: cross-industry validation (audit)", () => {
+// ===== Phase 3A: Audit — cross-industry simplified (no targets required) =====
+describe("community bid: cross-industry no longer requires targets", () => {
   const adminCtx = () => createAuthContext({ role: "admin" });
 
-  // 32. More than 5 target industries → BAD_REQUEST (max 5)
-  it("more than 5 cross-industry targets throws BAD_REQUEST", async () => {
+  // 32. cross-industry bid without target industries is created successfully
+  it("cross-industry bid without targetIndustrySpaceCodes succeeds", async () => {
     const caller = appRouter.createCaller(adminCtx());
-    await expect(caller.community.createBid({
+    const { bidId } = await caller.community.createBid({
       spaceCode: "cross-industry",
-      title: "Too many targets",
+      title: "Cross-industry no targets",
+      description: "Open to all industries",
+      durationHours: 24,
+      images: [],
+    });
+    const { bid, targetIndustries } = await caller.community.getBid({ bidId });
+    expect(bid.spaceCode).toBe("cross-industry");
+    expect(targetIndustries).toEqual([]);
+  }, 30000);
+
+  // 33. cross-industry bid can be submitted without target industries (no BAD_REQUEST)
+  it("cross-industry bid can be submitted without target industries", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    const { bidId } = await caller.community.createBid({
+      spaceCode: "cross-industry",
+      title: "Cross-industry submit test",
       description: "D",
       durationHours: 24,
       images: [],
-      targetIndustrySpaceCodes: ["textile", "electronics", "packaging", "metal", "plastics", "automotive"],
-    })).rejects.toThrow(); // zod max(5) throws
-  });
+    });
+    await expect(caller.community.submitBid({ bidId })).resolves.not.toThrow();
+    const { bid } = await caller.community.getBid({ bidId });
+    expect(bid.status).toBe("pending_review");
+  }, 30000);
 
-  // 33. Non-cross-industry bid with targetIndustrySpaceCodes throws BAD_REQUEST
-  it("non-cross-industry bid cannot have target industries", async () => {
+  // 34. cross-industry bid can be approved (via db helper) without target industries
+  it("cross-industry bid can be approved without target industries", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    const { bidId } = await caller.community.createBid({
+      spaceCode: "cross-industry",
+      title: "Cross-industry approve test",
+      description: "D",
+      durationHours: 24,
+      images: [],
+    });
+    await caller.community.submitBid({ bidId });
+    // approveBid adminProcedure requires email whitelist; use db helper directly (same pattern as other tests)
+    await expect(approveCommunityBid(bidId, 1, "Test Admin")).resolves.not.toThrow();
+    const { bid } = await caller.community.getBid({ bidId });
+    expect(bid.status).toBe("active");
+  }, 30000);
+
+  // 35. illegal spaceCode is still rejected as BAD_REQUEST
+  it("illegal spaceCode is still rejected as BAD_REQUEST", async () => {
     const caller = appRouter.createCaller(adminCtx());
     await expect(caller.community.createBid({
+      spaceCode: "not-a-real-industry",
+      title: "T",
+      description: "D",
+      durationHours: 24,
+      images: [],
+    })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  }, 10000);
+
+  // 36. communityBidIndustries table is always empty for new bids (backward compat)
+  it("targetIndustries relation is never written for new bids", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    const { bidId } = await caller.community.createBid({
       spaceCode: "textile",
-      title: "Bad target for regular",
+      title: "Backward compat test",
       description: "D",
       durationHours: 24,
       images: [],
-      targetIndustrySpaceCodes: ["electronics"],
-    })).rejects.toMatchObject({ code: "BAD_REQUEST" });
-  }, 10000);
-
-  // 34. Duplicate target industries in createBid → BAD_REQUEST
-  it("duplicate target industries are rejected with BAD_REQUEST", async () => {
-    const caller = appRouter.createCaller(adminCtx());
-    await expect(caller.community.createBid({
-      spaceCode: "cross-industry",
-      title: "Dup industries",
-      description: "D",
-      durationHours: 24,
-      images: [],
-      targetIndustrySpaceCodes: ["textile", "textile"],
-    })).rejects.toMatchObject({ code: "BAD_REQUEST" });
-  }, 10000);
-
-  // 35. Cross-industry update relation sync: change targets, old ones removed
-  it("updateBid replaces target industries (old removed, new inserted)", async () => {
-    const caller = appRouter.createCaller(adminCtx());
-    const { bidId } = await caller.community.createBid({
-      spaceCode: "cross-industry",
-      title: "Target sync test",
-      description: "D",
-      durationHours: 24,
-      images: [],
-      targetIndustrySpaceCodes: ["textile", "electronics"],
     });
-    let industries = await getCommunityBidIndustries(bidId);
-    expect(industries.sort()).toEqual(["electronics", "textile"].sort());
-
-    // Update to different targets (use valid slugs: packaging, metal-processing, consumer-goods)
-    await caller.community.updateBid({
-      bidId,
-      targetIndustrySpaceCodes: ["packaging", "metal-processing", "consumer-goods"],
-    });
-    industries = await getCommunityBidIndustries(bidId);
-    expect(industries.sort()).toEqual(["consumer-goods", "metal-processing", "packaging"].sort());
-    expect(industries).not.toContain("textile");
-    expect(industries).not.toContain("electronics");
-  }, 30000);
-
-  // 36. submitBid re-validates cross-industry: cleared targets → BAD_REQUEST at submit time
-  it("submitBid re-validates: cross-industry bid with no targets cannot be submitted", async () => {
-    const caller = appRouter.createCaller(adminCtx());
-    const { bidId } = await caller.community.createBid({
-      spaceCode: "cross-industry",
-      title: "Re-validate targets",
-      description: "D",
-      durationHours: 24,
-      images: [],
-      targetIndustrySpaceCodes: ["textile"],
-    });
-    // Manually clear the target industries (simulates race condition or direct DB manipulation)
-    const { default: mysql } = await import("mysql2/promise");
-    const conn = await mysql.createConnection(process.env.DATABASE_URL!);
-    await conn.execute("DELETE FROM `communityBidIndustries` WHERE `bidId` = ?", [bidId]);
-    await conn.end();
-    // submitBid should catch missing targets
-    await expect(caller.community.submitBid({ bidId })).rejects.toMatchObject({ code: "BAD_REQUEST" });
-  }, 30000);
+    const industries = await getCommunityBidIndustries(bidId);
+    expect(industries).toEqual([]);
+  }, 20000);
 });
 
 // ===== Phase 3A: Audit — withdraw and delete =====

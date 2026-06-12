@@ -5,8 +5,8 @@ import { z } from "zod";
 import { Loader2, ShoppingBag } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
-import { COMMUNITY_CROSS_INDUSTRY_SLUG } from "@shared/const";
-import { INDUSTRY_OPTIONS, INDUSTRY_SLUGS } from "@shared/constants";
+import { COMMUNITY_CROSS_INDUSTRY_SLUG, COMMUNITY_CROSS_INDUSTRY_NAME } from "@shared/const";
+import { INDUSTRY_SLUGS } from "@shared/constants";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -40,7 +40,6 @@ const schema = z.object({
   budgetMin: z.string().optional(),
   budgetMax: z.string().optional(),
   durationHours: z.number().int().min(1).max(168),
-  targetIndustrySpaceCodes: z.array(z.string()).optional(),
 });
 
 type FormData = {
@@ -55,7 +54,6 @@ type FormData = {
   budgetMin?: string;
   budgetMax?: string;
   durationHours: number;
-  targetIndustrySpaceCodes?: string[];
 };
 
 const DURATION_OPTIONS = [
@@ -66,9 +64,13 @@ const DURATION_OPTIONS = [
   { label: "7 天", value: 168 },
 ];
 
-const INDUSTRY_SLUG_LIST = Array.from(INDUSTRY_OPTIONS)
-  .map(name => ({ name, slug: INDUSTRY_SLUGS[name] ?? "" }))
-  .filter(t => t.slug !== "");
+const SLUG_TO_INDUSTRY_NAME: Record<string, string> = Object.fromEntries(
+  Object.entries(INDUSTRY_SLUGS).map(([name, slug]) => [slug, name])
+);
+function getSpaceDisplayName(code: string): string {
+  if (code === COMMUNITY_CROSS_INDUSTRY_SLUG) return COMMUNITY_CROSS_INDUSTRY_NAME;
+  return SLUG_TO_INDUSTRY_NAME[code] ?? code;
+}
 
 interface Props {
   spaceCode: string;
@@ -80,10 +82,6 @@ interface Props {
 }
 
 export default function CommunityBidForm({ spaceCode, existingBidId, existingAuthorFactoryId, defaultValues, onSuccess, onCancel }: Props) {
-  const isCrossIndustry = spaceCode === COMMUNITY_CROSS_INDUSTRY_SLUG;
-  const [selectedIndustries, setSelectedIndustries] = useState<Set<string>>(
-    new Set(defaultValues?.targetIndustrySpaceCodes ?? [])
-  );
   const [images, setImages] = useState<string[]>(defaultValues?.images ?? []);
   const [isUploading, setIsUploading] = useState(false);
   const [selectedProductIds, setSelectedProductIds] = useState<number[]>(defaultValues?.pinnedProductIds ?? []);
@@ -176,8 +174,6 @@ export default function CommunityBidForm({ spaceCode, existingBidId, existingAut
   };
 
   async function onSubmit(data: FormData, andSubmit: boolean) {
-    if (isCrossIndustry && selectedIndustries.size === 0) return;
-
     // Resolve authorFactoryId for new bids
     let authorFactoryId: number | undefined;
     if (!existingBidId) {
@@ -213,7 +209,6 @@ export default function CommunityBidForm({ spaceCode, existingBidId, existingAut
           images,
           pinnedProductIds: selectedProductIds,
           durationHours: data.durationHours,
-          targetIndustrySpaceCodes: isCrossIndustry ? Array.from(selectedIndustries) : [],
         });
         bidId = existingBidId;
       } else {
@@ -233,7 +228,6 @@ export default function CommunityBidForm({ spaceCode, existingBidId, existingAut
           pinnedProductIds: selectedProductIds,
           durationHours: data.durationHours,
           authorFactoryId,
-          targetIndustrySpaceCodes: isCrossIndustry ? Array.from(selectedIndustries) : [],
         });
         bidId = res.bidId;
       }
@@ -409,32 +403,16 @@ export default function CommunityBidForm({ spaceCode, existingBidId, existingAut
             附件功能尚未支援，將於後續版本推出
           </div>
 
-          {isCrossIndustry && (
-            <div>
-              <Label>目標產業（至少選一項）*</Label>
-              <div className="mt-1.5 grid grid-cols-2 gap-1.5 max-h-40 overflow-y-auto border rounded-md p-3 bg-muted/30">
-                {INDUSTRY_SLUG_LIST.map(({ name, slug }) => (
-                  <div key={slug} className="flex items-center gap-2">
-                    <Checkbox
-                      id={`ind-${slug}`}
-                      checked={selectedIndustries.has(slug)}
-                      onCheckedChange={(v) => {
-                        setSelectedIndustries(prev => {
-                          const next = new Set(prev);
-                          if (v) next.add(slug); else next.delete(slug);
-                          return next;
-                        });
-                      }}
-                    />
-                    <label htmlFor={`ind-${slug}`} className="text-xs cursor-pointer leading-tight">{name}</label>
-                  </div>
-                ))}
-              </div>
-              {isCrossIndustry && selectedIndustries.size === 0 && (
-                <p className="text-xs text-destructive mt-1">請至少選擇一個目標產業</p>
-              )}
-            </div>
-          )}
+          <div>
+            <Label className="text-sm">所屬產業</Label>
+            <input
+              type="text"
+              value={getSpaceDisplayName(spaceCode)}
+              disabled
+              readOnly
+              className="mt-1 w-full px-3 py-2 text-sm text-muted-foreground bg-muted cursor-not-allowed rounded-md border border-input"
+            />
+          </div>
 
           <div>
             <Label htmlFor="bid-duration">競標開放時間</Label>
@@ -459,14 +437,14 @@ export default function CommunityBidForm({ spaceCode, existingBidId, existingAut
           <Button variant="outline" onClick={onCancel} disabled={isSubmitting}>取消</Button>
           <Button
             variant="outline"
-            disabled={isSubmitting || isUploading || (isCrossIndustry && selectedIndustries.size === 0) || (!existingBidId && factories.length > 1 && !selectedFactoryId)}
+            disabled={isSubmitting || isUploading || (!existingBidId && factories.length > 1 && !selectedFactoryId)}
             onClick={handleSubmit((data: FormData) => onSubmit(data, false))}
           >
             {(isSubmitting || isUploading) ? <Loader2 className="w-4 h-4 animate-spin mr-1.5" /> : null}
             {isUploading ? "上傳中…" : "儲存草稿"}
           </Button>
           <Button
-            disabled={isSubmitting || isUploading || (isCrossIndustry && selectedIndustries.size === 0) || (!existingBidId && factories.length > 1 && !selectedFactoryId)}
+            disabled={isSubmitting || isUploading || (!existingBidId && factories.length > 1 && !selectedFactoryId)}
             onClick={handleSubmit((data: FormData) => onSubmit(data, true))}
           >
             {(isSubmitting || isUploading) ? <Loader2 className="w-4 h-4 animate-spin mr-1.5" /> : null}
