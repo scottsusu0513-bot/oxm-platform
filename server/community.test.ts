@@ -1,8 +1,11 @@
-import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
+import { describe, expect, it, beforeEach, afterEach, beforeAll, vi } from "vitest";
 import { appRouter } from "./routers";
 import type { TrpcContext } from "./_core/context";
-import { resolveDefaultCommunitySpace, approveCommunityBid, rejectCommunityBid, withdrawCommunityBid, softDeleteCommunityBid, getCommunityBidIndustries, listCommunityBidReviewHistory, updateCommunityBid, getCommunityBidById } from "./db";
+import { resolveDefaultCommunitySpace, approveCommunityBid, rejectCommunityBid, withdrawCommunityBid, softDeleteCommunityBid, getCommunityBidIndustries, listCommunityBidReviewHistory, updateCommunityBid, getCommunityBidById, getDb, createCommunityBidOffer, withdrawCommunityBidOffer, resubmitCommunityBidOffer, getCommunityBidOfferById, getCommunityBidOfferByFactory, getCommunityBidOfferByUser, getCommunityBidOfferCount, listCommunityBidOffersForOwner, getApprovedFactoriesForUser, setTestBidDeadlinePast, setTestBidStatus, updateCommunityBidOfferSafe } from "./db";
+import { communityNotifications } from "../drizzle/schema";
 import { COMMUNITY_CROSS_INDUSTRY_SLUG } from "../shared/const";
+import { factories as factoriesTable } from "../drizzle/schema";
+import { and as drizzleAnd, eq as drizzleEq, ne as drizzleNe } from "drizzle-orm";
 
 type AuthenticatedUser = NonNullable<TrpcContext["user"]>;
 
@@ -2273,5 +2276,1176 @@ describe("community bid: stale pinnedProductIds handling on submitBid (audit)", 
 
     const bid = await getCommunityBidById(bidId);
     expect(bid?.status).toBe("pending_review");
+  }, 60000);
+});
+
+// ===== Phase 3B: 廠商投標報價 =====
+// Shared state: populated in beforeAll; factory-dependent tests skip if testFactory is null.
+let p3bBidId = 0;
+let testFactory: { id: number; ownerId: number } | null = null;
+
+// Helper: create and approve an active bid for Phase 3B tests
+async function createActiveBid(title: string): Promise<number> {
+  const caller = appRouter.createCaller(createAuthContext({ role: "admin" }));
+  const { bidId } = await caller.community.createBid({
+    spaceCode: "textile", title, description: "Phase 3B test", durationHours: 168, images: [],
+  });
+  await caller.community.submitBid({ bidId });
+  await approveCommunityBid(bidId, 1, "Test Admin");
+  return bidId;
+}
+
+// Helper: factory-owner caller (null if no factory)
+function factoryOwnerCtx() {
+  if (!testFactory) return null;
+  return createAuthContext({ role: "admin", id: testFactory.ownerId });
+}
+
+// ===== createBidOffer: access control and bid validation =====
+describe("community.createBidOffer: access control + bid validation", () => {
+  const adminCtx = () => createAuthContext({ role: "admin" });
+
+  beforeAll(async () => {
+    // Shared active bid (author = user 1)
+    p3bBidId = await createActiveBid("P3B access control test bid");
+
+    // Find approved factory NOT owned by user 1 (avoids author self-bid restriction)
+    const db_ = await getDb();
+    if (db_) {
+      const rows = await db_
+        .select({ id: factoriesTable.id, ownerId: factoriesTable.ownerId })
+        .from(factoriesTable)
+        .where(drizzleAnd(drizzleEq(factoriesTable.status, "approved"), drizzleNe(factoriesTable.ownerId, 1)))
+        .limit(1);
+      if (rows.length > 0) {
+        testFactory = { id: rows[0].id, ownerId: rows[0].ownerId! };
+      }
+    }
+  }, 30000);
+
+  // 1. Unauthenticated → UNAUTHORIZED
+  it("unauthenticated → UNAUTHORIZED", async () => {
+    const caller = appRouter.createCaller(createPublicContext());
+    await expect(caller.community.createBidOffer({
+      bidId: 1, bidderFactoryId: 1, proposal: "P", images: [], pinnedProductIds: [],
+    })).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+  });
+
+  // 2. Non-admin in beta → FORBIDDEN
+  it("non-admin user in beta → FORBIDDEN", async () => {
+    const caller = appRouter.createCaller(createAuthContext({ role: "user" }));
+    await expect(caller.community.createBidOffer({
+      bidId: 1, bidderFactoryId: 1, proposal: "P", images: [], pinnedProductIds: [],
+    })).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  // 3. Bid not found → NOT_FOUND
+  it("nonexistent bid → NOT_FOUND", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    await expect(caller.community.createBidOffer({
+      bidId: 999999999, bidderFactoryId: 1, proposal: "P", images: [], pinnedProductIds: [],
+    })).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  // 4. Bid not active (draft) → BAD_REQUEST
+  it("bid in draft status → BAD_REQUEST", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    const { bidId } = await caller.community.createBid({
+      spaceCode: "textile", title: "Draft bid for offer test", description: "D", durationHours: 24, images: [],
+    });
+    await expect(caller.community.createBidOffer({
+      bidId, bidderFactoryId: 1, proposal: "P", images: [], pinnedProductIds: [],
+    })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  }, 60000);
+
+  // 5. Author tries to bid on own bid → FORBIDDEN
+  it("bid author cannot bid on own request → FORBIDDEN", async () => {
+    // p3bBidId is authored by user 1 (adminCtx)
+    const caller = appRouter.createCaller(adminCtx()); // user 1 = author
+    await expect(caller.community.createBidOffer({
+      bidId: p3bBidId, bidderFactoryId: 1, proposal: "P", images: [], pinnedProductIds: [],
+    })).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  // 6. User with no approved factory → FORBIDDEN
+  it("user with no approved factory → FORBIDDEN", async () => {
+    // Use id=999998 — this user has no factory in test DB
+    const caller = appRouter.createCaller(createAuthContext({ role: "admin", id: 999998 }));
+    await expect(caller.community.createBidOffer({
+      bidId: p3bBidId, bidderFactoryId: 1, proposal: "P", images: [], pinnedProductIds: [],
+    })).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  // 7. Factory not owned by user → FORBIDDEN
+  it("factory not belonging to user → FORBIDDEN", async () => {
+    if (!testFactory) return; // skip if no factory
+    const caller = appRouter.createCaller(factoryOwnerCtx()!);
+    await expect(caller.community.createBidOffer({
+      bidId: p3bBidId, bidderFactoryId: 999999, proposal: "P", images: [], pinnedProductIds: [],
+    })).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  // 8. Valid offer creation → returns offerId
+  it("valid factory offer creation returns offerId", async () => {
+    if (!testFactory) return; // skip if no factory
+    const caller = appRouter.createCaller(factoryOwnerCtx()!);
+    const result = await caller.community.createBidOffer({
+      bidId: p3bBidId,
+      bidderFactoryId: testFactory.id,
+      proposal: "我們可以生產",
+      amount: 50000,
+      deliveryDays: 30,
+      images: [],
+      pinnedProductIds: [],
+    });
+    expect(result.offerId).toBeGreaterThan(0);
+  }, 60000);
+
+  // 9. Duplicate factory offer → CONFLICT
+  it("duplicate offer from same factory → CONFLICT", async () => {
+    if (!testFactory) return; // skip if no factory
+    const caller = appRouter.createCaller(factoryOwnerCtx()!);
+    await expect(caller.community.createBidOffer({
+      bidId: p3bBidId,
+      bidderFactoryId: testFactory.id,
+      proposal: "Second offer — should fail",
+      images: [],
+      pinnedProductIds: [],
+    })).rejects.toMatchObject({ code: "CONFLICT" });
+  }, 60000);
+
+  // 10. Bid deadline already passed → BAD_REQUEST
+  it("past-deadline bid → BAD_REQUEST", async () => {
+    if (!testFactory) return; // skip if no factory — needs to pass factory check first
+    const pastBidId = await createActiveBid("Past deadline bid");
+    await setTestBidDeadlinePast(pastBidId); // set deadline to 2020-01-01 (always past)
+    const caller = appRouter.createCaller(factoryOwnerCtx()!);
+    await expect(caller.community.createBidOffer({
+      bidId: pastBidId,
+      bidderFactoryId: testFactory!.id,
+      proposal: "Late offer",
+      images: [],
+      pinnedProductIds: [],
+    })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  }, 60000);
+});
+
+// ===== updateBidOffer / withdrawBidOffer / resubmitBidOffer: state machine =====
+describe("community.updateBidOffer / withdrawBidOffer / resubmitBidOffer: state machine", () => {
+  const adminCtx = () => createAuthContext({ role: "admin" });
+  let stateBidId = 0;
+  let stateOfferId = 0;
+
+  beforeAll(async () => {
+    if (!testFactory) return;
+    stateBidId = await createActiveBid("State machine test bid");
+    // Create offer directly via DB (bypasses router factory check)
+    stateOfferId = await createCommunityBidOffer({
+      bidId: stateBidId,
+      bidderUserId: testFactory.ownerId,
+      bidderFactoryId: testFactory.id,
+      bidderNameSnapshot: "Test Factory Owner",
+      bidderFactoryNameSnapshot: "Test Factory",
+      bidderRoleSnapshot: "owner",
+      amount: null,
+      currency: "TWD",
+      deliveryDays: null,
+      moq: null,
+      sampleAvailable: false,
+      proposal: "Initial proposal",
+      commercialTerms: null,
+      images: [],
+      pinnedProductIds: [],
+    });
+  }, 30000);
+
+  // updateBidOffer tests
+  // 11. offer not found → NOT_FOUND
+  it("updateBidOffer: nonexistent offer → NOT_FOUND", async () => {
+    const caller = appRouter.createCaller(factoryOwnerCtx() ?? adminCtx());
+    await expect(caller.community.updateBidOffer({ offerId: 999999999, proposal: "New" }))
+      .rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  // 12. wrong owner → FORBIDDEN
+  it("updateBidOffer: wrong user → FORBIDDEN", async () => {
+    if (!testFactory || !stateOfferId) return;
+    const otherCtx = createAuthContext({ role: "admin", id: 999997 });
+    const caller = appRouter.createCaller(otherCtx);
+    await expect(caller.community.updateBidOffer({ offerId: stateOfferId, proposal: "Hijack" }))
+      .rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  // 13. valid update → success
+  it("updateBidOffer: valid update returns success", async () => {
+    if (!testFactory || !stateOfferId) return;
+    const caller = appRouter.createCaller(factoryOwnerCtx()!);
+    const result = await caller.community.updateBidOffer({
+      offerId: stateOfferId,
+      proposal: "Updated proposal",
+      amount: 80000,
+      deliveryDays: 45,
+    });
+    expect(result.success).toBe(true);
+    // Verify the offer was updated
+    const updated = await getCommunityBidOfferById(stateOfferId);
+    expect(updated?.proposal).toBe("Updated proposal");
+  }, 60000);
+
+  // withdrawBidOffer tests
+  // 14. offer not found → NOT_FOUND
+  it("withdrawBidOffer: nonexistent offer → NOT_FOUND", async () => {
+    const caller = appRouter.createCaller(factoryOwnerCtx() ?? adminCtx());
+    await expect(caller.community.withdrawBidOffer({ offerId: 999999998 }))
+      .rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  // 15. wrong owner → FORBIDDEN
+  it("withdrawBidOffer: wrong user → FORBIDDEN", async () => {
+    if (!testFactory || !stateOfferId) return;
+    const otherCtx = createAuthContext({ role: "admin", id: 999996 });
+    const caller = appRouter.createCaller(otherCtx);
+    await expect(caller.community.withdrawBidOffer({ offerId: stateOfferId }))
+      .rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  // 16. valid withdraw → success
+  it("withdrawBidOffer: valid withdraw returns success", async () => {
+    if (!testFactory || !stateOfferId) return;
+    const caller = appRouter.createCaller(factoryOwnerCtx()!);
+    const result = await caller.community.withdrawBidOffer({ offerId: stateOfferId });
+    expect(result.success).toBe(true);
+    const offer = await getCommunityBidOfferById(stateOfferId);
+    expect(offer?.status).toBe("withdrawn");
+    expect(offer?.withdrawnAt).not.toBeNull();
+  }, 60000);
+
+  // 17. double withdraw → BAD_REQUEST (already withdrawn)
+  it("withdrawBidOffer: already-withdrawn offer → BAD_REQUEST", async () => {
+    if (!testFactory || !stateOfferId) return;
+    const caller = appRouter.createCaller(factoryOwnerCtx()!);
+    await expect(caller.community.withdrawBidOffer({ offerId: stateOfferId }))
+      .rejects.toMatchObject({ code: "BAD_REQUEST" });
+  }, 60000);
+
+  // resubmitBidOffer tests
+  // 18. offer not found → NOT_FOUND
+  it("resubmitBidOffer: nonexistent offer → NOT_FOUND", async () => {
+    const caller = appRouter.createCaller(factoryOwnerCtx() ?? adminCtx());
+    await expect(caller.community.resubmitBidOffer({ offerId: 999999997, proposal: "P" }))
+      .rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  // 19. wrong owner → FORBIDDEN
+  it("resubmitBidOffer: wrong user → FORBIDDEN", async () => {
+    if (!testFactory || !stateOfferId) return;
+    const otherCtx = createAuthContext({ role: "admin", id: 999995 });
+    const caller = appRouter.createCaller(otherCtx);
+    await expect(caller.community.resubmitBidOffer({ offerId: stateOfferId, proposal: "P" }))
+      .rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  // 20. valid resubmit → success
+  it("resubmitBidOffer: valid resubmit sets status back to active", async () => {
+    if (!testFactory || !stateOfferId) return;
+    const caller = appRouter.createCaller(factoryOwnerCtx()!);
+    const result = await caller.community.resubmitBidOffer({
+      offerId: stateOfferId,
+      proposal: "Resubmitted proposal",
+    });
+    expect(result.success).toBe(true);
+    const offer = await getCommunityBidOfferById(stateOfferId);
+    expect(offer?.status).toBe("active");
+    expect(offer?.withdrawnAt).toBeNull();
+    expect(offer?.proposal).toBe("Resubmitted proposal");
+  }, 60000);
+
+  // 21. resubmit active offer → BAD_REQUEST (must be withdrawn first)
+  it("resubmitBidOffer: active offer → BAD_REQUEST", async () => {
+    if (!testFactory || !stateOfferId) return;
+    const caller = appRouter.createCaller(factoryOwnerCtx()!);
+    await expect(caller.community.resubmitBidOffer({ offerId: stateOfferId, proposal: "P" }))
+      .rejects.toMatchObject({ code: "BAD_REQUEST" });
+  }, 60000);
+});
+
+// ===== getMyBidOffer / getBidOfferCount / listBidOffersForOwner: privacy =====
+describe("community.getMyBidOffer / getBidOfferCount / listBidOffersForOwner: privacy", () => {
+  const adminCtx = () => createAuthContext({ role: "admin" });
+  let privacyBidId = 0;
+  let privacyOfferId = 0;
+
+  beforeAll(async () => {
+    privacyBidId = await createActiveBid("Privacy test bid");
+    if (!testFactory) return;
+    // Create an offer on this bid via DB
+    privacyOfferId = await createCommunityBidOffer({
+      bidId: privacyBidId,
+      bidderUserId: testFactory.ownerId,
+      bidderFactoryId: testFactory.id,
+      bidderNameSnapshot: "Privacy Test Owner",
+      bidderFactoryNameSnapshot: "Privacy Test Factory",
+      bidderRoleSnapshot: "owner",
+      amount: 75000,
+      currency: "TWD",
+      deliveryDays: 21,
+      moq: null,
+      sampleAvailable: true,
+      proposal: "Privacy test proposal",
+      commercialTerms: null,
+      images: [],
+      pinnedProductIds: [],
+    });
+  }, 30000);
+
+  // getMyBidOffer tests
+  // 22. No offer → returns { offer: null }
+  it("getMyBidOffer: no offer → { offer: null }", async () => {
+    // Use a different user who has never bid
+    const caller = appRouter.createCaller(createAuthContext({ role: "admin", id: 999994 }));
+    const result = await caller.community.getMyBidOffer({ bidId: privacyBidId });
+    expect(result.offer).toBeNull();
+  }, 30000);
+
+  // 23. Returns own offer
+  it("getMyBidOffer: returns own active offer", async () => {
+    if (!testFactory || !privacyOfferId) return;
+    const caller = appRouter.createCaller(factoryOwnerCtx()!);
+    const result = await caller.community.getMyBidOffer({ bidId: privacyBidId });
+    expect(result.offer).not.toBeNull();
+    expect(result.offer?.proposal).toBe("Privacy test proposal");
+    expect(result.offer?.sampleAvailable).toBe(true);
+  }, 30000);
+
+  // 24. Does not return another user's offer
+  it("getMyBidOffer: does not see other user's offer", async () => {
+    // User 1 (bid author) has no offer; user 999993 has no offer
+    const caller = appRouter.createCaller(createAuthContext({ role: "admin", id: 999993 }));
+    const result = await caller.community.getMyBidOffer({ bidId: privacyBidId });
+    expect(result.offer).toBeNull();
+  }, 30000);
+
+  // getBidOfferCount tests
+  // 25. Empty bid → count = 0
+  it("getBidOfferCount: bid with no offers → 0", async () => {
+    const emptyBidId = await createActiveBid("Empty count bid");
+    const caller = appRouter.createCaller(adminCtx());
+    const result = await caller.community.getBidOfferCount({ bidId: emptyBidId });
+    expect(result.count).toBe(0);
+  }, 60000);
+
+  // 26. Bid not found → NOT_FOUND
+  it("getBidOfferCount: nonexistent bid → NOT_FOUND", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    await expect(caller.community.getBidOfferCount({ bidId: 999999999 }))
+      .rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  // 27. Active offers counted, withdrawn not
+  it("getBidOfferCount: counts only active offers (not withdrawn)", async () => {
+    if (!testFactory || !privacyOfferId) return;
+    const caller = appRouter.createCaller(adminCtx());
+    // privacyBidId has 1 active offer
+    const before = await caller.community.getBidOfferCount({ bidId: privacyBidId });
+    expect(before.count).toBe(1);
+    // Withdraw it
+    await withdrawCommunityBidOffer(privacyOfferId);
+    const after = await caller.community.getBidOfferCount({ bidId: privacyBidId });
+    expect(after.count).toBe(0);
+    // Resubmit for subsequent tests
+    await resubmitCommunityBidOffer(privacyOfferId, {});
+  }, 60000);
+
+  // 28. Multiple offers → correct count
+  it("getBidOfferCount: correct count with multiple offers", async () => {
+    if (!testFactory) return;
+    const multiBidId = await createActiveBid("Multi-offer count bid");
+    // Create 2 offers from different factories using direct DB (would need 2 factories)
+    // For simplicity: verify count = 1 with our single test factory
+    await createCommunityBidOffer({
+      bidId: multiBidId,
+      bidderUserId: testFactory.ownerId,
+      bidderFactoryId: testFactory.id,
+      bidderNameSnapshot: "Owner",
+      bidderFactoryNameSnapshot: "Factory",
+      bidderRoleSnapshot: "owner",
+      amount: null, currency: "TWD", deliveryDays: null, moq: null,
+      sampleAvailable: false, proposal: "Multi test", commercialTerms: null,
+      images: [], pinnedProductIds: [],
+    });
+    const caller = appRouter.createCaller(adminCtx());
+    const result = await caller.community.getBidOfferCount({ bidId: multiBidId });
+    expect(result.count).toBe(1);
+  }, 60000);
+
+  // listBidOffersForOwner tests
+  // 29. Bid not found → NOT_FOUND
+  it("listBidOffersForOwner: nonexistent bid → NOT_FOUND", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    await expect(caller.community.listBidOffersForOwner({ bidId: 999999999 }))
+      .rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  // 30. Non-owner user (role="user") → FORBIDDEN (beta gate or auth check)
+  it("listBidOffersForOwner: non-owner non-admin user → FORBIDDEN", async () => {
+    // role="user" hits the beta-gate FORBIDDEN before reaching the auth check
+    const otherCtx = createAuthContext({ role: "user", id: 999992 });
+    const caller = appRouter.createCaller(otherCtx);
+    await expect(caller.community.listBidOffersForOwner({ bidId: privacyBidId }))
+      .rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  // 31. Owner sees all offers
+  it("listBidOffersForOwner: owner sees all offers", async () => {
+    if (!testFactory || !privacyOfferId) return;
+    // privacyBidId is authored by user 1
+    const caller = appRouter.createCaller(adminCtx()); // user 1 = author
+    const result = await caller.community.listBidOffersForOwner({ bidId: privacyBidId });
+    expect(result.offers.length).toBeGreaterThan(0);
+    const myOffer = result.offers.find(o => o.id === privacyOfferId);
+    expect(myOffer).toBeDefined();
+    expect(myOffer?.bidderFactoryId).toBe(testFactory.id);
+  }, 30000);
+
+  // 32. Admin sees all offers
+  it("listBidOffersForOwner: admin sees all offers too", async () => {
+    if (!testFactory || !privacyOfferId) return;
+    // Admin is user 1 AND is the bid owner — both conditions satisfied
+    const caller = appRouter.createCaller(adminCtx());
+    const result = await caller.community.listBidOffersForOwner({ bidId: privacyBidId });
+    expect(Array.isArray(result.offers)).toBe(true);
+  }, 30000);
+
+  // 33. Includes withdrawn offers (owner sees all statuses)
+  it("listBidOffersForOwner: includes withdrawn offers", async () => {
+    if (!testFactory || !privacyOfferId) return;
+    await withdrawCommunityBidOffer(privacyOfferId);
+    const caller = appRouter.createCaller(adminCtx());
+    const result = await caller.community.listBidOffersForOwner({ bidId: privacyBidId });
+    const withdrawnOffer = result.offers.find(o => o.status === "withdrawn");
+    expect(withdrawnOffer).toBeDefined();
+    // Restore
+    await resubmitCommunityBidOffer(privacyOfferId, {});
+  }, 60000);
+});
+
+// ===== DB: community bid offer functions (unit tests) =====
+describe("DB: community bid offer functions", () => {
+  let dbBidId = 0;
+  let dbOfferId = 0;
+
+  beforeAll(async () => {
+    dbBidId = await createActiveBid("DB unit test bid");
+  }, 30000);
+
+  // 34. getApprovedFactoriesForUser: unknown user → empty array
+  it("getApprovedFactoriesForUser: unknown user returns []", async () => {
+    const result = await getApprovedFactoriesForUser(999999999);
+    expect(result).toEqual([]);
+  });
+
+  // 35. createCommunityBidOffer: inserts record
+  it("createCommunityBidOffer: inserts offer record", async () => {
+    if (!testFactory) return;
+    dbOfferId = await createCommunityBidOffer({
+      bidId: dbBidId,
+      bidderUserId: testFactory.ownerId,
+      bidderFactoryId: testFactory.id,
+      bidderNameSnapshot: "DB Test Owner",
+      bidderFactoryNameSnapshot: "DB Test Factory",
+      bidderRoleSnapshot: "owner",
+      amount: 100000,
+      currency: "TWD",
+      deliveryDays: 60,
+      moq: 50,
+      sampleAvailable: true,
+      proposal: "DB test proposal",
+      commercialTerms: "Net 30",
+      images: [],
+      pinnedProductIds: [],
+    });
+    expect(dbOfferId).toBeGreaterThan(0);
+  }, 30000);
+
+  // 36. createCommunityBidOffer: ER_DUP_ENTRY → CONFLICT code error
+  it("createCommunityBidOffer: duplicate factory throws CONFLICT", async () => {
+    if (!testFactory || !dbOfferId) return;
+    await expect(createCommunityBidOffer({
+      bidId: dbBidId,
+      bidderUserId: testFactory.ownerId,
+      bidderFactoryId: testFactory.id,
+      bidderNameSnapshot: "Dup",
+      bidderFactoryNameSnapshot: "Dup Factory",
+      bidderRoleSnapshot: "owner",
+      amount: null, currency: "TWD", deliveryDays: null, moq: null,
+      sampleAvailable: false, proposal: "Dup", commercialTerms: null,
+      images: [], pinnedProductIds: [],
+    })).rejects.toMatchObject({ code: "CONFLICT" });
+  }, 30000);
+
+  // 37. getCommunityBidOfferById: returns record
+  it("getCommunityBidOfferById: returns correct offer", async () => {
+    if (!testFactory || !dbOfferId) return;
+    const offer = await getCommunityBidOfferById(dbOfferId);
+    expect(offer).not.toBeNull();
+    expect(offer?.proposal).toBe("DB test proposal");
+    expect(offer?.amount).toBe("100000"); // decimal returned as string
+    expect(offer?.moq).toBe(50);
+    expect(offer?.sampleAvailable).toBe(true);
+  }, 30000);
+
+  // 38. getCommunityBidOfferById: nonexistent → null
+  it("getCommunityBidOfferById: nonexistent offer returns null", async () => {
+    const offer = await getCommunityBidOfferById(999999999);
+    expect(offer).toBeNull();
+  });
+
+  // 39. getCommunityBidOfferByFactory: returns correct offer
+  it("getCommunityBidOfferByFactory: returns offer for factory", async () => {
+    if (!testFactory || !dbOfferId) return;
+    const offer = await getCommunityBidOfferByFactory(dbBidId, testFactory.id);
+    expect(offer).not.toBeNull();
+    expect(offer?.id).toBe(dbOfferId);
+  }, 30000);
+
+  // 40. getCommunityBidOfferByUser: returns correct offer
+  it("getCommunityBidOfferByUser: returns offer for user", async () => {
+    if (!testFactory || !dbOfferId) return;
+    const offer = await getCommunityBidOfferByUser(dbBidId, testFactory.ownerId);
+    expect(offer).not.toBeNull();
+    expect(offer?.id).toBe(dbOfferId);
+  }, 30000);
+
+  // 41. withdrawCommunityBidOffer: sets status=withdrawn + withdrawnAt
+  it("withdrawCommunityBidOffer: sets status to withdrawn", async () => {
+    if (!testFactory || !dbOfferId) return;
+    await withdrawCommunityBidOffer(dbOfferId);
+    const offer = await getCommunityBidOfferById(dbOfferId);
+    expect(offer?.status).toBe("withdrawn");
+    expect(offer?.withdrawnAt).not.toBeNull();
+  }, 30000);
+
+  // 42. withdrawCommunityBidOffer: already withdrawn → CONFLICT error
+  it("withdrawCommunityBidOffer: already withdrawn throws CONFLICT", async () => {
+    if (!testFactory || !dbOfferId) return;
+    await expect(withdrawCommunityBidOffer(dbOfferId))
+      .rejects.toMatchObject({ code: "CONFLICT" });
+  }, 30000);
+
+  // 43. resubmitCommunityBidOffer: sets status=active + clears withdrawnAt
+  it("resubmitCommunityBidOffer: sets status back to active", async () => {
+    if (!testFactory || !dbOfferId) return;
+    await resubmitCommunityBidOffer(dbOfferId, { proposal: "Resubmitted DB proposal" });
+    const offer = await getCommunityBidOfferById(dbOfferId);
+    expect(offer?.status).toBe("active");
+    expect(offer?.withdrawnAt).toBeNull();
+    expect(offer?.proposal).toBe("Resubmitted DB proposal");
+  }, 30000);
+
+  // 44. getCommunityBidOfferCount: counts only active, not withdrawn
+  it("getCommunityBidOfferCount: counts active offers only", async () => {
+    if (!testFactory || !dbOfferId) return;
+    const activeCount = await getCommunityBidOfferCount(dbBidId);
+    expect(activeCount).toBe(1);
+    await withdrawCommunityBidOffer(dbOfferId);
+    const withdrawnCount = await getCommunityBidOfferCount(dbBidId);
+    expect(withdrawnCount).toBe(0);
+    await resubmitCommunityBidOffer(dbOfferId, {});
+  }, 60000);
+
+  // 45. listCommunityBidOffersForOwner: includes all statuses
+  it("listCommunityBidOffersForOwner: includes all non-deleted offers", async () => {
+    if (!testFactory || !dbOfferId) return;
+    const offers = await listCommunityBidOffersForOwner(dbBidId);
+    expect(offers.length).toBeGreaterThan(0);
+    const found = offers.find(o => o.id === dbOfferId);
+    expect(found).toBeDefined();
+  }, 30000);
+
+  // 46. getCommunityBidOfferCount: different bid → 0
+  it("getCommunityBidOfferCount: bid with no offers returns 0", async () => {
+    const emptyBidId = await createActiveBid("Count zero bid");
+    const count = await getCommunityBidOfferCount(emptyBidId);
+    expect(count).toBe(0);
+  }, 60000);
+});
+
+// ===== Phase 3B Hardening: concurrency, deadline SQL, null factory, lastUpdatedBy =====
+describe("Phase 3B Hardening: concurrency + deadline + null factory + audit", () => {
+  // 47. Concurrent createBidOffer from same factory → only one succeeds (DB UNIQUE constraint)
+  it("concurrent createBidOffer from same factory → exactly one succeeds, one CONFLICT", async () => {
+    if (!testFactory) return;
+    const concurrentBidId = await createActiveBid("Concurrency UNIQUE test");
+    const base = {
+      bidId: concurrentBidId,
+      bidderUserId: testFactory.ownerId,
+      bidderFactoryId: testFactory.id,
+      bidderNameSnapshot: "Concurrent Owner",
+      bidderFactoryNameSnapshot: "Concurrent Factory",
+      bidderRoleSnapshot: "owner",
+      amount: null, currency: "TWD", deliveryDays: null, moq: null,
+      sampleAvailable: false, commercialTerms: null, images: [], pinnedProductIds: [],
+    };
+    const [r1, r2] = await Promise.allSettled([
+      createCommunityBidOffer({ ...base, proposal: "Concurrent offer 1" }),
+      createCommunityBidOffer({ ...base, proposal: "Concurrent offer 2" }),
+    ]);
+    const fulfilled = [r1, r2].filter(r => r.status === "fulfilled");
+    const rejected = [r1, r2].filter(r => r.status === "rejected");
+    expect(fulfilled.length).toBe(1);
+    expect(rejected.length).toBe(1);
+    const rejectedResult = rejected[0] as PromiseRejectedResult;
+    expect(rejectedResult.reason?.code).toBe("CONFLICT");
+    const count = await getCommunityBidOfferCount(concurrentBidId);
+    expect(count).toBe(1);
+  }, 60000);
+
+  // 48. SQL-level deadline: setTestBidDeadlinePast prevents insert even if router check passed
+  it("setTestBidDeadlinePast → createCommunityBidOffer throws BID_UNAVAILABLE", async () => {
+    if (!testFactory) return;
+    const deadlineBidId = await createActiveBid("SQL deadline test");
+    await setTestBidDeadlinePast(deadlineBidId);
+    await expect(createCommunityBidOffer({
+      bidId: deadlineBidId,
+      bidderUserId: testFactory.ownerId,
+      bidderFactoryId: testFactory.id,
+      bidderNameSnapshot: "Owner", bidderFactoryNameSnapshot: "Factory", bidderRoleSnapshot: "owner",
+      amount: null, currency: "TWD", deliveryDays: null, moq: null,
+      sampleAvailable: false, proposal: "Late insert", commercialTerms: null, images: [], pinnedProductIds: [],
+    })).rejects.toMatchObject({ code: "BID_UNAVAILABLE" });
+  }, 60000);
+
+  // 49. lastUpdatedByUserId/Snapshot set correctly on withdraw
+  it("withdrawCommunityBidOffer sets lastUpdatedByUserId and Snapshot", async () => {
+    if (!testFactory) return;
+    const auditBidId = await createActiveBid("Audit withdraw test");
+    const auditOfferId = await createCommunityBidOffer({
+      bidId: auditBidId, bidderUserId: testFactory.ownerId,
+      bidderFactoryId: testFactory.id, bidderNameSnapshot: "Audit Owner",
+      bidderFactoryNameSnapshot: "Audit Factory", bidderRoleSnapshot: "owner",
+      amount: null, currency: "TWD", deliveryDays: null, moq: null,
+      sampleAvailable: false, proposal: "Audit test", commercialTerms: null, images: [], pinnedProductIds: [],
+    });
+    await withdrawCommunityBidOffer(auditOfferId, testFactory.ownerId, "Audit Actor");
+    const offer = await getCommunityBidOfferById(auditOfferId);
+    expect(offer?.lastUpdatedByUserId).toBe(testFactory.ownerId);
+    expect(offer?.lastUpdatedByNameSnapshot).toBe("Audit Actor");
+    expect(offer?.status).toBe("withdrawn");
+  }, 60000);
+
+  // 50. lastUpdatedByUserId/Snapshot set correctly on resubmit
+  it("resubmitCommunityBidOffer sets lastUpdatedByUserId and Snapshot", async () => {
+    if (!testFactory) return;
+    const resubBidId = await createActiveBid("Audit resubmit test");
+    const resubOfferId = await createCommunityBidOffer({
+      bidId: resubBidId, bidderUserId: testFactory.ownerId,
+      bidderFactoryId: testFactory.id, bidderNameSnapshot: "Resub Owner",
+      bidderFactoryNameSnapshot: "Resub Factory", bidderRoleSnapshot: "owner",
+      amount: null, currency: "TWD", deliveryDays: null, moq: null,
+      sampleAvailable: false, proposal: "Resub test", commercialTerms: null, images: [], pinnedProductIds: [],
+    });
+    await withdrawCommunityBidOffer(resubOfferId);
+    await resubmitCommunityBidOffer(resubOfferId, { proposal: "Resubmitted" }, testFactory.ownerId, "Resub Actor");
+    const offer = await getCommunityBidOfferById(resubOfferId);
+    expect(offer?.lastUpdatedByUserId).toBe(testFactory.ownerId);
+    expect(offer?.lastUpdatedByNameSnapshot).toBe("Resub Actor");
+    expect(offer?.status).toBe("active");
+    expect(offer?.proposal).toBe("Resubmitted");
+  }, 60000);
+
+  // 51. null bidderFactoryId → updateBidOffer throws BAD_REQUEST at router level
+  it("updateBidOffer: bidderFactoryId=null → BAD_REQUEST (router rejects null-factory edits)", async () => {
+    if (!testFactory) return;
+    const nullFacBidId = await createActiveBid("Null factory update test");
+    const nullFacOfferId = await createCommunityBidOffer({
+      bidId: nullFacBidId, bidderUserId: testFactory.ownerId,
+      bidderFactoryId: testFactory.id, bidderNameSnapshot: "NF Owner",
+      bidderFactoryNameSnapshot: "NF Factory", bidderRoleSnapshot: "owner",
+      amount: null, currency: "TWD", deliveryDays: null, moq: null,
+      sampleAvailable: false, proposal: "Null factory offer", commercialTerms: null, images: [], pinnedProductIds: [],
+    });
+    // Simulate factory being deleted by setting bidderFactoryId to null directly
+    const db_ = await getDb();
+    if (db_) {
+      await db_.execute(
+        `UPDATE communityBidOffers SET bidderFactoryId = NULL WHERE id = ${nullFacOfferId}` as any,
+      );
+    }
+    const caller = appRouter.createCaller(createAuthContext({ role: "admin", id: testFactory.ownerId }));
+    await expect(caller.community.updateBidOffer({ offerId: nullFacOfferId, proposal: "New" }))
+      .rejects.toMatchObject({ code: "BAD_REQUEST" });
+  }, 60000);
+
+  // 52. null bidderFactoryId → resubmitBidOffer throws BAD_REQUEST
+  it("resubmitBidOffer: bidderFactoryId=null → BAD_REQUEST", async () => {
+    if (!testFactory) return;
+    const nfReBidId = await createActiveBid("Null factory resubmit test");
+    const nfReOfferId = await createCommunityBidOffer({
+      bidId: nfReBidId, bidderUserId: testFactory.ownerId,
+      bidderFactoryId: testFactory.id, bidderNameSnapshot: "NF2 Owner",
+      bidderFactoryNameSnapshot: "NF2 Factory", bidderRoleSnapshot: "owner",
+      amount: null, currency: "TWD", deliveryDays: null, moq: null,
+      sampleAvailable: false, proposal: "Null factory resubmit", commercialTerms: null, images: [], pinnedProductIds: [],
+    });
+    await withdrawCommunityBidOffer(nfReOfferId);
+    const db_ = await getDb();
+    if (db_) {
+      await db_.execute(`UPDATE communityBidOffers SET bidderFactoryId = NULL WHERE id = ${nfReOfferId}` as any);
+    }
+    const caller = appRouter.createCaller(createAuthContext({ role: "admin", id: testFactory.ownerId }));
+    await expect(caller.community.resubmitBidOffer({ offerId: nfReOfferId, proposal: "Re-P" }))
+      .rejects.toMatchObject({ code: "BAD_REQUEST" });
+  }, 60000);
+
+  // 53. Privacy: non-owner non-admin cannot call listBidOffersForOwner (cross-user isolation)
+  it("listBidOffersForOwner: non-owner admin-role user with different id → FORBIDDEN", async () => {
+    if (!testFactory) return;
+    // Create a bid owned by user 1 (adminCtx), then try to access as user 999991 (admin role, different id)
+    const privBidId2 = await createActiveBid("Privacy cross-user test 2");
+    const otherCaller = appRouter.createCaller(createAuthContext({ role: "admin", id: 999991 }));
+    // Note: 999991 is NOT the bid author (author = user 1), so should get FORBIDDEN
+    await expect(otherCaller.community.listBidOffersForOwner({ bidId: privBidId2 }))
+      .rejects.toMatchObject({ code: "FORBIDDEN" });
+  }, 60000);
+
+  // 54. Validation bounds: proposal > 5000 chars → BAD_REQUEST
+  it("createBidOffer: proposal > 5000 chars → BAD_REQUEST (Zod validation)", async () => {
+    if (!testFactory) return;
+    const caller = appRouter.createCaller(createAuthContext({ role: "admin", id: testFactory.ownerId }));
+    const longBidId = await createActiveBid("Validation bounds test");
+    await expect(caller.community.createBidOffer({
+      bidId: longBidId,
+      bidderFactoryId: testFactory.id,
+      proposal: "a".repeat(5001),
+      images: [],
+      pinnedProductIds: [],
+    })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  }, 60000);
+
+  // 55. Validation bounds: amount > 999999999999 → BAD_REQUEST
+  it("createBidOffer: amount > 999999999999 → BAD_REQUEST (Zod validation)", async () => {
+    if (!testFactory) return;
+    const caller = appRouter.createCaller(createAuthContext({ role: "admin", id: testFactory.ownerId }));
+    const amountBidId = await createActiveBid("Amount validation test");
+    await expect(caller.community.createBidOffer({
+      bidId: amountBidId,
+      bidderFactoryId: testFactory.id,
+      proposal: "Valid proposal",
+      amount: 9999999999999, // > max
+      images: [],
+      pinnedProductIds: [],
+    })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  }, 60000);
+
+  // 56. Validation bounds: deliveryDays > 3650 → BAD_REQUEST
+  it("createBidOffer: deliveryDays > 3650 → BAD_REQUEST (Zod validation)", async () => {
+    if (!testFactory) return;
+    const caller = appRouter.createCaller(createAuthContext({ role: "admin", id: testFactory.ownerId }));
+    const ddBidId = await createActiveBid("DeliveryDays validation test");
+    await expect(caller.community.createBidOffer({
+      bidId: ddBidId,
+      bidderFactoryId: testFactory.id,
+      proposal: "Valid proposal",
+      deliveryDays: 3651, // > max
+      images: [],
+      pinnedProductIds: [],
+    })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  }, 60000);
+});
+
+// ===== Section 一: SQL-level deadline guards for update/withdraw/resubmit =====
+describe("Section 一: SQL deadline guards — update/withdraw/resubmit", () => {
+  let dlBidId = 0;
+  let dlOfferId = 0;
+
+  beforeAll(async () => {
+    if (!testFactory) return;
+    dlBidId = await createActiveBid("Section 一 deadline guard test");
+    dlOfferId = await createCommunityBidOffer({
+      bidId: dlBidId, bidderUserId: testFactory.ownerId,
+      bidderFactoryId: testFactory.id, bidderNameSnapshot: "DL Owner",
+      bidderFactoryNameSnapshot: "DL Factory", bidderRoleSnapshot: "owner",
+      amount: null, currency: "TWD", deliveryDays: null, moq: null,
+      sampleAvailable: false, proposal: "DL initial", commercialTerms: null,
+      images: [], pinnedProductIds: [],
+    });
+  }, 30000);
+
+  // 57. updateCommunityBidOfferSafe: bid deadline past → BID_UNAVAILABLE (SQL-level)
+  it("updateCommunityBidOfferSafe: bid deadline past → BID_UNAVAILABLE at SQL level", async () => {
+    if (!testFactory || !dlOfferId) return;
+    const pastBidId = await createActiveBid("SQL update deadline guard");
+    const pastOfferId = await createCommunityBidOffer({
+      bidId: pastBidId, bidderUserId: testFactory.ownerId,
+      bidderFactoryId: testFactory.id, bidderNameSnapshot: "PD Owner",
+      bidderFactoryNameSnapshot: "PD Factory", bidderRoleSnapshot: "owner",
+      amount: null, currency: "TWD", deliveryDays: null, moq: null,
+      sampleAvailable: false, proposal: "PD offer", commercialTerms: null,
+      images: [], pinnedProductIds: [],
+    });
+    await setTestBidDeadlinePast(pastBidId);
+    await expect(updateCommunityBidOfferSafe(pastOfferId, { proposal: "Late update" }, testFactory.ownerId, "Test Actor"))
+      .rejects.toMatchObject({ code: "BID_UNAVAILABLE" });
+    // Offer should remain unchanged
+    const offer = await getCommunityBidOfferById(pastOfferId);
+    expect(offer?.proposal).toBe("PD offer");
+  }, 60000);
+
+  // 58. updateCommunityBidOfferSafe: bid cancelled → BID_UNAVAILABLE at SQL level
+  it("updateCommunityBidOfferSafe: bid cancelled → BID_UNAVAILABLE at SQL level", async () => {
+    if (!testFactory) return;
+    const cancelledBidId = await createActiveBid("SQL update cancelled guard");
+    const cancelledOfferId = await createCommunityBidOffer({
+      bidId: cancelledBidId, bidderUserId: testFactory.ownerId,
+      bidderFactoryId: testFactory.id, bidderNameSnapshot: "CX Owner",
+      bidderFactoryNameSnapshot: "CX Factory", bidderRoleSnapshot: "owner",
+      amount: null, currency: "TWD", deliveryDays: null, moq: null,
+      sampleAvailable: false, proposal: "CX offer", commercialTerms: null,
+      images: [], pinnedProductIds: [],
+    });
+    await setTestBidStatus(cancelledBidId, "cancelled");
+    await expect(updateCommunityBidOfferSafe(cancelledOfferId, { proposal: "Cancelled update" }, testFactory.ownerId, "Test"))
+      .rejects.toMatchObject({ code: "BID_UNAVAILABLE" });
+  }, 60000);
+
+  // 59. updateBidOffer router: past-deadline bid → BAD_REQUEST (wraps BID_UNAVAILABLE)
+  it("updateBidOffer router: past-deadline bid → BAD_REQUEST", async () => {
+    if (!testFactory) return;
+    const deadlineBidId = await createActiveBid("Router update deadline guard");
+    const deadlineOfferId = await createCommunityBidOffer({
+      bidId: deadlineBidId, bidderUserId: testFactory.ownerId,
+      bidderFactoryId: testFactory.id, bidderNameSnapshot: "RD Owner",
+      bidderFactoryNameSnapshot: "RD Factory", bidderRoleSnapshot: "owner",
+      amount: null, currency: "TWD", deliveryDays: null, moq: null,
+      sampleAvailable: false, proposal: "RD offer", commercialTerms: null,
+      images: [], pinnedProductIds: [],
+    });
+    await setTestBidDeadlinePast(deadlineBidId);
+    const caller = appRouter.createCaller(createAuthContext({ role: "admin", id: testFactory.ownerId }));
+    await expect(caller.community.updateBidOffer({ offerId: deadlineOfferId, proposal: "Late" }))
+      .rejects.toMatchObject({ code: "BAD_REQUEST" });
+  }, 60000);
+
+  // 60. withdrawCommunityBidOffer: bid deadline past → BID_UNAVAILABLE (SQL-level)
+  it("withdrawCommunityBidOffer: bid deadline past → BID_UNAVAILABLE at SQL level", async () => {
+    if (!testFactory) return;
+    const wdBidId = await createActiveBid("SQL withdraw deadline guard");
+    const wdOfferId = await createCommunityBidOffer({
+      bidId: wdBidId, bidderUserId: testFactory.ownerId,
+      bidderFactoryId: testFactory.id, bidderNameSnapshot: "WD Owner",
+      bidderFactoryNameSnapshot: "WD Factory", bidderRoleSnapshot: "owner",
+      amount: null, currency: "TWD", deliveryDays: null, moq: null,
+      sampleAvailable: false, proposal: "WD offer", commercialTerms: null,
+      images: [], pinnedProductIds: [],
+    });
+    await setTestBidDeadlinePast(wdBidId);
+    await expect(withdrawCommunityBidOffer(wdOfferId, testFactory.ownerId, "Test"))
+      .rejects.toMatchObject({ code: "BID_UNAVAILABLE" });
+    // Status unchanged
+    const offer = await getCommunityBidOfferById(wdOfferId);
+    expect(offer?.status).toBe("active");
+  }, 60000);
+
+  // 61. withdrawBidOffer router: past-deadline bid → BAD_REQUEST
+  it("withdrawBidOffer router: past-deadline bid → BAD_REQUEST", async () => {
+    if (!testFactory) return;
+    const rWdBidId = await createActiveBid("Router withdraw deadline guard");
+    const rWdOfferId = await createCommunityBidOffer({
+      bidId: rWdBidId, bidderUserId: testFactory.ownerId,
+      bidderFactoryId: testFactory.id, bidderNameSnapshot: "RW Owner",
+      bidderFactoryNameSnapshot: "RW Factory", bidderRoleSnapshot: "owner",
+      amount: null, currency: "TWD", deliveryDays: null, moq: null,
+      sampleAvailable: false, proposal: "RW offer", commercialTerms: null,
+      images: [], pinnedProductIds: [],
+    });
+    await setTestBidDeadlinePast(rWdBidId);
+    const caller = appRouter.createCaller(createAuthContext({ role: "admin", id: testFactory.ownerId }));
+    await expect(caller.community.withdrawBidOffer({ offerId: rWdOfferId }))
+      .rejects.toMatchObject({ code: "BAD_REQUEST" });
+  }, 60000);
+
+  // 62. resubmitCommunityBidOffer: bid deadline past → BID_UNAVAILABLE (SQL-level)
+  it("resubmitCommunityBidOffer: bid deadline past → BID_UNAVAILABLE at SQL level", async () => {
+    if (!testFactory) return;
+    const rsBidId = await createActiveBid("SQL resubmit deadline guard");
+    const rsOfferId = await createCommunityBidOffer({
+      bidId: rsBidId, bidderUserId: testFactory.ownerId,
+      bidderFactoryId: testFactory.id, bidderNameSnapshot: "RS Owner",
+      bidderFactoryNameSnapshot: "RS Factory", bidderRoleSnapshot: "owner",
+      amount: null, currency: "TWD", deliveryDays: null, moq: null,
+      sampleAvailable: false, proposal: "RS offer", commercialTerms: null,
+      images: [], pinnedProductIds: [],
+    });
+    // Withdraw via raw DB (not through the bid guard, to get offer into withdrawn state)
+    const pool_ = await getDb();
+    if (pool_) await pool_.execute(`UPDATE communityBidOffers SET status = 'withdrawn' WHERE id = ${rsOfferId}` as any);
+    await setTestBidDeadlinePast(rsBidId);
+    await expect(resubmitCommunityBidOffer(rsOfferId, {}, testFactory.ownerId, "Test"))
+      .rejects.toMatchObject({ code: "BID_UNAVAILABLE" });
+    const offer = await getCommunityBidOfferById(rsOfferId);
+    expect(offer?.status).toBe("withdrawn");
+  }, 60000);
+
+  // 63. resubmitBidOffer router: past-deadline bid → BAD_REQUEST
+  it("resubmitBidOffer router: past-deadline bid → BAD_REQUEST", async () => {
+    if (!testFactory) return;
+    const rRsBidId = await createActiveBid("Router resubmit deadline guard");
+    const rRsOfferId = await createCommunityBidOffer({
+      bidId: rRsBidId, bidderUserId: testFactory.ownerId,
+      bidderFactoryId: testFactory.id, bidderNameSnapshot: "RR Owner",
+      bidderFactoryNameSnapshot: "RR Factory", bidderRoleSnapshot: "owner",
+      amount: null, currency: "TWD", deliveryDays: null, moq: null,
+      sampleAvailable: false, proposal: "RR offer", commercialTerms: null,
+      images: [], pinnedProductIds: [],
+    });
+    // Withdraw first (bid still active at this point)
+    await withdrawCommunityBidOffer(rRsOfferId);
+    // Now set deadline past AFTER withdrawing
+    await setTestBidDeadlinePast(rRsBidId);
+    const caller = appRouter.createCaller(createAuthContext({ role: "admin", id: testFactory.ownerId }));
+    await expect(caller.community.resubmitBidOffer({ offerId: rRsOfferId, proposal: "Late resub" }))
+      .rejects.toMatchObject({ code: "BAD_REQUEST" });
+  }, 60000);
+
+  // 64. withdrawCommunityBidOffer: offer already withdrawn → CONFLICT (not BID_UNAVAILABLE)
+  it("withdrawCommunityBidOffer: offer already withdrawn → CONFLICT (correct disambiguation)", async () => {
+    if (!testFactory || !dlOfferId) return;
+    // dlBidId is still active (no deadline manipulation)
+    // First withdraw
+    await withdrawCommunityBidOffer(dlOfferId);
+    // Second withdraw → CONFLICT (offer.status !== 'active')
+    await expect(withdrawCommunityBidOffer(dlOfferId))
+      .rejects.toMatchObject({ code: "CONFLICT" });
+    // Restore
+    const db_ = await getDb();
+    if (db_) await db_.execute(`UPDATE communityBidOffers SET status = 'active', withdrawnAt = NULL WHERE id = ${dlOfferId}` as any);
+  }, 60000);
+
+  // 65. resubmitCommunityBidOffer: offer already active → CONFLICT (not BID_UNAVAILABLE)
+  it("resubmitCommunityBidOffer: offer already active → CONFLICT (correct disambiguation)", async () => {
+    if (!testFactory || !dlOfferId) return;
+    // dlBidId still active; dlOfferId is now active (restored in test 64)
+    await expect(resubmitCommunityBidOffer(dlOfferId, {}))
+      .rejects.toMatchObject({ code: "CONFLICT" });
+  }, 60000);
+
+  // 66. updateCommunityBidOfferSafe: withdrawn offer → CONFLICT (correct disambiguation)
+  it("updateCommunityBidOfferSafe: withdrawn offer → CONFLICT (correct disambiguation)", async () => {
+    if (!testFactory || !dlOfferId) return;
+    // Withdraw dlOfferId
+    await withdrawCommunityBidOffer(dlOfferId);
+    await expect(updateCommunityBidOfferSafe(dlOfferId, { proposal: "Nope" }, testFactory.ownerId, "Test"))
+      .rejects.toMatchObject({ code: "CONFLICT" });
+    // Restore
+    const db_ = await getDb();
+    if (db_) await db_.execute(`UPDATE communityBidOffers SET status = 'active', withdrawnAt = NULL WHERE id = ${dlOfferId}` as any);
+  }, 60000);
+});
+
+// ===== Section 四: Product soft-skip on updateBidOffer / resubmitBidOffer =====
+describe("Section 四: product soft-skip — updateBidOffer and resubmitBidOffer", () => {
+  // 67. updateBidOffer: deleted product → soft-skip, returns removedProductCount > 0
+  it("updateBidOffer: non-existent product ID → soft-skipped, removedProductCount=1", async () => {
+    if (!testFactory) return;
+    const softBidId = await createActiveBid("Soft-skip update test");
+    const softOfferId = await createCommunityBidOffer({
+      bidId: softBidId, bidderUserId: testFactory.ownerId,
+      bidderFactoryId: testFactory.id, bidderNameSnapshot: "SF Owner",
+      bidderFactoryNameSnapshot: "SF Factory", bidderRoleSnapshot: "owner",
+      amount: null, currency: "TWD", deliveryDays: null, moq: null,
+      sampleAvailable: false, proposal: "SF initial", commercialTerms: null,
+      images: [], pinnedProductIds: [],
+    });
+    const caller = appRouter.createCaller(createAuthContext({ role: "admin", id: testFactory.ownerId }));
+    const result = await caller.community.updateBidOffer({
+      offerId: softOfferId,
+      proposal: "Updated with stale product",
+      pinnedProductIds: [888777], // non-existent product
+    });
+    expect(result.success).toBe(true);
+    expect(result.removedProductCount).toBe(1);
+    const offer = await getCommunityBidOfferById(softOfferId);
+    expect((offer?.pinnedProductIds as number[]).length).toBe(0);
+  }, 60000);
+
+  // 68. updateBidOffer: cross-factory product → BAD_REQUEST (hard-reject)
+  it("updateBidOffer: cross-factory product ID → BAD_REQUEST", async () => {
+    if (!testFactory) return;
+    // Find a product from a DIFFERENT factory
+    const db_ = await getDb();
+    if (!db_) return;
+    const { products: productsTable } = await import("../drizzle/schema");
+    const { ne: drizzleNeLocal } = await import("drizzle-orm");
+    const otherProducts = await db_.select({ id: productsTable.id })
+      .from(productsTable)
+      .where(drizzleNeLocal(productsTable.factoryId, testFactory.id))
+      .limit(1);
+    if (otherProducts.length === 0) return; // no other factory product to test with
+    const crossId = otherProducts[0].id;
+
+    const crossBidId = await createActiveBid("Cross-factory product update test");
+    const crossOfferId = await createCommunityBidOffer({
+      bidId: crossBidId, bidderUserId: testFactory.ownerId,
+      bidderFactoryId: testFactory.id, bidderNameSnapshot: "CF Owner",
+      bidderFactoryNameSnapshot: "CF Factory", bidderRoleSnapshot: "owner",
+      amount: null, currency: "TWD", deliveryDays: null, moq: null,
+      sampleAvailable: false, proposal: "CF initial", commercialTerms: null,
+      images: [], pinnedProductIds: [],
+    });
+    const caller = appRouter.createCaller(createAuthContext({ role: "admin", id: testFactory.ownerId }));
+    await expect(caller.community.updateBidOffer({ offerId: crossOfferId, pinnedProductIds: [crossId] }))
+      .rejects.toMatchObject({ code: "BAD_REQUEST" });
+  }, 60000);
+
+  // 69. updateBidOffer: no pinnedProductIds provided → removedProductCount=0
+  it("updateBidOffer: no pinnedProductIds field → removedProductCount=0", async () => {
+    if (!testFactory) return;
+    const nopBidId = await createActiveBid("No product update test");
+    const nopOfferId = await createCommunityBidOffer({
+      bidId: nopBidId, bidderUserId: testFactory.ownerId,
+      bidderFactoryId: testFactory.id, bidderNameSnapshot: "NP Owner",
+      bidderFactoryNameSnapshot: "NP Factory", bidderRoleSnapshot: "owner",
+      amount: null, currency: "TWD", deliveryDays: null, moq: null,
+      sampleAvailable: false, proposal: "NP initial", commercialTerms: null,
+      images: [], pinnedProductIds: [],
+    });
+    const caller = appRouter.createCaller(createAuthContext({ role: "admin", id: testFactory.ownerId }));
+    const result = await caller.community.updateBidOffer({ offerId: nopOfferId, proposal: "No product change" });
+    expect(result.success).toBe(true);
+    expect(result.removedProductCount).toBe(0);
+  }, 60000);
+
+  // 70. resubmitBidOffer: non-existent product → soft-skip, returns removedProductCount > 0
+  it("resubmitBidOffer: stale product → soft-skipped, removedProductCount=1", async () => {
+    if (!testFactory) return;
+    const rsSoftBidId = await createActiveBid("Resubmit soft-skip test");
+    const rsSoftOfferId = await createCommunityBidOffer({
+      bidId: rsSoftBidId, bidderUserId: testFactory.ownerId,
+      bidderFactoryId: testFactory.id, bidderNameSnapshot: "RS Owner",
+      bidderFactoryNameSnapshot: "RS Factory", bidderRoleSnapshot: "owner",
+      amount: null, currency: "TWD", deliveryDays: null, moq: null,
+      sampleAvailable: false, proposal: "RS initial", commercialTerms: null,
+      images: [], pinnedProductIds: [],
+    });
+    await withdrawCommunityBidOffer(rsSoftOfferId);
+    const caller = appRouter.createCaller(createAuthContext({ role: "admin", id: testFactory.ownerId }));
+    const result = await caller.community.resubmitBidOffer({
+      offerId: rsSoftOfferId,
+      proposal: "Resubmit with stale product",
+      pinnedProductIds: [777666], // non-existent
+    });
+    expect(result.success).toBe(true);
+    expect(result.removedProductCount).toBe(1);
+    const offer = await getCommunityBidOfferById(rsSoftOfferId);
+    expect(offer?.status).toBe("active");
+    expect((offer?.pinnedProductIds as number[]).length).toBe(0);
+  }, 60000);
+});
+
+// ===== Section 七: Notification rules — create=notify, update/withdraw/resubmit=no notify =====
+describe("Section 七: notification rules — only createBidOffer notifies", () => {
+  let notifBidId = 0;
+  let notifOfferId = 0;
+
+  beforeAll(async () => {
+    if (!testFactory) return;
+    notifBidId = await createActiveBid("Notification rules test bid");
+    notifOfferId = await createCommunityBidOffer({
+      bidId: notifBidId, bidderUserId: testFactory.ownerId,
+      bidderFactoryId: testFactory.id, bidderNameSnapshot: "NT Owner",
+      bidderFactoryNameSnapshot: "NT Factory", bidderRoleSnapshot: "owner",
+      amount: null, currency: "TWD", deliveryDays: null, moq: null,
+      sampleAvailable: false, proposal: "NT initial", commercialTerms: null,
+      images: [], pinnedProductIds: [],
+    });
+  }, 30000);
+
+  async function getNotifCount(): Promise<number> {
+    const db_ = await getDb();
+    if (!db_) return 0;
+    const [row] = await db_.select({ n: communityNotifications.id })
+      .from(communityNotifications)
+      .where(communityNotifications.eventGroup ? undefined : undefined)
+      .limit(9999);
+    // Count all rows in table — use SQL count
+    const { sql: sqlFn, count } = await import("drizzle-orm");
+    const [r] = await db_.select({ c: count() }).from(communityNotifications);
+    return Number(r?.c ?? 0);
+  }
+
+  // 71. createBidOffer via router creates a notification for the bid author
+  it("createBidOffer creates notification for bid author (dedupeKey prevents double-insert)", async () => {
+    if (!testFactory) return;
+    const db_ = await getDb();
+    if (!db_) return;
+    const { sql: sqlFn } = await import("drizzle-orm");
+    const [before] = await db_.select({ c: sqlFn<number>`COUNT(*)` })
+      .from(communityNotifications);
+    const countBefore = Number(before.c);
+
+    // createBidOffer via router — notifBidId is authored by user 1
+    // testFactory.ownerId !== 1 so the notification should be created
+    const freshBidId = await createActiveBid("Notif create test");
+    const freshCaller = appRouter.createCaller(createAuthContext({ role: "admin", id: testFactory.ownerId }));
+    await freshCaller.community.createBidOffer({
+      bidId: freshBidId,
+      bidderFactoryId: testFactory.id,
+      proposal: "Notif create offer",
+      images: [],
+      pinnedProductIds: [],
+    });
+
+    const [after] = await db_.select({ c: sqlFn<number>`COUNT(*)` })
+      .from(communityNotifications);
+    const countAfter = Number(after.c);
+    expect(countAfter).toBeGreaterThan(countBefore);
+  }, 60000);
+
+  // 72. updateBidOffer does NOT create new notification
+  it("updateBidOffer does NOT create notification", async () => {
+    if (!testFactory || !notifOfferId) return;
+    const db_ = await getDb();
+    if (!db_) return;
+    const { sql: sqlFn } = await import("drizzle-orm");
+    const [before] = await db_.select({ c: sqlFn<number>`COUNT(*)` }).from(communityNotifications);
+    const countBefore = Number(before.c);
+
+    const caller = appRouter.createCaller(createAuthContext({ role: "admin", id: testFactory.ownerId }));
+    await caller.community.updateBidOffer({ offerId: notifOfferId, proposal: "NT updated" });
+
+    const [after] = await db_.select({ c: sqlFn<number>`COUNT(*)` }).from(communityNotifications);
+    expect(Number(after.c)).toBe(countBefore);
+  }, 60000);
+
+  // 73. withdrawBidOffer does NOT create new notification
+  it("withdrawBidOffer does NOT create notification", async () => {
+    if (!testFactory || !notifOfferId) return;
+    const db_ = await getDb();
+    if (!db_) return;
+    const { sql: sqlFn } = await import("drizzle-orm");
+    const [before] = await db_.select({ c: sqlFn<number>`COUNT(*)` }).from(communityNotifications);
+    const countBefore = Number(before.c);
+
+    const caller = appRouter.createCaller(createAuthContext({ role: "admin", id: testFactory.ownerId }));
+    await caller.community.withdrawBidOffer({ offerId: notifOfferId });
+
+    const [after] = await db_.select({ c: sqlFn<number>`COUNT(*)` }).from(communityNotifications);
+    expect(Number(after.c)).toBe(countBefore);
+  }, 60000);
+
+  // 74. resubmitBidOffer does NOT create new notification
+  it("resubmitBidOffer does NOT create notification", async () => {
+    if (!testFactory || !notifOfferId) return;
+    const db_ = await getDb();
+    if (!db_) return;
+    const { sql: sqlFn } = await import("drizzle-orm");
+    const [before] = await db_.select({ c: sqlFn<number>`COUNT(*)` }).from(communityNotifications);
+    const countBefore = Number(before.c);
+
+    const caller = appRouter.createCaller(createAuthContext({ role: "admin", id: testFactory.ownerId }));
+    await caller.community.resubmitBidOffer({ offerId: notifOfferId, proposal: "NT resubmit" });
+
+    const [after] = await db_.select({ c: sqlFn<number>`COUNT(*)` }).from(communityNotifications);
+    expect(Number(after.c)).toBe(countBefore);
   }, 60000);
 });

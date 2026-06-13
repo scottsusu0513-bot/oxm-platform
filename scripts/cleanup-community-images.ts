@@ -1,10 +1,11 @@
 /**
- * 清理孤兒社群貼文圖片（未被任何貼文引用的 S3 物件）
+ * 清理孤兒社群圖片（未被任何貼文或投標引用的 S3 物件）
  * 執行：pnpm cleanup:community-images [--dry-run]
  *
  * 邏輯：
  * 1. 列出 S3 community-posts/ 下的所有物件
- * 2. 查詢 DB 中所有貼文的 images 欄位，建立已引用 URL 集合
+ * 2. 查詢 DB 中所有貼文（community_posts.images）和投標
+ *    （communityBidOffers.images）的 images 欄位，建立已引用 URL 集合
  * 3. 找出超過 24 小時且未被引用的物件（孤兒圖片）
  * 4. 刪除孤兒圖片（--dry-run 時只列出不刪除）
  *
@@ -61,25 +62,37 @@ async function main() {
 
   console.log(`[cleanup] S3 物件數：${s3Objects.length}`);
 
-  // 2. 查詢 DB 已引用的 URL
+  // 2. 查詢 DB 已引用的 URL（貼文 + 投標報價）
   const pool = await mysql.createPool({ uri: dbUrl, connectionLimit: 3 });
   const conn = await pool.getConnection();
   let referencedUrls: Set<string>;
   try {
-    const [rows] = await conn.query<mysql.RowDataPacket[]>(
+    referencedUrls = new Set<string>();
+
+    function collectImages(rows: mysql.RowDataPacket[]) {
+      for (const row of rows) {
+        try {
+          const imgs: unknown = typeof row.images === "string"
+            ? JSON.parse(row.images)
+            : row.images;
+          if (Array.isArray(imgs)) {
+            imgs.forEach((u) => typeof u === "string" && referencedUrls.add(u));
+          }
+        } catch { /* malformed JSON, skip */ }
+      }
+    }
+
+    // community_posts.images
+    const [postRows] = await conn.query<mysql.RowDataPacket[]>(
       "SELECT images FROM community_posts WHERE images IS NOT NULL AND images != '[]'",
     );
-    referencedUrls = new Set<string>();
-    for (const row of rows) {
-      try {
-        const imgs: unknown = typeof row.images === "string"
-          ? JSON.parse(row.images)
-          : row.images;
-        if (Array.isArray(imgs)) {
-          imgs.forEach((u) => typeof u === "string" && referencedUrls.add(u));
-        }
-      } catch { /* malformed JSON, skip */ }
-    }
+    collectImages(postRows);
+
+    // communityBidOffers.images (all statuses, deletedAt IS NULL)
+    const [offerRows] = await conn.query<mysql.RowDataPacket[]>(
+      "SELECT images FROM communityBidOffers WHERE images IS NOT NULL AND images != '[]' AND deletedAt IS NULL",
+    );
+    collectImages(offerRows);
   } finally {
     conn.release();
     await pool.end();

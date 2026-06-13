@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useLocation, Link } from "wouter";
-import { ArrowLeft, Gavel, Edit2, CheckCircle, XCircle, Clock, Loader2, AlertTriangle, ShoppingBag } from "lucide-react";
+import { ArrowLeft, Gavel, Edit2, CheckCircle, XCircle, Clock, Loader2, AlertTriangle, ShoppingBag, ChevronDown, ChevronUp } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { COMMUNITY_CROSS_INDUSTRY_SLUG, COMMUNITY_CROSS_INDUSTRY_NAME } from "@shared/const";
@@ -14,6 +14,7 @@ import Navbar from "@/components/Navbar";
 import { Helmet } from "react-helmet-async";
 import { toast } from "sonner";
 import CommunityBidForm from "./CommunityBidForm";
+import CommunityBidOfferForm from "./CommunityBidOfferForm";
 import type { CommunityBid } from "../../../../drizzle/schema";
 
 const SPACE_CODE_TO_NAME: Record<string, string> = {
@@ -56,12 +57,54 @@ export default function CommunityBidDetail({ spaceCode, bidId }: Props) {
   const [showEditForm, setShowEditForm] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
   const [showRejectInput, setShowRejectInput] = useState(false);
+  const [showOfferForm, setShowOfferForm] = useState(false);
+  const [showOfferList, setShowOfferList] = useState(false);
+  const [selectedBidderFactoryId, setSelectedBidderFactoryId] = useState<number | null>(null);
 
   const utils = trpc.useUtils();
   const { data, isLoading, isError } = trpc.community.getBid.useQuery(
     { bidId },
     { staleTime: 30_000 },
   );
+
+  // Identity options (to check if viewer has an approved factory)
+  const { data: identityData } = trpc.community.getMyIdentityOptions.useQuery(
+    undefined,
+    { enabled: !!user, staleTime: 60_000 },
+  );
+  const myFactories = (identityData?.identities ?? []).filter((o): o is { type: "factory"; factoryId: number; label: string; role: "owner" | "co_manager" } => o.type === "factory");
+
+  // Bidder: my offer for this bid
+  const { data: myOfferData, refetch: refetchMyOffer } = trpc.community.getMyBidOffer.useQuery(
+    { bidId },
+    { enabled: !!user && myFactories.length > 0, staleTime: 30_000 },
+  );
+  const myOffer = myOfferData?.offer ?? null;
+
+  // Offer count (for everyone)
+  const { data: offerCountData } = trpc.community.getBidOfferCount.useQuery(
+    { bidId },
+    { enabled: !!data && data.bid.status === "active", staleTime: 30_000 },
+  );
+
+  // Owner/admin: list all offers
+  const { data: offersData } = trpc.community.listBidOffersForOwner.useQuery(
+    { bidId },
+    {
+      enabled: !!user && !!data && (data.bid.authorUserId === user?.id || user?.role === "admin") && showOfferList,
+      staleTime: 30_000,
+    },
+  );
+
+  const withdrawOfferMutation = trpc.community.withdrawBidOffer.useMutation({
+    onSuccess: () => {
+      toast.success("投標已撤回");
+      utils.community.getMyBidOffer.invalidate({ bidId });
+      utils.community.getBidOfferCount.invalidate({ bidId });
+      utils.community.listBidOffersForOwner.invalidate({ bidId });
+    },
+    onError: (e) => toast.error(e.message),
+  });
 
   const submitMutation = trpc.community.submitBid.useMutation({
     onSuccess: (data) => {
@@ -269,12 +312,191 @@ export default function CommunityBidDetail({ spaceCode, bidId }: Props) {
             </section>
           )}
 
-          {/* Bidding placeholder */}
+          {/* Offer section */}
           {bid.status === "active" && (
-            <section className="rounded-lg border border-dashed border-border p-6 text-center">
-              <Gavel className="w-8 h-8 mx-auto mb-3 text-muted-foreground/40" />
-              <p className="text-sm font-medium text-muted-foreground">投標功能建置中</p>
-              <p className="text-xs text-muted-foreground/60 mt-1">廠商報價功能即將推出，敬請期待</p>
+            <section className="space-y-3">
+              {/* Offer count — always visible */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Gavel className="w-4 h-4" />
+                  <span>
+                    {offerCountData != null
+                      ? `已收到 ${offerCountData.count} 個投標`
+                      : "載入中..."}
+                  </span>
+                </div>
+                {/* Owner or admin: toggle offer list */}
+                {(isOwner || isAdmin) && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setShowOfferList(v => !v)}
+                  >
+                    {showOfferList ? <ChevronUp className="w-3.5 h-3.5 mr-1" /> : <ChevronDown className="w-3.5 h-3.5 mr-1" />}
+                    {showOfferList ? "收起投標" : "查看所有投標"}
+                  </Button>
+                )}
+              </div>
+
+              {/* Owner/admin: offer list */}
+              {(isOwner || isAdmin) && showOfferList && (
+                <div className="space-y-3">
+                  {isAdmin && !isOwner && (
+                    <p className="text-xs text-orange-600 dark:text-orange-400 font-medium">管理員檢視（私密報價）</p>
+                  )}
+                  {!offersData ? (
+                    <Skeleton className="h-20 w-full" />
+                  ) : offersData.offers.length === 0 ? (
+                    <p className="text-sm text-muted-foreground text-center py-4">尚無投標</p>
+                  ) : (
+                    offersData.offers.map(offer => {
+                      const offerImages = (offer.images as string[]) ?? [];
+                      const pinnedIds = (offer.pinnedProductIds as number[]) ?? [];
+                      const offerProducts = offersData.allProducts.filter(p => pinnedIds.includes(p.id));
+                      return (
+                        <div
+                          key={offer.id}
+                          className="rounded-lg border border-border p-4 space-y-2.5 bg-muted/20"
+                        >
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <span className="text-sm font-medium">{offer.bidderFactoryNameSnapshot || offer.bidderNameSnapshot}</span>
+                              {offer.bidderRoleSnapshot === "co_manager" && (
+                                <span className="ml-1.5 text-xs text-muted-foreground">（協理）</span>
+                              )}
+                            </div>
+                            <Badge variant={offer.status === "active" ? "default" : "secondary"} className="text-xs">
+                              {offer.status === "active" ? "進行中" : offer.status === "withdrawn" ? "已撤回" : "已取消資格"}
+                            </Badge>
+                          </div>
+                          <p className="text-sm whitespace-pre-wrap leading-relaxed">{offer.proposal}</p>
+                          <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                            {offer.amount && <span>報價：NT$ {Number(offer.amount).toLocaleString()}</span>}
+                            {offer.deliveryDays && <span>交期：{offer.deliveryDays} 天</span>}
+                            {offer.moq && <span>MOQ：{offer.moq}</span>}
+                            {offer.sampleAvailable && <span>可提供樣品</span>}
+                          </div>
+                          {offer.commercialTerms && (
+                            <p className="text-xs text-muted-foreground border-t border-border/60 pt-1.5">{offer.commercialTerms}</p>
+                          )}
+                          {offerImages.length > 0 && (
+                            <div className="flex flex-wrap gap-1.5 pt-0.5">
+                              {offerImages.map((url, i) => (
+                                <a key={`${url}-${i}`} href={url} target="_blank" rel="noopener noreferrer">
+                                  <img src={url} alt={`附圖 ${i + 1}`} className="w-16 h-16 object-cover rounded border border-border hover:opacity-80 transition-opacity" />
+                                </a>
+                              ))}
+                            </div>
+                          )}
+                          {offerProducts.length > 0 && (
+                            <div className="flex flex-wrap gap-1.5">
+                              {offerProducts.map(p => (
+                                <Link key={p.id} href={`/factory/${p.factoryId}`}>
+                                  <div className="flex items-center gap-1.5 px-2 py-1 rounded border border-border bg-background hover:bg-muted/40 transition-colors cursor-pointer max-w-[160px]">
+                                    {(p.images as string[] | null)?.[0] && (
+                                      <img src={(p.images as string[])[0]} alt={p.name} className="w-6 h-6 rounded object-cover shrink-0" />
+                                    )}
+                                    <span className="text-xs truncate">{p.name}</span>
+                                  </div>
+                                </Link>
+                              ))}
+                            </div>
+                          )}
+                          <p className="text-xs text-muted-foreground/50">
+                            {new Date(offer.submittedAt).toLocaleString("zh-TW", { dateStyle: "short", timeStyle: "short" })}
+                            {offer.lastUpdatedByNameSnapshot && offer.lastUpdatedByUserId !== offer.bidderUserId && (
+                              <span className="ml-2">（最後更新：{offer.lastUpdatedByNameSnapshot}）</span>
+                            )}
+                          </p>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              )}
+
+              {/* Bidder panel (not shown to bid author) */}
+              {user && !isOwner && !isAdmin && (
+                <div className="rounded-lg border border-border p-4">
+                  {myFactories.length === 0 ? (
+                    <p className="text-sm text-muted-foreground text-center">需以已審核工廠身分參與投標</p>
+                  ) : myOffer == null ? (
+                    <div className="space-y-3">
+                      {/* Multi-factory selector: shown only when user has >1 factory */}
+                      {myFactories.length > 1 && (
+                        <div>
+                          <Label className="text-xs text-muted-foreground mb-1 block">代表工廠</Label>
+                          <select
+                            className="w-full text-sm border border-border rounded-md px-3 py-1.5 bg-background"
+                            value={selectedBidderFactoryId ?? ""}
+                            onChange={e => setSelectedBidderFactoryId(Number(e.target.value) || null)}
+                          >
+                            <option value="">請選擇代表工廠</option>
+                            {myFactories.map(f => (
+                              <option key={f.factoryId} value={f.factoryId}>
+                                {f.label}{f.role === "co_manager" ? "（協理）" : ""}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+                      <div className="flex items-center justify-between">
+                        <p className="text-sm text-muted-foreground">以工廠身分投標此需求</p>
+                        <Button
+                          size="sm"
+                          disabled={myFactories.length > 1 && !selectedBidderFactoryId}
+                          onClick={() => setShowOfferForm(true)}
+                        >
+                          <Gavel className="w-3.5 h-3.5 mr-1.5" />
+                          投標
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-medium">我的投標</span>
+                        <Badge variant={myOffer.status === "active" ? "default" : "secondary"} className="text-xs">
+                          {myOffer.status === "active" ? "進行中" : myOffer.status === "withdrawn" ? "已撤回" : "已取消資格"}
+                        </Badge>
+                      </div>
+                      <p className="text-sm whitespace-pre-wrap leading-relaxed">{myOffer.proposal}</p>
+                      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                        {myOffer.amount && <span>報價：NT$ {Number(myOffer.amount).toLocaleString()}</span>}
+                        {myOffer.deliveryDays && <span>交期：{myOffer.deliveryDays} 天</span>}
+                        {myOffer.moq && <span>MOQ：{myOffer.moq}</span>}
+                        {myOffer.sampleAvailable && <span>可提供樣品</span>}
+                      </div>
+                      <div className="flex gap-2">
+                        {myOffer.status === "active" && (
+                          <>
+                            <Button size="sm" variant="outline" onClick={() => setShowOfferForm(true)}>修改</Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="text-destructive border-destructive/40 hover:bg-destructive/10"
+                              disabled={withdrawOfferMutation.isPending}
+                              onClick={() => {
+                                if (confirm("確定撤回此投標？")) {
+                                  withdrawOfferMutation.mutate({ offerId: myOffer.id });
+                                }
+                              }}
+                            >
+                              {withdrawOfferMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : null}
+                              撤回
+                            </Button>
+                          </>
+                        )}
+                        {myOffer.status === "withdrawn" && (
+                          <Button size="sm" onClick={() => setShowOfferForm(true)}>
+                            重新投標
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
             </section>
           )}
 
@@ -417,6 +639,27 @@ export default function CommunityBidDetail({ spaceCode, bidId }: Props) {
           )}
         </article>
       </main>
+
+      {/* Offer form (create / edit / resubmit) */}
+      {showOfferForm && myFactories.length > 0 && (() => {
+        // When editing/resubmitting, use the offer's factory. When creating, use selected or first.
+        const factoryId = myOffer?.bidderFactoryId
+          ?? selectedBidderFactoryId
+          ?? myFactories[0].factoryId;
+        return (
+          <CommunityBidOfferForm
+            bidId={bidId}
+            bidderFactoryId={factoryId}
+            existingOffer={myOffer}
+            onSuccess={() => {
+              setShowOfferForm(false);
+              utils.community.getMyBidOffer.invalidate({ bidId });
+              utils.community.getBidOfferCount.invalidate({ bidId });
+            }}
+            onCancel={() => setShowOfferForm(false)}
+          />
+        );
+      })()}
 
       {/* Edit form */}
       {showEditForm && (

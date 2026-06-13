@@ -21,12 +21,12 @@ import {
   communityPosts, communityComments,
   communityBoardFollows, factoryFollows, communityContentFollows,
   communityReactions, communityMentions, communityNotifications,
-  communityBids, communityBidIndustries, communityBidReviewHistory,
+  communityBids, communityBidIndustries, communityBidReviewHistory, communityBidOffers,
   type Factory, type InsertFactory, type Product, type InsertProduct, type Favorite, type InsertFavorite,
   type CommunityPost, type CommunityComment,
   type CommunityBoardFollow, type FactoryFollow, type CommunityContentFollow,
   type CommunityReaction, type CommunityMention, type CommunityNotification,
-  type CommunityBid, type CommunityBidReviewHistory,
+  type CommunityBid, type CommunityBidReviewHistory, type CommunityBidOffer,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 import { ADJACENT_REGIONS, INDUSTRY_SLUGS } from "../shared/constants";
@@ -5037,4 +5037,345 @@ export async function countPendingCommunityBids(): Promise<number> {
     .from(communityBids)
     .where(and(eq(communityBids.status, "pending_review"), isNull(communityBids.deletedAt)));
   return Number(rows[0]?.count ?? 0);
+}
+
+// ===== 商案討論區：廠商投標報價 =====
+
+export type ApprovedFactoryForUser = {
+  factoryId: number;
+  factoryName: string;
+  role: "owner" | "co_manager";
+};
+
+export async function getApprovedFactoriesForUser(userId: number): Promise<ApprovedFactoryForUser[]> {
+  const db_ = await getDb();
+  if (!db_) return [];
+
+  const result: ApprovedFactoryForUser[] = [];
+
+  const ownedRows = await db_.select({ id: factories.id, name: factories.name })
+    .from(factories)
+    .where(and(eq(factories.ownerId, userId), eq(factories.status, "approved")))
+    .limit(1);
+  if (ownedRows.length > 0) {
+    result.push({ factoryId: ownedRows[0].id, factoryName: ownedRows[0].name, role: "owner" });
+  }
+
+  const coMgrRows = await db_
+    .select({ id: factories.id, name: factories.name })
+    .from(factoryCoManagers)
+    .innerJoin(factories, and(eq(factories.id, factoryCoManagers.factoryId), eq(factories.status, "approved")))
+    .where(and(eq(factoryCoManagers.userId, userId), isNull(factoryCoManagers.removedAt)));
+  for (const row of coMgrRows) {
+    result.push({ factoryId: row.id, factoryName: row.name, role: "co_manager" });
+  }
+
+  return result;
+}
+
+export type CreateBidOfferInput = {
+  bidId: number;
+  bidderUserId: number;
+  bidderFactoryId: number;
+  bidderNameSnapshot: string;
+  bidderFactoryNameSnapshot: string;
+  bidderRoleSnapshot: string;
+  amount: number | null;
+  currency: string;
+  deliveryDays: number | null;
+  moq: number | null;
+  sampleAvailable: boolean;
+  proposal: string;
+  commercialTerms: string | null;
+  images: string[];
+  pinnedProductIds: number[];
+};
+
+export async function createCommunityBidOffer(input: CreateBidOfferInput): Promise<number> {
+  const pool = await getRawPool();
+  const amountStr = input.amount != null ? String(input.amount) : null;
+  const imgJson = JSON.stringify(input.images ?? []);
+  const pinJson = JSON.stringify(input.pinnedProductIds ?? []);
+  const submittedAt = toSqlUtc(new Date());
+
+  // Atomic conditional INSERT: only insert if bid is still active and within deadline.
+  // (deadline IS NULL OR deadline > UTC_TIMESTAMP()) guards against race conditions
+  // where the router's pre-check passed but the deadline expired before the DB write.
+  let header: mysql.ResultSetHeader;
+  try {
+    [header] = await pool.execute<mysql.ResultSetHeader>(
+      `INSERT INTO \`communityBidOffers\`
+         (\`bidId\`, \`bidderUserId\`, \`bidderFactoryId\`,
+          \`bidderNameSnapshot\`, \`bidderFactoryNameSnapshot\`, \`bidderRoleSnapshot\`,
+          \`amount\`, \`currency\`, \`deliveryDays\`, \`moq\`, \`sampleAvailable\`,
+          \`proposal\`, \`commercialTerms\`, \`images\`, \`pinnedProductIds\`,
+          \`lastUpdatedByUserId\`, \`lastUpdatedByNameSnapshot\`, \`submittedAt\`)
+       SELECT ?, ?, ?,
+              ?, ?, ?,
+              ?, ?, ?, ?, ?,
+              ?, ?, ?, ?,
+              ?, ?, ?
+       FROM \`communityBids\`
+       WHERE \`id\` = ? AND \`status\` = 'active' AND \`deletedAt\` IS NULL
+         AND (\`deadline\` IS NULL OR \`deadline\` > UTC_TIMESTAMP())`,
+      [
+        input.bidId, input.bidderUserId, input.bidderFactoryId,
+        input.bidderNameSnapshot, input.bidderFactoryNameSnapshot, input.bidderRoleSnapshot,
+        amountStr, input.currency, input.deliveryDays, input.moq, input.sampleAvailable ? 1 : 0,
+        input.proposal, input.commercialTerms, imgJson, pinJson,
+        input.bidderUserId, input.bidderNameSnapshot, submittedAt,
+        // WHERE params:
+        input.bidId,
+      ],
+    );
+  } catch (e: any) {
+    if (e?.code === "ER_DUP_ENTRY") {
+      throw Object.assign(new Error("此工廠已有投標紀錄"), { code: "CONFLICT" });
+    }
+    throw e;
+  }
+
+  if (header.affectedRows === 0) {
+    throw Object.assign(
+      new Error("此需求已截止或目前不開放投標，無法投標"),
+      { code: "BID_UNAVAILABLE" },
+    );
+  }
+  return header.insertId;
+}
+
+export type UpdateBidOfferInput = Partial<{
+  amount: number | null;
+  currency: string;
+  deliveryDays: number | null;
+  moq: number | null;
+  sampleAvailable: boolean;
+  proposal: string;
+  commercialTerms: string | null;
+  images: string[];
+  pinnedProductIds: number[];
+}>;
+
+export async function updateCommunityBidOffer(
+  offerId: number,
+  input: UpdateBidOfferInput,
+  actorUserId?: number | null,
+  actorNameSnapshot?: string,
+): Promise<void> {
+  const db_ = await getDb();
+  if (!db_) throw new Error("DB not available");
+  const { images, pinnedProductIds, amount, ...rest } = input;
+  const fields: Record<string, unknown> = { ...rest };
+  if (amount !== undefined) fields.amount = amount != null ? String(amount) : null;
+  if (images !== undefined) fields.images = images;
+  if (pinnedProductIds !== undefined) fields.pinnedProductIds = pinnedProductIds;
+  if (actorUserId !== undefined) {
+    fields.lastUpdatedByUserId = actorUserId;
+    fields.lastUpdatedByNameSnapshot = actorNameSnapshot ?? '';
+  }
+  if (Object.keys(fields).length > 0) {
+    await db_.update(communityBidOffers).set(fields).where(eq(communityBidOffers.id, offerId));
+  }
+}
+
+// JOIN-based UPDATE with bid deadline guard; throws CONFLICT or BID_UNAVAILABLE if affectedRows=0.
+export async function updateCommunityBidOfferSafe(
+  offerId: number,
+  input: UpdateBidOfferInput,
+  actorUserId: number,
+  actorNameSnapshot: string,
+): Promise<void> {
+  const pool = await getRawPool();
+  const setClauses: string[] = [
+    '`o`.`lastUpdatedByUserId` = ?',
+    '`o`.`lastUpdatedByNameSnapshot` = ?',
+  ];
+  const params: (string | number | boolean | null)[] = [actorUserId, actorNameSnapshot];
+
+  if (input.proposal !== undefined) { setClauses.push('`o`.`proposal` = ?'); params.push(input.proposal); }
+  if (input.amount !== undefined) { setClauses.push('`o`.`amount` = ?'); params.push(input.amount != null ? String(input.amount) : null); }
+  if (input.deliveryDays !== undefined) { setClauses.push('`o`.`deliveryDays` = ?'); params.push(input.deliveryDays); }
+  if (input.moq !== undefined) { setClauses.push('`o`.`moq` = ?'); params.push(input.moq); }
+  if (input.sampleAvailable !== undefined) { setClauses.push('`o`.`sampleAvailable` = ?'); params.push(input.sampleAvailable ? 1 : 0); }
+  if (input.commercialTerms !== undefined) { setClauses.push('`o`.`commercialTerms` = ?'); params.push(input.commercialTerms); }
+  if (input.images !== undefined) { setClauses.push('`o`.`images` = ?'); params.push(JSON.stringify(input.images)); }
+  if (input.pinnedProductIds !== undefined) { setClauses.push('`o`.`pinnedProductIds` = ?'); params.push(JSON.stringify(input.pinnedProductIds)); }
+  if (input.currency !== undefined) { setClauses.push('`o`.`currency` = ?'); params.push(input.currency); }
+
+  params.push(offerId);
+  const [header] = await pool.execute<mysql.ResultSetHeader>(
+    `UPDATE \`communityBidOffers\` AS o
+     INNER JOIN \`communityBids\` AS b ON b.id = o.bidId
+     SET ${setClauses.join(', ')}
+     WHERE o.\`id\` = ?
+     AND o.\`status\` = 'active'
+     AND o.\`deletedAt\` IS NULL
+     AND b.\`status\` = 'active'
+     AND b.\`deletedAt\` IS NULL
+     AND (b.\`deadline\` IS NULL OR b.\`deadline\` > UTC_TIMESTAMP())`,
+    params,
+  );
+  if (header.affectedRows === 0) {
+    const db_ = await getDb();
+    let offerStatus: string | null = null;
+    if (db_) {
+      const [row] = await db_.select({ status: communityBidOffers.status }).from(communityBidOffers).where(eq(communityBidOffers.id, offerId)).limit(1);
+      offerStatus = row?.status ?? null;
+    }
+    if (offerStatus !== 'active') {
+      throw Object.assign(new Error("投標狀態衝突，無法更新"), { code: "CONFLICT" });
+    }
+    throw Object.assign(new Error("此需求已截止或關閉，無法修改投標"), { code: "BID_UNAVAILABLE" });
+  }
+}
+
+export async function withdrawCommunityBidOffer(
+  offerId: number,
+  actorUserId?: number | null,
+  actorNameSnapshot?: string,
+): Promise<void> {
+  const pool = await getRawPool();
+  const now = new Date();
+  const [header] = await pool.execute<mysql.ResultSetHeader>(
+    `UPDATE \`communityBidOffers\` AS o
+     INNER JOIN \`communityBids\` AS b ON b.id = o.bidId
+     SET o.\`status\` = 'withdrawn', o.\`withdrawnAt\` = ?, o.\`lastUpdatedByUserId\` = ?, o.\`lastUpdatedByNameSnapshot\` = ?
+     WHERE o.\`id\` = ?
+     AND o.\`status\` = 'active'
+     AND o.\`deletedAt\` IS NULL
+     AND b.\`status\` = 'active'
+     AND b.\`deletedAt\` IS NULL
+     AND (b.\`deadline\` IS NULL OR b.\`deadline\` > UTC_TIMESTAMP())`,
+    [toSqlUtc(now), actorUserId ?? null, actorNameSnapshot ?? '', offerId],
+  );
+  if (header.affectedRows === 0) {
+    const db_ = await getDb();
+    let offerStatus: string | null = null;
+    if (db_) {
+      const [row] = await db_.select({ status: communityBidOffers.status }).from(communityBidOffers).where(eq(communityBidOffers.id, offerId)).limit(1);
+      offerStatus = row?.status ?? null;
+    }
+    if (offerStatus !== 'active') {
+      throw Object.assign(new Error("投標紀錄狀態不符合，無法撤回"), { code: "CONFLICT" });
+    }
+    throw Object.assign(new Error("此需求已截止或關閉，無法撤回投標"), { code: "BID_UNAVAILABLE" });
+  }
+}
+
+export async function resubmitCommunityBidOffer(
+  offerId: number,
+  updateFields: UpdateBidOfferInput,
+  actorUserId?: number | null,
+  actorNameSnapshot?: string,
+): Promise<void> {
+  const pool = await getRawPool();
+  const now = new Date();
+  const [header] = await pool.execute<mysql.ResultSetHeader>(
+    `UPDATE \`communityBidOffers\` AS o
+     INNER JOIN \`communityBids\` AS b ON b.id = o.bidId
+     SET o.\`status\` = 'active', o.\`submittedAt\` = ?, o.\`withdrawnAt\` = NULL, o.\`lastUpdatedByUserId\` = ?, o.\`lastUpdatedByNameSnapshot\` = ?
+     WHERE o.\`id\` = ?
+     AND o.\`status\` = 'withdrawn'
+     AND o.\`deletedAt\` IS NULL
+     AND b.\`status\` = 'active'
+     AND b.\`deletedAt\` IS NULL
+     AND (b.\`deadline\` IS NULL OR b.\`deadline\` > UTC_TIMESTAMP())`,
+    [toSqlUtc(now), actorUserId ?? null, actorNameSnapshot ?? '', offerId],
+  );
+  if (header.affectedRows === 0) {
+    const db_ = await getDb();
+    let offerStatus: string | null = null;
+    if (db_) {
+      const [row] = await db_.select({ status: communityBidOffers.status }).from(communityBidOffers).where(eq(communityBidOffers.id, offerId)).limit(1);
+      offerStatus = row?.status ?? null;
+    }
+    if (offerStatus !== 'withdrawn') {
+      throw Object.assign(new Error("投標紀錄狀態不符合，無法重新投標"), { code: "CONFLICT" });
+    }
+    throw Object.assign(new Error("此需求已截止或關閉，無法重新投標"), { code: "BID_UNAVAILABLE" });
+  }
+  if (Object.keys(updateFields).length > 0) {
+    await updateCommunityBidOffer(offerId, updateFields, actorUserId, actorNameSnapshot);
+  }
+}
+
+// For tests only: sets communityBids.deadline to a past timestamp.
+export async function setTestBidDeadlinePast(bidId: number): Promise<void> {
+  const pool = await getRawPool();
+  await pool.execute(
+    "UPDATE `communityBids` SET `deadline` = '2020-01-01 00:00:00' WHERE `id` = ?",
+    [bidId],
+  );
+}
+
+// For tests only: sets communityBids.status directly (bypasses state machine).
+export async function setTestBidStatus(bidId: number, status: string): Promise<void> {
+  const pool = await getRawPool();
+  await pool.execute(
+    "UPDATE `communityBids` SET `status` = ? WHERE `id` = ?",
+    [status, bidId],
+  );
+}
+
+export async function getCommunityBidOfferById(offerId: number): Promise<CommunityBidOffer | null> {
+  const db_ = await getDb();
+  if (!db_) return null;
+  const rows = await db_.select()
+    .from(communityBidOffers)
+    .where(eq(communityBidOffers.id, offerId))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+export async function getCommunityBidOfferByFactory(bidId: number, factoryId: number): Promise<CommunityBidOffer | null> {
+  const db_ = await getDb();
+  if (!db_) return null;
+  const rows = await db_.select()
+    .from(communityBidOffers)
+    .where(and(
+      eq(communityBidOffers.bidId, bidId),
+      eq(communityBidOffers.bidderFactoryId, factoryId),
+      isNull(communityBidOffers.deletedAt),
+    ))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+export async function getCommunityBidOfferByUser(bidId: number, userId: number): Promise<CommunityBidOffer | null> {
+  const db_ = await getDb();
+  if (!db_) return null;
+  const rows = await db_.select()
+    .from(communityBidOffers)
+    .where(and(
+      eq(communityBidOffers.bidId, bidId),
+      eq(communityBidOffers.bidderUserId, userId),
+      isNull(communityBidOffers.deletedAt),
+    ))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+export async function getCommunityBidOfferCount(bidId: number): Promise<number> {
+  const db_ = await getDb();
+  if (!db_) return 0;
+  const [row] = await db_.select({ n: sql<number>`COUNT(*)` })
+    .from(communityBidOffers)
+    .where(and(
+      eq(communityBidOffers.bidId, bidId),
+      eq(communityBidOffers.status, "active"),
+      isNull(communityBidOffers.deletedAt),
+    ));
+  return Number(row?.n ?? 0);
+}
+
+export async function listCommunityBidOffersForOwner(bidId: number): Promise<CommunityBidOffer[]> {
+  const db_ = await getDb();
+  if (!db_) return [];
+  return db_.select()
+    .from(communityBidOffers)
+    .where(and(
+      eq(communityBidOffers.bidId, bidId),
+      isNull(communityBidOffers.deletedAt),
+    ))
+    .orderBy(desc(communityBidOffers.submittedAt));
 }

@@ -770,3 +770,42 @@ export const communityBidReviewHistory = mysqlTable("communityBidReviewHistory",
 }));
 
 export type CommunityBidReviewHistory = typeof communityBidReviewHistory.$inferSelect;
+
+// ===== 商案討論區：廠商投標報價 =====
+// One offer per factory per bid: UNIQUE(bidId, bidderFactoryId).
+// MySQL allows multiple NULLs in a UNIQUE index, so SET NULL on FK delete doesn't cause conflicts.
+// Bid author cannot offer on their own bid (enforced at router layer, not schema).
+export const communityBidOffers = mysqlTable("communityBidOffers", {
+  id: int("id").autoincrement().primaryKey(),
+  bidId: int("bidId").notNull().references(() => communityBids.id, { onDelete: "cascade" }),
+  bidderUserId: int("bidderUserId").references(() => users.id, { onDelete: "set null" }),
+  bidderFactoryId: int("bidderFactoryId").references(() => factories.id, { onDelete: "set null" }),
+  bidderNameSnapshot: varchar("bidderNameSnapshot", { length: 100 }).notNull().default(""),
+  bidderFactoryNameSnapshot: varchar("bidderFactoryNameSnapshot", { length: 200 }).notNull().default(""),
+  bidderRoleSnapshot: varchar("bidderRoleSnapshot", { length: 50 }).notNull().default("owner"),
+  amount: decimal("amount", { precision: 12, scale: 0 }),
+  currency: varchar("currency", { length: 10 }).notNull().default("TWD"),
+  deliveryDays: int("deliveryDays"),
+  moq: int("moq"),
+  sampleAvailable: boolean("sampleAvailable").notNull().default(false),
+  proposal: text("proposal").notNull(),
+  commercialTerms: text("commercialTerms"),
+  images: json("images").$type<string[]>().notNull().default([]),
+  pinnedProductIds: json("pinnedProductIds").$type<number[]>().notNull().default([]),
+  lastUpdatedByUserId: int("lastUpdatedByUserId").references(() => users.id, { onDelete: "set null" }),
+  lastUpdatedByNameSnapshot: varchar("lastUpdatedByNameSnapshot", { length: 100 }).notNull().default(""),
+  status: mysqlEnum("status", ["active", "withdrawn", "disqualified"]).notNull().default("active"),
+  submittedAt: timestamp("submittedAt").defaultNow().notNull(),
+  withdrawnAt: timestamp("withdrawnAt"),
+  deletedAt: timestamp("deletedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (t) => ({
+  bidFactoryUq: uniqueIndex("cbo_bid_factory_uq").on(t.bidId, t.bidderFactoryId),
+  bidStatusIdx: index("cbo_bid_status_idx").on(t.bidId, t.status),
+  bidderUserIdx: index("cbo_bidder_user_idx").on(t.bidderUserId),
+  bidderFactoryIdx: index("cbo_bidder_factory_idx").on(t.bidderFactoryId),
+  lastUpdaterIdx: index("cbo_last_updater_idx").on(t.lastUpdatedByUserId),
+}));
+
+export type CommunityBidOffer = typeof communityBidOffers.$inferSelect;
