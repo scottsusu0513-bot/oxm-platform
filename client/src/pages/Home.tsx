@@ -163,12 +163,22 @@ function HeroImageCarousel() {
     setCurrent(idx);
   };
 
-  if (resolved === null || total === 0) return null;
+  // Loading: render skeleton with same outer dimensions to prevent layout shift
+  if (resolved === null) {
+    return (
+      <div className="max-w-4xl mx-auto mb-5 md:mb-8">
+        <div className="relative h-[200px] md:h-[300px] lg:h-[340px] w-full rounded-2xl md:rounded-3xl bg-muted/50 animate-pulse" />
+      </div>
+    );
+  }
+
+  // No carousel images found — collapse without placeholder (one-time, on initial load)
+  if (total === 0) return null;
 
   const img = resolved[current];
 
   return (
-    <div className="max-w-4xl mx-auto mb-5 md:mb-8">
+    <div className="max-w-4xl mx-auto mb-5 md:mb-8 carousel-appear">
       {/* Fixed-height frame — prevents layout jump when switching images */}
       <div
         className="relative h-[200px] md:h-[300px] lg:h-[340px] w-full overflow-hidden rounded-2xl md:rounded-3xl border border-border/40 shadow-lg bg-gradient-to-br from-white to-orange-50/40"

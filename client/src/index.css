@@ -224,6 +224,12 @@
 .carousel-slide-right { animation: carousel-slide-right 0.45s ease forwards; }
 .carousel-slide-left  { animation: carousel-slide-left  0.45s ease forwards; }
 
+@keyframes carousel-appear {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.carousel-appear { animation: carousel-appear 0.3s ease forwards; }
+
 @layer components {
   .container {
     width: 100%;
