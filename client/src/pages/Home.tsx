@@ -185,20 +185,20 @@ function HeroImageCarousel() {
         onMouseEnter={() => setPaused(true)}
         onMouseLeave={() => setPaused(false)}
       >
-        {/* Blurred fill layer (mobile only) — softens object-contain letterbox */}
+        {/* Blurred fill layer — softens object-contain letterbox on all viewports */}
         <img
           src={img.src}
           alt=""
           aria-hidden
-          className="absolute inset-0 h-full w-full object-cover scale-110 blur-xl opacity-25 md:hidden"
+          className="absolute inset-0 h-full w-full object-cover scale-110 blur-xl opacity-25"
         />
-        {/* Main image: contain on mobile (no crop), cover on desktop */}
+        {/* Main image: object-contain on all viewports — never crop */}
         <img
           key={slideKey}
           src={img.src}
           alt={img.alt}
           loading="eager"
-          className={`absolute inset-0 h-full w-full object-contain object-center md:object-cover ${slideDir === "right" ? "carousel-slide-right" : "carousel-slide-left"}`}
+          className={`absolute inset-0 h-full w-full object-contain object-center z-10 ${slideDir === "right" ? "carousel-slide-right" : "carousel-slide-left"}`}
         />
 
         {/* Arrows */}
