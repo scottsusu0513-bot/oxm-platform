@@ -116,11 +116,30 @@ export default function UsersList() {
                             </span>
                           </div>
                         </td>
-                        <td className="py-3 px-4 align-middle whitespace-nowrap">
-                          {(u as any).factoryName
-                            ? <span className="text-orange-700 font-medium">{(u as any).factoryName}</span>
-                            : <span className="text-gray-400">無</span>
-                          }
+                        <td className="py-3 px-4 align-middle">
+                          {(() => {
+                            const ownedId: number | null = (u as any).factoryId ?? null;
+                            const ownedName: string | null = (u as any).factoryName ?? null;
+                            const coManaged: Array<{ factoryId: number; factoryName: string }> = (u as any).coManagedFactories ?? [];
+                            // Exclude co-managed entries that overlap with the owned factory
+                            const coManagedFiltered = coManaged.filter(f => f.factoryId !== ownedId);
+                            const hasOwned = !!ownedName;
+                            const hasCoManaged = coManagedFiltered.length > 0;
+                            if (!hasOwned && !hasCoManaged) return <span className="text-gray-400">無</span>;
+                            return (
+                              <div className="flex flex-col gap-0.5">
+                                {hasOwned && (
+                                  <span className="text-orange-700 font-medium">{ownedName}</span>
+                                )}
+                                {coManagedFiltered.map(f => (
+                                  <span key={f.factoryId} className="flex items-center gap-1">
+                                    <span className="text-[10px] font-bold text-purple-700 bg-purple-50 border border-purple-200 px-1 leading-4 rounded whitespace-nowrap">管</span>
+                                    <span className="text-gray-700">{f.factoryName}</span>
+                                  </span>
+                                ))}
+                              </div>
+                            );
+                          })()}
                         </td>
                         <td className="py-3 px-4 align-middle w-[80px]">
                           <span className={`px-2 py-1 rounded text-xs font-semibold whitespace-nowrap ${

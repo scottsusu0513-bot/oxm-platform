@@ -7,7 +7,7 @@ import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ArrowLeft, Search, MapPin, Building2, Phone, Globe, Star, Shield, ShieldCheck, Clock, User } from "lucide-react";
+import { ArrowLeft, Search, MapPin, Building2, Phone, Globe, Star, Shield, ShieldCheck, Clock, User, Users } from "lucide-react";
 import { toast } from "sonner";
 
 export default function FactoriesList() {
@@ -200,6 +200,26 @@ export default function FactoriesList() {
                             <Star className="h-3.5 w-3.5 text-yellow-400 shrink-0" />
                             <span>{Number(f.avgRating).toFixed(1)} ({f.reviewCount ?? 0} 則評價)</span>
                           </div>
+                        )}
+                      </div>
+
+                      {/* Co-managers */}
+                      <div className="flex items-start gap-1.5 mb-2">
+                        <Users className="h-3.5 w-3.5 text-purple-400 shrink-0 mt-0.5" />
+                        <span className="text-xs text-gray-400 whitespace-nowrap">共同管理員：</span>
+                        {f.coManagers && f.coManagers.length > 0 ? (
+                          <div className="flex flex-wrap gap-1">
+                            {f.coManagers.map((cm: any) => (
+                              <span key={cm.userId} className="text-xs text-purple-700 bg-purple-50 border border-purple-200 px-2 py-0.5 rounded-full">
+                                {cm.name ?? ""}
+                                {cm.name && cm.email ? <span className="text-purple-400 ml-1">({cm.email})</span> : null}
+                                {!cm.name && cm.email ? cm.email : null}
+                                {!cm.name && !cm.email ? `#${cm.userId}` : null}
+                              </span>
+                            ))}
+                          </div>
+                        ) : (
+                          <span className="text-xs text-gray-400">無</span>
                         )}
                       </div>
 

@@ -582,10 +582,25 @@ function AdminDashboardContent() {
                         </div>
                         <div className="text-right">
                           <p className="text-xs text-gray-400">{u.role}</p>
-                          {(u as any).factoryName
-                            ? <p className="text-xs text-orange-700 mt-0.5">{(u as any).factoryName}</p>
-                            : <p className="text-xs text-gray-300 mt-0.5">無工廠</p>
-                          }
+                          {(() => {
+                            const ownedId: number | null = (u as any).factoryId ?? null;
+                            const ownedName: string | null = (u as any).factoryName ?? null;
+                            const coManaged: Array<{ factoryId: number; factoryName: string }> = (u as any).coManagedFactories ?? [];
+                            const coManagedFiltered = coManaged.filter((f: any) => f.factoryId !== ownedId);
+                            const hasOwned = !!ownedName;
+                            const hasCoManaged = coManagedFiltered.length > 0;
+                            if (!hasOwned && !hasCoManaged) return <p className="text-xs text-gray-300 mt-0.5">無工廠</p>;
+                            return (
+                              <div className="mt-0.5">
+                                {hasOwned && <p className="text-xs text-orange-700">{ownedName}</p>}
+                                {coManagedFiltered.map((f: any) => (
+                                  <p key={f.factoryId} className="text-xs text-purple-600">
+                                    <span className="font-semibold">【管】</span>{f.factoryName}
+                                  </p>
+                                ))}
+                              </div>
+                            );
+                          })()}
                         </div>
                       </div>
                     ))}

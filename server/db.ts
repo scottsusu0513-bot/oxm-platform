@@ -954,7 +954,37 @@ export async function getAdminFactories(page = 1, pageSize = 20, search?: string
     .orderBy(desc(factories.createdAt))
     .limit(pageSize).offset((page - 1) * pageSize);
 
-  const items = rows.map(r => ({ ...r.factory, ownerAccountName: r.ownerAccountName, ownerAccountEmail: r.ownerAccountEmail }));
+  const baseItems = rows.map(r => ({ ...r.factory, ownerAccountName: r.ownerAccountName, ownerAccountEmail: r.ownerAccountEmail }));
+
+  // Batch-fetch active co-managers for all factories on this page (no N+1)
+  const coManagersByFactory = new Map<number, Array<{ userId: number; name: string | null; email: string | null }>>();
+  if (baseItems.length > 0) {
+    const factoryIds = baseItems.map(f => f.id);
+    const cmRows = await db
+      .select({
+        factoryId: factoryCoManagers.factoryId,
+        userId: factoryCoManagers.userId,
+        name: users.name,
+        primaryEmail: users.primaryEmail,
+        email: users.email,
+      })
+      .from(factoryCoManagers)
+      .innerJoin(users, eq(factoryCoManagers.userId, users.id))
+      .where(and(
+        inArray(factoryCoManagers.factoryId, factoryIds),
+        isNull(factoryCoManagers.removedAt),
+      ));
+    for (const row of cmRows) {
+      const list = coManagersByFactory.get(row.factoryId) ?? [];
+      list.push({ userId: row.userId, name: row.name, email: row.primaryEmail ?? row.email });
+      coManagersByFactory.set(row.factoryId, list);
+    }
+  }
+
+  const items = baseItems.map(f => ({
+    ...f,
+    coManagers: coManagersByFactory.get(f.id) ?? [] as Array<{ userId: number; name: string | null; email: string | null }>,
+  }));
   return { items, total, page, pageSize };
 }
 
@@ -1014,11 +1044,35 @@ export async function getAdminUsers(page = 1, pageSize = 20, search?: string) {
     }
   }
 
+  // Batch-fetch active co-managed factories for all users on this page (no N+1)
+  const coManagedByUser = new Map<number, Array<{ factoryId: number; factoryName: string }>>();
+  if (items.length > 0) {
+    const userIds = items.map(u => u.id);
+    const cmRows = await db
+      .select({
+        userId: factoryCoManagers.userId,
+        factoryId: factoryCoManagers.factoryId,
+        factoryName: factories.name,
+      })
+      .from(factoryCoManagers)
+      .innerJoin(factories, eq(factoryCoManagers.factoryId, factories.id))
+      .where(and(
+        inArray(factoryCoManagers.userId, userIds),
+        isNull(factoryCoManagers.removedAt),
+      ));
+    for (const row of cmRows) {
+      const list = coManagedByUser.get(row.userId) ?? [];
+      list.push({ factoryId: row.factoryId, factoryName: row.factoryName });
+      coManagedByUser.set(row.userId, list);
+    }
+  }
+
   const enriched = items.map(u => ({
     ...u,
     hasVerifiedPrimaryEmail: !!u.primaryEmailVerifiedAt,
     hasGoogleLinked: googleSet.has(u.id),
     hasLineLinked: lineSet.has(u.id),
+    coManagedFactories: coManagedByUser.get(u.id) ?? [] as Array<{ factoryId: number; factoryName: string }>,
   }));
 
   return { items: enriched, total, page, pageSize };
