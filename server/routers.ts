@@ -14,8 +14,8 @@ import { storagePut, storagePresignedUrl } from "./storage";
 import { validateImageUpload } from "./_core/security";
 import { INDUSTRY_OPTIONS, TAIWAN_REGIONS, CAPITAL_OPTIONS, INDUSTRY_SLUGS } from "../shared/constants";
 import { nanoid } from "nanoid";
-import { factories, conversations, reviews, reports } from "../drizzle/schema";
-import { desc, eq, and, sql } from "drizzle-orm";
+import { factories, conversations, reviews, reports, factoryCoManagers, users } from "../drizzle/schema";
+import { desc, eq, and, sql, isNull } from "drizzle-orm";
 import { getDb } from "./db";
 import { sendPushToUser, sendPushToRecipients } from "./push";
 
@@ -1804,7 +1804,25 @@ export const appRouter = router({
       const factory = await db.getFactoryById(input.id);
       if (!factory) return null;
       const owner = await db.getUserById(factory.ownerId);
-      return { ...factory, ownerAccountName: owner?.name ?? null, ownerAccountEmail: owner?.email ?? null };
+      const drizzle = await getDb();
+      let coManagers: Array<{ userId: number; name: string | null; email: string | null }> = [];
+      if (drizzle) {
+        const cmRows = await drizzle
+          .select({
+            userId: factoryCoManagers.userId,
+            name: users.name,
+            primaryEmail: users.primaryEmail,
+            email: users.email,
+          })
+          .from(factoryCoManagers)
+          .innerJoin(users, eq(factoryCoManagers.userId, users.id))
+          .where(and(
+            eq(factoryCoManagers.factoryId, input.id),
+            isNull(factoryCoManagers.removedAt),
+          ));
+        coManagers = cmRows.map(r => ({ userId: r.userId, name: r.name, email: r.primaryEmail ?? r.email }));
+      }
+      return { ...factory, ownerAccountName: owner?.name ?? null, ownerAccountEmail: owner?.email ?? null, coManagers };
     }),
 
     approveFactory: adminProcedure.input(z.object({ factoryId: z.number() })).mutation(async ({ input }) => {

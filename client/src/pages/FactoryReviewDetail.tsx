@@ -10,7 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Checkbox } from "@/components/ui/checkbox";
-import { ArrowLeft, Building2, MapPin, AlertCircle, Image, Package, User, ChevronDown, Pencil } from "lucide-react";
+import { ArrowLeft, Building2, MapPin, AlertCircle, Image, Package, User, ChevronDown, Pencil, Users } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { INDUSTRY_OPTIONS } from "@shared/constants";
@@ -368,6 +368,36 @@ export default function FactoryReviewDetail() {
             </Card>
           </TabsContent>
         </Tabs>
+
+        {/* 共同管理員 */}
+        <Card className="mb-6">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Users className="h-5 w-5" />
+              共同管理員
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {!factory.coManagers || factory.coManagers.length === 0 ? (
+              <p className="text-muted-foreground text-sm">尚無共同管理員</p>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {factory.coManagers.map((cm) => (
+                  <div
+                    key={cm.userId}
+                    className="flex items-center gap-2 px-3 py-2 bg-gray-50 border border-gray-200 rounded-md text-sm"
+                  >
+                    <User className="h-4 w-4 shrink-0 text-gray-500" />
+                    <span className="font-medium">{cm.name ?? cm.email ?? `使用者 #${cm.userId}`}</span>
+                    {cm.name && cm.email && (
+                      <span className="text-muted-foreground">({cm.email})</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
         {/* 審核操作 */}
         <Card>
