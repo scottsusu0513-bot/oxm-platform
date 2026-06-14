@@ -93,7 +93,7 @@ const carouselImages = [
   { id: "03", alt: "OXM 首頁輪播圖片 3" },
   { id: "04", alt: "OXM 首頁輪播圖片 4" },
   { id: "05", alt: "OXM 首頁輪播圖片 5" },
-];
+].sort((a, b) => parseInt(b.id) - parseInt(a.id));
 
 type ResolvedImage = { id: string; src: string; alt: string };
 
