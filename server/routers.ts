@@ -1,7 +1,7 @@
-import { COOKIE_NAME, THIRTY_DAYS_MS, COMMUNITY_FEATURE_STATUS } from "@shared/const";
+import { COOKIE_NAME, THIRTY_DAYS_MS, COMMUNITY_FEATURE_STATUS, PLATFORM_NOTIFICATION_TYPES, COMMUNITY_PUBLIC_ENTRY_ENABLED } from "@shared/const";
 import { sdk } from "./_core/sdk";
 import { enhanceSearchKeyword, getSearchIntent } from './semantic-search';
-import { sendNewInquiryEmail, sendFactoryApprovedEmail, sendFactoryRejectedEmail, sendFactorySubmittedEmail, sendReportEmail, sendSupportTicketEmail, sendReviewReplyEmail, sendNewMessageNotificationEmail, sendReportStatusUpdateEmail, sendTicketStatusUpdateEmail, sendMessageReplyNotificationEmail, sendEmailVerificationEmail, sendAdminBroadcastEmail, sendRevisionSubmittedEmail, sendRevisionApprovedEmail, sendRevisionRejectedEmail } from './email';
+import { sendNewInquiryEmail, sendFactoryApprovedEmail, sendFactoryRejectedEmail, sendFactorySubmittedEmail, sendReportEmail, sendSupportTicketEmail, sendReviewReplyEmail, sendNewMessageNotificationEmail, sendReportStatusUpdateEmail, sendTicketStatusUpdateEmail, sendMessageReplyNotificationEmail, sendEmailVerificationEmail, sendAdminBroadcastEmail, sendRevisionSubmittedEmail, sendRevisionApprovedEmail, sendRevisionRejectedEmail, sendUpgradeApplicationEmail } from './email';
 import { sha256Hex, generateRawToken } from './_core/oauthHelpers';
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
@@ -14,15 +14,23 @@ import { storagePut, storagePresignedUrl } from "./storage";
 import { validateImageUpload } from "./_core/security";
 import { INDUSTRY_OPTIONS, TAIWAN_REGIONS, CAPITAL_OPTIONS, INDUSTRY_SLUGS } from "../shared/constants";
 import { nanoid } from "nanoid";
-import { factories, conversations, reviews, reports, factoryCoManagers, users } from "../drizzle/schema";
+import { factories, conversations, reviews, reports, factoryCoManagers, users, upgradeConsultants } from "../drizzle/schema";
 import { desc, eq, and, sql, isNull } from "drizzle-orm";
 import { getDb } from "./db";
 import { sendPushToUser, sendPushToRecipients } from "./push";
+import { createPlatformNotifications } from "./notifications";
 
 function requireVerifiedEmail(user: { primaryEmailVerifiedAt: Date | null }): void {
   if (!user.primaryEmailVerifiedAt) {
     throw new TRPCError({ code: "FORBIDDEN", message: "UNVERIFIED_EMAIL" });
   }
+}
+
+// Returns null (no filter) for admin or when community is public; otherwise restricts to platform-only types.
+function getVisibleTypesForUser(role: string): string[] | null {
+  return (role === "admin" || COMMUNITY_PUBLIC_ENTRY_ENABLED)
+    ? null
+    : Array.from(PLATFORM_NOTIFICATION_TYPES);
 }
 
 async function assertFactoryManager(factoryId: number, userId: number) {
@@ -744,6 +752,20 @@ export const appRouter = router({
       const messageId = await db.sendCoManagerInviteMessage(conv.id, ctx.user.id, content);
       await db.linkInvitationToMessage(invitationId, messageId);
 
+      // 站內通知：通知被邀請人
+      createPlatformNotifications([{
+        recipientUserId: invitee.id,
+        actorUserId: ctx.user.id,
+        actorName: ctx.user.name ?? ctx.user.email ?? "",
+        actorFactoryId: factory.id,
+        actorFactoryName: factory.name,
+        eventType: "co_manager_invitation",
+        eventGroup: "co_manager",
+        message: `「${factory.name}」邀請你成為次管理者，請到對話頁面確認`,
+        actionUrl: `/chat/${conv.id}`,
+        dedupeKey: `co_manager_invitation:${invitationId}`,
+      }]).catch(() => {});
+
       return { success: true, conversationId: conv.id };
     }),
 
@@ -752,10 +774,43 @@ export const appRouter = router({
       action: z.enum(["accept", "decline"]),
     })).mutation(async ({ ctx, input }) => {
       if (input.action === "accept") requireVerifiedEmail(ctx.user);
+      // Fetch invitation before mutating so we can send a notification
+      const inv = await db.getInvitationById(input.invitationId);
       if (input.action === "accept") {
         await db.acceptInvitation(input.invitationId, ctx.user.id);
       } else {
         await db.declineInvitation(input.invitationId, ctx.user.id);
+      }
+      // 站內通知：通知邀請人（工廠主管理者），fire-and-forget 避免阻塞回應
+      if (inv) {
+        void (async () => {
+          try {
+            const [factory, invitee] = await Promise.all([
+              db.getFactoryById(inv.factoryId),
+              db.getUserById(ctx.user.id),
+            ]);
+            const inviteeName = invitee?.name ?? invitee?.email ?? "使用者";
+            const factoryName = factory?.name ?? "工廠";
+            await createPlatformNotifications([{
+              recipientUserId: inv.inviterUserId,
+              actorUserId: ctx.user.id,
+              actorName: inviteeName,
+              actorFactoryId: factory?.id ?? null,
+              actorFactoryName: factoryName,
+              eventType: input.action === "accept"
+                ? "co_manager_invitation_accepted"
+                : "co_manager_invitation_rejected",
+              eventGroup: "co_manager",
+              message: input.action === "accept"
+                ? `${inviteeName} 已接受邀請，加入「${factoryName}」成為次管理者`
+                : `${inviteeName} 婉拒了次管理者邀請`,
+              actionUrl: "/dashboard",
+              dedupeKey: `co_manager_respond:${input.invitationId}:${input.action}`,
+            }]);
+          } catch (e) {
+            console.warn("[respondToInvitation] notification failed", e);
+          }
+        })();
       }
       return { success: true };
     }),
@@ -1140,6 +1195,19 @@ export const appRouter = router({
               },
             }).catch(() => {});
           }
+          // 站內通知
+          createPlatformNotifications([{
+            recipientUserId: conv.userId,
+            actorUserId: ctx.user.id,
+            actorFactoryId: factory?.id ?? null,
+            actorFactoryName: factory?.name ?? null,
+            actorName: factory?.name ?? "",
+            eventType: "chat_message",
+            eventGroup: "chat",
+            message: `${factory?.name ?? "工廠"} 傳了一則新訊息`,
+            actionUrl: `/chat/${input.conversationId}`,
+            dedupeKey: `chat_message:conv:${input.conversationId}:ts:${Date.now()}`,
+          }]).catch(() => {});
         }).catch(() => {});
       }
 
@@ -1230,6 +1298,27 @@ export const appRouter = router({
               },
             });
           }).catch((e) => { console.warn("[Push] chat.send factory push error", e); });
+        }
+
+        // 站內通知：通知工廠端（owner + co-managers）
+        if (factory) {
+          Promise.all([
+            Promise.resolve(factory.ownerId),
+            db.getActiveCoManagerUserIds(factory.id),
+          ]).then(([ownerId, coMgrIds]) => {
+            const recipientIds = Array.from(new Set([ownerId, ...coMgrIds])).filter(id => id !== ctx.user.id);
+            if (recipientIds.length === 0) return;
+            return createPlatformNotifications(recipientIds.map(uid => ({
+              recipientUserId: uid,
+              actorUserId: ctx.user.id,
+              actorName: ctx.user.name ?? ctx.user.email ?? "",
+              eventType: "chat_message",
+              eventGroup: "chat",
+              message: `${ctx.user.name ?? "客戶"} 傳了一則新詢問訊息`,
+              actionUrl: `/chat/${input.conversationId}`,
+              dedupeKey: `chat_message:conv:${input.conversationId}:r:${uid}:ts:${Date.now()}`,
+            })));
+          }).catch(() => {});
         }
       }
       return { success: true };
@@ -1708,6 +1797,19 @@ export const appRouter = router({
             },
           }).catch(() => {});
         }
+        // 站內通知
+        createPlatformNotifications([{
+          recipientUserId: review.userId,
+          actorUserId: ctx.user.id,
+          actorFactoryId: factory.id,
+          actorFactoryName: factory.name,
+          actorName: factory.name,
+          eventType: "review_reply",
+          eventGroup: "review",
+          message: `${factory.name} 回覆了你的評價`,
+          actionUrl: `/factory/${factory.id}#reviews`,
+          dedupeKey: `review_reply:${input.reviewId}`,
+        }]).catch(() => {});
       }).catch(() => {});
 
       return { success: true };
@@ -1841,6 +1943,14 @@ export const appRouter = router({
       body: `「${factory.name}」已通過審核，現已正式上架`,
       data: { type: "factory_approved", targetPath: "/dashboard" },
     }).catch(() => {});
+    createPlatformNotifications([{
+      recipientUserId: factory.ownerId,
+      eventType: "factory_approved",
+      eventGroup: "factory",
+      message: `「${factory.name}」已通過審核，現已正式上架`,
+      actionUrl: "/dashboard",
+      dedupeKey: `factory_approved:${factory.id}:${Date.now()}`,
+    }]).catch(() => {});
   }
   return { success: true };
 }),
@@ -1862,6 +1972,14 @@ export const appRouter = router({
           body: `「${rejectedFactory.name}」審核未通過，請修改後重新送審`,
           data: { type: "factory_rejected", targetPath: "/dashboard" },
         }).catch(() => {});
+        createPlatformNotifications([{
+          recipientUserId: rejectedFactory.ownerId,
+          eventType: "factory_rejected",
+          eventGroup: "factory",
+          message: `「${rejectedFactory.name}」審核未通過，請修改後重新送審`,
+          actionUrl: "/dashboard",
+          dedupeKey: `factory_rejected:${rejectedFactory.id}:${Date.now()}`,
+        }]).catch(() => {});
       }
       return { success: true };
     }),
@@ -2045,10 +2163,10 @@ export const appRouter = router({
     })).mutation(async ({ input }) => {
       const report = await db.getReportById(input.id);
       await db.updateReportStatus(input.id, input.status, input.adminNote);
-      // 通知檢舉者（若有開啟 reportUpdate 通知設定）
-      if (report?.userEmail) {
+      // 通知檢舉者（Email + 站內通知）
+      if (report?.userId) {
         const settings = (report.notificationSettings as Record<string, boolean> | null) ?? {};
-        if (settings.reportUpdate !== false) {
+        if (report.userEmail && settings.reportUpdate !== false) {
           sendReportStatusUpdateEmail({
             userEmail: report.userEmail,
             userName: report.userName ?? '您',
@@ -2056,6 +2174,14 @@ export const appRouter = router({
             status: input.status,
           }).catch(() => {});
         }
+        createPlatformNotifications([{
+          recipientUserId: report.userId,
+          eventType: "report_status_changed",
+          eventGroup: "report",
+          message: `您對「${report.factoryName ?? "工廠"}」的檢舉狀態已更新`,
+          actionUrl: "/member",
+          dedupeKey: `report_status:${input.id}:${input.status}`,
+        }]).catch(() => {});
       }
       return { success: true };
     }),
@@ -2079,10 +2205,10 @@ export const appRouter = router({
     })).mutation(async ({ input }) => {
       const ticket = await db.getSupportTicketById(input.id);
       await db.updateSupportTicketStatus(input.id, input.status, input.adminNote);
-      // 通知投訴者（若有開啟 ticketUpdate 通知設定）
-      if (ticket?.userEmail) {
+      // 通知投訴者（Email + 站內通知）
+      if (ticket?.userId) {
         const settings = (ticket.notificationSettings as Record<string, boolean> | null) ?? {};
-        if (settings.ticketUpdate !== false) {
+        if (ticket.userEmail && settings.ticketUpdate !== false) {
           sendTicketStatusUpdateEmail({
             userEmail: ticket.userEmail,
             userName: ticket.userName ?? '您',
@@ -2090,6 +2216,14 @@ export const appRouter = router({
             status: input.status,
           }).catch(() => {});
         }
+        createPlatformNotifications([{
+          recipientUserId: ticket.userId,
+          eventType: "support_ticket_updated",
+          eventGroup: "support",
+          message: `您的客服投訴案件「${ticket.subject}」狀態已更新`,
+          actionUrl: "/member",
+          dedupeKey: `ticket_status:${input.id}:${input.status}`,
+        }]).catch(() => {});
       }
       return { success: true };
     }),
@@ -2125,6 +2259,26 @@ export const appRouter = router({
         receiverIds = [input.receiverId];
       }
       await db.createMessageRecipients(campaignId, receiverIds);
+
+      // 站內通知：通知所有收件人，fire-and-forget
+      (async () => {
+        try {
+          if (receiverIds.length > 0) {
+            const titleSnap = input.title.length > 100 ? input.title.slice(0, 97) + "..." : input.title;
+            await createPlatformNotifications(receiverIds.map(uid => ({
+              recipientUserId: uid,
+              eventType: "admin_announcement",
+              eventGroup: "platform",
+              message: `平台通知：${titleSnap}`,
+              actionUrl: `/admin-message/${campaignId}`,
+              titleSnapshot: titleSnap,
+              dedupeKey: `admin_announcement:${campaignId}:r:${uid}`,
+            })));
+          }
+        } catch (err) {
+          console.warn("[notification] admin_announcement station error:", err instanceof Error ? err.message : String(err));
+        }
+      })();
 
       // 手機推播：只推給 announcement === true 的使用者，fire-and-forget
       (async () => {
@@ -3483,8 +3637,8 @@ export const appRouter = router({
     // ===== Phase 2A: Notifications =====
 
     notificationUnreadCount: protectedProcedure.query(async ({ ctx }) => {
-      checkCommunityRead(ctx.user);
-      const count = await db.getCommunityNotificationUnreadCount(ctx.user.id);
+      const visibleTypes = getVisibleTypesForUser(ctx.user.role);
+      const count = await db.getCommunityNotificationUnreadCount(ctx.user.id, visibleTypes);
       return { count };
     }),
 
@@ -3494,21 +3648,21 @@ export const appRouter = router({
         pageSize: z.number().int().min(1).max(50).default(20),
       }))
       .query(async ({ ctx, input }) => {
-        checkCommunityRead(ctx.user);
-        return db.listCommunityNotifications(ctx.user.id, input.page, input.pageSize);
+        const visibleTypes = getVisibleTypesForUser(ctx.user.role);
+        return db.listCommunityNotifications(ctx.user.id, input.page, input.pageSize, visibleTypes);
       }),
 
     notificationMarkRead: protectedProcedure
       .input(z.object({ notificationId: z.number().int() }))
       .mutation(async ({ ctx, input }) => {
-        checkCommunityWrite(ctx.user);
-        await db.markCommunityNotificationRead(input.notificationId, ctx.user.id);
+        const visibleTypes = getVisibleTypesForUser(ctx.user.role);
+        await db.markCommunityNotificationRead(input.notificationId, ctx.user.id, visibleTypes);
         return { success: true };
       }),
 
     notificationMarkAllRead: protectedProcedure.mutation(async ({ ctx }) => {
-      checkCommunityWrite(ctx.user);
-      await db.markAllCommunityNotificationsRead(ctx.user.id);
+      const visibleTypes = getVisibleTypesForUser(ctx.user.role);
+      await db.markAllCommunityNotificationsRead(ctx.user.id, visibleTypes);
       return { success: true };
     }),
 
@@ -4136,6 +4290,166 @@ export const appRouter = router({
 
         return { offers, allProducts, isAdmin };
       }),
+  }),
+
+  // ===== 企業升級中心 =====
+  upgradeCenter: router({
+    apply: publicProcedure.input(z.object({
+      companyName: z.string().min(1).max(200),
+      contactName: z.string().min(1).max(100),
+      phone: z.string().min(7).max(30),
+      email: z.string().email().max(320),
+      location: z.string().min(1).max(100),
+      capitalAmount: z.string().min(1).max(30),
+      employeeCount: z.string().min(1).max(30),
+      factoryType: z.string().min(1).max(30),
+      hasGovernmentProject: z.boolean(),
+      governmentProjectName: z.string().max(200).optional(),
+      hasGovernmentAward: z.boolean(),
+      governmentAwardName: z.string().max(200).optional(),
+      hasPatent: z.boolean(),
+      patentCount: z.number().int().min(1).max(9999).optional(),
+      exportStatus: z.string().min(1).max(30),
+      notes: z.string().max(2000).optional(),
+      consentAgreed: z.literal(true),
+    })).mutation(async ({ input }) => {
+      const isDuplicate = await db.findRecentUpgradeApplication(input.email, input.phone);
+      if (isDuplicate) {
+        throw new TRPCError({
+          code: "TOO_MANY_REQUESTS",
+          message: "您已在 10 分鐘內送出過申請，請稍後再試。",
+        });
+      }
+      // Auto-assign to regional consultant
+      const regionKey = db.resolveRegionKey(input.location);
+      let assignedConsultantId: number | null = null;
+      let status: "new" | "unassigned" = "unassigned";
+      if (regionKey) {
+        const consultant = await db.getConsultantByRegion(regionKey);
+        if (consultant) {
+          assignedConsultantId = consultant.id;
+          status = "new";
+        }
+      }
+      const id = await db.createUpgradeApplication({
+        companyName: input.companyName,
+        contactName: input.contactName,
+        phone: input.phone,
+        email: input.email,
+        location: input.location,
+        capitalAmount: input.capitalAmount,
+        employeeCount: input.employeeCount,
+        factoryType: input.factoryType,
+        hasGovernmentProject: input.hasGovernmentProject,
+        governmentProjectName: input.governmentProjectName ?? null,
+        hasGovernmentAward: input.hasGovernmentAward,
+        governmentAwardName: input.governmentAwardName ?? null,
+        hasPatent: input.hasPatent,
+        patentCount: input.patentCount ?? null,
+        exportStatus: input.exportStatus,
+        notes: input.notes ?? null,
+        consentAgreed: true,
+        status,
+        assignedConsultantId,
+      });
+      sendUpgradeApplicationEmail({
+        companyName: input.companyName,
+        contactName: input.contactName,
+        phone: input.phone,
+        email: input.email,
+        location: input.location,
+        applicationId: id,
+      }).catch((err) => {
+        console.error("[Email] upgrade center notification failed:", err);
+      });
+      return { success: true, id };
+    }),
+
+    adminList: adminProcedure.input(z.object({
+      status: z.enum(["new", "viewed", "contacted", "consulting", "submitted", "completed", "unassigned", "archived"]).optional(),
+      limit: z.number().int().min(1).max(200).default(50),
+      offset: z.number().int().min(0).default(0),
+    })).query(async ({ input }) => {
+      const [items, total] = await Promise.all([
+        db.listUpgradeApplications({ status: input.status, limit: input.limit, offset: input.offset }),
+        db.countUpgradeApplications(input.status),
+      ]);
+      return { items, total };
+    }),
+
+    adminGet: adminProcedure.input(z.object({ id: z.number() })).query(async ({ input }) => {
+      const item = await db.getUpgradeApplicationById(input.id);
+      if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "找不到申請案件" });
+      return item;
+    }),
+
+    adminUpdateStatus: adminProcedure.input(z.object({
+      id: z.number(),
+      status: z.enum(["new", "viewed", "contacted", "consulting", "submitted", "completed", "unassigned", "archived"]),
+    })).mutation(async ({ input }) => {
+      await db.updateUpgradeApplicationStatus(input.id, input.status);
+      return { success: true };
+    }),
+  }),
+
+  // ===== 顧問案件管理 =====
+  upgradeConsultant: router({
+    // 取得目前登入者的顧問身份
+    myProfiles: protectedProcedure.query(async ({ ctx }) => {
+      return db.getConsultantsByUserId(ctx.user.id);
+    }),
+
+    // 顧問查看自己地區的案件
+    myCases: protectedProcedure.input(z.object({
+      status: z.enum(["new", "viewed", "contacted", "consulting", "submitted", "completed", "unassigned", "archived"]).optional(),
+      limit: z.number().int().min(1).max(100).default(50),
+      offset: z.number().int().min(0).default(0),
+    })).query(async ({ ctx, input }) => {
+      const consultants = await db.getConsultantsByUserId(ctx.user.id);
+      if (consultants.length === 0) throw new TRPCError({ code: "FORBIDDEN", message: "您不是顧問" });
+      const ids = consultants.map(c => c.id);
+      const [items, total] = await Promise.all([
+        db.listApplicationsByConsultantIds(ids, { status: input.status, limit: input.limit, offset: input.offset }),
+        db.countApplicationsByConsultantIds(ids, input.status),
+      ]);
+      return { items, total, consultants };
+    }),
+
+    // 顧問查收案件
+    acknowledge: protectedProcedure.input(z.object({
+      applicationId: z.number(),
+    })).mutation(async ({ ctx, input }) => {
+      const consultants = await db.getConsultantsByUserId(ctx.user.id);
+      if (consultants.length === 0) throw new TRPCError({ code: "FORBIDDEN", message: "您不是顧問" });
+      // Find which consultant this application belongs to
+      const app = await db.getUpgradeApplicationById(input.applicationId);
+      if (!app) throw new TRPCError({ code: "NOT_FOUND", message: "找不到案件" });
+      const belongsToMe = consultants.some(c => c.id === app.assignedConsultantId);
+      if (!belongsToMe) throw new TRPCError({ code: "FORBIDDEN", message: "此案件不屬於您的地區" });
+      if (app.status !== "new") throw new TRPCError({ code: "BAD_REQUEST", message: "此案件已查收或狀態不符" });
+      const result = await db.acknowledgeUpgradeApplication(app.id, app.assignedConsultantId!, ctx.user.id);
+      if (!result.ok) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "查收失敗，請重試" });
+      return { success: true };
+    }),
+
+    // 管理員：查看所有顧問設定
+    adminListConsultants: adminProcedure.query(async () => {
+      return db.listAllConsultants();
+    }),
+
+    // 管理員：綁定 / 解除顧問 userId
+    adminBindUser: adminProcedure.input(z.object({
+      consultantId: z.number(),
+      userId: z.number().nullable(),
+    })).mutation(async ({ input }) => {
+      await db.bindConsultantUser(input.consultantId, input.userId);
+      return { success: true };
+    }),
+
+    // 管理員：統計
+    adminStats: adminProcedure.query(async () => {
+      return db.adminGetUpgradeStats();
+    }),
   }),
 
 });

@@ -10,7 +10,7 @@ import { setupSecurityHeaders, setupOriginCheck } from "./security";
 import { apiLimiter, loginLimiter, uploadLimiter, messageLimiter, submitReviewLimiter, adminLimiter, searchLimiter, reportLimiter } from "./rateLimit";
 import { COOKIE_NAME } from "@shared/const";
 import { INDUSTRY_SLUGS, PHASE1_SUB_INDUSTRY_PAGES } from "../../shared/constants";
-import { getDb, getApprovedFactoriesForSitemap } from "../db";
+import { getDb, getApprovedFactoriesForSitemap, ensureConsultantsSeeded } from "../db";
 
 async function startServer() {
   console.log("[boot] startServer called");
@@ -210,6 +210,7 @@ async function startServer() {
 
   server.listen(port, "0.0.0.0", () => {
     console.log(`[boot] Server running on http://0.0.0.0:${port}/`);
+    ensureConsultantsSeeded().catch(err => console.error("[boot] consultant seed failed:", err));
   });
 }
 

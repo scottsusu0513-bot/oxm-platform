@@ -1,7 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
 import { Link, useLocation } from "wouter";
-import { Factory, MessageCircle, User, LogOut, LayoutDashboard, Menu, X, UserPlus, Search, Settings, Heart, UserCircle, ChevronDown, FileText, ScrollText, Store, Bell } from "lucide-react";
+import { Factory, MessageCircle, User, LogOut, LayoutDashboard, Menu, X, UserPlus, Search, Settings, Heart, UserCircle, ChevronDown, FileText, ScrollText, Store, Bell, BookOpen } from "lucide-react";
 import { COMMUNITY_FEATURE_STATUS, COMMUNITY_PUBLIC_ENTRY_ENABLED } from "@shared/const";
 import UnverifiedEmailHint from "@/components/UnverifiedEmailHint";
 import { useState, useEffect } from "react";
@@ -63,7 +63,7 @@ export default function Navbar() {
   const reviewUnread = reviewUnreadQuery.data?.count ?? 0;
 
   const communityNotifQuery = trpc.community.notificationUnreadCount.useQuery(undefined, {
-    enabled: isAuthenticated && user?.role === 'admin' && COMMUNITY_PUBLIC_ENTRY_ENABLED,
+    enabled: isAuthenticated,
     refetchInterval: 60000,
   });
   const communityUnread = communityNotifQuery.data?.count ?? 0;
@@ -118,11 +118,19 @@ export default function Navbar() {
               </Button>
             </Link>
           )}
-          {isAuthenticated && user?.role === 'admin' && communityUnread > 0 && (
-            <Link href="/community/notifications">
-              <Button variant={location.startsWith("/community/notifications") ? "secondary" : "ghost"} size="sm" className="relative">
+          <Link href="/manual">
+            <Button variant={location.startsWith("/manual") ? "secondary" : "ghost"} size="sm">
+              <BookOpen className="w-4 h-4 mr-1" />
+              使用說明
+            </Button>
+          </Link>
+          {isAuthenticated && (
+            <Link href="/notifications">
+              <Button variant={location.startsWith("/notifications") ? "secondary" : "ghost"} size="sm" className="relative">
                 <Bell className="w-4 h-4" />
-                <span className="pointer-events-none absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-orange-500 ring-2 ring-background" />
+                {communityUnread > 0 && (
+                  <span className="pointer-events-none absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-orange-500 ring-2 ring-background" />
+                )}
               </Button>
             </Link>
           )}
@@ -237,6 +245,12 @@ export default function Navbar() {
         {/* Mobile Menu Toggle */}
         <div className="md:hidden flex items-center gap-1">
           {showEmailHint && <UnverifiedEmailHint />}
+          {/* 收藏快捷入口（手機版） — 底部導覽已無收藏項目，故在此補回 */}
+          <Link href="/favorites">
+            <Button variant="ghost" size="sm" aria-label="我的收藏">
+              <Heart className="w-5 h-5" />
+            </Button>
+          </Link>
           <Button variant="ghost" size="sm" className="relative" onClick={() => setMobileOpen(!mobileOpen)}>
             {mobileOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
             {hasAnyNotification && !mobileOpen && (
@@ -268,6 +282,12 @@ export default function Navbar() {
               </Button>
             </Link>
           )}
+          <Link href="/manual" onClick={() => setMobileOpen(false)}>
+            <Button variant={location.startsWith("/manual") ? "secondary" : "ghost"} className="w-full justify-start">
+              <BookOpen className="w-4 h-4 mr-2" />
+              使用說明
+            </Button>
+          </Link>
           {isAuthenticated && (
             <>
               <Link href="/messages" onClick={() => setMobileOpen(false)}>
@@ -275,6 +295,15 @@ export default function Navbar() {
                   <MessageCircle className="w-4 h-4 mr-2" />
                   我的訊息
                   {userUnread > 0 && (
+                    <span className="ml-auto h-2.5 w-2.5 rounded-full bg-orange-500 shrink-0" />
+                  )}
+                </Button>
+              </Link>
+              <Link href="/notifications" onClick={() => setMobileOpen(false)}>
+                <Button variant="ghost" className="w-full justify-start relative">
+                  <Bell className="w-4 h-4 mr-2" />
+                  通知中心
+                  {communityUnread > 0 && (
                     <span className="ml-auto h-2.5 w-2.5 rounded-full bg-orange-500 shrink-0" />
                   )}
                 </Button>
@@ -295,26 +324,15 @@ export default function Navbar() {
                 </Link>
               ) : null}
               {user?.role === "admin" && (
-                <>
-                  <Link href="/community/notifications" onClick={() => setMobileOpen(false)}>
-                    <Button variant="ghost" className="w-full justify-start relative">
-                      <Bell className="w-4 h-4 mr-2" />
-                      討論區通知
-                      {communityUnread > 0 && (
-                        <span className="ml-auto h-2.5 w-2.5 rounded-full bg-orange-500 shrink-0" />
-                      )}
-                    </Button>
-                  </Link>
-                  <Link href="/admin" onClick={() => setMobileOpen(false)}>
-                    <Button variant="ghost" className="w-full justify-start relative">
-                      <Settings className="w-4 h-4 mr-2" />
-                      管理員
-                      {(pendingCount > 0 || hasAdminNotification) && (
-                        <span className="ml-auto h-2.5 w-2.5 rounded-full bg-orange-500 shrink-0" />
-                      )}
-                    </Button>
-                  </Link>
-                </>
+                <Link href="/admin" onClick={() => setMobileOpen(false)}>
+                  <Button variant="ghost" className="w-full justify-start relative">
+                    <Settings className="w-4 h-4 mr-2" />
+                    管理員
+                    {(pendingCount > 0 || hasAdminNotification) && (
+                      <span className="ml-auto h-2.5 w-2.5 rounded-full bg-orange-500 shrink-0" />
+                    )}
+                  </Button>
+                </Link>
               )}
               <Link href="/member" onClick={() => setMobileOpen(false)}>
                 <Button variant="ghost" className="w-full justify-start"><UserCircle className="w-4 h-4 mr-2" />會員中心</Button>

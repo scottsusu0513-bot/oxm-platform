@@ -675,6 +675,7 @@ export const communityNotifications = mysqlTable("communityNotifications", {
   actorNameSnapshot: varchar("actorNameSnapshot", { length: 100 }).notNull().default(""),
   actorFactoryNameSnapshot: varchar("actorFactoryNameSnapshot", { length: 200 }),
   message: text("message").notNull(),
+  actionUrl: varchar("actionUrl", { length: 500 }),
   dedupeKey: varchar("dedupeKey", { length: 200 }).notNull(),
   isRead: boolean("isRead").notNull().default(false),
   readAt: timestamp("readAt"),
@@ -809,3 +810,34 @@ export const communityBidOffers = mysqlTable("communityBidOffers", {
 }));
 
 export type CommunityBidOffer = typeof communityBidOffers.$inferSelect;
+
+// ===== 企業升級中心：申請案件 =====
+export const upgradeApplications = mysqlTable("upgradeApplications", {
+  id: int("id").autoincrement().primaryKey(),
+  companyName: varchar("companyName", { length: 200 }).notNull(),
+  contactName: varchar("contactName", { length: 100 }).notNull(),
+  phone: varchar("phone", { length: 30 }).notNull(),
+  email: varchar("email", { length: 320 }).notNull(),
+  location: varchar("location", { length: 100 }).notNull(),
+  capitalAmount: varchar("capitalAmount", { length: 30 }).notNull(),
+  employeeCount: varchar("employeeCount", { length: 30 }).notNull(),
+  factoryType: varchar("factoryType", { length: 30 }).notNull(),
+  hasGovernmentProject: boolean("hasGovernmentProject").notNull().default(false),
+  governmentProjectName: varchar("governmentProjectName", { length: 200 }),
+  hasGovernmentAward: boolean("hasGovernmentAward").notNull().default(false),
+  governmentAwardName: varchar("governmentAwardName", { length: 200 }),
+  hasPatent: boolean("hasPatent").notNull().default(false),
+  patentCount: int("patentCount"),
+  exportStatus: varchar("exportStatus", { length: 30 }).notNull(),
+  notes: text("notes"),
+  consentAgreed: boolean("consentAgreed").notNull().default(true),
+  status: mysqlEnum("status", ["pending", "qualified", "unqualified", "assigned", "archived"]).notNull().default("pending"),
+  assignedConsultantId: int("assignedConsultantId"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (t) => ({
+  statusCreatedIdx: index("ua_status_created_idx").on(t.status, t.createdAt),
+}));
+
+export type UpgradeApplication = typeof upgradeApplications.$inferSelect;
+export type InsertUpgradeApplication = typeof upgradeApplications.$inferInsert;

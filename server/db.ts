@@ -22,11 +22,14 @@ import {
   communityBoardFollows, factoryFollows, communityContentFollows,
   communityReactions, communityMentions, communityNotifications,
   communityBids, communityBidIndustries, communityBidReviewHistory, communityBidOffers,
+  upgradeApplications, upgradeConsultants,
   type Factory, type InsertFactory, type Product, type InsertProduct, type Favorite, type InsertFavorite,
   type CommunityPost, type CommunityComment,
   type CommunityBoardFollow, type FactoryFollow, type CommunityContentFollow,
   type CommunityReaction, type CommunityMention, type CommunityNotification,
   type CommunityBid, type CommunityBidReviewHistory, type CommunityBidOffer,
+  type UpgradeApplication, type InsertUpgradeApplication,
+  type UpgradeConsultant,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 import { ADJACENT_REGIONS, INDUSTRY_SLUGS } from "../shared/constants";
@@ -4551,6 +4554,7 @@ export interface CreateCommunityNotificationInput {
   actorNameSnapshot: string;
   actorFactoryNameSnapshot?: string | null;
   message: string;
+  actionUrl?: string | null;
   dedupeKey: string;
 }
 
@@ -4571,6 +4575,7 @@ export async function createCommunityNotification(input: CreateCommunityNotifica
       actorNameSnapshot: input.actorNameSnapshot,
       actorFactoryNameSnapshot: input.actorFactoryNameSnapshot ?? null,
       message: input.message,
+      actionUrl: input.actionUrl ?? null,
       dedupeKey: input.dedupeKey,
     })
     .onDuplicateKeyUpdate({ set: { dedupeKey: input.dedupeKey } }); // no-op on dedupe collision
@@ -4597,6 +4602,7 @@ export async function createCommunityNotificationsBatch(inputs: CreateCommunityN
           actorNameSnapshot: input.actorNameSnapshot,
           actorFactoryNameSnapshot: input.actorFactoryNameSnapshot ?? null,
           message: input.message,
+          actionUrl: input.actionUrl ?? null,
           dedupeKey: input.dedupeKey,
         })
         .onDuplicateKeyUpdate({ set: { dedupeKey: input.dedupeKey } }); // no-op on duplicate
@@ -4610,14 +4616,19 @@ export async function listCommunityNotifications(
   recipientUserId: number,
   page: number,
   pageSize: number,
+  visibleTypes?: string[] | null,
 ): Promise<{ items: CommunityNotification[]; total: number }> {
   const db = await getDb();
   if (!db) return { items: [], total: 0 };
   const offset = (page - 1) * pageSize;
+  const typeFilter = visibleTypes && visibleTypes.length > 0
+    ? inArray(communityNotifications.eventType, visibleTypes)
+    : undefined;
   const items = await db.select().from(communityNotifications)
     .where(and(
       eq(communityNotifications.recipientUserId, recipientUserId),
       isNull(communityNotifications.deletedAt),
+      typeFilter,
     ))
     .orderBy(desc(communityNotifications.createdAt))
     .limit(pageSize)
@@ -4627,42 +4638,65 @@ export async function listCommunityNotifications(
     .where(and(
       eq(communityNotifications.recipientUserId, recipientUserId),
       isNull(communityNotifications.deletedAt),
+      typeFilter,
     ));
   return { items, total: Number(countRow?.count ?? 0) };
 }
 
-export async function getCommunityNotificationUnreadCount(recipientUserId: number): Promise<number> {
+export async function getCommunityNotificationUnreadCount(
+  recipientUserId: number,
+  visibleTypes?: string[] | null,
+): Promise<number> {
   const db = await getDb();
   if (!db) return 0;
+  const typeFilter = visibleTypes && visibleTypes.length > 0
+    ? inArray(communityNotifications.eventType, visibleTypes)
+    : undefined;
   const [row] = await db.select({ count: sql<number>`COUNT(*)` })
     .from(communityNotifications)
     .where(and(
       eq(communityNotifications.recipientUserId, recipientUserId),
       eq(communityNotifications.isRead, false),
       isNull(communityNotifications.deletedAt),
+      typeFilter,
     ));
   return Number(row?.count ?? 0);
 }
 
-export async function markCommunityNotificationRead(notificationId: number, recipientUserId: number): Promise<void> {
+export async function markCommunityNotificationRead(
+  notificationId: number,
+  recipientUserId: number,
+  visibleTypes?: string[] | null,
+): Promise<void> {
   const db = await getDb();
   if (!db) return;
+  const typeFilter = visibleTypes && visibleTypes.length > 0
+    ? inArray(communityNotifications.eventType, visibleTypes)
+    : undefined;
   await db.update(communityNotifications)
     .set({ isRead: true, readAt: new Date() })
     .where(and(
       eq(communityNotifications.id, notificationId),
       eq(communityNotifications.recipientUserId, recipientUserId),
+      typeFilter,
     ));
 }
 
-export async function markAllCommunityNotificationsRead(recipientUserId: number): Promise<void> {
+export async function markAllCommunityNotificationsRead(
+  recipientUserId: number,
+  visibleTypes?: string[] | null,
+): Promise<void> {
   const db = await getDb();
   if (!db) return;
+  const typeFilter = visibleTypes && visibleTypes.length > 0
+    ? inArray(communityNotifications.eventType, visibleTypes)
+    : undefined;
   await db.update(communityNotifications)
     .set({ isRead: true, readAt: new Date() })
     .where(and(
       eq(communityNotifications.recipientUserId, recipientUserId),
       eq(communityNotifications.isRead, false),
+      typeFilter,
     ));
 }
 
@@ -5432,4 +5466,280 @@ export async function listCommunityBidOffersForOwner(bidId: number): Promise<Com
       isNull(communityBidOffers.deletedAt),
     ))
     .orderBy(desc(communityBidOffers.submittedAt));
+}
+
+// ===== 企業升級中心 =====
+
+// ===== 企業升級中心：地區對應 =====
+
+// 後端規範地區關鍵字，normalize 臺→台 後比對 location 字串
+const REGION_KEYWORDS: Record<"north" | "central" | "south", string[]> = {
+  north:   ["基隆", "台北", "新北", "桃園", "新竹", "宜蘭"],
+  central: ["苗栗", "台中", "彰化", "南投"],
+  south:   ["雲林", "嘉義", "台南", "高雄", "屏東", "澎湖"],
+};
+
+export function resolveRegionKey(location: string): "north" | "central" | "south" | null {
+  const normalized = location.replace(/臺/g, "台").trim();
+  for (const [key, keywords] of Object.entries(REGION_KEYWORDS) as [keyof typeof REGION_KEYWORDS, string[]][]) {
+    if (keywords.some(k => normalized.includes(k))) return key;
+  }
+  return null;
+}
+
+// ===== 企業升級中心：顧問 =====
+
+const CONSULTANT_SEEDS: Array<{ name: string; regionKey: "north" | "central" | "south"; serviceAreas: string[] }> = [
+  {
+    name: "北部顧問",
+    regionKey: "north",
+    serviceAreas: ["基隆市", "台北市", "臺北市", "新北市", "桃園市", "新竹市", "新竹縣", "宜蘭縣"],
+  },
+  {
+    name: "齊力日川",
+    regionKey: "central",
+    serviceAreas: ["苗栗縣", "台中市", "臺中市", "彰化縣", "南投縣"],
+  },
+  {
+    name: "南部顧問",
+    regionKey: "south",
+    serviceAreas: ["雲林縣", "嘉義市", "嘉義縣", "台南市", "臺南市", "高雄市", "屏東縣", "澎湖縣"],
+  },
+];
+
+export async function ensureConsultantsSeeded(): Promise<void> {
+  const db_ = await getDb();
+  if (!db_) return;
+  for (const seed of CONSULTANT_SEEDS) {
+    const existing = await db_.select({ id: upgradeConsultants.id })
+      .from(upgradeConsultants)
+      .where(eq(upgradeConsultants.regionKey, seed.regionKey))
+      .limit(1);
+    if (existing.length === 0) {
+      await db_.insert(upgradeConsultants).values({
+        name: seed.name,
+        regionKey: seed.regionKey,
+        serviceAreas: seed.serviceAreas,
+        isActive: true,
+      });
+      console.log(`[upgrade] seeded consultant: ${seed.regionKey}`);
+    }
+  }
+}
+
+export async function listAllConsultants(): Promise<UpgradeConsultant[]> {
+  const db_ = await getDb();
+  if (!db_) return [];
+  return db_.select().from(upgradeConsultants).orderBy(upgradeConsultants.regionKey);
+}
+
+export async function getConsultantByRegion(regionKey: "north" | "central" | "south"): Promise<UpgradeConsultant | undefined> {
+  const db_ = await getDb();
+  if (!db_) return undefined;
+  const [row] = await db_.select().from(upgradeConsultants)
+    .where(and(eq(upgradeConsultants.regionKey, regionKey), eq(upgradeConsultants.isActive, true)))
+    .limit(1);
+  return row;
+}
+
+export async function getConsultantsByUserId(userId: number): Promise<UpgradeConsultant[]> {
+  const db_ = await getDb();
+  if (!db_) return [];
+  return db_.select().from(upgradeConsultants)
+    .where(eq(upgradeConsultants.userId, userId));
+}
+
+export async function bindConsultantUser(consultantId: number, userId: number | null): Promise<void> {
+  const db_ = await getDb();
+  if (!db_) return;
+  await db_.update(upgradeConsultants)
+    .set({ userId })
+    .where(eq(upgradeConsultants.id, consultantId));
+}
+
+export async function listApplicationsByConsultantIds(
+  consultantIds: number[],
+  opts?: { status?: UpgradeApplication["status"]; limit?: number; offset?: number },
+): Promise<UpgradeApplication[]> {
+  const db_ = await getDb();
+  if (!db_) return [];
+  if (consultantIds.length === 0) return [];
+  const conditions: ReturnType<typeof eq>[] = [
+    inArray(upgradeApplications.assignedConsultantId, consultantIds) as any,
+  ];
+  if (opts?.status) conditions.push(eq(upgradeApplications.status, opts.status) as any);
+  return db_.select()
+    .from(upgradeApplications)
+    .where(and(...conditions))
+    .orderBy(desc(upgradeApplications.createdAt))
+    .limit(opts?.limit ?? 100)
+    .offset(opts?.offset ?? 0);
+}
+
+export async function countApplicationsByConsultantIds(
+  consultantIds: number[],
+  status?: UpgradeApplication["status"],
+): Promise<number> {
+  const db_ = await getDb();
+  if (!db_) return 0;
+  if (consultantIds.length === 0) return 0;
+  const conditions: any[] = [inArray(upgradeApplications.assignedConsultantId, consultantIds)];
+  if (status) conditions.push(eq(upgradeApplications.status, status));
+  const [row] = await db_.select({ n: sql<number>`COUNT(*)` })
+    .from(upgradeApplications)
+    .where(and(...conditions));
+  return Number(row?.n ?? 0);
+}
+
+export async function acknowledgeUpgradeApplication(
+  id: number,
+  consultantId: number,
+  userId: number,
+): Promise<{ ok: boolean }> {
+  const db_ = await getDb();
+  if (!db_) return { ok: false };
+  // Only allow if the application is assigned to this consultant and still "new"
+  const [row] = await db_.select()
+    .from(upgradeApplications)
+    .where(and(
+      eq(upgradeApplications.id, id),
+      eq(upgradeApplications.assignedConsultantId, consultantId),
+      eq(upgradeApplications.status, "new"),
+    ));
+  if (!row) return { ok: false };
+  await db_.update(upgradeApplications)
+    .set({ status: "viewed", viewedAt: new Date(), viewedByUserId: userId })
+    .where(eq(upgradeApplications.id, id));
+  return { ok: true };
+}
+
+export async function adminGetUpgradeStats(): Promise<{
+  total: number;
+  byRegion: Record<string, { consultantName: string; total: number; unviewed: number }>;
+  unviewed: number;
+  overdue48h: number;
+  unassigned: number;
+}> {
+  const db_ = await getDb();
+  if (!db_) return { total: 0, byRegion: {}, unviewed: 0, overdue48h: 0, unassigned: 0 };
+
+  const cutoff48h = new Date(Date.now() - 48 * 60 * 60 * 1000);
+
+  const regionRows = await db_.select({
+    regionKey: upgradeConsultants.regionKey,
+    consultantName: upgradeConsultants.name,
+    n: sql<number>`COUNT(*)`,
+  })
+    .from(upgradeApplications)
+    .innerJoin(upgradeConsultants, eq(upgradeApplications.assignedConsultantId, upgradeConsultants.id))
+    .groupBy(upgradeConsultants.regionKey, upgradeConsultants.name);
+
+  const regionUnviewedRows = await db_.select({
+    regionKey: upgradeConsultants.regionKey,
+    n: sql<number>`COUNT(*)`,
+  })
+    .from(upgradeApplications)
+    .innerJoin(upgradeConsultants, eq(upgradeApplications.assignedConsultantId, upgradeConsultants.id))
+    .where(eq(upgradeApplications.status, "new"))
+    .groupBy(upgradeConsultants.regionKey);
+
+  const byRegion: Record<string, { consultantName: string; total: number; unviewed: number }> = {};
+  for (const r of regionRows) {
+    byRegion[r.regionKey] = { consultantName: r.consultantName, total: Number(r.n), unviewed: 0 };
+  }
+  for (const r of regionUnviewedRows) {
+    if (byRegion[r.regionKey]) byRegion[r.regionKey].unviewed = Number(r.n);
+  }
+
+  const [{ total }] = await db_.select({ total: sql<number>`COUNT(*)` })
+    .from(upgradeApplications);
+
+  const [{ unviewed }] = await db_.select({ unviewed: sql<number>`COUNT(*)` })
+    .from(upgradeApplications).where(eq(upgradeApplications.status, "new"));
+
+  const [{ overdue48h }] = await db_.select({ overdue48h: sql<number>`COUNT(*)` })
+    .from(upgradeApplications).where(and(
+      eq(upgradeApplications.status, "new"),
+      sql`${upgradeApplications.createdAt} < ${cutoff48h}`,
+    ));
+
+  const [{ unassigned }] = await db_.select({ unassigned: sql<number>`COUNT(*)` })
+    .from(upgradeApplications).where(eq(upgradeApplications.status, "unassigned"));
+
+  return {
+    total: Number(total),
+    byRegion,
+    unviewed: Number(unviewed),
+    overdue48h: Number(overdue48h),
+    unassigned: Number(unassigned),
+  };
+}
+
+export async function findRecentUpgradeApplication(
+  email: string,
+  phone: string,
+  withinMs = 10 * 60 * 1000,
+): Promise<boolean> {
+  const db_ = await getDb();
+  if (!db_) return false;
+  const cutoff = new Date(Date.now() - withinMs);
+  const [row] = await db_.select({ n: sql<number>`COUNT(*)` })
+    .from(upgradeApplications)
+    .where(and(
+      eq(upgradeApplications.email, email),
+      eq(upgradeApplications.phone, phone),
+      gt(upgradeApplications.createdAt, cutoff),
+    ));
+  return Number(row?.n ?? 0) > 0;
+}
+
+export async function createUpgradeApplication(
+  data: InsertUpgradeApplication,
+): Promise<number> {
+  const db_ = await getDb();
+  if (!db_) throw new Error("DB not available");
+  const [result] = await db_.insert(upgradeApplications).values(data);
+  return result.insertId;
+}
+
+export async function listUpgradeApplications(opts?: {
+  status?: UpgradeApplication["status"];
+  limit?: number;
+  offset?: number;
+}): Promise<UpgradeApplication[]> {
+  const db_ = await getDb();
+  if (!db_) return [];
+  const conditions = opts?.status ? [eq(upgradeApplications.status, opts.status)] : [];
+  return db_.select()
+    .from(upgradeApplications)
+    .where(conditions.length ? and(...conditions) : undefined)
+    .orderBy(desc(upgradeApplications.createdAt))
+    .limit(opts?.limit ?? 100)
+    .offset(opts?.offset ?? 0);
+}
+
+export async function getUpgradeApplicationById(id: number): Promise<UpgradeApplication | undefined> {
+  const db_ = await getDb();
+  if (!db_) return undefined;
+  const [row] = await db_.select().from(upgradeApplications).where(eq(upgradeApplications.id, id));
+  return row;
+}
+
+export async function updateUpgradeApplicationStatus(
+  id: number,
+  status: UpgradeApplication["status"],
+): Promise<void> {
+  const db_ = await getDb();
+  if (!db_) return;
+  await db_.update(upgradeApplications).set({ status }).where(eq(upgradeApplications.id, id));
+}
+
+export async function countUpgradeApplications(status?: UpgradeApplication["status"]): Promise<number> {
+  const db_ = await getDb();
+  if (!db_) return 0;
+  const conditions = status ? [eq(upgradeApplications.status, status)] : [];
+  const [row] = await db_.select({ n: sql<number>`COUNT(*)` })
+    .from(upgradeApplications)
+    .where(conditions.length ? and(...conditions) : undefined);
+  return Number(row?.n ?? 0);
 }

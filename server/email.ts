@@ -698,3 +698,53 @@ export async function sendRevisionRejectedEmail(params: {
     console.error('[Email] sendRevisionRejectedEmail failed:', err);
   }
 }
+
+// ===== 企業升級中心：通知管理員有新申請 =====
+export async function sendUpgradeApplicationEmail(params: {
+  companyName: string;
+  contactName: string;
+  phone: string;
+  email: string;
+  location: string;
+  applicationId: number;
+}) {
+  if (!isEmailEnabled()) {
+    console.log('[Email] 未設定 RESEND_API_KEY，跳過升級中心通知信');
+    return;
+  }
+  const resend = getResend();
+  if (!resend) return;
+
+  const adminEmail = ADMIN_EMAIL ?? FROM_EMAIL;
+  if (!adminEmail) return;
+
+  const appUrl = process.env.VITE_APP_URL ?? 'http://localhost:3000';
+
+  try {
+    await resend.emails.send({
+      from: FROM_EMAIL,
+      to: adminEmail,
+      subject: `【OXM 企業升級中心】新申請 #${params.applicationId}：${params.companyName}`,
+      html: `
+        <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #f97316;">企業升級中心 — 新申請</h2>
+          <p>有一筆新的企業升級評估申請待審核。</p>
+          <table style="border-collapse:collapse; width:100%; margin: 16px 0;">
+            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">公司名稱</td><td style="padding:8px;">${params.companyName}</td></tr>
+            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">聯絡人</td><td style="padding:8px;">${params.contactName}</td></tr>
+            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">電話</td><td style="padding:8px;">${params.phone}</td></tr>
+            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">Email</td><td style="padding:8px;">${params.email}</td></tr>
+            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">所在地</td><td style="padding:8px;">${params.location}</td></tr>
+          </table>
+          <a href="${appUrl}/admin/upgrade-applications"
+            style="background:#f97316;color:white;padding:12px 24px;border-radius:6px;text-decoration:none;display:inline-block;">
+            前往後台查看
+          </a>
+          <p style="color:#999;font-size:12px;margin-top:24px;">此信件由 OXM 平台自動發送</p>
+        </div>
+      `,
+    });
+  } catch (err) {
+    console.error('[Email] sendUpgradeApplicationEmail failed:', err);
+  }
+}

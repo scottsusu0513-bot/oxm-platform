@@ -32,6 +32,9 @@ const TermsPage             = lazy(() => import("./pages/TermsPage"));
 const VerifyEmailPage       = lazy(() => import("./pages/VerifyEmailPage"));
 const UserManual            = lazy(() => import("./pages/UserManual"));
 const Community             = lazy(() => import("./pages/Community"));
+const Notifications         = lazy(() => import("./pages/Notifications"));
+const EnterpriseUpgradeCenter = lazy(() => import("./pages/EnterpriseUpgradeCenter"));
+const EnterpriseUpgradeApply  = lazy(() => import("./pages/EnterpriseUpgradeApply"));
 const NotFound              = lazy(() => import("./pages/NotFound"));
 
 // ── Admin 頁面（獨立 chunk，一般使用者不會載入）──────────────────────────
@@ -46,6 +49,8 @@ const AdsList               = lazy(() => import("./pages/AdsList"));
 const FactoryReviewDetail   = lazy(() => import("./pages/FactoryReviewDetail"));
 const PendingFactoriesList  = lazy(() => import("./pages/PendingFactoriesList"));
 const AdminSupportCenter    = lazy(() => import("./pages/AdminSupportCenter"));
+const AdminUpgradeApplications = lazy(() => import("./pages/AdminUpgradeApplications"));
+const ConsultantCases        = lazy(() => import("./pages/ConsultantCases"));
 const AdminAnnouncements    = lazy(() => import("./pages/AdminAnnouncements"));
 const AdminMessages         = lazy(() => import("./pages/AdminMessages"));
 const AdminMessageDetail    = lazy(() => import("./pages/AdminMessageDetail"));
@@ -266,6 +271,7 @@ function Router() {
         <Route path="/admin/factory-review" component={FactoryReviewDetail} />
         <Route path="/admin/pending-factories" component={PendingFactoriesList} />
         <Route path="/admin/support" component={AdminSupportCenter} />
+        <Route path="/admin/upgrade-applications" component={AdminUpgradeApplications} />
         <Route path="/admin/announcements" component={AdminAnnouncements} />
         <Route path="/admin/messages/:campaignId" component={AdminMessages} />
         <Route path="/admin/messages" component={AdminMessages} />
@@ -277,7 +283,11 @@ function Router() {
         <Route path="/privacy" component={PrivacyPolicyPage} />
         <Route path="/terms" component={TermsPage} />
         <Route path="/verify-email" component={VerifyEmailPage} />
+        <Route path="/notifications" component={Notifications} />
         <Route path="/community/*?" component={Community} />
+        <Route path="/upgrade-center/apply" component={EnterpriseUpgradeApply} />
+        <Route path="/upgrade-center" component={EnterpriseUpgradeCenter} />
+        <Route path="/upgrade-consultant/cases" component={ConsultantCases} />
         <Route path="/404" component={NotFound} />
         <Route component={NotFound} />
       </Switch>
