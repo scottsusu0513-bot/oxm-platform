@@ -113,7 +113,7 @@ function SuccessView() {
 export default function EnterpriseUpgradeApply() {
   const [submitted, setSubmitted] = useState(false);
 
-  const applyMutation = trpc.upgradeCenter.apply.useMutation({
+  const applyMutation = trpc.upgradeCenter.submitApplication.useMutation({
     onSuccess: () => setSubmitted(true),
     onError: (err) => {
       toast.error(err.message || "送出失敗，請稍後再試");

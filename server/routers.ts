@@ -4294,7 +4294,7 @@ export const appRouter = router({
 
   // ===== 企業升級中心 =====
   upgradeCenter: router({
-    apply: publicProcedure.input(z.object({
+    submitApplication: publicProcedure.input(z.object({
       companyName: z.string().min(1).max(200),
       contactName: z.string().min(1).max(100),
       phone: z.string().min(7).max(30),
