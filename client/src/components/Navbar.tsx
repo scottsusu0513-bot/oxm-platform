@@ -118,13 +118,15 @@ export default function Navbar() {
               </Button>
             </Link>
           )}
-          <Link href="/manual">
-            <Button variant={location.startsWith("/manual") ? "secondary" : "ghost"} size="sm">
-              <BookOpen className="w-4 h-4 mr-1" />
-              使用說明
-            </Button>
-          </Link>
-          {isAuthenticated && (
+          {user?.role === "admin" && (
+            <Link href="/manual">
+              <Button variant={location.startsWith("/manual") ? "secondary" : "ghost"} size="sm">
+                <BookOpen className="w-4 h-4 mr-1" />
+                使用說明
+              </Button>
+            </Link>
+          )}
+          {isAuthenticated && user?.role === "admin" && (
             <Link href="/notifications">
               <Button variant={location.startsWith("/notifications") ? "secondary" : "ghost"} size="sm" className="relative">
                 <Bell className="w-4 h-4" />
@@ -282,12 +284,14 @@ export default function Navbar() {
               </Button>
             </Link>
           )}
-          <Link href="/manual" onClick={() => setMobileOpen(false)}>
-            <Button variant={location.startsWith("/manual") ? "secondary" : "ghost"} className="w-full justify-start">
-              <BookOpen className="w-4 h-4 mr-2" />
-              使用說明
-            </Button>
-          </Link>
+          {user?.role === "admin" && (
+            <Link href="/manual" onClick={() => setMobileOpen(false)}>
+              <Button variant={location.startsWith("/manual") ? "secondary" : "ghost"} className="w-full justify-start">
+                <BookOpen className="w-4 h-4 mr-2" />
+                使用說明
+              </Button>
+            </Link>
+          )}
           {isAuthenticated && (
             <>
               <Link href="/messages" onClick={() => setMobileOpen(false)}>
@@ -299,15 +303,17 @@ export default function Navbar() {
                   )}
                 </Button>
               </Link>
-              <Link href="/notifications" onClick={() => setMobileOpen(false)}>
-                <Button variant="ghost" className="w-full justify-start relative">
-                  <Bell className="w-4 h-4 mr-2" />
-                  通知中心
-                  {communityUnread > 0 && (
-                    <span className="ml-auto h-2.5 w-2.5 rounded-full bg-orange-500 shrink-0" />
-                  )}
-                </Button>
-              </Link>
+              {user?.role === "admin" && (
+                <Link href="/notifications" onClick={() => setMobileOpen(false)}>
+                  <Button variant="ghost" className="w-full justify-start relative">
+                    <Bell className="w-4 h-4 mr-2" />
+                    通知中心
+                    {communityUnread > 0 && (
+                      <span className="ml-auto h-2.5 w-2.5 rounded-full bg-orange-500 shrink-0" />
+                    )}
+                  </Button>
+                </Link>
+              )}
               {showDashboardBtn ? (
                 <Link href="/dashboard" onClick={() => setMobileOpen(false)}>
                   <Button variant="ghost" className="w-full justify-start relative">
