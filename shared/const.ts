@@ -13,3 +13,31 @@ export const COMMUNITY_CROSS_INDUSTRY_SLUG = "cross-industry" as const;
 // Controls public UI entry points (Navbar, menus, etc.).
 // Set to false to hide all public entries while keeping /community route + API functional for internal testing.
 export const COMMUNITY_PUBLIC_ENTRY_ENABLED = false;
+
+// ===== 通知中心：eventType 分群 =====
+// Platform notifications: always visible to all logged-in users
+export const PLATFORM_NOTIFICATION_TYPES = new Set<string>([
+  "factory_approved",
+  "factory_rejected",
+  "chat_message", // covers both directions: buyer→factory and factory→buyer
+  "review_reply",
+  "co_manager_invitation",
+  "co_manager_invitation_accepted",
+  "co_manager_invitation_rejected",
+  "admin_announcement",
+  "report_status_changed",
+  "support_ticket_updated",
+]);
+
+// Community/bid notifications: only visible when COMMUNITY_PUBLIC_ENTRY_ENABLED or user is admin
+export const COMMUNITY_NOTIFICATION_TYPES = new Set<string>([
+  "community_post_reply",
+  "community_comment_reply",
+  "community_mention",
+  "community_reply_and_mention",
+  "bid_review_approved",
+  "bid_review_rejected",
+  "bid_new_offer",
+  "followed_factory_new_discussion",
+  "board_new_discussion",
+]);

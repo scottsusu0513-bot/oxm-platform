@@ -811,6 +811,26 @@ export const communityBidOffers = mysqlTable("communityBidOffers", {
 
 export type CommunityBidOffer = typeof communityBidOffers.$inferSelect;
 
+// ===== 企業升級中心：顧問設定 =====
+// 三個固定地區（north/central/south），每筆綁定一個 userId（可 null）
+// userId 可重複：測試期間三個地區都可綁到同一帳號
+export const upgradeConsultants = mysqlTable("upgradeConsultants", {
+  id: int("id").autoincrement().primaryKey(),
+  name: varchar("name", { length: 100 }).notNull(),
+  regionKey: mysqlEnum("regionKey", ["north", "central", "south"]).notNull(),
+  userId: int("userId").references(() => users.id, { onDelete: "set null" }),
+  serviceAreas: json("serviceAreas").$type<string[]>().notNull(),
+  isActive: boolean("isActive").notNull().default(true),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (t) => ({
+  regionKeyUq: uniqueIndex("uc_region_key_uq").on(t.regionKey),
+  userIdIdx: index("uc_user_id_idx").on(t.userId),
+}));
+
+export type UpgradeConsultant = typeof upgradeConsultants.$inferSelect;
+export type InsertUpgradeConsultant = typeof upgradeConsultants.$inferInsert;
+
 // ===== 企業升級中心：申請案件 =====
 export const upgradeApplications = mysqlTable("upgradeApplications", {
   id: int("id").autoincrement().primaryKey(),
@@ -831,12 +851,16 @@ export const upgradeApplications = mysqlTable("upgradeApplications", {
   exportStatus: varchar("exportStatus", { length: 30 }).notNull(),
   notes: text("notes"),
   consentAgreed: boolean("consentAgreed").notNull().default(true),
-  status: mysqlEnum("status", ["pending", "qualified", "unqualified", "assigned", "archived"]).notNull().default("pending"),
-  assignedConsultantId: int("assignedConsultantId"),
+  // status: new→viewed→contacted→consulting→submitted→completed / unassigned / archived
+  status: mysqlEnum("status", ["new", "viewed", "contacted", "consulting", "submitted", "completed", "unassigned", "archived"]).notNull().default("new"),
+  assignedConsultantId: int("assignedConsultantId").references(() => upgradeConsultants.id, { onDelete: "set null" }),
+  viewedAt: timestamp("viewedAt"),
+  viewedByUserId: int("viewedByUserId"), // no FK — audit trail even if user deleted
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 }, (t) => ({
   statusCreatedIdx: index("ua_status_created_idx").on(t.status, t.createdAt),
+  consultantIdx: index("ua_consultant_idx").on(t.assignedConsultantId, t.status, t.createdAt),
 }));
 
 export type UpgradeApplication = typeof upgradeApplications.$inferSelect;
