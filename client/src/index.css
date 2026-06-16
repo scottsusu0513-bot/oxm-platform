@@ -13,7 +13,7 @@
 }
 
 .animate-page-enter {
-  animation: page-enter 160ms ease-out both;
+  animation: page-enter 160ms ease-out backwards;
 }
 
 @media (prefers-reduced-motion: reduce) {

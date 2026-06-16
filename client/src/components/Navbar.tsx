@@ -247,12 +247,6 @@ export default function Navbar() {
         {/* Mobile Menu Toggle */}
         <div className="md:hidden flex items-center gap-1">
           {showEmailHint && <UnverifiedEmailHint />}
-          {/* 收藏快捷入口（手機版） — 底部導覽已無收藏項目，故在此補回 */}
-          <Link href="/favorites">
-            <Button variant="ghost" size="sm" aria-label="我的收藏">
-              <Heart className="w-5 h-5" />
-            </Button>
-          </Link>
           <Button variant="ghost" size="sm" className="relative" onClick={() => setMobileOpen(!mobileOpen)}>
             {mobileOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
             {hasAnyNotification && !mobileOpen && (
@@ -303,17 +297,6 @@ export default function Navbar() {
                   )}
                 </Button>
               </Link>
-              {user?.role === "admin" && (
-                <Link href="/notifications" onClick={() => setMobileOpen(false)}>
-                  <Button variant="ghost" className="w-full justify-start relative">
-                    <Bell className="w-4 h-4 mr-2" />
-                    通知中心
-                    {communityUnread > 0 && (
-                      <span className="ml-auto h-2.5 w-2.5 rounded-full bg-orange-500 shrink-0" />
-                    )}
-                  </Button>
-                </Link>
-              )}
               {showDashboardBtn ? (
                 <Link href="/dashboard" onClick={() => setMobileOpen(false)}>
                   <Button variant="ghost" className="w-full justify-start relative">
@@ -340,6 +323,9 @@ export default function Navbar() {
                   </Button>
                 </Link>
               )}
+              <Link href="/favorites" onClick={() => setMobileOpen(false)}>
+                <Button variant="ghost" className="w-full justify-start"><Heart className="w-4 h-4 mr-2" />收藏</Button>
+              </Link>
               <Link href="/member" onClick={() => setMobileOpen(false)}>
                 <Button variant="ghost" className="w-full justify-start"><UserCircle className="w-4 h-4 mr-2" />會員中心</Button>
               </Link>

@@ -9,7 +9,6 @@ import { AppLoading } from "@/components/AppLoading";
 import { trpc } from "@/lib/trpc";
 
 const CommunityPost = lazy(() => import("@/components/community/CommunityPost"));
-const CommunityNotifications = lazy(() => import("@/components/community/CommunityNotifications"));
 const CommunityBidDetail = lazy(() => import("@/components/community/CommunityBidDetail"));
 
 const VALID_SPACE_CODES = new Set<string>([
@@ -69,13 +68,9 @@ export default function Community() {
     return <DefaultSpaceRedirector />;
   }
 
-  // /community/notifications
+  // /community/notifications → redirect to standalone /notifications route
   if (seg0 === "notifications") {
-    return (
-      <Suspense fallback={<AppLoading />}>
-        <CommunityNotifications />
-      </Suspense>
-    );
+    return <Redirect to="/notifications" />;
   }
 
   const spaceCode = seg0;

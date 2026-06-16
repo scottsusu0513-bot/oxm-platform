@@ -2,8 +2,7 @@ import { useState } from "react";
 import { trpc } from "@/lib/trpc";
 import Navbar from "@/components/Navbar";
 import { Helmet } from "react-helmet-async";
-import { Link } from "wouter";
-import { ChevronLeft, Loader2, AlertTriangle, Bell, CheckCheck } from "lucide-react";
+import { Loader2, AlertTriangle, Bell, CheckCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import CommunityNotificationItem from "./CommunityNotificationItem";
@@ -14,12 +13,36 @@ export default function CommunityNotifications() {
   const [page, setPage] = useState(1);
   const utils = trpc.useUtils();
 
-  const { data, isLoading, isError } = trpc.community.notificationList.useQuery({ page, pageSize: PAGE_SIZE });
+  const { data, isLoading, isError, refetch } = trpc.community.notificationList.useQuery(
+    { page, pageSize: PAGE_SIZE },
+    { retry: 1 },
+  );
   const totalPages = data ? Math.ceil(data.total / PAGE_SIZE) : 1;
 
   const markReadMut = trpc.community.notificationMarkRead.useMutation({
-    onSuccess: () => utils.community.notificationList.invalidate(),
-    onError: (e) => toast.error(e.message),
+    onMutate: async (variables) => {
+      await utils.community.notificationList.cancel();
+      const snapshot = utils.community.notificationList.getData({ page, pageSize: PAGE_SIZE });
+      utils.community.notificationList.setData({ page, pageSize: PAGE_SIZE }, (old) => {
+        if (!old) return old;
+        return {
+          ...old,
+          items: old.items.map(n =>
+            n.id === variables.notificationId ? { ...n, isRead: true, readAt: new Date() } : n
+          ),
+        };
+      });
+      return { snapshot };
+    },
+    onError: (_err, _vars, ctx) => {
+      if (ctx?.snapshot) {
+        utils.community.notificationList.setData({ page, pageSize: PAGE_SIZE }, ctx.snapshot);
+      }
+    },
+    onSettled: () => {
+      utils.community.notificationList.invalidate();
+      utils.community.notificationUnreadCount.invalidate();
+    },
   });
 
   const markAllMut = trpc.community.notificationMarkAllRead.useMutation({
@@ -36,20 +59,13 @@ export default function CommunityNotifications() {
   return (
     <div className="min-h-screen bg-background">
       <Helmet>
-        <title>通知中心 — OXM 商案討論區</title>
+        <title>通知中心 — OXM</title>
         <meta name="robots" content="noindex, nofollow" />
       </Helmet>
 
       <Navbar />
 
       <main className="container py-8 max-w-2xl">
-        {/* Breadcrumb */}
-        <div className="flex items-center gap-2 text-sm text-muted-foreground mb-6">
-          <Link href="/community" className="hover:text-foreground transition-colors">商案討論區</Link>
-          <ChevronLeft className="w-3 h-3 rotate-180" />
-          <span className="text-foreground font-medium">通知中心</span>
-        </div>
-
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
             <Bell className="w-5 h-5 text-orange-500" />
@@ -79,15 +95,18 @@ export default function CommunityNotifications() {
             <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
           </div>
         ) : isError ? (
-          <div className="flex items-center gap-2 text-destructive py-12 justify-center text-sm">
-            <AlertTriangle className="w-4 h-4" />
-            載入失敗，請重試
+          <div className="flex flex-col items-center gap-3 py-16">
+            <AlertTriangle className="w-6 h-6 text-destructive" />
+            <p className="text-sm text-destructive">通知載入失敗</p>
+            <Button variant="outline" size="sm" onClick={() => refetch()}>
+              重新載入
+            </Button>
           </div>
         ) : !data?.items.length ? (
           <div className="rounded-xl border border-border bg-card py-16 text-center">
             <Bell className="w-8 h-8 mx-auto mb-3 text-muted-foreground/30" />
             <p className="text-sm text-muted-foreground">目前沒有任何通知</p>
-            <p className="text-xs text-muted-foreground/70 mt-1">追蹤看板或工廠後，有新討論時會在這裡通知你</p>
+            <p className="text-xs text-muted-foreground/70 mt-1">有新消息時會在這裡通知你</p>
           </div>
         ) : (
           <div className="rounded-xl border border-border overflow-hidden bg-card">

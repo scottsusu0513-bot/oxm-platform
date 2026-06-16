@@ -1,5 +1,7 @@
-import { useState } from "react";
-import { Link } from "wouter";
+import { useState, useEffect } from "react";
+import { Link, useLocation } from "wouter";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { AppLoading } from "@/components/AppLoading";
 import { Helmet } from "react-helmet-async";
 import { useForm } from "react-hook-form";
 import { Button } from "@/components/ui/button";
@@ -111,6 +113,15 @@ function SuccessView() {
 // ── 主頁面 ────────────────────────────────────────────────────────────────────
 
 export default function EnterpriseUpgradeApply() {
+  const { user, loading } = useAuth();
+  const [, navigate] = useLocation();
+
+  useEffect(() => {
+    if (!loading && (!user || user.role !== "admin")) {
+      navigate("/", { replace: true });
+    }
+  }, [loading, user, navigate]);
+
   const [submitted, setSubmitted] = useState(false);
 
   const applyMutation = trpc.upgradeCenter.submitApplication.useMutation({
@@ -139,6 +150,8 @@ export default function EnterpriseUpgradeApply() {
   const hasAward = watch("hasAward");
   const hasPatent = watch("hasPatent");
   const agreeTerms = watch("agreeTerms");
+
+  if (loading || !user || user.role !== "admin") return <AppLoading />;
 
   const onSubmit = (data: FormValues) => {
     applyMutation.mutate({

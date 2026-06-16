@@ -25,7 +25,7 @@ export default function CommunityIndustryTabs({ activeSpaceCode }: Props) {
 
   return (
     <div
-      className="flex overflow-x-auto border-b border-border [&::-webkit-scrollbar]:hidden"
+      className="flex overflow-x-auto overflow-y-hidden border-b border-border [&::-webkit-scrollbar]:hidden"
       style={{ scrollbarWidth: "none" }}
       role="tablist"
       aria-label="選擇產業看板"

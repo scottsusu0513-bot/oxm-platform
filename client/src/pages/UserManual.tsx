@@ -1,4 +1,7 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
+import { useLocation } from "wouter";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { AppLoading } from "@/components/AppLoading";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -207,6 +210,15 @@ function SearchResults({
 // ── 主頁面 ────────────────────────────────────────────────────────────────────
 
 export default function UserManual() {
+  const { user, loading } = useAuth();
+  const [, navigate] = useLocation();
+
+  useEffect(() => {
+    if (!loading && (!user || user.role !== "admin")) {
+      navigate("/", { replace: true });
+    }
+  }, [loading, user, navigate]);
+
   const [searchQuery, setSearchQuery] = useState('');
   const [openArticle, setOpenArticle] = useState<string | null>(null);
   // accordion value 支援多個分類同時展開
@@ -214,6 +226,8 @@ export default function UserManual() {
 
   const popularArticles = useMemo(() => getPopularArticles(), []);
   const isSearching = searchQuery.trim().length > 0;
+
+  if (loading || !user || user.role !== "admin") return <AppLoading />;
 
   function toggleArticle(id: string) {
     setOpenArticle(prev => prev === id ? null : id);

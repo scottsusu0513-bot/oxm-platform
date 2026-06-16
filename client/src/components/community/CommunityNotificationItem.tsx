@@ -1,6 +1,6 @@
 import { formatDistanceToNow } from "date-fns";
 import { zhTW } from "date-fns/locale";
-import { Bell, MessageSquare, Reply, AtSign, Factory } from "lucide-react";
+import { Bell, MessageSquare, Reply, AtSign, Factory, MessageCircle, CheckCircle, XCircle, Megaphone, Flag } from "lucide-react";
 import { Link } from "wouter";
 import { cn } from "@/lib/utils";
 import type { CommunityNotification } from "@shared/types";
@@ -10,8 +10,16 @@ interface Props {
   onClick?: () => void;
 }
 
-function EventIcon({ eventGroup }: { eventGroup: string }) {
+function EventIcon({ eventGroup, eventType }: { eventGroup: string; eventType: string }) {
+  if (eventType === "factory_approved") return <CheckCircle className="w-3.5 h-3.5 text-green-500" />;
+  if (eventType === "factory_rejected") return <XCircle className="w-3.5 h-3.5 text-red-500" />;
+  if (eventType === "admin_announcement") return <Megaphone className="w-3.5 h-3.5 text-violet-500" />;
+  if (eventType === "report_status_changed" || eventType === "support_ticket_updated") return <Flag className="w-3.5 h-3.5 text-amber-500" />;
   switch (eventGroup) {
+    case "chat": return <MessageCircle className="w-3.5 h-3.5 text-blue-500" />;
+    case "review": return <Reply className="w-3.5 h-3.5 text-blue-500" />;
+    case "factory": return <Factory className="w-3.5 h-3.5 text-orange-500" />;
+    case "co_manager": return <Factory className="w-3.5 h-3.5 text-violet-500" />;
     case "reply": return <Reply className="w-3.5 h-3.5 text-blue-500" />;
     case "mention": return <AtSign className="w-3.5 h-3.5 text-violet-500" />;
     case "follow": return <Bell className="w-3.5 h-3.5 text-orange-500" />;
@@ -19,12 +27,17 @@ function EventIcon({ eventGroup }: { eventGroup: string }) {
   }
 }
 
+function resolveHref(notification: CommunityNotification): string {
+  if (notification.actionUrl) return notification.actionUrl;
+  if (notification.postId) {
+    return `/community/${notification.spaceCode ?? "cross-industry"}/${notification.postId}`;
+  }
+  return "/notifications";
+}
+
 export default function CommunityNotificationItem({ notification, onClick }: Props) {
   const timeAgo = formatDistanceToNow(new Date(notification.createdAt), { addSuffix: true, locale: zhTW });
-
-  const href = notification.postId
-    ? `/community/${notification.spaceCode ?? "cross-industry"}/${notification.postId}`
-    : "/community";
+  const href = resolveHref(notification);
 
   return (
     <Link href={href} onClick={onClick}>
@@ -37,7 +50,7 @@ export default function CommunityNotificationItem({ notification, onClick }: Pro
           "w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-0.5",
           notification.isRead ? "bg-muted" : "bg-orange-100 dark:bg-orange-900/30",
         )}>
-          <EventIcon eventGroup={notification.eventGroup} />
+          <EventIcon eventGroup={notification.eventGroup} eventType={notification.eventType} />
         </div>
 
         {/* Content */}

@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { AppLoading } from "@/components/AppLoading";
 import { Helmet } from "react-helmet-async";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -94,8 +96,16 @@ const STEPS = [
 // ── 主頁面 ────────────────────────────────────────────────────────────────────
 
 export default function EnterpriseUpgradeCenter() {
+  const { user, loading } = useAuth();
+  const [, navigate] = useLocation();
   const statsRef = useRef<HTMLDivElement>(null);
   const [statsStarted, setStatsStarted] = useState(false);
+
+  useEffect(() => {
+    if (!loading && (!user || user.role !== "admin")) {
+      navigate("/", { replace: true });
+    }
+  }, [loading, user, navigate]);
 
   useEffect(() => {
     const el = statsRef.current;
@@ -107,6 +117,8 @@ export default function EnterpriseUpgradeCenter() {
     observer.observe(el);
     return () => observer.disconnect();
   }, []);
+
+  if (loading || !user || user.role !== "admin") return <AppLoading />;
 
   return (
     <div className="min-h-screen bg-background">
