@@ -1,8 +1,12 @@
 import { useState } from "react";
+import { createPortal } from "react-dom";
 import { useLocation } from "wouter";
+import { Capacitor } from "@capacitor/core";
 import { trpc } from "@/lib/trpc";
 import { Megaphone, BookOpen, HelpCircle } from "lucide-react";
 import { MANUAL_ENTRY_ENABLED } from "@/lib/manual";
+
+const isNativePlatform = Capacitor.isNativePlatform();
 
 const LS_KEY = "oxm:lastViewedAnnouncementsAt";
 
@@ -17,6 +21,11 @@ function setLastViewed(ts: number) {
 const btnBase = `relative flex items-center gap-2 px-4 py-2.5
   text-white font-medium rounded-full shadow-lg hover:shadow-xl hover:-translate-y-0.5
   transition-all duration-200 select-none`;
+
+// On native, AppBottomNav is 56px + safe-area-inset-bottom; add clearance above it.
+const bottomStyle = isNativePlatform
+  ? "calc(56px + 1.5rem + env(safe-area-inset-bottom, 0px))"
+  : "calc(1.5rem + env(safe-area-inset-bottom, 0px))";
 
 export default function FloatingAnnouncementButton() {
   const [, navigate] = useLocation();
@@ -37,10 +46,12 @@ export default function FloatingAnnouncementButton() {
     document.getElementById("announcements")?.scrollIntoView({ behavior: "smooth" });
   };
 
-  return (
+  // Portal to document.body — escapes any ancestor transform/stacking-context
+  // created by NativePullToRefreshLayout's contentRef or animate-page-enter.
+  return createPortal(
     <div
       className="fixed right-5 z-40 flex flex-col items-end gap-2"
-      style={{ bottom: "calc(1.5rem + env(safe-area-inset-bottom, 0px))" }}
+      style={{ bottom: bottomStyle }}
     >
       {/* 使用手冊（MANUAL_ENTRY_ENABLED 為 true 時才顯示） */}
       {MANUAL_ENTRY_ENABLED && (
@@ -80,6 +91,7 @@ export default function FloatingAnnouncementButton() {
           </span>
         </button>
       )}
-    </div>
+    </div>,
+    document.body,
   );
 }

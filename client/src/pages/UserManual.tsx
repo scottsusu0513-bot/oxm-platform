@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/accordion";
 import {
   Search, X, ChevronRight, HelpCircle,
-  BookOpen, CheckCircle, Clock, AlertCircle,
+  BookOpen, CheckCircle, Clock, AlertCircle, ArrowLeft,
 } from "lucide-react";
 import { ManualAnnotatedImage } from "@/components/ManualAnnotatedImage";
 import {
@@ -254,6 +254,14 @@ export default function UserManual() {
       {/* ── 頁首 ────────────────────────────────────────────────────── */}
       <div className="bg-gradient-to-br from-orange-500 to-purple-600 text-white">
         <div className="max-w-3xl mx-auto px-4 py-10 sm:py-14">
+          <button
+            onClick={() => window.history.back()}
+            className="flex items-center gap-1.5 text-white/80 hover:text-white transition-colors mb-5 text-sm"
+            aria-label="回上一頁"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            回上一頁
+          </button>
           <div className="flex items-center gap-3 mb-3">
             <BookOpen className="w-7 h-7 shrink-0" aria-hidden="true" />
             <h1 className="text-2xl sm:text-3xl font-bold">使用手冊</h1>
