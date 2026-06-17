@@ -190,6 +190,23 @@ export default function EnterpriseUpgradeApply() {
       <Navbar />
 
       <div className="container py-10 md:py-16 max-w-2xl mx-auto space-y-8">
+        {/* 返回按鈕 */}
+        <button
+          type="button"
+          onClick={() => {
+            if (window.history.length > 1) {
+              window.history.back();
+            } else {
+              navigate("/upgrade-center");
+            }
+          }}
+          className="flex items-center gap-1.5 text-muted-foreground hover:text-foreground transition-colors text-sm"
+          aria-label="返回企業升級中心"
+        >
+          <ArrowLeft className="w-4 h-4" />
+          返回企業升級中心
+        </button>
+
         {/* 麵包屑 */}
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <Link href="/upgrade-center" className="hover:text-foreground transition-colors">
