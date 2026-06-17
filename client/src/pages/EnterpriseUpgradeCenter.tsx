@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, Fragment } from "react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { AppLoading } from "@/components/AppLoading";
@@ -6,9 +6,9 @@ import { Helmet } from "react-helmet-async";
 import { Button } from "@/components/ui/button";
 import Navbar from "@/components/Navbar";
 import {
-  ArrowRight, CheckCircle, Zap, Building2, Users, BarChart3,
-  ClipboardList, ClipboardCheck, FileText, Send, Briefcase,
-  ArrowDown, TrendingUp,
+  ArrowRight, CheckCircle, Building2, Users,
+  ClipboardList, ClipboardCheck, FileText, Send,
+  TrendingUp,
 } from "lucide-react";
 
 // ── 補助方案 ──────────────────────────────────────────────────────────────────
@@ -55,8 +55,7 @@ const PROCESS_STEPS = [
     title: "填寫評估資料",
     desc: "提供企業基本資訊、研發能力與財務狀況，5 分鐘完成初步評估表單",
     accent: "from-orange-500 to-amber-500",
-    cardCls: "border-orange-200 bg-orange-50",
-    stepCls: "text-orange-600",
+    stepCls: "text-orange-500",
   },
   {
     Icon: ClipboardCheck,
@@ -64,8 +63,7 @@ const PROCESS_STEPS = [
     title: "OXM 資格初審",
     desc: "OXM 專業團隊審查資料，確認符合政府補助基本申請資格",
     accent: "from-amber-500 to-yellow-500",
-    cardCls: "border-amber-200 bg-amber-50",
-    stepCls: "text-amber-600",
+    stepCls: "text-amber-500",
   },
   {
     Icon: Users,
@@ -73,8 +71,7 @@ const PROCESS_STEPS = [
     title: "媒合合作顧問",
     desc: "依企業類型與目標計畫，媒合最適合的政府計畫顧問團隊",
     accent: "from-teal-500 to-green-500",
-    cardCls: "border-teal-200 bg-teal-50",
-    stepCls: "text-teal-600",
+    stepCls: "text-teal-500",
   },
   {
     Icon: Building2,
@@ -82,8 +79,7 @@ const PROCESS_STEPS = [
     title: "專人到廠評估",
     desc: "顧問親赴貴廠進行深度訪查，全面評估申請條件與優化方向",
     accent: "from-sky-500 to-cyan-500",
-    cardCls: "border-sky-200 bg-sky-50",
-    stepCls: "text-sky-600",
+    stepCls: "text-sky-500",
   },
   {
     Icon: FileText,
@@ -91,8 +87,7 @@ const PROCESS_STEPS = [
     title: "撰寫計畫",
     desc: "顧問協助撰寫完整政府計畫書，確保內容符合審查標準",
     accent: "from-indigo-500 to-violet-500",
-    cardCls: "border-indigo-200 bg-indigo-50",
-    stepCls: "text-indigo-600",
+    stepCls: "text-indigo-500",
   },
   {
     Icon: Send,
@@ -100,138 +95,388 @@ const PROCESS_STEPS = [
     title: "送出申請",
     desc: "提交完整計畫書至主管機關，OXM 全程追蹤審查進度",
     accent: "from-violet-500 to-purple-600",
-    cardCls: "border-violet-200 bg-violet-50",
-    stepCls: "text-violet-600",
+    stepCls: "text-violet-500",
   },
 ];
 
-// ── KPI Widget ────────────────────────────────────────────────────────────────
+// ── LED 儀表板面板 ────────────────────────────────────────────────────────────
 
-function KPIWidget({
+function LedPanel({
+  headerLabel,
   icon: Icon,
-  value,
-  suffix,
-  label,
-  sub,
-  accent,
+  ledColor,
+  rows,
 }: {
+  headerLabel: string;
   icon: React.ElementType;
-  value: number;
-  suffix: string;
-  label: string;
-  sub: string;
-  accent: string;
+  ledColor: { hex: string; shadow: string };
+  rows: { label: string; value: string; unit: string }[];
 }) {
   return (
-    <div className="rounded-2xl border border-border bg-background p-6 flex flex-col gap-5 shadow-sm hover:shadow-md transition-shadow">
-      <div className="flex items-center justify-between">
-        <div className={`p-2.5 rounded-xl bg-gradient-to-br ${accent} shadow-sm`}>
-          <Icon className="w-5 h-5 text-white" />
+    <div className="relative overflow-hidden rounded-2xl bg-slate-950 flex flex-col gap-5 p-6 group"
+      style={{ border: "1px solid rgba(148,163,184,0.12)" }}
+    >
+      {/* Scanlines */}
+      <div
+        className="absolute inset-0 pointer-events-none"
+        style={{
+          backgroundImage:
+            "repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(255,255,255,0.012) 2px,rgba(255,255,255,0.012) 4px)",
+        }}
+      />
+      {/* Hover glow */}
+      <div
+        className="absolute inset-0 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-500"
+        style={{ background: `radial-gradient(ellipse at top right, ${ledColor.hex}0a, transparent 65%)` }}
+      />
+
+      {/* Header */}
+      <div className="relative flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className="flex gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-red-500/50" />
+            <span className="w-2 h-2 rounded-full bg-yellow-500/50" />
+            <span className="w-2 h-2 rounded-full bg-green-500/70" />
+          </span>
+          <span
+            className="text-[9px] font-mono tracking-[0.2em] uppercase ml-1"
+            style={{ color: "rgba(148,163,184,0.4)" }}
+          >
+            {headerLabel}
+          </span>
         </div>
-        <span className="text-xs text-muted-foreground px-2.5 py-1 bg-muted rounded-full font-medium">累計</span>
-      </div>
-      <div>
-        <div className="flex items-end gap-1.5">
-          <span className="text-4xl font-extrabold tabular-nums tracking-tight">{value}</span>
-          <span className="text-base text-muted-foreground mb-1 font-medium">{suffix}</span>
+        <div
+          className="p-1.5 rounded-lg"
+          style={{ background: `${ledColor.hex}15`, border: `1px solid ${ledColor.hex}25` }}
+        >
+          <Icon className="w-3.5 h-3.5" style={{ color: ledColor.hex }} />
         </div>
-        <p className="text-sm font-semibold text-foreground mt-1">{label}</p>
-        <p className="text-xs text-muted-foreground mt-0.5">{sub}</p>
       </div>
-      <div className="relative w-full h-1.5 bg-muted rounded-full overflow-hidden">
-        <div className={`h-full bg-gradient-to-r ${accent} rounded-full w-1`} />
+
+      {/* Data rows */}
+      <div className="relative flex-1 space-y-5">
+        {rows.map(({ label, value, unit }) => (
+          <div key={label}>
+            <p
+              className="text-[9px] font-mono uppercase tracking-[0.18em] mb-1.5"
+              style={{ color: "rgba(148,163,184,0.35)" }}
+            >
+              {label}
+            </p>
+            <div className="flex items-baseline gap-2">
+              <span
+                className="font-mono font-bold tabular-nums"
+                style={{
+                  color: ledColor.hex,
+                  fontSize: "2.5rem",
+                  lineHeight: 1,
+                  letterSpacing: "0.08em",
+                  textShadow: ledColor.shadow,
+                }}
+              >
+                {value}
+              </span>
+              <span
+                className="text-sm font-mono"
+                style={{ color: ledColor.hex, opacity: 0.45 }}
+              >
+                {unit}
+              </span>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Bottom status */}
+      <div className="relative flex items-center gap-1.5 pt-3" style={{ borderTop: "1px solid rgba(148,163,184,0.07)" }}>
+        <span
+          className="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0"
+          style={{ boxShadow: "0 0 5px #4ade80" }}
+        />
+        <span className="text-[9px] font-mono tracking-widest" style={{ color: "rgba(148,163,184,0.3)" }}>
+          LIVE · 數據將於平台啟動後更新
+        </span>
       </div>
     </div>
   );
 }
 
-// ── Hero 科技視覺 ─────────────────────────────────────────────────────────────
+// ── Hero 智慧城市視覺 ─────────────────────────────────────────────────────────
 
-function HeroTechVisual() {
+function HeroSmartVisual() {
   return (
-    <div className="hidden lg:block relative h-[400px] select-none" aria-hidden="true">
-      {/* Grid */}
+    <div
+      className="hidden lg:block relative h-[480px] select-none overflow-hidden rounded-2xl"
+      aria-hidden="true"
+      style={{ border: "1px solid rgba(148,163,184,0.12)" }}
+    >
+      {/* Dark background */}
+      <div className="absolute inset-0 bg-gradient-to-br from-slate-900 via-slate-800 to-indigo-950" />
+
+      {/* Tech grid */}
       <div
-        className="absolute inset-0 opacity-[0.12]"
+        className="absolute inset-0"
         style={{
           backgroundImage:
-            "linear-gradient(to right,#64748b 1px,transparent 1px),linear-gradient(to bottom,#64748b 1px,transparent 1px)",
-          backgroundSize: "28px 28px",
+            "linear-gradient(to right,rgba(148,163,184,0.06) 1px,transparent 1px)," +
+            "linear-gradient(to bottom,rgba(148,163,184,0.06) 1px,transparent 1px)",
+          backgroundSize: "20px 20px",
         }}
       />
-      {/* Glow orbs */}
-      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-72 h-72 bg-orange-400/15 rounded-full blur-3xl pointer-events-none" />
-      <div className="absolute top-1/4 right-1/4 w-52 h-52 bg-violet-400/15 rounded-full blur-2xl pointer-events-none" />
 
-      {/* SVG lines */}
-      <svg className="absolute inset-0 w-full h-full">
+      {/* Glow orbs */}
+      <div
+        className="absolute top-1/4 left-1/3 w-72 h-72 rounded-full blur-3xl pointer-events-none"
+        style={{ background: "rgba(249,115,22,0.10)" }}
+      />
+      <div
+        className="absolute bottom-1/3 right-1/4 w-52 h-52 rounded-full blur-2xl pointer-events-none"
+        style={{ background: "rgba(168,85,247,0.10)" }}
+      />
+
+      {/* CRT scanlines */}
+      <div
+        className="absolute inset-0 pointer-events-none opacity-[0.025]"
+        style={{
+          backgroundImage:
+            "repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(255,255,255,0.5) 2px,rgba(255,255,255,0.5) 4px)",
+        }}
+      />
+
+      {/* Main SVG: city skyline + growth trend + antennas */}
+      <svg
+        className="absolute inset-0 w-full h-full"
+        viewBox="0 0 460 480"
+        preserveAspectRatio="xMidYMid meet"
+      >
         <defs>
-          <linearGradient id="lg1" x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%" stopColor="#f97316" stopOpacity="0.5" />
-            <stop offset="100%" stopColor="#a855f7" stopOpacity="0.5" />
+          <linearGradient id="trendLine" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stopColor="#f97316" stopOpacity="0" />
+            <stop offset="30%" stopColor="#f97316" stopOpacity="0.55" />
+            <stop offset="100%" stopColor="#a855f7" stopOpacity="1" />
           </linearGradient>
+          <linearGradient id="trendFill" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stopColor="#f97316" stopOpacity="0" />
+            <stop offset="100%" stopColor="#a855f7" stopOpacity="0.07" />
+          </linearGradient>
+          <filter id="dotGlow" x="-80%" y="-80%" width="260%" height="260%">
+            <feGaussianBlur stdDeviation="3.5" result="b" />
+            <feMerge>
+              <feMergeNode in="b" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+          <filter id="antGlow" x="-100%" y="-100%" width="300%" height="300%">
+            <feGaussianBlur stdDeviation="2.5" result="b" />
+            <feMerge>
+              <feMergeNode in="b" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
         </defs>
-        <line x1="50%" y1="50%" x2="22%" y2="26%" stroke="url(#lg1)" strokeWidth="1.5" strokeDasharray="5 4" />
-        <line x1="50%" y1="50%" x2="78%" y2="20%" stroke="url(#lg1)" strokeWidth="1.5" strokeDasharray="5 4" />
-        <line x1="50%" y1="50%" x2="16%" y2="74%" stroke="url(#lg1)" strokeWidth="1.5" strokeDasharray="5 4" />
-        <line x1="50%" y1="50%" x2="83%" y2="70%" stroke="url(#lg1)" strokeWidth="1.5" strokeDasharray="5 4" />
-        <line x1="22%" y1="26%" x2="78%" y2="20%" stroke="#94a3b8" strokeWidth="1" strokeDasharray="3 6" opacity="0.3" />
-        <line x1="16%" y1="74%" x2="83%" y2="70%" stroke="#94a3b8" strokeWidth="1" strokeDasharray="3 6" opacity="0.3" />
+
+        {/* ── City buildings ─────────────────────────────────────────────── */}
+        {/* Left cluster */}
+        <rect x="0" y="355" width="32" height="125" fill="#1e293b" rx="1" />
+        <rect x="36" y="375" width="20" height="105" fill="#0f172a" rx="1" />
+        <rect x="60" y="310" width="40" height="170" fill="#1e293b" rx="1" />
+        <rect x="104" y="355" width="23" height="125" fill="#0f172a" rx="1" />
+        <rect x="131" y="278" width="46" height="202" fill="#1e293b" rx="1" />
+
+        {/* Center-left */}
+        <rect x="181" y="340" width="26" height="140" fill="#0f172a" rx="1" />
+
+        {/* Tallest/central */}
+        <rect x="211" y="250" width="56" height="230" fill="#1e293b" rx="1" />
+
+        {/* Center-right */}
+        <rect x="271" y="360" width="20" height="120" fill="#0f172a" rx="1" />
+        <rect x="295" y="290" width="40" height="190" fill="#1e293b" rx="1" />
+        <rect x="339" y="325" width="26" height="155" fill="#0f172a" rx="1" />
+        <rect x="369" y="305" width="34" height="175" fill="#1e293b" rx="1" />
+        <rect x="407" y="358" width="22" height="122" fill="#0f172a" rx="1" />
+        <rect x="433" y="335" width="27" height="145" fill="#1e293b" rx="1" />
+
+        {/* Ground */}
+        <rect x="0" y="458" width="460" height="22" fill="#0f172a" />
+
+        {/* ── Windows ─────────────────────────────────────────────────────── */}
+        {/* Left building */}
+        <rect x="4" y="362" width="7" height="8" fill="#fb923c" fillOpacity="0.75" rx="0.5" />
+        <rect x="15" y="362" width="7" height="8" fill="#334155" fillOpacity="0.5" rx="0.5" />
+        <rect x="4" y="376" width="7" height="8" fill="#334155" fillOpacity="0.4" rx="0.5" />
+        <rect x="15" y="376" width="7" height="8" fill="#fb923c" fillOpacity="0.5" rx="0.5" />
+
+        {/* x=60 building */}
+        <rect x="64" y="318" width="9" height="10" fill="#fb923c" fillOpacity="0.80" rx="0.5" />
+        <rect x="77" y="318" width="9" height="10" fill="#334155" fillOpacity="0.4" rx="0.5" />
+        <rect x="88" y="318" width="9" height="10" fill="#a78bfa" fillOpacity="0.65" rx="0.5" />
+        <rect x="64" y="334" width="9" height="10" fill="#334155" fillOpacity="0.4" rx="0.5" />
+        <rect x="77" y="334" width="9" height="10" fill="#fb923c" fillOpacity="0.60" rx="0.5" />
+        <rect x="88" y="334" width="9" height="10" fill="#fb923c" fillOpacity="0.45" rx="0.5" />
+
+        {/* x=131 tall building */}
+        <rect x="135" y="286" width="10" height="11" fill="#fb923c" fillOpacity="0.90" rx="0.5" />
+        <rect x="149" y="286" width="10" height="11" fill="#a78bfa" fillOpacity="0.70" rx="0.5" />
+        <rect x="163" y="286" width="10" height="11" fill="#334155" fillOpacity="0.40" rx="0.5" />
+        <rect x="135" y="303" width="10" height="11" fill="#334155" fillOpacity="0.40" rx="0.5" />
+        <rect x="149" y="303" width="10" height="11" fill="#fb923c" fillOpacity="0.65" rx="0.5" />
+        <rect x="163" y="303" width="10" height="11" fill="#a78bfa" fillOpacity="0.55" rx="0.5" />
+        <rect x="135" y="320" width="10" height="11" fill="#a78bfa" fillOpacity="0.60" rx="0.5" />
+        <rect x="149" y="320" width="10" height="11" fill="#334155" fillOpacity="0.40" rx="0.5" />
+
+        {/* x=211 tallest */}
+        <rect x="215" y="258" width="11" height="12" fill="#fb923c" fillOpacity="0.95" rx="0.5" />
+        <rect x="230" y="258" width="11" height="12" fill="#fb923c" fillOpacity="0.80" rx="0.5" />
+        <rect x="245" y="258" width="11" height="12" fill="#a78bfa" fillOpacity="0.90" rx="0.5" />
+        <rect x="215" y="276" width="11" height="12" fill="#a78bfa" fillOpacity="0.65" rx="0.5" />
+        <rect x="230" y="276" width="11" height="12" fill="#334155" fillOpacity="0.40" rx="0.5" />
+        <rect x="245" y="276" width="11" height="12" fill="#fb923c" fillOpacity="0.75" rx="0.5" />
+        <rect x="215" y="294" width="11" height="12" fill="#fb923c" fillOpacity="0.55" rx="0.5" />
+        <rect x="230" y="294" width="11" height="12" fill="#a78bfa" fillOpacity="0.70" rx="0.5" />
+        <rect x="245" y="294" width="11" height="12" fill="#334155" fillOpacity="0.40" rx="0.5" />
+        <rect x="215" y="312" width="11" height="12" fill="#a78bfa" fillOpacity="0.50" rx="0.5" />
+        <rect x="230" y="312" width="11" height="12" fill="#fb923c" fillOpacity="0.60" rx="0.5" />
+
+        {/* x=295 building */}
+        <rect x="299" y="298" width="10" height="11" fill="#fb923c" fillOpacity="0.70" rx="0.5" />
+        <rect x="313" y="298" width="10" height="11" fill="#334155" fillOpacity="0.40" rx="0.5" />
+        <rect x="325" y="298" width="10" height="11" fill="#a78bfa" fillOpacity="0.60" rx="0.5" />
+        <rect x="299" y="315" width="10" height="11" fill="#334155" fillOpacity="0.40" rx="0.5" />
+        <rect x="313" y="315" width="10" height="11" fill="#fb923c" fillOpacity="0.50" rx="0.5" />
+
+        {/* x=369 building */}
+        <rect x="373" y="313" width="10" height="11" fill="#fb923c" fillOpacity="0.60" rx="0.5" />
+        <rect x="387" y="313" width="10" height="11" fill="#334155" fillOpacity="0.40" rx="0.5" />
+        <rect x="395" y="313" width="10" height="11" fill="#a78bfa" fillOpacity="0.55" rx="0.5" />
+
+        {/* ── Antenna on tallest ──────────────────────────────────────────── */}
+        <line x1="239" y1="250" x2="239" y2="222" stroke="#f97316" strokeWidth="1.5" strokeOpacity="0.85" />
+        <circle cx="239" cy="220" r="4.5" fill="#f97316" fillOpacity="0.9" filter="url(#antGlow)" />
+        <circle cx="239" cy="220" r="9" fill="#f97316" fillOpacity="0.12" />
+
+        {/* Tech connection lines from antenna */}
+        <line x1="239" y1="220" x2="154" y2="278" stroke="#f97316" strokeOpacity="0.18" strokeWidth="0.8" strokeDasharray="4 5" />
+        <line x1="239" y1="220" x2="315" y2="288" stroke="#a855f7" strokeOpacity="0.18" strokeWidth="0.8" strokeDasharray="4 5" />
+
+        {/* Small antenna on x=131 building */}
+        <line x1="154" y1="278" x2="154" y2="262" stroke="#f97316" strokeWidth="1" strokeOpacity="0.5" />
+        <circle cx="154" cy="260" r="2.5" fill="#f97316" fillOpacity="0.6" />
+
+        {/* ── Growth trend line ────────────────────────────────────────────── */}
+        <polyline
+          points="20,440 80,395 145,348 210,298 275,245 340,192 400,142 450,98"
+          fill="none"
+          stroke="url(#trendLine)"
+          strokeWidth="2.5"
+          strokeDasharray="6 3"
+        />
+        <polygon
+          points="20,440 80,395 145,348 210,298 275,245 340,192 400,142 450,98 450,458 20,458"
+          fill="url(#trendFill)"
+        />
+
+        {/* Trend data points */}
+        {([[80, 395], [210, 298], [340, 192], [450, 98]] as [number, number][]).map(([cx, cy]) => (
+          <circle key={`${cx}`} cx={cx} cy={cy} r={cx === 450 ? 5.5 : 3} fill="#f97316" fillOpacity={cx === 450 ? 0.95 : 0.55} filter={cx === 450 ? "url(#dotGlow)" : undefined} />
+        ))}
+        <circle cx="450" cy="98" r="11" fill="#f97316" fillOpacity="0.10" />
+
+        {/* Upward arrow at tip */}
+        <polyline points="444,106 450,96 456,106" fill="none" stroke="#f97316" strokeWidth="2" strokeOpacity="0.9" strokeLinejoin="round" />
       </svg>
 
-      {/* Central OXM node */}
-      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-20 h-20 rounded-2xl bg-gradient-to-br from-orange-500 to-violet-600 shadow-xl shadow-orange-500/30 flex flex-col items-center justify-center text-white z-10">
-        <Zap className="w-6 h-6 mb-0.5" />
-        <span className="text-xs font-extrabold tracking-wide">OXM</span>
+      {/* Subsidy badges (top) */}
+      <div className="absolute top-4 left-4 right-4 flex gap-2 flex-wrap">
+        {[
+          { code: "SBIR", max: "3,000萬", border: "rgba(249,115,22,0.30)", bg: "rgba(249,115,22,0.10)", text: "#fb923c", dot: "#f97316" },
+          { code: "CITD", max: "500萬",   border: "rgba(245,158,11,0.30)", bg: "rgba(245,158,11,0.10)", text: "#fbbf24", dot: "#f59e0b" },
+          { code: "SIIR", max: "1,000萬", border: "rgba(168,85,247,0.30)", bg: "rgba(168,85,247,0.10)", text: "#c084fc", dot: "#a855f7" },
+        ].map(({ code, max, border, bg, text, dot }) => (
+          <div
+            key={code}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg backdrop-blur-sm"
+            style={{ border: `1px solid ${border}`, background: bg }}
+          >
+            <div className="w-1.5 h-1.5 rounded-full" style={{ background: dot }} />
+            <span className="text-[11px] font-mono font-bold" style={{ color: text }}>{code}</span>
+            <span className="text-[10px] font-mono" style={{ color: text, opacity: 0.7 }}>最高 {max}</span>
+          </div>
+        ))}
       </div>
 
-      {/* SBIR node */}
-      <div className="absolute z-10" style={{ top: "16%", left: "16%", transform: "translate(-50%,-50%)" }}>
-        <div className="w-[90px] rounded-xl border border-orange-200 bg-white/90 shadow-md p-2 text-center backdrop-blur-sm">
-          <span className="text-sm font-extrabold text-orange-600 block">SBIR</span>
-          <span className="text-[10px] text-orange-400 font-medium">最高 3,000萬</span>
+      {/* Mini control panel (right side) */}
+      <div
+        className="absolute top-14 right-4 w-[140px] rounded-xl overflow-hidden"
+        style={{ border: "1px solid rgba(148,163,184,0.10)", background: "rgba(15,23,42,0.88)", backdropFilter: "blur(10px)" }}
+      >
+        <div
+          className="flex items-center gap-1.5 px-3 py-2"
+          style={{ borderBottom: "1px solid rgba(148,163,184,0.08)" }}
+        >
+          <span
+            className="w-1.5 h-1.5 rounded-full bg-green-400"
+            style={{ boxShadow: "0 0 5px #4ade80" }}
+          />
+          <span className="text-[9px] font-mono tracking-[0.15em] uppercase" style={{ color: "rgba(148,163,184,0.4)" }}>
+            STATUS
+          </span>
+        </div>
+        <div className="p-3 space-y-2.5">
+          {[
+            { label: "評估中", val: "0", color: "#fb923c" },
+            { label: "媒合中", val: "0", color: "#c084fc" },
+            { label: "申請中", val: "0", color: "#4ade80" },
+          ].map(({ label, val, color }) => (
+            <div key={label} className="space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="text-[9px] font-mono" style={{ color: "rgba(148,163,184,0.4)" }}>{label}</span>
+                <span
+                  className="text-[12px] font-mono font-bold"
+                  style={{ color, textShadow: `0 0 8px ${color}80` }}
+                >
+                  {val}
+                </span>
+              </div>
+              <div className="h-0.5 rounded-full" style={{ background: "rgba(148,163,184,0.08)" }}>
+                <div className="h-full rounded-full" style={{ width: "0%", background: color }} />
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="px-3 pb-3">
+          <div
+            className="text-[8px] font-mono uppercase tracking-[0.15em] mb-1.5"
+            style={{ color: "rgba(148,163,184,0.3)" }}
+          >
+            UPGRADE IDX
+          </div>
+          <div className="flex items-end gap-0.5 h-8">
+            {[12, 24, 18, 36, 30, 48, 42, 60, 55, 72].map((h, i) => (
+              <div
+                key={i}
+                className="flex-1 rounded-sm"
+                style={{
+                  height: `${h}%`,
+                  background: i === 9 ? "#f97316" : `rgba(249,115,22,${0.12 + (i / 9) * 0.22})`,
+                  boxShadow: i === 9 ? "0 0 6px #f9731660" : undefined,
+                }}
+              />
+            ))}
+          </div>
         </div>
       </div>
 
-      {/* CITD node */}
-      <div className="absolute z-10" style={{ top: "12%", left: "78%", transform: "translate(-50%,-50%)" }}>
-        <div className="w-[90px] rounded-xl border border-amber-200 bg-white/90 shadow-md p-2 text-center backdrop-blur-sm">
-          <span className="text-sm font-extrabold text-amber-600 block">CITD</span>
-          <span className="text-[10px] text-amber-400 font-medium">最高 500萬</span>
-        </div>
-      </div>
-
-      {/* SIIR node */}
-      <div className="absolute z-10" style={{ top: "76%", left: "14%", transform: "translate(-50%,-50%)" }}>
-        <div className="w-[90px] rounded-xl border border-violet-200 bg-white/90 shadow-md p-2 text-center backdrop-blur-sm">
-          <span className="text-sm font-extrabold text-violet-600 block">SIIR</span>
-          <span className="text-[10px] text-violet-400 font-medium">最高 1,000萬</span>
-        </div>
-      </div>
-
-      {/* Enterprise node */}
-      <div className="absolute z-10" style={{ top: "72%", left: "84%", transform: "translate(-50%,-50%)" }}>
-        <div className="w-14 h-14 rounded-full border border-slate-200 bg-white/90 shadow-md flex flex-col items-center justify-center backdrop-blur-sm">
-          <Building2 className="w-5 h-5 text-slate-500 mb-0.5" />
-          <span className="text-[9px] text-slate-400 font-medium">企業</span>
-        </div>
-      </div>
-
-      {/* Consultant node */}
-      <div className="absolute z-10" style={{ top: "40%", left: "91%", transform: "translate(-50%,-50%)" }}>
-        <div className="w-14 h-14 rounded-full border border-slate-200 bg-white/90 shadow-md flex flex-col items-center justify-center backdrop-blur-sm">
-          <Users className="w-5 h-5 text-slate-500 mb-0.5" />
-          <span className="text-[9px] text-slate-400 font-medium">顧問</span>
-        </div>
-      </div>
-
-      {/* Status badge */}
-      <div className="absolute bottom-6 right-4 z-10 rounded-xl border border-green-200 bg-white/90 shadow-md px-3 py-2 flex items-center gap-2 backdrop-blur-sm">
+      {/* Bottom: live status */}
+      <div
+        className="absolute bottom-4 left-4 flex items-center gap-2 px-3 py-1.5 rounded-lg backdrop-blur-sm"
+        style={{ border: "1px solid rgba(74,222,128,0.22)", background: "rgba(74,222,128,0.07)" }}
+      >
         <span className="relative flex h-2 w-2">
-          <span className="motion-safe:animate-ping absolute inline-flex h-full w-full rounded-full bg-green-500 opacity-60" />
-          <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
+          <span className="motion-safe:animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-60" />
+          <span className="relative inline-flex rounded-full h-2 w-2 bg-green-400" />
         </span>
-        <span className="text-xs font-medium text-green-700">免費評估開放中</span>
+        <span className="text-[11px] font-mono font-medium text-green-300">免費評估開放中</span>
       </div>
     </div>
   );
@@ -274,7 +519,7 @@ export default function EnterpriseUpgradeCenter() {
           }}
         />
         <div
-          className="pointer-events-none absolute inset-0 -z-10 opacity-[0.06]"
+          className="pointer-events-none absolute inset-0 -z-10 opacity-[0.05]"
           aria-hidden="true"
           style={{
             backgroundImage:
@@ -340,22 +585,51 @@ export default function EnterpriseUpgradeCenter() {
             </Link>
           </div>
 
-          {/* Right: tech visual */}
-          <HeroTechVisual />
+          {/* Right: smart city visual */}
+          <HeroSmartVisual />
         </div>
       </section>
 
-      {/* ── KPI Dashboard ─────────────────────────────────────────────────── */}
-      <section className="py-16 md:py-20 bg-muted/20">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-8">
+      {/* ── LED 儀表板 ────────────────────────────────────────────────────── */}
+      <section className="py-16 md:py-20 bg-slate-950">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-10">
           <div className="text-center space-y-2">
-            <h2 className="text-2xl md:text-3xl font-bold">平台數據</h2>
-            <p className="text-muted-foreground text-sm">數據將在平台正式啟動後持續更新</p>
+            <h2 className="text-2xl md:text-3xl font-bold text-slate-100">平台數據</h2>
+            <p className="text-slate-500 text-sm font-mono tracking-wider">CONTROL CENTER · LIVE DATA</p>
           </div>
+
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
-            <KPIWidget icon={BarChart3} value={0} suffix="件" label="已媒合案件數" sub="含 SBIR・CITD・SIIR 全類型" accent="from-orange-500 to-amber-500" />
-            <KPIWidget icon={TrendingUp} value={0} suffix="萬" label="已協助申請金額" sub="政府計畫核准補助總額" accent="from-violet-500 to-indigo-500" />
-            <KPIWidget icon={Briefcase} value={0} suffix="家" label="合作企業數" sub="台灣各產業合作廠商" accent="from-teal-500 to-cyan-500" />
+            {/* Panel 1: 申請廠商 */}
+            <LedPanel
+              headerLabel="申請廠商"
+              icon={Building2}
+              ledColor={{ hex: "#4ade80", shadow: "0 0 10px #4ade8090, 0 0 22px #4ade8040" }}
+              rows={[
+                { label: "有送出申請", value: "0", unit: "家" },
+                { label: "有過件", value: "0", unit: "家" },
+                { label: "過件率", value: "0", unit: "%" },
+              ]}
+            />
+
+            {/* Panel 2: 總申請金額 */}
+            <LedPanel
+              headerLabel="總申請金額"
+              icon={TrendingUp}
+              ledColor={{ hex: "#fb923c", shadow: "0 0 10px #fb923c90, 0 0 22px #fb923c40" }}
+              rows={[
+                { label: "總金額", value: "0", unit: "萬元" },
+              ]}
+            />
+
+            {/* Panel 3: 已結案數量 */}
+            <LedPanel
+              headerLabel="已結案數量"
+              icon={CheckCircle}
+              ledColor={{ hex: "#c084fc", shadow: "0 0 10px #c084fc90, 0 0 22px #c084fc40" }}
+              rows={[
+                { label: "已結案", value: "0", unit: "件" },
+              ]}
+            />
           </div>
         </div>
       </section>
@@ -405,41 +679,52 @@ export default function EnterpriseUpgradeCenter() {
         </div>
       </section>
 
-      {/* ── 申請流程 Timeline ─────────────────────────────────────────────── */}
+      {/* ── 申請流程（橫向） ──────────────────────────────────────────────── */}
       <section className="py-16 md:py-20 bg-muted/20">
-        <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 space-y-10">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-10">
           <div className="text-center space-y-2">
             <h2 className="text-2xl md:text-3xl font-bold">申請流程</h2>
             <p className="text-muted-foreground">六個步驟，OXM 企業升級顧問全程陪跑</p>
           </div>
 
-          <div>
+          {/* Desktop: horizontal */}
+          <div className="hidden lg:flex items-start">
             {PROCESS_STEPS.map((step, i) => (
-              <div key={step.num} className="flex gap-5">
-                {/* Left: icon + connector */}
-                <div className="flex flex-col items-center shrink-0">
-                  <div className={`w-12 h-12 rounded-xl bg-gradient-to-br ${step.accent} flex items-center justify-center shadow-md`}>
+              <Fragment key={step.num}>
+                <div className="flex-1 flex flex-col items-center text-center gap-3 min-w-0 px-2">
+                  <div className={`w-12 h-12 rounded-xl bg-gradient-to-br ${step.accent} flex items-center justify-center shadow-md shrink-0`}>
                     <step.Icon className="w-5 h-5 text-white" />
                   </div>
-                  {i < PROCESS_STEPS.length - 1 && (
-                    <div className="flex flex-col items-center py-2 gap-1">
-                      <div className="w-px h-8 bg-border" />
-                      <ArrowDown className="w-3 h-3 text-muted-foreground/40" />
-                    </div>
-                  )}
-                </div>
-
-                {/* Right: card */}
-                <div style={{ paddingBottom: i < PROCESS_STEPS.length - 1 ? "8px" : "0" }} className="flex-1">
-                  <div className={`rounded-xl border ${step.cardCls} p-4 flex items-start gap-3`}>
-                    <span className={`text-xs font-extrabold opacity-60 shrink-0 mt-0.5 ${step.stepCls}`}>
+                  <div className="space-y-1 w-full">
+                    <span className={`text-[10px] font-extrabold tracking-widest opacity-60 block ${step.stepCls}`}>
                       STEP {step.num}
                     </span>
-                    <div className="space-y-0.5">
-                      <p className="font-semibold text-sm leading-snug">{step.title}</p>
-                      <p className="text-xs text-muted-foreground leading-relaxed">{step.desc}</p>
-                    </div>
+                    <p className="font-semibold text-sm leading-snug">{step.title}</p>
+                    <p className="text-[11px] text-muted-foreground leading-relaxed">{step.desc}</p>
                   </div>
+                </div>
+                {i < PROCESS_STEPS.length - 1 && (
+                  <div className="flex items-start pt-4 shrink-0">
+                    <ArrowRight className="w-4 h-4 text-muted-foreground/30" />
+                  </div>
+                )}
+              </Fragment>
+            ))}
+          </div>
+
+          {/* Mobile: single column */}
+          <div className="lg:hidden grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {PROCESS_STEPS.map((step) => (
+              <div key={step.num} className="flex items-start gap-4">
+                <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${step.accent} flex items-center justify-center shadow-md shrink-0`}>
+                  <step.Icon className="w-4 h-4 text-white" />
+                </div>
+                <div className="space-y-0.5">
+                  <span className={`text-[10px] font-extrabold tracking-widest opacity-60 block ${step.stepCls}`}>
+                    STEP {step.num}
+                  </span>
+                  <p className="font-semibold text-sm">{step.title}</p>
+                  <p className="text-xs text-muted-foreground leading-relaxed">{step.desc}</p>
                 </div>
               </div>
             ))}
@@ -454,11 +739,7 @@ export default function EnterpriseUpgradeCenter() {
             <div
               className="absolute inset-0 pointer-events-none opacity-10"
               aria-hidden="true"
-              style={{
-                backgroundImage:
-                  "radial-gradient(circle,white 1px,transparent 1px)",
-                backgroundSize: "24px 24px",
-              }}
+              style={{ backgroundImage: "radial-gradient(circle,white 1px,transparent 1px)", backgroundSize: "24px 24px" }}
             />
             <div className="relative space-y-4">
               <h2 className="text-2xl md:text-3xl font-extrabold">不確定適合哪項補助？</h2>
