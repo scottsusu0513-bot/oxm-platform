@@ -113,10 +113,10 @@ function LedPanel({
   rows: { label: string; value: string; unit: string }[];
 }) {
   return (
-    <div className="relative overflow-hidden rounded-2xl bg-slate-950 flex flex-col gap-5 p-6 group"
+    <div
+      className="relative overflow-hidden rounded-2xl bg-slate-950 flex flex-col gap-5 p-6 group"
       style={{ border: "1px solid rgba(148,163,184,0.12)" }}
     >
-      {/* Scanlines */}
       <div
         className="absolute inset-0 pointer-events-none"
         style={{
@@ -124,13 +124,11 @@ function LedPanel({
             "repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(255,255,255,0.012) 2px,rgba(255,255,255,0.012) 4px)",
         }}
       />
-      {/* Hover glow */}
       <div
         className="absolute inset-0 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-500"
         style={{ background: `radial-gradient(ellipse at top right, ${ledColor.hex}0a, transparent 65%)` }}
       />
 
-      {/* Header */}
       <div className="relative flex items-center justify-between">
         <div className="flex items-center gap-2">
           <span className="flex gap-1.5">
@@ -153,7 +151,6 @@ function LedPanel({
         </div>
       </div>
 
-      {/* Data rows */}
       <div className="relative flex-1 space-y-5">
         {rows.map(({ label, value, unit }) => (
           <div key={label}>
@@ -176,10 +173,7 @@ function LedPanel({
               >
                 {value}
               </span>
-              <span
-                className="text-sm font-mono"
-                style={{ color: ledColor.hex, opacity: 0.45 }}
-              >
+              <span className="text-sm font-mono" style={{ color: ledColor.hex, opacity: 0.45 }}>
                 {unit}
               </span>
             </div>
@@ -187,8 +181,10 @@ function LedPanel({
         ))}
       </div>
 
-      {/* Bottom status */}
-      <div className="relative flex items-center gap-1.5 pt-3" style={{ borderTop: "1px solid rgba(148,163,184,0.07)" }}>
+      <div
+        className="relative flex items-center gap-1.5 pt-3"
+        style={{ borderTop: "1px solid rgba(148,163,184,0.07)" }}
+      >
         <span
           className="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0"
           style={{ boxShadow: "0 0 5px #4ade80" }}
@@ -201,283 +197,245 @@ function LedPanel({
   );
 }
 
-// ── Hero 智慧城市視覺 ─────────────────────────────────────────────────────────
+// ── Hero 全版科技城市背景 ─────────────────────────────────────────────────────
 
-function HeroSmartVisual() {
+function HeroBackground() {
   return (
-    <div
-      className="hidden lg:block relative h-[480px] select-none overflow-hidden rounded-2xl"
-      aria-hidden="true"
-      style={{ border: "1px solid rgba(148,163,184,0.12)" }}
-    >
-      {/* Dark background */}
-      <div className="absolute inset-0 bg-gradient-to-br from-slate-900 via-slate-800 to-indigo-950" />
+    <div className="absolute inset-0 overflow-hidden" aria-hidden="true">
+      {/* Deep tech gradient */}
+      <div
+        className="absolute inset-0"
+        style={{
+          background:
+            "linear-gradient(160deg,#06091a 0%,#0c1535 30%,#100820 60%,#080c18 100%)",
+        }}
+      />
 
       {/* Tech grid */}
       <div
         className="absolute inset-0"
         style={{
           backgroundImage:
-            "linear-gradient(to right,rgba(148,163,184,0.06) 1px,transparent 1px)," +
-            "linear-gradient(to bottom,rgba(148,163,184,0.06) 1px,transparent 1px)",
-          backgroundSize: "20px 20px",
+            "linear-gradient(to right,rgba(148,163,184,0.04) 1px,transparent 1px)," +
+            "linear-gradient(to bottom,rgba(148,163,184,0.04) 1px,transparent 1px)",
+          backgroundSize: "40px 40px",
         }}
       />
 
-      {/* Glow orbs */}
+      {/* Atmospheric glow orbs */}
       <div
-        className="absolute top-1/4 left-1/3 w-72 h-72 rounded-full blur-3xl pointer-events-none"
-        style={{ background: "rgba(249,115,22,0.10)" }}
-      />
-      <div
-        className="absolute bottom-1/3 right-1/4 w-52 h-52 rounded-full blur-2xl pointer-events-none"
-        style={{ background: "rgba(168,85,247,0.10)" }}
-      />
-
-      {/* CRT scanlines */}
-      <div
-        className="absolute inset-0 pointer-events-none opacity-[0.025]"
+        className="absolute rounded-full"
         style={{
-          backgroundImage:
-            "repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(255,255,255,0.5) 2px,rgba(255,255,255,0.5) 4px)",
+          top: "15%", left: "12%", width: "520px", height: "420px",
+          background: "radial-gradient(ellipse,rgba(249,115,22,0.13) 0%,transparent 68%)",
+          filter: "blur(35px)",
+        }}
+      />
+      <div
+        className="absolute rounded-full"
+        style={{
+          top: "8%", right: "10%", width: "450px", height: "380px",
+          background: "radial-gradient(ellipse,rgba(168,85,247,0.13) 0%,transparent 68%)",
+          filter: "blur(35px)",
+        }}
+      />
+      <div
+        className="absolute rounded-full"
+        style={{
+          bottom: "25%", left: "38%", width: "380px", height: "320px",
+          background: "radial-gradient(ellipse,rgba(79,70,229,0.09) 0%,transparent 68%)",
+          filter: "blur(28px)",
         }}
       />
 
-      {/* Main SVG: city skyline + growth trend + antennas */}
+      {/* Horizontal light streaks */}
+      <div
+        className="absolute"
+        style={{
+          top: "38%", left: 0, right: 0, height: "1px",
+          background:
+            "linear-gradient(to right,transparent 0%,rgba(249,115,22,0.22) 25%,rgba(168,85,247,0.28) 65%,transparent 100%)",
+        }}
+      />
+      <div
+        className="absolute"
+        style={{
+          top: "62%", left: 0, right: 0, height: "1px",
+          background:
+            "linear-gradient(to right,transparent 5%,rgba(99,102,241,0.15) 40%,rgba(168,85,247,0.18) 70%,transparent 100%)",
+        }}
+      />
+
+      {/* City skyline + light beams + trend line */}
       <svg
-        className="absolute inset-0 w-full h-full"
-        viewBox="0 0 460 480"
-        preserveAspectRatio="xMidYMid meet"
+        className="absolute bottom-0 left-0 w-full"
+        height="240"
+        viewBox="0 0 1400 240"
+        preserveAspectRatio="xMidYMax meet"
       >
         <defs>
-          <linearGradient id="trendLine" x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%" stopColor="#f97316" stopOpacity="0" />
-            <stop offset="30%" stopColor="#f97316" stopOpacity="0.55" />
-            <stop offset="100%" stopColor="#a855f7" stopOpacity="1" />
+          <linearGradient id="hbm_org" x1="0" y1="1" x2="0" y2="0">
+            <stop offset="0%" stopColor="#f97316" stopOpacity="0.20" />
+            <stop offset="100%" stopColor="#f97316" stopOpacity="0" />
           </linearGradient>
-          <linearGradient id="trendFill" x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%" stopColor="#f97316" stopOpacity="0" />
-            <stop offset="100%" stopColor="#a855f7" stopOpacity="0.07" />
+          <linearGradient id="hbm_vio" x1="0" y1="1" x2="0" y2="0">
+            <stop offset="0%" stopColor="#a855f7" stopOpacity="0.16" />
+            <stop offset="100%" stopColor="#a855f7" stopOpacity="0" />
           </linearGradient>
-          <filter id="dotGlow" x="-80%" y="-80%" width="260%" height="260%">
-            <feGaussianBlur stdDeviation="3.5" result="b" />
-            <feMerge>
-              <feMergeNode in="b" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
-          <filter id="antGlow" x="-100%" y="-100%" width="300%" height="300%">
-            <feGaussianBlur stdDeviation="2.5" result="b" />
-            <feMerge>
-              <feMergeNode in="b" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
+          <linearGradient id="hbm_wht" x1="0" y1="1" x2="0" y2="0">
+            <stop offset="0%" stopColor="#ffffff" stopOpacity="0.07" />
+            <stop offset="100%" stopColor="#ffffff" stopOpacity="0" />
+          </linearGradient>
+          <linearGradient id="h_trend" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stopColor="#f97316" stopOpacity="0" />
+            <stop offset="20%" stopColor="#f97316" stopOpacity="0.5" />
+            <stop offset="75%" stopColor="#a855f7" stopOpacity="0.65" />
+            <stop offset="100%" stopColor="#a855f7" stopOpacity="0" />
+          </linearGradient>
+          <filter id="h_glow" x="-60%" y="-60%" width="220%" height="220%">
+            <feGaussianBlur stdDeviation="3" result="b" />
+            <feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge>
           </filter>
         </defs>
 
-        {/* ── City buildings ─────────────────────────────────────────────── */}
-        {/* Left cluster */}
-        <rect x="0" y="355" width="32" height="125" fill="#1e293b" rx="1" />
-        <rect x="36" y="375" width="20" height="105" fill="#0f172a" rx="1" />
-        <rect x="60" y="310" width="40" height="170" fill="#1e293b" rx="1" />
-        <rect x="104" y="355" width="23" height="125" fill="#0f172a" rx="1" />
-        <rect x="131" y="278" width="46" height="202" fill="#1e293b" rx="1" />
+        {/* Light beams above buildings */}
+        <rect x="65"   y="0" width="30" height="175" fill="url(#hbm_org)" />
+        <rect x="195"  y="0" width="48" height="148" fill="url(#hbm_wht)" />
+        <rect x="345"  y="0" width="34" height="162" fill="url(#hbm_vio)" />
+        <rect x="492"  y="0" width="58" height="130" fill="url(#hbm_org)" />
+        <rect x="625"  y="0" width="42" height="145" fill="url(#hbm_wht)" />
+        <rect x="760"  y="0" width="36" height="156" fill="url(#hbm_vio)" />
+        <rect x="875"  y="0" width="52" height="135" fill="url(#hbm_org)" />
+        <rect x="1015" y="0" width="40" height="150" fill="url(#hbm_wht)" />
+        <rect x="1155" y="0" width="44" height="140" fill="url(#hbm_vio)" />
+        <rect x="1295" y="0" width="32" height="160" fill="url(#hbm_org)" />
 
-        {/* Center-left */}
-        <rect x="181" y="340" width="26" height="140" fill="#0f172a" rx="1" />
+        {/* Background (dark) buildings */}
+        <rect x="0"    y="188" width="58"  height="52"  fill="#040912" />
+        <rect x="62"   y="168" width="48"  height="72"  fill="#040912" />
+        <rect x="115"  y="152" width="62"  height="88"  fill="#040912" />
+        <rect x="182"  y="172" width="38"  height="68"  fill="#040912" />
+        <rect x="225"  y="142" width="78"  height="98"  fill="#040912" />
+        <rect x="308"  y="162" width="42"  height="78"  fill="#040912" />
+        <rect x="355"  y="118" width="95"  height="122" fill="#040912" />
+        <rect x="455"  y="158" width="48"  height="82"  fill="#040912" />
+        <rect x="508"  y="106" width="118" height="134" fill="#040912" />
+        <rect x="632"  y="148" width="52"  height="92"  fill="#040912" />
+        <rect x="690"  y="112" width="100" height="128" fill="#040912" />
+        <rect x="796"  y="145" width="52"  height="95"  fill="#040912" />
+        <rect x="853"  y="120" width="90"  height="120" fill="#040912" />
+        <rect x="948"  y="152" width="48"  height="88"  fill="#040912" />
+        <rect x="1002" y="126" width="85"  height="114" fill="#040912" />
+        <rect x="1092" y="155" width="50"  height="85"  fill="#040912" />
+        <rect x="1148" y="132" width="78"  height="108" fill="#040912" />
+        <rect x="1232" y="158" width="46"  height="82"  fill="#040912" />
+        <rect x="1284" y="140" width="65"  height="100" fill="#040912" />
+        <rect x="1355" y="155" width="45"  height="85"  fill="#040912" />
 
-        {/* Tallest/central */}
-        <rect x="211" y="250" width="56" height="230" fill="#1e293b" rx="1" />
+        {/* Foreground buildings (slightly lighter) */}
+        <rect x="28"   y="196" width="32"  height="44"  fill="#0a1020" />
+        <rect x="165"  y="185" width="38"  height="55"  fill="#0a1020" />
+        <rect x="420"  y="175" width="30"  height="65"  fill="#0a1020" />
+        <rect x="578"  y="168" width="48"  height="72"  fill="#0a1020" />
+        <rect x="745"  y="178" width="42"  height="62"  fill="#0a1020" />
+        <rect x="1000" y="182" width="28"  height="58"  fill="#0a1020" />
+        <rect x="1168" y="175" width="35"  height="65"  fill="#0a1020" />
 
-        {/* Center-right */}
-        <rect x="271" y="360" width="20" height="120" fill="#0f172a" rx="1" />
-        <rect x="295" y="290" width="40" height="190" fill="#1e293b" rx="1" />
-        <rect x="339" y="325" width="26" height="155" fill="#0f172a" rx="1" />
-        <rect x="369" y="305" width="34" height="175" fill="#1e293b" rx="1" />
-        <rect x="407" y="358" width="22" height="122" fill="#0f172a" rx="1" />
-        <rect x="433" y="335" width="27" height="145" fill="#1e293b" rx="1" />
+        {/* Windows — orange + violet lit */}
+        {/* x=355 tall building */}
+        <rect x="363" y="126" width="12" height="13" fill="#fb923c" fillOpacity="0.80" rx="0.5" />
+        <rect x="379" y="126" width="12" height="13" fill="#a78bfa" fillOpacity="0.65" rx="0.5" />
+        <rect x="395" y="126" width="12" height="13" fill="#334155" fillOpacity="0.4"  rx="0.5" />
+        <rect x="411" y="126" width="12" height="13" fill="#fb923c" fillOpacity="0.55" rx="0.5" />
+        <rect x="363" y="145" width="12" height="13" fill="#334155" fillOpacity="0.4"  rx="0.5" />
+        <rect x="379" y="145" width="12" height="13" fill="#fb923c" fillOpacity="0.65" rx="0.5" />
+        <rect x="395" y="145" width="12" height="13" fill="#a78bfa" fillOpacity="0.55" rx="0.5" />
 
-        {/* Ground */}
-        <rect x="0" y="458" width="460" height="22" fill="#0f172a" />
+        {/* x=508 tallest center-left building */}
+        <rect x="516" y="114" width="14" height="15" fill="#fb923c" fillOpacity="0.92" rx="0.5" />
+        <rect x="534" y="114" width="14" height="15" fill="#fb923c" fillOpacity="0.72" rx="0.5" />
+        <rect x="552" y="114" width="14" height="15" fill="#a78bfa" fillOpacity="0.88" rx="0.5" />
+        <rect x="570" y="114" width="14" height="15" fill="#334155" fillOpacity="0.4"  rx="0.5" />
+        <rect x="588" y="114" width="14" height="15" fill="#fb923c" fillOpacity="0.60" rx="0.5" />
+        <rect x="516" y="135" width="14" height="15" fill="#a78bfa" fillOpacity="0.62" rx="0.5" />
+        <rect x="534" y="135" width="14" height="15" fill="#334155" fillOpacity="0.4"  rx="0.5" />
+        <rect x="552" y="135" width="14" height="15" fill="#fb923c" fillOpacity="0.72" rx="0.5" />
+        <rect x="570" y="135" width="14" height="15" fill="#a78bfa" fillOpacity="0.62" rx="0.5" />
 
-        {/* ── Windows ─────────────────────────────────────────────────────── */}
-        {/* Left building */}
-        <rect x="4" y="362" width="7" height="8" fill="#fb923c" fillOpacity="0.75" rx="0.5" />
-        <rect x="15" y="362" width="7" height="8" fill="#334155" fillOpacity="0.5" rx="0.5" />
-        <rect x="4" y="376" width="7" height="8" fill="#334155" fillOpacity="0.4" rx="0.5" />
-        <rect x="15" y="376" width="7" height="8" fill="#fb923c" fillOpacity="0.5" rx="0.5" />
+        {/* x=690 building */}
+        <rect x="698" y="120" width="13" height="14" fill="#fb923c" fillOpacity="0.80" rx="0.5" />
+        <rect x="715" y="120" width="13" height="14" fill="#334155" fillOpacity="0.4"  rx="0.5" />
+        <rect x="732" y="120" width="13" height="14" fill="#a78bfa" fillOpacity="0.72" rx="0.5" />
+        <rect x="749" y="120" width="13" height="14" fill="#fb923c" fillOpacity="0.55" rx="0.5" />
+        <rect x="698" y="139" width="13" height="14" fill="#334155" fillOpacity="0.4"  rx="0.5" />
+        <rect x="715" y="139" width="13" height="14" fill="#fb923c" fillOpacity="0.65" rx="0.5" />
 
-        {/* x=60 building */}
-        <rect x="64" y="318" width="9" height="10" fill="#fb923c" fillOpacity="0.80" rx="0.5" />
-        <rect x="77" y="318" width="9" height="10" fill="#334155" fillOpacity="0.4" rx="0.5" />
-        <rect x="88" y="318" width="9" height="10" fill="#a78bfa" fillOpacity="0.65" rx="0.5" />
-        <rect x="64" y="334" width="9" height="10" fill="#334155" fillOpacity="0.4" rx="0.5" />
-        <rect x="77" y="334" width="9" height="10" fill="#fb923c" fillOpacity="0.60" rx="0.5" />
-        <rect x="88" y="334" width="9" height="10" fill="#fb923c" fillOpacity="0.45" rx="0.5" />
+        {/* x=853 building */}
+        <rect x="861" y="128" width="12" height="13" fill="#fb923c" fillOpacity="0.72" rx="0.5" />
+        <rect x="877" y="128" width="12" height="13" fill="#a78bfa" fillOpacity="0.68" rx="0.5" />
+        <rect x="893" y="128" width="12" height="13" fill="#334155" fillOpacity="0.40" rx="0.5" />
+        <rect x="909" y="128" width="12" height="13" fill="#fb923c" fillOpacity="0.50" rx="0.5" />
 
-        {/* x=131 tall building */}
-        <rect x="135" y="286" width="10" height="11" fill="#fb923c" fillOpacity="0.90" rx="0.5" />
-        <rect x="149" y="286" width="10" height="11" fill="#a78bfa" fillOpacity="0.70" rx="0.5" />
-        <rect x="163" y="286" width="10" height="11" fill="#334155" fillOpacity="0.40" rx="0.5" />
-        <rect x="135" y="303" width="10" height="11" fill="#334155" fillOpacity="0.40" rx="0.5" />
-        <rect x="149" y="303" width="10" height="11" fill="#fb923c" fillOpacity="0.65" rx="0.5" />
-        <rect x="163" y="303" width="10" height="11" fill="#a78bfa" fillOpacity="0.55" rx="0.5" />
-        <rect x="135" y="320" width="10" height="11" fill="#a78bfa" fillOpacity="0.60" rx="0.5" />
-        <rect x="149" y="320" width="10" height="11" fill="#334155" fillOpacity="0.40" rx="0.5" />
+        {/* x=1002 building */}
+        <rect x="1010" y="134" width="12" height="13" fill="#fb923c" fillOpacity="0.68" rx="0.5" />
+        <rect x="1026" y="134" width="12" height="13" fill="#334155" fillOpacity="0.40" rx="0.5" />
+        <rect x="1042" y="134" width="12" height="13" fill="#a78bfa" fillOpacity="0.60" rx="0.5" />
 
-        {/* x=211 tallest */}
-        <rect x="215" y="258" width="11" height="12" fill="#fb923c" fillOpacity="0.95" rx="0.5" />
-        <rect x="230" y="258" width="11" height="12" fill="#fb923c" fillOpacity="0.80" rx="0.5" />
-        <rect x="245" y="258" width="11" height="12" fill="#a78bfa" fillOpacity="0.90" rx="0.5" />
-        <rect x="215" y="276" width="11" height="12" fill="#a78bfa" fillOpacity="0.65" rx="0.5" />
-        <rect x="230" y="276" width="11" height="12" fill="#334155" fillOpacity="0.40" rx="0.5" />
-        <rect x="245" y="276" width="11" height="12" fill="#fb923c" fillOpacity="0.75" rx="0.5" />
-        <rect x="215" y="294" width="11" height="12" fill="#fb923c" fillOpacity="0.55" rx="0.5" />
-        <rect x="230" y="294" width="11" height="12" fill="#a78bfa" fillOpacity="0.70" rx="0.5" />
-        <rect x="245" y="294" width="11" height="12" fill="#334155" fillOpacity="0.40" rx="0.5" />
-        <rect x="215" y="312" width="11" height="12" fill="#a78bfa" fillOpacity="0.50" rx="0.5" />
-        <rect x="230" y="312" width="11" height="12" fill="#fb923c" fillOpacity="0.60" rx="0.5" />
+        {/* x=1148 building */}
+        <rect x="1156" y="140" width="11" height="12" fill="#a78bfa" fillOpacity="0.65" rx="0.5" />
+        <rect x="1171" y="140" width="11" height="12" fill="#fb923c" fillOpacity="0.55" rx="0.5" />
+        <rect x="1186" y="140" width="11" height="12" fill="#334155" fillOpacity="0.40" rx="0.5" />
 
-        {/* x=295 building */}
-        <rect x="299" y="298" width="10" height="11" fill="#fb923c" fillOpacity="0.70" rx="0.5" />
-        <rect x="313" y="298" width="10" height="11" fill="#334155" fillOpacity="0.40" rx="0.5" />
-        <rect x="325" y="298" width="10" height="11" fill="#a78bfa" fillOpacity="0.60" rx="0.5" />
-        <rect x="299" y="315" width="10" height="11" fill="#334155" fillOpacity="0.40" rx="0.5" />
-        <rect x="313" y="315" width="10" height="11" fill="#fb923c" fillOpacity="0.50" rx="0.5" />
+        {/* Antenna on tallest (x=508) */}
+        <line x1="553" y1="106" x2="553" y2="78" stroke="#f97316" strokeWidth="1.5" strokeOpacity="0.85" />
+        <circle cx="553" cy="76" r="5" fill="#f97316" fillOpacity="0.92" filter="url(#h_glow)" />
+        <circle cx="553" cy="76" r="11" fill="#f97316" fillOpacity="0.10" />
 
-        {/* x=369 building */}
-        <rect x="373" y="313" width="10" height="11" fill="#fb923c" fillOpacity="0.60" rx="0.5" />
-        <rect x="387" y="313" width="10" height="11" fill="#334155" fillOpacity="0.40" rx="0.5" />
-        <rect x="395" y="313" width="10" height="11" fill="#a78bfa" fillOpacity="0.55" rx="0.5" />
+        {/* Small antennas */}
+        <line x1="400" y1="118" x2="400" y2="102" stroke="#f97316" strokeWidth="1" strokeOpacity="0.5" />
+        <circle cx="400" cy="100" r="3" fill="#f97316" fillOpacity="0.6" />
+        <line x1="730" y1="112" x2="730" y2="98" stroke="#a855f7" strokeWidth="1" strokeOpacity="0.5" />
+        <circle cx="730" cy="96" r="3" fill="#a855f7" fillOpacity="0.6" />
 
-        {/* ── Antenna on tallest ──────────────────────────────────────────── */}
-        <line x1="239" y1="250" x2="239" y2="222" stroke="#f97316" strokeWidth="1.5" strokeOpacity="0.85" />
-        <circle cx="239" cy="220" r="4.5" fill="#f97316" fillOpacity="0.9" filter="url(#antGlow)" />
-        <circle cx="239" cy="220" r="9" fill="#f97316" fillOpacity="0.12" />
+        {/* Tech connection lines */}
+        <line x1="553" y1="76" x2="400" y2="100" stroke="#f97316" strokeOpacity="0.15" strokeWidth="1" strokeDasharray="5 7" />
+        <line x1="553" y1="76" x2="730" y2="98"  stroke="#a855f7" strokeOpacity="0.15" strokeWidth="1" strokeDasharray="5 7" />
 
-        {/* Tech connection lines from antenna */}
-        <line x1="239" y1="220" x2="154" y2="278" stroke="#f97316" strokeOpacity="0.18" strokeWidth="0.8" strokeDasharray="4 5" />
-        <line x1="239" y1="220" x2="315" y2="288" stroke="#a855f7" strokeOpacity="0.18" strokeWidth="0.8" strokeDasharray="4 5" />
-
-        {/* Small antenna on x=131 building */}
-        <line x1="154" y1="278" x2="154" y2="262" stroke="#f97316" strokeWidth="1" strokeOpacity="0.5" />
-        <circle cx="154" cy="260" r="2.5" fill="#f97316" fillOpacity="0.6" />
-
-        {/* ── Growth trend line ────────────────────────────────────────────── */}
+        {/* Growth trend line */}
         <polyline
-          points="20,440 80,395 145,348 210,298 275,245 340,192 400,142 450,98"
+          points="0,228 140,210 280,194 420,177 560,161 700,145 840,128 980,112 1120,96 1260,80 1400,64"
           fill="none"
-          stroke="url(#trendLine)"
-          strokeWidth="2.5"
-          strokeDasharray="6 3"
+          stroke="url(#h_trend)"
+          strokeWidth="2"
+          strokeDasharray="8 4"
         />
         <polygon
-          points="20,440 80,395 145,348 210,298 275,245 340,192 400,142 450,98 450,458 20,458"
-          fill="url(#trendFill)"
+          points="0,228 140,210 280,194 420,177 560,161 700,145 840,128 980,112 1120,96 1260,80 1400,64 1400,230 0,230"
+          fill="url(#h_trend)"
+          fillOpacity="0.04"
         />
 
-        {/* Trend data points */}
-        {([[80, 395], [210, 298], [340, 192], [450, 98]] as [number, number][]).map(([cx, cy]) => (
-          <circle key={`${cx}`} cx={cx} cy={cy} r={cx === 450 ? 5.5 : 3} fill="#f97316" fillOpacity={cx === 450 ? 0.95 : 0.55} filter={cx === 450 ? "url(#dotGlow)" : undefined} />
-        ))}
-        <circle cx="450" cy="98" r="11" fill="#f97316" fillOpacity="0.10" />
+        {/* Trend dots */}
+        <circle cx="280"  cy="194" r="3.5" fill="#f97316" fillOpacity="0.55" />
+        <circle cx="560"  cy="161" r="3.5" fill="#f97316" fillOpacity="0.65" />
+        <circle cx="840"  cy="128" r="4"   fill="#f97316" fillOpacity="0.75" filter="url(#h_glow)" />
+        <circle cx="1120" cy="96"  r="3.5" fill="#a855f7" fillOpacity="0.65" />
 
-        {/* Upward arrow at tip */}
-        <polyline points="444,106 450,96 456,106" fill="none" stroke="#f97316" strokeWidth="2" strokeOpacity="0.9" strokeLinejoin="round" />
+        {/* Horizon line */}
+        <line x1="0" y1="225" x2="1400" y2="225" stroke="#f97316" strokeWidth="0.5" strokeOpacity="0.12" />
+
+        {/* Ground */}
+        <rect x="0" y="225" width="1400" height="15" fill="#020508" />
       </svg>
 
-      {/* Subsidy badges (top) */}
-      <div className="absolute top-4 left-4 right-4 flex gap-2 flex-wrap">
-        {[
-          { code: "SBIR", max: "3,000萬", border: "rgba(249,115,22,0.30)", bg: "rgba(249,115,22,0.10)", text: "#fb923c", dot: "#f97316" },
-          { code: "CITD", max: "500萬",   border: "rgba(245,158,11,0.30)", bg: "rgba(245,158,11,0.10)", text: "#fbbf24", dot: "#f59e0b" },
-          { code: "SIIR", max: "1,000萬", border: "rgba(168,85,247,0.30)", bg: "rgba(168,85,247,0.10)", text: "#c084fc", dot: "#a855f7" },
-        ].map(({ code, max, border, bg, text, dot }) => (
-          <div
-            key={code}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg backdrop-blur-sm"
-            style={{ border: `1px solid ${border}`, background: bg }}
-          >
-            <div className="w-1.5 h-1.5 rounded-full" style={{ background: dot }} />
-            <span className="text-[11px] font-mono font-bold" style={{ color: text }}>{code}</span>
-            <span className="text-[10px] font-mono" style={{ color: text, opacity: 0.7 }}>最高 {max}</span>
-          </div>
-        ))}
-      </div>
-
-      {/* Mini control panel (right side) */}
+      {/* Scanlines */}
       <div
-        className="absolute top-14 right-4 w-[140px] rounded-xl overflow-hidden"
-        style={{ border: "1px solid rgba(148,163,184,0.10)", background: "rgba(15,23,42,0.88)", backdropFilter: "blur(10px)" }}
-      >
-        <div
-          className="flex items-center gap-1.5 px-3 py-2"
-          style={{ borderBottom: "1px solid rgba(148,163,184,0.08)" }}
-        >
-          <span
-            className="w-1.5 h-1.5 rounded-full bg-green-400"
-            style={{ boxShadow: "0 0 5px #4ade80" }}
-          />
-          <span className="text-[9px] font-mono tracking-[0.15em] uppercase" style={{ color: "rgba(148,163,184,0.4)" }}>
-            STATUS
-          </span>
-        </div>
-        <div className="p-3 space-y-2.5">
-          {[
-            { label: "評估中", val: "0", color: "#fb923c" },
-            { label: "媒合中", val: "0", color: "#c084fc" },
-            { label: "申請中", val: "0", color: "#4ade80" },
-          ].map(({ label, val, color }) => (
-            <div key={label} className="space-y-1">
-              <div className="flex items-center justify-between">
-                <span className="text-[9px] font-mono" style={{ color: "rgba(148,163,184,0.4)" }}>{label}</span>
-                <span
-                  className="text-[12px] font-mono font-bold"
-                  style={{ color, textShadow: `0 0 8px ${color}80` }}
-                >
-                  {val}
-                </span>
-              </div>
-              <div className="h-0.5 rounded-full" style={{ background: "rgba(148,163,184,0.08)" }}>
-                <div className="h-full rounded-full" style={{ width: "0%", background: color }} />
-              </div>
-            </div>
-          ))}
-        </div>
-        <div className="px-3 pb-3">
-          <div
-            className="text-[8px] font-mono uppercase tracking-[0.15em] mb-1.5"
-            style={{ color: "rgba(148,163,184,0.3)" }}
-          >
-            UPGRADE IDX
-          </div>
-          <div className="flex items-end gap-0.5 h-8">
-            {[12, 24, 18, 36, 30, 48, 42, 60, 55, 72].map((h, i) => (
-              <div
-                key={i}
-                className="flex-1 rounded-sm"
-                style={{
-                  height: `${h}%`,
-                  background: i === 9 ? "#f97316" : `rgba(249,115,22,${0.12 + (i / 9) * 0.22})`,
-                  boxShadow: i === 9 ? "0 0 6px #f9731660" : undefined,
-                }}
-              />
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* Bottom: live status */}
-      <div
-        className="absolute bottom-4 left-4 flex items-center gap-2 px-3 py-1.5 rounded-lg backdrop-blur-sm"
-        style={{ border: "1px solid rgba(74,222,128,0.22)", background: "rgba(74,222,128,0.07)" }}
-      >
-        <span className="relative flex h-2 w-2">
-          <span className="motion-safe:animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-60" />
-          <span className="relative inline-flex rounded-full h-2 w-2 bg-green-400" />
-        </span>
-        <span className="text-[11px] font-mono font-medium text-green-300">免費評估開放中</span>
-      </div>
+        className="absolute inset-0 pointer-events-none"
+        style={{
+          backgroundImage:
+            "repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,0,0,0.06) 3px,rgba(0,0,0,0.06) 4px)",
+        }}
+      />
     </div>
   );
 }
@@ -508,85 +466,241 @@ export default function EnterpriseUpgradeCenter() {
 
       <Navbar />
 
-      {/* ── Hero ──────────────────────────────────────────────────────────── */}
-      <section className="relative overflow-hidden border-b border-border">
+      {/* ── Hero (滿版科技城市背景) ──────────────────────────────────────── */}
+      <section className="relative overflow-hidden" style={{ minHeight: "640px" }}>
+        <HeroBackground />
+
+        {/* Center content */}
         <div
-          className="pointer-events-none absolute inset-0 -z-10"
-          aria-hidden="true"
-          style={{
-            background:
-              "radial-gradient(ellipse at 15% 50%, oklch(0.95 0.04 50) 0%, transparent 55%), radial-gradient(ellipse at 85% 30%, oklch(0.96 0.03 295) 0%, transparent 50%)",
-          }}
-        />
-        <div
-          className="pointer-events-none absolute inset-0 -z-10 opacity-[0.05]"
-          aria-hidden="true"
-          style={{
-            backgroundImage:
-              "linear-gradient(to right,#64748b 1px,transparent 1px),linear-gradient(to bottom,#64748b 1px,transparent 1px)",
-            backgroundSize: "32px 32px",
-          }}
-        />
-
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16 md:py-20 grid lg:grid-cols-2 gap-12 items-center">
-          {/* Left: copy */}
-          <div className="space-y-7">
-            <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-orange-200 bg-orange-50 text-orange-700 text-sm font-medium">
-              <span className="relative flex h-2 w-2">
-                <span className="motion-safe:animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-500 opacity-60" />
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-orange-500" />
-              </span>
-              免費資格評估開放中
-            </div>
-
-            <div className="space-y-3">
-              <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight leading-tight">
-                <span className="bg-gradient-to-r from-orange-500 to-amber-500 bg-clip-text text-transparent">
-                  企業升級中心
-                </span>
-              </h1>
-              <p className="text-xl text-muted-foreground leading-relaxed">
-                協助台灣企業取得政府補助與轉型資源
-              </p>
-            </div>
-
-            <div className="flex flex-wrap gap-2">
-              {(["SBIR", "CITD", "SIIR"] as const).map((tag) => (
-                <span key={tag} className="px-3 py-1.5 rounded-lg border border-border bg-muted/50 text-sm font-semibold text-foreground">
-                  {tag}
-                </span>
-              ))}
-              <span className="px-3 py-1.5 rounded-lg border border-orange-200 bg-orange-50 text-sm font-semibold text-orange-700">
-                最高補助 3,000 萬元
-              </span>
-            </div>
-
-            <ul className="space-y-2.5">
-              {[
-                "全程顧問陪跑，從評估到送件",
-                "媒合最適合您企業的計畫類型",
-                "專人到廠評估，提高申請成功率",
-              ].map((pt) => (
-                <li key={pt} className="flex items-center gap-2.5 text-sm text-muted-foreground">
-                  <CheckCircle className="w-4 h-4 text-orange-500 shrink-0" />
-                  {pt}
-                </li>
-              ))}
-            </ul>
-
-            <Link href="/upgrade-center/apply">
-              <Button
-                size="lg"
-                className="bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white border-0 text-base px-8 shadow-lg shadow-orange-500/25"
-              >
-                免費評估資格
-                <ArrowRight className="w-4 h-4 ml-2" />
-              </Button>
-            </Link>
+          className="relative z-10 flex flex-col items-center justify-center text-center px-4 sm:px-6 lg:px-8"
+          style={{ minHeight: "640px", paddingTop: "6rem", paddingBottom: "7rem" }}
+        >
+          {/* Live pill */}
+          <div
+            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full mb-5"
+            style={{ border: "1px solid rgba(249,115,22,0.32)", background: "rgba(249,115,22,0.10)" }}
+          >
+            <span className="relative flex h-2 w-2">
+              <span className="motion-safe:animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-500 opacity-60" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-orange-500" />
+            </span>
+            <span className="text-sm font-medium text-orange-300">免費資格評估開放中</span>
           </div>
 
-          {/* Right: smart city visual */}
-          <HeroSmartVisual />
+          {/* Tagline */}
+          <p
+            className="text-[11px] font-mono tracking-[0.28em] uppercase mb-5"
+            style={{ color: "rgba(148,163,184,0.45)" }}
+          >
+            數位轉型 · 智慧製造 · 產業升級
+          </p>
+
+          {/* Main title */}
+          <h1 className="text-5xl sm:text-6xl lg:text-7xl font-extrabold tracking-tight mb-5">
+            <span
+              style={{
+                background:
+                  "linear-gradient(135deg,#fb923c 0%,#f97316 28%,#e879f9 65%,#7c3aed 100%)",
+                WebkitBackgroundClip: "text",
+                WebkitTextFillColor: "transparent",
+                backgroundClip: "text",
+                filter: "drop-shadow(0 0 32px rgba(249,115,22,0.35))",
+              }}
+            >
+              企業升級中心
+            </span>
+          </h1>
+
+          {/* Subtitle */}
+          <p
+            className="text-lg sm:text-xl max-w-md mb-7 leading-relaxed"
+            style={{ color: "rgba(203,213,225,0.80)" }}
+          >
+            協助台灣企業取得政府補助與轉型資源
+          </p>
+
+          {/* Key points (inline on desktop) */}
+          <div className="flex flex-wrap justify-center gap-x-6 gap-y-2 mb-8">
+            {["全程顧問陪跑", "免費資格評估", "提高申請成功率"].map((pt) => (
+              <span
+                key={pt}
+                className="flex items-center gap-1.5 text-sm"
+                style={{ color: "rgba(148,163,184,0.75)" }}
+              >
+                <CheckCircle className="w-4 h-4 text-orange-400/80 shrink-0" />
+                {pt}
+              </span>
+            ))}
+          </div>
+
+          {/* CTA */}
+          <Link href="/upgrade-center/apply">
+            <Button
+              size="lg"
+              className="bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white border-0 text-base px-8 shadow-lg shadow-orange-500/30"
+            >
+              免費評估資格
+              <ArrowRight className="w-4 h-4 ml-2" />
+            </Button>
+          </Link>
+
+          {/* Mobile inline badges (hidden on lg) */}
+          <div className="flex flex-wrap justify-center gap-2 mt-8 lg:hidden">
+            {[
+              { code: "SBIR", max: "3,000萬", hex: "#fb923c" },
+              { code: "CITD", max: "500萬",   hex: "#fbbf24" },
+              { code: "SIIR", max: "1,000萬", hex: "#c084fc" },
+            ].map(({ code, max, hex }) => (
+              <div
+                key={code}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full backdrop-blur-sm"
+                style={{ border: `1px solid ${hex}40`, background: `${hex}18`, color: hex }}
+              >
+                <span className="text-xs font-bold font-mono">{code}</span>
+                <span className="text-[10px] font-mono opacity-70">最高 {max}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* ── Desktop floating badge cards (absolute to section) ── */}
+
+        {/* SBIR — upper right */}
+        <div
+          className="hidden lg:flex absolute z-20 flex-col items-center gap-1.5 rounded-2xl px-5 py-4 backdrop-blur-md"
+          style={{
+            top: "18%", right: "8%",
+            border: "1px solid rgba(249,115,22,0.38)",
+            background: "rgba(249,115,22,0.12)",
+          }}
+        >
+          <span
+            className="text-[10px] font-mono tracking-[0.18em] uppercase"
+            style={{ color: "rgba(251,146,60,0.65)" }}
+          >
+            SBIR
+          </span>
+          <span
+            className="text-3xl font-extrabold font-mono tabular-nums"
+            style={{ color: "#fb923c", textShadow: "0 0 24px rgba(249,115,22,0.55)" }}
+          >
+            3,000萬
+          </span>
+          <span className="text-[10px] font-mono" style={{ color: "rgba(251,146,60,0.50)" }}>
+            最高補助
+          </span>
+        </div>
+
+        {/* CITD — right middle */}
+        <div
+          className="hidden lg:flex absolute z-20 flex-col items-center gap-1.5 rounded-2xl px-5 py-4 backdrop-blur-md"
+          style={{
+            top: "52%", right: "6%", transform: "translateY(-50%)",
+            border: "1px solid rgba(245,158,11,0.38)",
+            background: "rgba(245,158,11,0.12)",
+          }}
+        >
+          <span
+            className="text-[10px] font-mono tracking-[0.18em] uppercase"
+            style={{ color: "rgba(251,191,36,0.65)" }}
+          >
+            CITD
+          </span>
+          <span
+            className="text-3xl font-extrabold font-mono tabular-nums"
+            style={{ color: "#fbbf24", textShadow: "0 0 24px rgba(245,158,11,0.55)" }}
+          >
+            500萬
+          </span>
+          <span className="text-[10px] font-mono" style={{ color: "rgba(251,191,36,0.50)" }}>
+            最高補助
+          </span>
+        </div>
+
+        {/* SIIR — lower left */}
+        <div
+          className="hidden lg:flex absolute z-20 flex-col items-center gap-1.5 rounded-2xl px-5 py-4 backdrop-blur-md"
+          style={{
+            bottom: "18%", left: "7%",
+            border: "1px solid rgba(168,85,247,0.38)",
+            background: "rgba(168,85,247,0.12)",
+          }}
+        >
+          <span
+            className="text-[10px] font-mono tracking-[0.18em] uppercase"
+            style={{ color: "rgba(192,132,252,0.65)" }}
+          >
+            SIIR
+          </span>
+          <span
+            className="text-3xl font-extrabold font-mono tabular-nums"
+            style={{ color: "#c084fc", textShadow: "0 0 24px rgba(168,85,247,0.55)" }}
+          >
+            1,000萬
+          </span>
+          <span className="text-[10px] font-mono" style={{ color: "rgba(192,132,252,0.50)" }}>
+            最高補助
+          </span>
+        </div>
+
+        {/* "數位轉型 智慧製造" label — upper left */}
+        <div
+          className="hidden lg:flex absolute z-20 items-center gap-2.5 rounded-xl px-4 py-2.5 backdrop-blur-md"
+          style={{
+            top: "20%", left: "8%",
+            border: "1px solid rgba(249,115,22,0.20)",
+            background: "rgba(6,9,26,0.72)",
+          }}
+        >
+          <div
+            className="w-2 h-2 rounded-full bg-orange-500"
+            style={{ boxShadow: "0 0 8px #f97316" }}
+          />
+          <div>
+            <p
+              className="text-[9px] font-mono tracking-[0.2em] uppercase"
+              style={{ color: "rgba(148,163,184,0.45)" }}
+            >
+              智慧製造
+            </p>
+            <p className="text-xs font-bold font-mono text-orange-300">產業升級</p>
+          </div>
+        </div>
+
+        {/* "最高補助 3,000萬元" — lower right */}
+        <div
+          className="hidden lg:flex absolute z-20 items-center gap-2 rounded-xl px-4 py-2.5 backdrop-blur-md"
+          style={{
+            bottom: "20%", right: "10%",
+            border: "1px solid rgba(168,85,247,0.20)",
+            background: "rgba(6,9,26,0.72)",
+          }}
+        >
+          <div
+            className="w-2 h-2 rounded-full"
+            style={{ background: "#a855f7", boxShadow: "0 0 8px #a855f7" }}
+          />
+          <div>
+            <p
+              className="text-[9px] font-mono tracking-[0.2em] uppercase"
+              style={{ color: "rgba(148,163,184,0.45)" }}
+            >
+              最高補助
+            </p>
+            <p className="text-xs font-bold font-mono text-violet-300">3,000 萬元</p>
+          </div>
+        </div>
+
+        {/* "免費評估開放中" live dot — bottom center */}
+        <div
+          className="absolute z-20 bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-2 px-3 py-1.5 rounded-lg backdrop-blur-sm"
+          style={{ border: "1px solid rgba(74,222,128,0.22)", background: "rgba(74,222,128,0.07)" }}
+        >
+          <span className="relative flex h-2 w-2">
+            <span className="motion-safe:animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-60" />
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-green-400" />
+          </span>
+          <span className="text-[11px] font-mono font-medium text-green-300">SYSTEM ACTIVE</span>
         </div>
       </section>
 
@@ -599,19 +713,16 @@ export default function EnterpriseUpgradeCenter() {
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
-            {/* Panel 1: 申請廠商 */}
             <LedPanel
               headerLabel="申請廠商"
               icon={Building2}
               ledColor={{ hex: "#4ade80", shadow: "0 0 10px #4ade8090, 0 0 22px #4ade8040" }}
               rows={[
                 { label: "有送出申請", value: "0", unit: "家" },
-                { label: "有過件", value: "0", unit: "家" },
-                { label: "過件率", value: "0", unit: "%" },
+                { label: "有過件",     value: "0", unit: "家" },
+                { label: "過件率",     value: "0", unit: "%"  },
               ]}
             />
-
-            {/* Panel 2: 總申請金額 */}
             <LedPanel
               headerLabel="總申請金額"
               icon={TrendingUp}
@@ -620,8 +731,6 @@ export default function EnterpriseUpgradeCenter() {
                 { label: "總金額", value: "0", unit: "萬元" },
               ]}
             />
-
-            {/* Panel 3: 已結案數量 */}
             <LedPanel
               headerLabel="已結案數量"
               icon={CheckCircle}
@@ -712,7 +821,7 @@ export default function EnterpriseUpgradeCenter() {
             ))}
           </div>
 
-          {/* Mobile: single column */}
+          {/* Mobile: single/two column */}
           <div className="lg:hidden grid grid-cols-1 sm:grid-cols-2 gap-4">
             {PROCESS_STEPS.map((step) => (
               <div key={step.num} className="flex items-start gap-4">
