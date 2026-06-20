@@ -264,26 +264,26 @@ export default function EnterpriseUpgradeCenter() {
 
       <Navbar />
 
-      {/* ── Hero ────────────────────────────────────────────────────────────── */}
+      {/* ── Hero Image ─────────────────────────────────────────────────────── */}
+      <section style={{ backgroundColor: "#06090f" }}>
+        <img
+          src="/images/upgrade-center/hero-bg.png"
+          alt="企業升級中心"
+          style={{ width: "100%", height: "auto", display: "block" }}
+        />
+      </section>
+
+      {/* ── Hero CTA ──────────────────────────────────────────────────────── */}
       <section
-        className="relative overflow-hidden min-h-[400px] md:min-h-[640px] flex items-center"
+        className="py-12 md:py-16"
         style={{
-          backgroundImage: 'url("/images/upgrade-center/hero-bg.png")',
-          backgroundSize: "cover",
-          backgroundPosition: "center",
-          backgroundColor: "#06090f",
+          background: "linear-gradient(180deg,#06090f 0%,#040c1a 100%)",
           borderBottom: "1px solid rgba(148,163,184,0.08)",
         }}
       >
-        {/* Dark overlay — heavy left, fades to transparent right */}
-        <div
-          className="absolute inset-0 pointer-events-none"
-          style={{ background: "linear-gradient(105deg, rgba(4,7,18,0.94) 0%, rgba(4,7,18,0.88) 28%, rgba(4,7,18,0.55) 58%, rgba(4,7,18,0.12) 100%)" }}
-        />
-
-        <div className="relative z-10 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16 md:py-24">
+        <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <h1 className="sr-only">企業升級中心</h1>
           <div className="max-w-lg space-y-6 text-white">
-            <h1 className="sr-only">企業升級中心</h1>
 
             {/* Live pill */}
             <div
