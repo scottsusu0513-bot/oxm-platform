@@ -47,12 +47,13 @@ type FormValues = {
 
 // ── 選項常數 ──────────────────────────────────────────────────────────────────
 
+// Values match shared/constants.ts CAPITAL_OPTIONS so auto-fill from factory data works
 const CAPITAL_LEVEL_OPTIONS = [
-  { value: "under_500w", label: "500 萬以下" },
-  { value: "500w_1000w", label: "500 萬～1,000 萬" },
-  { value: "1000w_5000w", label: "1,000 萬～5,000 萬" },
-  { value: "5000w_1y", label: "5,000 萬～1 億" },
-  { value: "over_1y", label: "1 億以上" },
+  { value: "100萬以下",    label: "100 萬以下" },
+  { value: "100~500萬",   label: "100～500 萬" },
+  { value: "500~2000萬",  label: "500～2,000 萬" },
+  { value: "2000~5000萬", label: "2,000～5,000 萬" },
+  { value: "5000萬以上",  label: "5,000 萬以上" },
 ];
 
 const EMPLOYEE_COUNT_OPTIONS = [
@@ -81,10 +82,10 @@ const EXPORT_MODE_OPTIONS = [
 
 // ── 帶入提示 ──────────────────────────────────────────────────────────────────
 
-function AutoFillHint() {
+function AutoFillHint({ factoryName, editable = true }: { factoryName: string; editable?: boolean }) {
   return (
     <p className="text-[11px] text-amber-600/80 dark:text-amber-400/70">
-      已由 OXM 工廠資料帶入，可修改
+      已從 {factoryName} 工廠資料帶入{editable ? "，可修改" : ""}
     </p>
   );
 }
@@ -499,13 +500,15 @@ export default function EnterpriseUpgradeApply() {
               </Label>
               <Input
                 id="companyName"
-                placeholder="請輸入公司或工廠名稱"
+                readOnly
+                aria-disabled="true"
+                className="bg-muted/60 cursor-not-allowed text-foreground/80 focus-visible:ring-0 focus-visible:ring-offset-0"
                 {...register("companyName", { required: "請填寫公司名稱" })}
               />
               {errors.companyName && (
                 <p className="text-xs text-destructive">{errors.companyName.message}</p>
               )}
-              {autoFilled.companyName && <AutoFillHint />}
+              {autoFilled.companyName && <AutoFillHint factoryName={approvedFactory.name} editable={false} />}
             </div>
 
             {/* 聯絡人 */}
@@ -521,7 +524,7 @@ export default function EnterpriseUpgradeApply() {
               {errors.contactName && (
                 <p className="text-xs text-destructive">{errors.contactName.message}</p>
               )}
-              {autoFilled.contactName && <AutoFillHint />}
+              {autoFilled.contactName && <AutoFillHint factoryName={approvedFactory.name} />}
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -542,7 +545,7 @@ export default function EnterpriseUpgradeApply() {
                 {errors.phone && (
                   <p className="text-xs text-destructive">{errors.phone.message}</p>
                 )}
-                {autoFilled.phone && <AutoFillHint />}
+                {autoFilled.phone && <AutoFillHint factoryName={approvedFactory.name} />}
               </div>
 
               {/* Email */}
@@ -562,7 +565,7 @@ export default function EnterpriseUpgradeApply() {
                 {errors.email && (
                   <p className="text-xs text-destructive">{errors.email.message}</p>
                 )}
-                {autoFilled.email && <AutoFillHint />}
+                {autoFilled.email && <AutoFillHint factoryName={approvedFactory.name} />}
               </div>
             </div>
 
@@ -573,13 +576,15 @@ export default function EnterpriseUpgradeApply() {
               </Label>
               <Input
                 id="city"
-                placeholder="例：新竹市、台中市"
+                readOnly
+                aria-disabled="true"
+                className="bg-muted/60 cursor-not-allowed text-foreground/80 focus-visible:ring-0 focus-visible:ring-offset-0"
                 {...register("city", { required: "請填寫公司所在地" })}
               />
               {errors.city && (
                 <p className="text-xs text-destructive">{errors.city.message}</p>
               )}
-              {autoFilled.city && <AutoFillHint />}
+              {autoFilled.city && <AutoFillHint factoryName={approvedFactory.name} editable={false} />}
             </div>
           </fieldset>
 
@@ -611,7 +616,7 @@ export default function EnterpriseUpgradeApply() {
               {errors.capitalLevel && (
                 <p className="text-xs text-destructive">{errors.capitalLevel.message}</p>
               )}
-              {autoFilled.capitalLevel && <AutoFillHint />}
+              {autoFilled.capitalLevel && <AutoFillHint factoryName={approvedFactory.name} />}
             </div>
 
             {/* 員工人數 */}
