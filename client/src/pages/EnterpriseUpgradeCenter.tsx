@@ -285,8 +285,8 @@ export default function EnterpriseUpgradeCenter() {
               className="absolute inset-x-0 bottom-0 h-20 pointer-events-none"
               style={{ background: "linear-gradient(to top, rgba(4,7,18,0.85) 0%, transparent 100%)" }}
             />
-            {/* Overlay CTA */}
-            <div className="absolute bottom-4 left-4 md:bottom-6 md:left-8 flex items-center gap-3">
+            {/* Overlay CTA — centered, below the UPGRADE card */}
+            <div className="absolute bottom-4 md:bottom-7 left-1/2 -translate-x-1/2 flex items-center gap-3 whitespace-nowrap">
               <Button
                 size="default"
                 onClick={handleApplyClick}
