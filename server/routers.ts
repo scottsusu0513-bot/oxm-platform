@@ -4458,6 +4458,55 @@ export const appRouter = router({
       return { success: true };
     }),
 
+    // 顧問推進案件狀態（嚴格順序：viewed→contacted→consulting→submitted→completed）
+    updateCaseStatus: protectedProcedure.input(z.object({
+      applicationId: z.number().int().positive(),
+      nextStatus: z.enum(["contacted", "consulting", "submitted", "completed"]),
+    })).mutation(async ({ ctx, input }) => {
+      const app = await db.getUpgradeApplicationById(input.applicationId);
+      if (!app) throw new TRPCError({ code: "NOT_FOUND", message: "找不到案件" });
+      if (!ctx.user.isAdmin) {
+        const consultants = await db.getConsultantsByUserId(ctx.user.id);
+        const active = consultants.filter(c => c.isActive);
+        if (active.length === 0) throw new TRPCError({ code: "FORBIDDEN", message: "您不是顧問" });
+        if (!active.some(c => c.id === app.assignedConsultantId))
+          throw new TRPCError({ code: "FORBIDDEN", message: "此案件不屬於您的地區" });
+      }
+      // 嚴格 transition 驗證，防止跳狀態
+      const ALLOWED: Record<string, string> = {
+        viewed:     "contacted",
+        contacted:  "consulting",
+        consulting: "submitted",
+        submitted:  "completed",
+      };
+      if (ALLOWED[app.status] !== input.nextStatus) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `目前狀態「${app.status}」不能直接推進至「${input.nextStatus}」`,
+        });
+      }
+      await db.updateUpgradeApplicationStatus(input.applicationId, input.nextStatus);
+      return { success: true };
+    }),
+
+    // 顧問更新案件備註
+    updateCaseNotes: protectedProcedure.input(z.object({
+      applicationId: z.number().int().positive(),
+      notes: z.string().max(5000),
+    })).mutation(async ({ ctx, input }) => {
+      const app = await db.getUpgradeApplicationById(input.applicationId);
+      if (!app) throw new TRPCError({ code: "NOT_FOUND", message: "找不到案件" });
+      if (!ctx.user.isAdmin) {
+        const consultants = await db.getConsultantsByUserId(ctx.user.id);
+        const active = consultants.filter(c => c.isActive);
+        if (active.length === 0) throw new TRPCError({ code: "FORBIDDEN", message: "您不是顧問" });
+        if (!active.some(c => c.id === app.assignedConsultantId))
+          throw new TRPCError({ code: "FORBIDDEN", message: "此案件不屬於您的地區" });
+      }
+      await db.updateUpgradeCaseNotes(input.applicationId, input.notes || null);
+      return { success: true };
+    }),
+
     // 管理員：查看所有顧問設定
     adminListConsultants: adminProcedure.query(async () => {
       return db.listAllConsultants();

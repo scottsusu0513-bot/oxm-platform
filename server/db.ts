@@ -5749,6 +5749,12 @@ export async function updateUpgradeApplicationStatus(
   await db_.update(upgradeApplications).set({ status }).where(eq(upgradeApplications.id, id));
 }
 
+export async function updateUpgradeCaseNotes(id: number, notes: string | null): Promise<void> {
+  const db_ = await getDb();
+  if (!db_) return;
+  await db_.update(upgradeApplications).set({ notes }).where(eq(upgradeApplications.id, id));
+}
+
 export async function countUpgradeApplications(status?: UpgradeApplication["status"]): Promise<number> {
   const db_ = await getDb();
   if (!db_) return 0;

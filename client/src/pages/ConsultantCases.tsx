@@ -7,10 +7,12 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import {
   ChevronDown, ChevronUp, Building2, Phone, Mail, MapPin,
   CheckCircle2, Loader2, Briefcase, MessageCircle, ShieldAlert,
+  ArrowRight, Save, Clock,
 } from "lucide-react";
 import Navbar from "@/components/Navbar";
 
@@ -55,6 +57,14 @@ const EXPORT_LABELS: Record<string, string> = {
   multiple: "多種模式",
 };
 
+// 狀態推進設定（new→viewed 由 acknowledge 處理）
+const STATUS_NEXT: Partial<Record<string, { label: string; next: string }>> = {
+  viewed:     { label: "標記已聯繫", next: "contacted" },
+  contacted:  { label: "標記輔導中", next: "consulting" },
+  consulting: { label: "標記已送件", next: "submitted" },
+  submitted:  { label: "標記已結案", next: "completed" },
+};
+
 // ── 型別 ────────────────────────────────────────────────────────────────────
 
 type Case = {
@@ -79,6 +89,7 @@ type Case = {
   factoryId?: number | null;
   factoryName?: string | null;
   createdAt: Date;
+  updatedAt: Date;
 };
 
 // ── 統計卡 ─────────────────────────────────────────────────────────────────
@@ -102,14 +113,40 @@ function StatCard({ label, count, color }: { label: string; count: number; color
 
 // ── 案件卡片 ────────────────────────────────────────────────────────────────
 
-function CaseCard({ item, onAcknowledge, acknowledging }: {
-  item: Case;
-  onAcknowledge: (id: number) => void;
-  acknowledging: boolean;
-}) {
+function CaseCard({ item }: { item: Case }) {
+  const utils = trpc.useUtils();
   const [expanded, setExpanded] = useState(false);
+  const [localNotes, setLocalNotes] = useState(item.notes ?? "");
+
   const info = statusInfo(item.status);
   const isNew = item.status === "new";
+  const nextStep = STATUS_NEXT[item.status];
+  const notesChanged = localNotes !== (item.notes ?? "");
+
+  const invalidate = () => utils.upgradeConsultant.myCases.invalidate();
+
+  const acknowledgeMutation = trpc.upgradeConsultant.acknowledge.useMutation({
+    onSuccess: () => { invalidate(); toast.success("已成功查收案件"); },
+    onError: (err) => toast.error(err.message || "查收失敗，請重試"),
+  });
+
+  const statusMutation = trpc.upgradeConsultant.updateCaseStatus.useMutation({
+    onSuccess: () => { invalidate(); toast.success("狀態已更新"); },
+    onError: (err) => toast.error(err.message || "狀態更新失敗"),
+  });
+
+  const notesMutation = trpc.upgradeConsultant.updateCaseNotes.useMutation({
+    onSuccess: () => {
+      invalidate();
+      toast.success("備註已儲存");
+    },
+    onError: (err) => toast.error(err.message || "儲存失敗"),
+  });
+
+  const updatedDate = new Date(item.updatedAt).toLocaleDateString("zh-TW");
+  const createdDate = new Date(item.createdAt).toLocaleDateString("zh-TW");
+  const showUpdated = updatedDate !== createdDate ||
+    Math.abs(new Date(item.updatedAt).getTime() - new Date(item.createdAt).getTime()) > 5000;
 
   return (
     <Card className={`overflow-hidden ${isNew ? "border-blue-200 bg-blue-50/20 dark:border-blue-900/40 dark:bg-blue-950/10" : ""}`}>
@@ -139,9 +176,14 @@ function CaseCard({ item, onAcknowledge, acknowledging }: {
               <span className="flex items-center gap-1"><Mail className="w-3 h-3" />{item.email}</span>
             </div>
           </div>
-          <span className="text-xs text-muted-foreground whitespace-nowrap shrink-0">
-            {new Date(item.createdAt).toLocaleDateString("zh-TW")}
-          </span>
+          <div className="text-right shrink-0 space-y-0.5">
+            <div className="text-xs text-muted-foreground whitespace-nowrap">{createdDate}</div>
+            {showUpdated && (
+              <div className="text-xs text-muted-foreground/60 whitespace-nowrap flex items-center gap-1 justify-end">
+                <Clock className="w-3 h-3" />{updatedDate}
+              </div>
+            )}
+          </div>
         </div>
 
         {/* 標籤列 */}
@@ -161,7 +203,7 @@ function CaseCard({ item, onAcknowledge, acknowledging }: {
         </button>
 
         {expanded && (
-          <div className="border-t border-border/50 pt-3 space-y-3">
+          <div className="border-t border-border/50 pt-3">
             <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
               <div><span className="text-muted-foreground">聯絡人：</span>{item.contactName}</div>
               <div><span className="text-muted-foreground">所在地：</span>{item.location}</div>
@@ -171,14 +213,34 @@ function CaseCard({ item, onAcknowledge, acknowledging }: {
               <div><span className="text-muted-foreground">政府獎項：</span>{item.hasGovernmentAward ? (item.governmentAwardName || "有（未填名稱）") : "無"}</div>
               <div><span className="text-muted-foreground">專利：</span>{item.hasPatent ? `有（${item.patentCount ?? "未填"}件）` : "無"}</div>
             </div>
-            {item.notes && (
-              <div className="rounded-lg bg-muted/50 px-3 py-2 text-xs">
-                <p className="font-medium text-foreground mb-1">補充說明</p>
-                <p className="text-muted-foreground whitespace-pre-wrap">{item.notes}</p>
-              </div>
-            )}
           </div>
         )}
+
+        {/* 備註區 */}
+        <div className="space-y-1.5">
+          <p className="text-xs font-medium text-muted-foreground">顧問備註</p>
+          <Textarea
+            value={localNotes}
+            onChange={e => setLocalNotes(e.target.value)}
+            placeholder="記錄聯繫狀況、推薦補助方案等…"
+            rows={2}
+            className="text-xs resize-none"
+          />
+          {notesChanged && (
+            <Button
+              size="sm"
+              variant="secondary"
+              className="h-7 text-xs"
+              disabled={notesMutation.isPending}
+              onClick={() => notesMutation.mutate({ applicationId: item.id, notes: localNotes })}
+            >
+              {notesMutation.isPending
+                ? <Loader2 className="w-3 h-3 animate-spin mr-1" />
+                : <Save className="w-3 h-3 mr-1" />}
+              儲存備註
+            </Button>
+          )}
+        </div>
 
         {/* 動作區 */}
         <div className="border-t border-border/50 pt-3 flex items-center gap-2 flex-wrap">
@@ -186,17 +248,36 @@ function CaseCard({ item, onAcknowledge, acknowledging }: {
             <Button
               size="sm"
               className="h-8 text-xs"
-              disabled={acknowledging}
-              onClick={() => onAcknowledge(item.id)}
+              disabled={acknowledgeMutation.isPending}
+              onClick={() => acknowledgeMutation.mutate({ applicationId: item.id })}
             >
-              {acknowledging ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <CheckCircle2 className="w-3.5 h-3.5 mr-1" />}
+              {acknowledgeMutation.isPending
+                ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" />
+                : <CheckCircle2 className="w-3.5 h-3.5 mr-1" />}
               查收案件
             </Button>
           )}
-          {item.status === "viewed" && (
-            <span className="text-xs text-muted-foreground flex items-center gap-1">
-              <CheckCircle2 className="w-3.5 h-3.5 text-cyan-500" />
-              已查收，請聯繫廠商
+          {nextStep && !isNew && (
+            <Button
+              size="sm"
+              variant="secondary"
+              className="h-8 text-xs"
+              disabled={statusMutation.isPending}
+              onClick={() => statusMutation.mutate({
+                applicationId: item.id,
+                nextStatus: nextStep.next as "contacted" | "consulting" | "submitted" | "completed",
+              })}
+            >
+              {statusMutation.isPending
+                ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" />
+                : <ArrowRight className="w-3.5 h-3.5 mr-1" />}
+              {nextStep.label}
+            </Button>
+          )}
+          {item.status === "completed" && (
+            <span className="text-xs text-emerald-600 flex items-center gap-1">
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              已結案
             </span>
           )}
           {/* 私訊廠商 — 預留入口，本階段 disabled */}
@@ -219,19 +300,10 @@ function CaseCard({ item, onAcknowledge, acknowledging }: {
 // ── 案件列表（per-tab） ─────────────────────────────────────────────────────
 
 function CaseList({ statusFilter }: { statusFilter?: StatusValue }) {
-  const utils = trpc.useUtils();
   const query = trpc.upgradeConsultant.myCases.useQuery(
     { status: statusFilter, limit: 50, offset: 0 },
     { refetchInterval: 30000 }
   );
-
-  const acknowledgeMutation = trpc.upgradeConsultant.acknowledge.useMutation({
-    onSuccess: () => {
-      utils.upgradeConsultant.myCases.invalidate();
-      toast.success("已成功查收案件");
-    },
-    onError: (err) => toast.error(err.message || "查收失敗，請重試"),
-  });
 
   if (query.isLoading) return <AppLoading />;
   if (query.error) return (
@@ -252,12 +324,7 @@ function CaseList({ statusFilter }: { statusFilter?: StatusValue }) {
     <div className="space-y-4">
       <p className="text-xs text-muted-foreground">共 {query.data.total} 筆</p>
       {query.data.items.map(item => (
-        <CaseCard
-          key={item.id}
-          item={item as Case}
-          onAcknowledge={(id) => acknowledgeMutation.mutate({ applicationId: id })}
-          acknowledging={acknowledgeMutation.isPending}
-        />
+        <CaseCard key={item.id} item={item as Case} />
       ))}
     </div>
   );
@@ -275,7 +342,6 @@ export default function ConsultantCases() {
     enabled: !!user,
   });
 
-  // Stats: fetch all cases for counting (admin or active consultant)
   const isActiveConsultant = profilesQuery.data?.some(p => p.isActive) ?? false;
   const canAccess = isAdmin || isActiveConsultant;
 
@@ -286,13 +352,11 @@ export default function ConsultantCases() {
 
   if (loading || profilesQuery.isLoading) return <AppLoading />;
 
-  // Gate: not logged in
   if (!user) {
     navigate("/");
     return null;
   }
 
-  // Gate: not admin, not active consultant
   if (!canAccess) {
     return (
       <div className="min-h-screen bg-background">
@@ -309,22 +373,14 @@ export default function ConsultantCases() {
     );
   }
 
-  // Compute stats from all-cases fetch
   const allItems = statsQuery.data?.items ?? [];
   const stats = {
-    new:       allItems.filter(i => i.status === "new").length,
-    viewed:    allItems.filter(i => i.status === "viewed").length,
+    new:        allItems.filter(i => i.status === "new").length,
+    viewed:     allItems.filter(i => i.status === "viewed").length,
     consulting: allItems.filter(i => i.status === "contacted" || i.status === "consulting").length,
-    submitted: allItems.filter(i => i.status === "submitted").length,
-    completed: allItems.filter(i => i.status === "completed").length,
+    submitted:  allItems.filter(i => i.status === "submitted").length,
+    completed:  allItems.filter(i => i.status === "completed").length,
   };
-
-  const regionLabel = profilesQuery.data
-    ?.filter(c => c.isActive)
-    .map(c => {
-      const regionMap: Record<string, string> = { north: "北部", central: "中部", south: "南部" };
-      return `${regionMap[c.regionKey] ?? c.regionKey}（${c.name}）`;
-    }).join("、");
 
   return (
     <div className="min-h-screen bg-background">
@@ -332,24 +388,9 @@ export default function ConsultantCases() {
       <div className="container py-8 max-w-3xl mx-auto space-y-6">
 
         {/* 頁面標題 */}
-        <div>
-          <div className="flex items-center gap-2">
-            <Briefcase className="w-5 h-5 text-orange-500" />
-            <h1 className="text-xl font-bold">顧問中心</h1>
-            {isAdmin && (
-              <Badge className="bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-400 border-0 text-xs">
-                管理員
-              </Badge>
-            )}
-          </div>
-          <p className="text-xs text-muted-foreground mt-1">
-            企業升級案件收件與顧問作業後台
-          </p>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            {isAdmin
-              ? "管理員檢視模式：可查看所有顧問案件，用於系統測試與案件分派確認。"
-              : `查看分派給您的企業升級申請案件，並於此完成查收、追蹤與後續作業。${regionLabel ? `｜負責地區：${regionLabel}` : ""}`}
-          </p>
+        <div className="flex items-center gap-2">
+          <Briefcase className="w-5 h-5 text-orange-500" />
+          <h1 className="text-xl font-bold">顧問中心</h1>
         </div>
 
         {/* 統計卡 */}
