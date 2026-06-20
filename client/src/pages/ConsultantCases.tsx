@@ -385,8 +385,9 @@ export default function ConsultantCases() {
 
   const isAdmin = user?.role === 'admin';
 
+  // Admin 不需要查 myProfiles：直接視同有顧問權限（disabled 避免多餘 loading）
   const profilesQuery = trpc.upgradeConsultant.myProfiles.useQuery(undefined, {
-    enabled: !!user,
+    enabled: !!user && !isAdmin,
   });
 
   const isActiveConsultant = profilesQuery.data?.some(p => p.isActive) ?? false;
@@ -397,7 +398,8 @@ export default function ConsultantCases() {
     { enabled: !!user && canAccess, refetchInterval: 60000 }
   );
 
-  if (loading || profilesQuery.isLoading) return <AppLoading />;
+  // Admin 不等 profilesQuery（disabled），只等 auth loading
+  if (loading || (!isAdmin && profilesQuery.isLoading)) return <AppLoading />;
 
   if (!user) {
     navigate("/");

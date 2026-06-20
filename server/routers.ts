@@ -4441,18 +4441,28 @@ export const appRouter = router({
       return { items, total, consultants };
     }),
 
-    // 顧問查收案件
+    // 顧問查收案件（admin bypass：視同顧問）
     acknowledge: protectedProcedure.input(z.object({
       applicationId: z.number(),
     })).mutation(async ({ ctx, input }) => {
-      const consultants = await db.getConsultantsByUserId(ctx.user.id);
-      if (consultants.length === 0) throw new TRPCError({ code: "FORBIDDEN", message: "您不是顧問" });
-      // Find which consultant this application belongs to
       const app = await db.getUpgradeApplicationById(input.applicationId);
       if (!app) throw new TRPCError({ code: "NOT_FOUND", message: "找不到案件" });
+      if (app.status !== "new") throw new TRPCError({ code: "BAD_REQUEST", message: "此案件已查收或狀態不符" });
+
+      if (ctx.user.isAdmin) {
+        // Admin 視同顧問：若案件已分派則用 assignedConsultantId，否則直接改狀態
+        if (app.assignedConsultantId) {
+          await db.acknowledgeUpgradeApplication(app.id, app.assignedConsultantId, ctx.user.id);
+        } else {
+          await db.updateUpgradeApplicationStatus(app.id, "viewed");
+        }
+        return { success: true };
+      }
+
+      const consultants = await db.getConsultantsByUserId(ctx.user.id);
+      if (consultants.length === 0) throw new TRPCError({ code: "FORBIDDEN", message: "您不是顧問" });
       const belongsToMe = consultants.some(c => c.id === app.assignedConsultantId);
       if (!belongsToMe) throw new TRPCError({ code: "FORBIDDEN", message: "此案件不屬於您的地區" });
-      if (app.status !== "new") throw new TRPCError({ code: "BAD_REQUEST", message: "此案件已查收或狀態不符" });
       const result = await db.acknowledgeUpgradeApplication(app.id, app.assignedConsultantId!, ctx.user.id);
       if (!result.ok) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "查收失敗，請重試" });
       return { success: true };
