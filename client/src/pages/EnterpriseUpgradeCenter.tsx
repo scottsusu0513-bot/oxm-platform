@@ -280,13 +280,11 @@ export default function EnterpriseUpgradeCenter() {
                 display: "block",
               }}
             />
-            {/* Bottom gradient for button readability */}
+            {/* Overlay CTA — below the centre "UPGRADE" card, no gradient cover */}
             <div
-              className="absolute inset-x-0 bottom-0 h-20 pointer-events-none"
-              style={{ background: "linear-gradient(to top, rgba(4,7,18,0.85) 0%, transparent 100%)" }}
-            />
-            {/* Overlay CTA — centered, below the UPGRADE card */}
-            <div className="absolute bottom-4 md:bottom-7 left-1/2 -translate-x-1/2 flex items-center gap-3 whitespace-nowrap">
+              className="absolute left-1/2 -translate-x-1/2 hidden sm:flex"
+              style={{ top: "70%" }}
+            >
               <Button
                 size="default"
                 onClick={handleApplyClick}
@@ -296,9 +294,6 @@ export default function EnterpriseUpgradeCenter() {
                 免費評估資格
                 <ArrowRight className="w-4 h-4 ml-2" />
               </Button>
-              <span className="hidden sm:inline text-xs font-mono text-slate-300/70 tracking-wider">
-                SBIR · CITD · SIIR
-              </span>
             </div>
           </div>
         </div>
