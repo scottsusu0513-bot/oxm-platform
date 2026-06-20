@@ -280,10 +280,10 @@ export default function EnterpriseUpgradeCenter() {
                 display: "block",
               }}
             />
-            {/* Overlay CTA — below the centre "UPGRADE" card, no gradient cover */}
+            {/* Overlay CTA — x≈61% y≈82%: below UPGRADE card, above road trail */}
             <div
-              className="absolute left-1/2 -translate-x-1/2 hidden sm:flex"
-              style={{ top: "70%" }}
+              className="absolute hidden sm:flex"
+              style={{ left: "61%", top: "82%", transform: "translate(-50%, -50%)" }}
             >
               <Button
                 size="default"
