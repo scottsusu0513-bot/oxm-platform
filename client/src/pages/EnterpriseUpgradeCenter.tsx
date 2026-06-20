@@ -107,119 +107,63 @@ const PROCESS_STEPS = [
   },
 ];
 
-// ── LED 七段數碼管數字 ─────────────────────────────────────────────────────────
+// ── 平台數據卡片 ────────────────────────────────────────────────────────────
 
-function SegmentNumber({
-  val,
-  color,
-  glow,
-  size = "2.5rem",
-}: {
-  val: string;
-  color: string;
-  glow: string;
-  size?: string;
-}) {
-  const base: React.CSSProperties = {
-    fontFamily: "'Courier New','Lucida Console',monospace",
-    fontWeight: 900,
-    letterSpacing: "0.14em",
-    fontSize: size,
-    lineHeight: 1,
-  };
-  return (
-    <span style={{ position: "relative", display: "inline-block" }}>
-      <span
-        aria-hidden
-        style={{ ...base, position: "absolute", top: 0, left: 0, color: `${color}1e`, userSelect: "none", pointerEvents: "none" }}
-      >
-        {"8".repeat(val.length)}
-      </span>
-      <span style={{ ...base, position: "relative", color, textShadow: glow }}>
-        {val}
-      </span>
-    </span>
-  );
-}
-
-// ── LED 儀表板面板 ────────────────────────────────────────────────────────────
-
-function LedPanel({
-  headerLabel,
+function StatCard({
+  title,
   icon: Icon,
-  ledColor,
+  color,
   rows,
+  bar,
 }: {
-  headerLabel: string;
+  title: string;
   icon: React.ElementType;
-  ledColor: { hex: string; shadow: string };
+  color: string;
   rows: { label: string; value: string; unit: string }[];
+  bar?: number;
 }) {
   return (
     <div
-      className="relative overflow-hidden rounded-xl flex flex-col"
+      className="rounded-xl p-4 flex flex-col gap-2.5"
       style={{
-        background: "linear-gradient(160deg,rgba(2,6,18,0.98) 0%,rgba(1,4,12,0.98) 100%)",
-        border: `1px solid ${ledColor.hex}28`,
-        boxShadow: `0 0 40px ${ledColor.hex}0a, inset 0 0 0 1px ${ledColor.hex}10`,
+        background: "linear-gradient(145deg,#0f172a 0%,#0a0f1e 100%)",
+        border: `1px solid ${color}1a`,
       }}
     >
-      {/* Top accent bar */}
-      <div
-        className="shrink-0"
-        style={{ height: 2, background: `linear-gradient(90deg,transparent 0%,${ledColor.hex}cc 30%,${ledColor.hex} 50%,${ledColor.hex}cc 70%,transparent 100%)` }}
-      />
-      {/* Scanlines */}
-      <div
-        className="absolute inset-0 pointer-events-none opacity-35"
-        style={{ backgroundImage: "repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,0,0,0.30) 3px,rgba(0,0,0,0.30) 4px)" }}
-      />
-      {/* Corner brackets */}
-      <div className="absolute top-3 right-3 w-4 h-4 pointer-events-none" style={{ borderTop: `1.5px solid ${ledColor.hex}28`, borderRight: `1.5px solid ${ledColor.hex}28` }} />
-      <div className="absolute bottom-3 left-3 w-4 h-4 pointer-events-none" style={{ borderBottom: `1.5px solid ${ledColor.hex}28`, borderLeft: `1.5px solid ${ledColor.hex}28` }} />
-
-      {/* Header */}
-      <div className="relative flex items-center justify-between px-5 pt-4 pb-3">
-        <div className="flex items-center gap-2.5">
-          <span className="relative flex h-2.5 w-2.5">
-            <span className="motion-safe:animate-ping absolute inline-flex h-full w-full rounded-full opacity-50" style={{ backgroundColor: ledColor.hex }} />
-            <span className="relative inline-flex rounded-full h-2.5 w-2.5" style={{ backgroundColor: ledColor.hex, boxShadow: `0 0 8px ${ledColor.hex}` }} />
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className="relative flex h-2 w-2">
+            <span className="motion-safe:animate-ping absolute inline-flex h-full w-full rounded-full opacity-40" style={{ backgroundColor: color }} />
+            <span className="relative inline-flex rounded-full h-2 w-2" style={{ backgroundColor: color, boxShadow: `0 0 6px ${color}` }} />
           </span>
-          <span className="text-[9px] font-mono tracking-[0.25em] uppercase" style={{ color: `${ledColor.hex}88` }}>
-            {headerLabel}
-          </span>
+          <span className="text-[9px] font-mono tracking-[0.22em] uppercase" style={{ color: `${color}80` }}>{title}</span>
         </div>
-        <Icon className="w-3.5 h-3.5 opacity-50" style={{ color: ledColor.hex }} />
+        <Icon className="w-3 h-3" style={{ color: `${color}44` }} />
       </div>
-
-      {/* Data rows */}
-      <div className="relative flex-1 px-5 pb-4 space-y-5">
+      <div className="space-y-2">
         {rows.map(({ label, value, unit }) => (
-          <div key={label} className="space-y-1">
-            <div className="flex items-center gap-2">
-              <span className="text-[9px] font-mono uppercase tracking-[0.22em]" style={{ color: "rgba(148,163,184,0.25)" }}>
-                {label}
+          <div key={label}>
+            <div className="text-[8px] font-mono tracking-widest uppercase mb-0.5" style={{ color: "rgba(148,163,184,0.28)" }}>{label}</div>
+            <div className="flex items-baseline gap-1.5">
+              <span
+                className="font-mono font-black text-xl leading-none tracking-wider"
+                style={{ color, textShadow: `0 0 8px ${color}55, 0 0 20px ${color}25` }}
+              >
+                {value}
               </span>
-              <div className="flex-1 h-px" style={{ background: `linear-gradient(90deg,${ledColor.hex}18,transparent)` }} />
-            </div>
-            <div className="flex items-baseline gap-2.5">
-              <SegmentNumber val={value} color={ledColor.hex} glow={ledColor.shadow} size="2.8rem" />
-              <span className="text-sm font-mono" style={{ color: ledColor.hex, opacity: 0.35 }}>{unit}</span>
+              <span className="font-mono text-xs" style={{ color: `${color}44` }}>{unit}</span>
             </div>
           </div>
         ))}
       </div>
-
-      {/* Footer */}
-      <div
-        className="relative flex items-center justify-between px-5 pb-4 pt-2"
-        style={{ borderTop: `1px solid ${ledColor.hex}0c` }}
-      >
-        <div className="flex items-center gap-1.5">
-          <span className="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" style={{ boxShadow: "0 0 4px #4ade80" }} />
-          <span className="text-[8px] font-mono tracking-widest uppercase" style={{ color: "rgba(148,163,184,0.20)" }}>LIVE</span>
+      {bar !== undefined && (
+        <div className="h-px rounded-full mt-auto" style={{ background: "rgba(148,163,184,0.10)" }}>
+          <div className="h-px rounded-full" style={{ width: `${bar}%`, backgroundColor: color, boxShadow: `0 0 4px ${color}` }} />
         </div>
-        <span className="text-[8px] font-mono" style={{ color: "rgba(148,163,184,0.14)" }}>DATA PENDING LAUNCH</span>
+      )}
+      <div className="flex items-center gap-1">
+        <span className="w-1 h-1 rounded-full bg-green-400" style={{ boxShadow: "0 0 3px #4ade80" }} />
+        <span className="text-[7px] font-mono tracking-widest uppercase" style={{ color: "rgba(148,163,184,0.18)" }}>DATA PENDING LAUNCH</span>
       </div>
     </div>
   );
@@ -280,10 +224,10 @@ export default function EnterpriseUpgradeCenter() {
                 display: "block",
               }}
             />
-            {/* Overlay CTA — x≈61% y≈82%: below UPGRADE card, above road trail */}
+            {/* Overlay CTA — x≈65% y≈85%: below UPGRADE card, above road trail */}
             <div
               className="absolute hidden sm:flex"
-              style={{ left: "61%", top: "82%", transform: "translate(-50%, -50%)" }}
+              style={{ left: "65%", top: "85%", transform: "translate(-50%, -50%)" }}
             >
               <Button
                 size="default"
@@ -299,59 +243,48 @@ export default function EnterpriseUpgradeCenter() {
         </div>
       </section>
 
-      {/* ── LED 儀表板 ────────────────────────────────────────────────────── */}
-      <section
-        className="relative py-8 md:py-10 overflow-hidden"
-        style={{
-          background: "linear-gradient(180deg,#06090f 0%,#020508 70%,#040c1a 100%)",
-          borderTop: "1px solid rgba(148,163,184,0.06)",
-        }}
-      >
-        {/* Cyan grid pattern (CSS only) */}
-        <div
-          className="absolute inset-0 pointer-events-none"
-          style={{
-            backgroundImage:
-              "linear-gradient(rgba(6,182,212,0.025) 1px,transparent 1px),linear-gradient(90deg,rgba(6,182,212,0.025) 1px,transparent 1px)",
-            backgroundSize: "48px 48px",
-          }}
-        />
-
-        <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-8">
-          <div>
-            <p className="text-[9px] font-mono tracking-[0.30em] uppercase" style={{ color: "rgba(6,182,212,0.50)" }}>
-              CONTROL ROOM · LIVE
-            </p>
-            <h2 className="text-xl font-bold text-slate-100 mt-1">平台數據</h2>
-            <div className="flex items-center gap-1.5 mt-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-green-400" style={{ boxShadow: "0 0 4px #4ade80" }} />
-              <p className="text-xs font-mono text-slate-500">數據將在平台正式啟動後持續更新</p>
+      {/* ── 平台數據 ────────────────────────────────────────────────────── */}
+      <section className="bg-slate-50 py-8 md:py-10">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="rounded-2xl bg-white shadow-sm border border-slate-100 p-6 md:p-8">
+            <div className="flex flex-col md:flex-row gap-6 md:gap-8 items-start md:items-center">
+              {/* Left: label */}
+              <div className="md:w-36 shrink-0 space-y-2">
+                <h2 className="text-base font-bold text-slate-800">平台數據</h2>
+                <div className="flex items-start gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-green-400 mt-0.5 shrink-0" style={{ boxShadow: "0 0 4px #4ade80" }} />
+                  <p className="text-[10px] text-slate-400 leading-snug">數據將在平台正式啟動後持續更新</p>
+                </div>
+              </div>
+              {/* Right: 3 stat cards */}
+              <div className="flex-1 grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <StatCard
+                  title="申請廠商"
+                  icon={Building2}
+                  color="#4ade80"
+                  rows={[
+                    { label: "有送出申請", value: "00018", unit: "家" },
+                    { label: "有過件",     value: "00006", unit: "家" },
+                    { label: "過件率",     value: "33",    unit: "%" },
+                  ]}
+                  bar={33}
+                />
+                <StatCard
+                  title="總申請金額"
+                  icon={TrendingUp}
+                  color="#fb923c"
+                  rows={[{ label: "累積補助金額", value: "01250", unit: "萬元" }]}
+                  bar={42}
+                />
+                <StatCard
+                  title="已結案數量"
+                  icon={CheckCircle}
+                  color="#c084fc"
+                  rows={[{ label: "已結案案件數", value: "00015", unit: "件" }]}
+                  bar={83}
+                />
+              </div>
             </div>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
-            <LedPanel
-              headerLabel="申請廠商"
-              icon={Building2}
-              ledColor={{ hex: "#4ade80", shadow: "0 0 10px #4ade8080, 0 0 22px #4ade8030" }}
-              rows={[
-                { label: "有送出申請", value: "0", unit: "家" },
-                { label: "有過件",     value: "0", unit: "家" },
-                { label: "過件率",     value: "0", unit: "%"  },
-              ]}
-            />
-            <LedPanel
-              headerLabel="總申請金額"
-              icon={TrendingUp}
-              ledColor={{ hex: "#fb923c", shadow: "0 0 10px #fb923c80, 0 0 22px #fb923c30" }}
-              rows={[{ label: "累積補助金額", value: "0", unit: "萬元" }]}
-            />
-            <LedPanel
-              headerLabel="已結案數量"
-              icon={CheckCircle}
-              ledColor={{ hex: "#c084fc", shadow: "0 0 10px #c084fc80, 0 0 22px #c084fc30" }}
-              rows={[{ label: "已結案案件數", value: "0", unit: "件" }]}
-            />
           </div>
         </div>
       </section>
