@@ -4416,15 +4416,24 @@ export const appRouter = router({
       return db.getConsultantsByUserId(ctx.user.id);
     }),
 
-    // 顧問查看自己地區的案件
+    // 顧問查看自己地區的案件（admin 可看全部）
     myCases: protectedProcedure.input(z.object({
       status: z.enum(["new", "viewed", "contacted", "consulting", "submitted", "completed", "unassigned", "archived"]).optional(),
-      limit: z.number().int().min(1).max(100).default(50),
+      limit: z.number().int().min(1).max(200).default(50),
       offset: z.number().int().min(0).default(0),
     })).query(async ({ ctx, input }) => {
       const consultants = await db.getConsultantsByUserId(ctx.user.id);
-      if (consultants.length === 0) throw new TRPCError({ code: "FORBIDDEN", message: "您不是顧問" });
-      const ids = consultants.map(c => c.id);
+      // Admin bypass: see all cases regardless of consultant assignment
+      if (ctx.user.isAdmin) {
+        const [items, total] = await Promise.all([
+          db.listUpgradeApplications({ status: input.status, limit: input.limit, offset: input.offset }),
+          db.countUpgradeApplications(input.status),
+        ]);
+        return { items, total, consultants };
+      }
+      const activeConsultants = consultants.filter(c => c.isActive);
+      if (activeConsultants.length === 0) throw new TRPCError({ code: "FORBIDDEN", message: "您不是顧問" });
+      const ids = activeConsultants.map(c => c.id);
       const [items, total] = await Promise.all([
         db.listApplicationsByConsultantIds(ids, { status: input.status, limit: input.limit, offset: input.offset }),
         db.countApplicationsByConsultantIds(ids, input.status),

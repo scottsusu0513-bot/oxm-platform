@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useLocation } from "wouter";
+import { Link } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { AppLoading } from "@/components/AppLoading";
 import { trpc } from "@/lib/trpc";
@@ -8,8 +9,13 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
-import { ChevronDown, ChevronUp, Building2, Phone, Mail, MapPin, CheckCircle2, Loader2 } from "lucide-react";
+import {
+  ChevronDown, ChevronUp, Building2, Phone, Mail, MapPin,
+  CheckCircle2, Loader2, Briefcase, MessageCircle, ShieldAlert,
+} from "lucide-react";
 import Navbar from "@/components/Navbar";
+
+// ── 狀態對應 ────────────────────────────────────────────────────────────────
 
 const STATUSES = [
   { value: "new",        label: "新案件",   color: "bg-blue-100 text-blue-700" },
@@ -17,7 +23,7 @@ const STATUSES = [
   { value: "contacted",  label: "已聯繫",   color: "bg-indigo-100 text-indigo-700" },
   { value: "consulting", label: "輔導中",   color: "bg-violet-100 text-violet-700" },
   { value: "submitted",  label: "已送件",   color: "bg-green-100 text-green-700" },
-  { value: "completed",  label: "已完成",   color: "bg-emerald-100 text-emerald-700" },
+  { value: "completed",  label: "已結案",   color: "bg-emerald-100 text-emerald-700" },
 ] as const;
 
 type StatusValue = typeof STATUSES[number]["value"];
@@ -50,6 +56,8 @@ const EXPORT_LABELS: Record<string, string> = {
   multiple: "多種模式",
 };
 
+// ── 型別 ────────────────────────────────────────────────────────────────────
+
 type Case = {
   id: number;
   companyName: string;
@@ -74,6 +82,27 @@ type Case = {
   createdAt: Date;
 };
 
+// ── 統計卡 ─────────────────────────────────────────────────────────────────
+
+const STAT_COLORS: Record<string, string> = {
+  blue:    "bg-blue-50 border-blue-100 text-blue-700",
+  cyan:    "bg-cyan-50 border-cyan-100 text-cyan-700",
+  violet:  "bg-violet-50 border-violet-100 text-violet-700",
+  green:   "bg-green-50 border-green-100 text-green-700",
+  emerald: "bg-emerald-50 border-emerald-100 text-emerald-700",
+};
+
+function StatCard({ label, count, color }: { label: string; count: number; color: keyof typeof STAT_COLORS }) {
+  return (
+    <div className={`rounded-xl border p-3 ${STAT_COLORS[color]}`}>
+      <div className="text-2xl font-bold leading-none">{count}</div>
+      <div className="text-xs mt-1 opacity-80">{label}</div>
+    </div>
+  );
+}
+
+// ── 案件卡片 ────────────────────────────────────────────────────────────────
+
 function CaseCard({ item, onAcknowledge, acknowledging }: {
   item: Case;
   onAcknowledge: (id: number) => void;
@@ -84,8 +113,9 @@ function CaseCard({ item, onAcknowledge, acknowledging }: {
   const isNew = item.status === "new";
 
   return (
-    <Card className={`overflow-hidden ${isNew ? "border-blue-200 bg-blue-50/20" : ""}`}>
+    <Card className={`overflow-hidden ${isNew ? "border-blue-200 bg-blue-50/20 dark:border-blue-900/40 dark:bg-blue-950/10" : ""}`}>
       <CardContent className="p-4 space-y-3">
+        {/* 標題行 */}
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
@@ -97,7 +127,7 @@ function CaseCard({ item, onAcknowledge, acknowledging }: {
                   href={`/factory/${item.factoryId}`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 dark:bg-blue-950/40 dark:text-blue-400 text-xs border border-blue-200 dark:border-blue-900/40 hover:bg-blue-100 transition-colors"
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-orange-50 text-orange-600 dark:bg-orange-950/40 dark:text-orange-400 text-xs border border-orange-200 dark:border-orange-900/40 hover:bg-orange-100 transition-colors"
                 >
                   <Building2 className="w-3 h-3" />
                   {item.factoryName ? `OXM：${item.factoryName}` : "OXM 工廠"}
@@ -115,12 +145,14 @@ function CaseCard({ item, onAcknowledge, acknowledging }: {
           </span>
         </div>
 
+        {/* 標籤列 */}
         <div className="flex flex-wrap gap-2 text-xs">
           <span className="px-2 py-0.5 rounded-full bg-muted">{CAPITAL_LABELS[item.capitalAmount] ?? item.capitalAmount}</span>
           <span className="px-2 py-0.5 rounded-full bg-muted">{EMPLOYEE_LABELS[item.employeeCount] ?? item.employeeCount}</span>
           <span className="px-2 py-0.5 rounded-full bg-muted">{EXPORT_LABELS[item.exportStatus] ?? item.exportStatus}</span>
         </div>
 
+        {/* 展開/收起 */}
         <button
           className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
           onClick={() => setExpanded(v => !v)}
@@ -149,32 +181,43 @@ function CaseCard({ item, onAcknowledge, acknowledging }: {
           </div>
         )}
 
-        {isNew && (
-          <div className="border-t border-border/50 pt-3">
+        {/* 動作區 */}
+        <div className="border-t border-border/50 pt-3 flex items-center gap-2 flex-wrap">
+          {isNew && (
             <Button
               size="sm"
-              className="w-full h-8 text-xs"
+              className="h-8 text-xs"
               disabled={acknowledging}
               onClick={() => onAcknowledge(item.id)}
             >
               {acknowledging ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <CheckCircle2 className="w-3.5 h-3.5 mr-1" />}
-              確認查收
+              查收案件
             </Button>
-          </div>
-        )}
-
-        {item.status === "viewed" && (
-          <div className="border-t border-border/50 pt-3">
-            <p className="text-xs text-center text-muted-foreground">
-              <CheckCircle2 className="w-3.5 h-3.5 inline mr-1 text-cyan-500" />
-              顧問已查收，可進入下一階段對話
-            </p>
-          </div>
-        )}
+          )}
+          {item.status === "viewed" && (
+            <span className="text-xs text-muted-foreground flex items-center gap-1">
+              <CheckCircle2 className="w-3.5 h-3.5 text-cyan-500" />
+              已查收，請聯繫廠商
+            </span>
+          )}
+          {/* 私訊廠商 — 預留入口，本階段 disabled */}
+          <Button
+            size="sm"
+            variant="outline"
+            disabled
+            className="h-8 text-xs ml-auto opacity-50 cursor-not-allowed"
+            title="即將開放：顧問身分私訊功能開發中"
+          >
+            <MessageCircle className="w-3.5 h-3.5 mr-1" />
+            私訊廠商（即將開放）
+          </Button>
+        </div>
       </CardContent>
     </Card>
   );
 }
+
+// ── 案件列表（per-tab） ─────────────────────────────────────────────────────
 
 function CaseList({ statusFilter }: { statusFilter?: StatusValue }) {
   const utils = trpc.useUtils();
@@ -221,47 +264,110 @@ function CaseList({ statusFilter }: { statusFilter?: StatusValue }) {
   );
 }
 
+// ── 主頁面 ──────────────────────────────────────────────────────────────────
+
 export default function ConsultantCases() {
   const { user, loading } = useAuth();
   const [, navigate] = useLocation();
+
+  const isAdmin = user?.role === 'admin';
 
   const profilesQuery = trpc.upgradeConsultant.myProfiles.useQuery(undefined, {
     enabled: !!user,
   });
 
+  // Stats: fetch all cases for counting (admin or active consultant)
+  const isActiveConsultant = profilesQuery.data?.some(p => p.isActive) ?? false;
+  const canAccess = isAdmin || isActiveConsultant;
+
+  const statsQuery = trpc.upgradeConsultant.myCases.useQuery(
+    { limit: 200, offset: 0 },
+    { enabled: !!user && canAccess, refetchInterval: 60000 }
+  );
+
   if (loading || profilesQuery.isLoading) return <AppLoading />;
 
+  // Gate: not logged in
   if (!user) {
     navigate("/");
     return null;
   }
 
-  if (!profilesQuery.data?.length) {
+  // Gate: not admin, not active consultant
+  if (!canAccess) {
     return (
       <div className="min-h-screen bg-background">
         <Navbar />
-        <div className="container py-16 max-w-lg mx-auto text-center">
-          <p className="text-muted-foreground text-sm">您沒有顧問權限，無法查看案件。</p>
-          <Button variant="ghost" size="sm" className="mt-4" onClick={() => navigate("/")}>返回首頁</Button>
+        <div className="container py-16 max-w-lg mx-auto text-center space-y-4">
+          <div className="w-14 h-14 rounded-full bg-muted flex items-center justify-center mx-auto">
+            <ShieldAlert className="w-7 h-7 text-muted-foreground" />
+          </div>
+          <p className="font-medium">您沒有顧問權限</p>
+          <p className="text-muted-foreground text-sm">此頁面僅供 OXM 企業升級顧問使用</p>
+          <Button variant="ghost" size="sm" onClick={() => navigate("/")}>返回首頁</Button>
         </div>
       </div>
     );
   }
 
-  const regionLabel = profilesQuery.data.map(c => {
-    const map: Record<string, string> = { north: "北部", central: "中部", south: "南部" };
-    return `${map[c.regionKey] ?? c.regionKey}（${c.name}）`;
-  }).join("、");
+  // Compute stats from all-cases fetch
+  const allItems = statsQuery.data?.items ?? [];
+  const stats = {
+    new:       allItems.filter(i => i.status === "new").length,
+    viewed:    allItems.filter(i => i.status === "viewed").length,
+    consulting: allItems.filter(i => i.status === "contacted" || i.status === "consulting").length,
+    submitted: allItems.filter(i => i.status === "submitted").length,
+    completed: allItems.filter(i => i.status === "completed").length,
+  };
+
+  const regionLabel = profilesQuery.data
+    ?.filter(c => c.isActive)
+    .map(c => {
+      const regionMap: Record<string, string> = { north: "北部", central: "中部", south: "南部" };
+      return `${regionMap[c.regionKey] ?? c.regionKey}（${c.name}）`;
+    }).join("、");
 
   return (
     <div className="min-h-screen bg-background">
       <Navbar />
       <div className="container py-8 max-w-3xl mx-auto space-y-6">
+
+        {/* 頁面標題 */}
         <div>
-          <h1 className="text-xl font-bold">顧問案件管理</h1>
-          <p className="text-xs text-muted-foreground mt-1">負責地區：{regionLabel}</p>
+          <div className="flex items-center gap-2">
+            <Briefcase className="w-5 h-5 text-orange-500" />
+            <h1 className="text-xl font-bold">顧問中心</h1>
+            {isAdmin && (
+              <Badge className="bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-400 border-0 text-xs">
+                管理員
+              </Badge>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground mt-1">
+            {isAdmin
+              ? "管理員身份：查看所有企業升級申請案件"
+              : `查看企業升級中心分派給您的案件${regionLabel ? `｜負責地區：${regionLabel}` : ""}`}
+          </p>
+          {isAdmin && (
+            <p className="text-xs text-muted-foreground mt-0.5">
+              如需進行完整管理操作，請前往{" "}
+              <Link href="/admin/upgrade" className="text-orange-500 hover:underline">
+                管理後台 →
+              </Link>
+            </p>
+          )}
         </div>
 
+        {/* 統計卡 */}
+        <div className="grid grid-cols-3 sm:grid-cols-5 gap-3">
+          <StatCard label="新進案件" count={stats.new} color="blue" />
+          <StatCard label="已查收" count={stats.viewed} color="cyan" />
+          <StatCard label="諮詢中" count={stats.consulting} color="violet" />
+          <StatCard label="已送件" count={stats.submitted} color="green" />
+          <StatCard label="已結案" count={stats.completed} color="emerald" />
+        </div>
+
+        {/* 分頁案件列表 */}
         <Tabs defaultValue="all">
           <TabsList className="flex-wrap h-auto gap-1">
             <TabsTrigger value="all">全部</TabsTrigger>
@@ -269,7 +375,7 @@ export default function ConsultantCases() {
             <TabsTrigger value="viewed">已查收</TabsTrigger>
             <TabsTrigger value="contacted">已聯繫</TabsTrigger>
             <TabsTrigger value="consulting">輔導中</TabsTrigger>
-            <TabsTrigger value="completed">已完成</TabsTrigger>
+            <TabsTrigger value="completed">已結案</TabsTrigger>
           </TabsList>
 
           <TabsContent value="all" className="mt-4">
@@ -281,6 +387,7 @@ export default function ConsultantCases() {
             </TabsContent>
           ))}
         </Tabs>
+
       </div>
     </div>
   );

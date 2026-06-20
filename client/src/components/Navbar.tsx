@@ -1,7 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
 import { Link, useLocation } from "wouter";
-import { Factory, MessageCircle, User, LogOut, LayoutDashboard, Menu, X, UserPlus, Search, Settings, Heart, UserCircle, ChevronDown, FileText, ScrollText, Store, Bell, BookOpen } from "lucide-react";
+import { Factory, MessageCircle, User, LogOut, LayoutDashboard, Menu, X, UserPlus, Search, Settings, Heart, UserCircle, ChevronDown, FileText, ScrollText, Store, Bell, BookOpen, Briefcase } from "lucide-react";
 import { COMMUNITY_FEATURE_STATUS, COMMUNITY_PUBLIC_ENTRY_ENABLED } from "@shared/const";
 import UnverifiedEmailHint from "@/components/UnverifiedEmailHint";
 import { useState, useEffect } from "react";
@@ -74,6 +74,14 @@ export default function Navbar() {
     staleTime: 60000,
   });
   const showDashboardBtn = user?.isFactoryOwner || (!coManagedQuery.isLoading && (coManagedQuery.data?.length ?? 0) > 0);
+
+  // 顧問中心：admin 永遠顯示；一般會員查 myProfiles 判斷
+  const isAdmin = user?.role === 'admin';
+  const consultantProfilesQuery = trpc.upgradeConsultant.myProfiles.useQuery(undefined, {
+    enabled: isAuthenticated && !isAdmin,
+    staleTime: 120000,
+  });
+  const showConsultantCenter = isAdmin || (consultantProfilesQuery.data?.some(p => p.isActive) ?? false);
 
   const pendingCount = pendingCountQuery.data?.count ?? 0;
   const hasAdminNotification = !!(adminNotifQuery.data?.hasMessageReplies || adminNotifQuery.data?.hasSupportPending);
@@ -207,6 +215,18 @@ export default function Navbar() {
                       會員中心
                     </Link>
                   </DropdownMenuItem>
+                  {showConsultantCenter && (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem asChild>
+                        <Link href="/upgrade-consultant/cases" className="flex items-center gap-2 cursor-pointer text-orange-600 focus:text-orange-600">
+                          <Briefcase className="w-4 h-4" />
+                          顧問中心
+                        </Link>
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                    </>
+                  )}
                   <DropdownMenuItem asChild>
                     <Link href="/privacy" className="flex items-center gap-2 cursor-pointer">
                       <FileText className="w-4 h-4" />
@@ -320,6 +340,14 @@ export default function Navbar() {
                     {(pendingCount > 0 || hasAdminNotification) && (
                       <span className="ml-auto h-2.5 w-2.5 rounded-full bg-orange-500 shrink-0" />
                     )}
+                  </Button>
+                </Link>
+              )}
+              {showConsultantCenter && (
+                <Link href="/upgrade-consultant/cases" onClick={() => setMobileOpen(false)}>
+                  <Button variant="ghost" className="w-full justify-start text-orange-600">
+                    <Briefcase className="w-4 h-4 mr-2" />
+                    顧問中心
                   </Button>
                 </Link>
               )}
