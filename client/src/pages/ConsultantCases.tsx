@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { useLocation } from "wouter";
-import { Link } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { AppLoading } from "@/components/AppLoading";
 import { trpc } from "@/lib/trpc";
@@ -344,18 +343,13 @@ export default function ConsultantCases() {
             )}
           </div>
           <p className="text-xs text-muted-foreground mt-1">
-            {isAdmin
-              ? "管理員身份：查看所有企業升級申請案件"
-              : `查看企業升級中心分派給您的案件${regionLabel ? `｜負責地區：${regionLabel}` : ""}`}
+            企業升級案件收件與顧問作業後台
           </p>
-          {isAdmin && (
-            <p className="text-xs text-muted-foreground mt-0.5">
-              如需進行完整管理操作，請前往{" "}
-              <Link href="/admin/upgrade" className="text-orange-500 hover:underline">
-                管理後台 →
-              </Link>
-            </p>
-          )}
+          <p className="text-xs text-muted-foreground mt-0.5">
+            {isAdmin
+              ? "管理員檢視模式：可查看所有顧問案件，用於系統測試與案件分派確認。"
+              : `查看分派給您的企業升級申請案件，並於此完成查收、追蹤與後續作業。${regionLabel ? `｜負責地區：${regionLabel}` : ""}`}
+          </p>
         </div>
 
         {/* 統計卡 */}
