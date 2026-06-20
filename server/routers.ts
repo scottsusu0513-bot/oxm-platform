@@ -4489,7 +4489,7 @@ export const appRouter = router({
         accepted:    ["submitted"],
         submitted:   ["rejected", "transforming"],  // 政府通過後直接進企業轉型中
         rejected:    ["submitted"],                  // 政府駁回後可補件重新送審
-        approved:    ["transforming"],               // backward compat：舊 approved 資料仍可推進
+        approved:    ["transforming", "completed"],   // backward compat：舊 approved 資料可推進至轉型或直接結案
         transforming:["completed"],
         // Legacy backward compat
         viewed:      ["ineligible", "accepted"],
