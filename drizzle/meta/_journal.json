@@ -197,6 +197,13 @@
       "when": 1781200000000,
       "tag": "0037_factory_revisions",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "5",
+      "when": 1781515035061,
+      "tag": "0028_upgrade_center",
+      "breakpoints": true
     }
   ]
 }

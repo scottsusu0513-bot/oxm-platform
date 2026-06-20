@@ -1,4 +1,4 @@
-import { eq, and, like, desc, asc, sql, inArray, or, isNull, gt, isNotNull } from "drizzle-orm";
+import { eq, and, like, desc, asc, sql, inArray, or, isNull, gt, isNotNull, getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
 import { createHash } from "crypto";
@@ -2385,6 +2385,11 @@ export async function getCoManagedFactories(userId: number) {
   return db.select({
     factoryId: factoryCoManagers.factoryId,
     name: factories.name,
+    region: factories.region,
+    contactEmail: factories.contactEmail,
+    phone: factories.phone,
+    contactPersonName: factories.contactPersonName,
+    capitalLevel: factories.capitalLevel,
     industry: factories.industry,
     status: factories.status,
   })
@@ -5560,7 +5565,7 @@ export async function bindConsultantUser(consultantId: number, userId: number | 
 export async function listApplicationsByConsultantIds(
   consultantIds: number[],
   opts?: { status?: UpgradeApplication["status"]; limit?: number; offset?: number },
-): Promise<UpgradeApplication[]> {
+): Promise<(UpgradeApplication & { factoryName: string | null })[]> {
   const db_ = await getDb();
   if (!db_) return [];
   if (consultantIds.length === 0) return [];
@@ -5568,12 +5573,17 @@ export async function listApplicationsByConsultantIds(
     inArray(upgradeApplications.assignedConsultantId, consultantIds) as any,
   ];
   if (opts?.status) conditions.push(eq(upgradeApplications.status, opts.status) as any);
-  return db_.select()
+  const rows = await db_.select({
+    ...getTableColumns(upgradeApplications),
+    factoryName: factories.name,
+  })
     .from(upgradeApplications)
+    .leftJoin(factories, eq(upgradeApplications.factoryId, factories.id))
     .where(and(...conditions))
     .orderBy(desc(upgradeApplications.createdAt))
     .limit(opts?.limit ?? 100)
     .offset(opts?.offset ?? 0);
+  return rows as (UpgradeApplication & { factoryName: string | null })[];
 }
 
 export async function countApplicationsByConsultantIds(
@@ -5706,16 +5716,21 @@ export async function listUpgradeApplications(opts?: {
   status?: UpgradeApplication["status"];
   limit?: number;
   offset?: number;
-}): Promise<UpgradeApplication[]> {
+}): Promise<(UpgradeApplication & { factoryName: string | null })[]> {
   const db_ = await getDb();
   if (!db_) return [];
   const conditions = opts?.status ? [eq(upgradeApplications.status, opts.status)] : [];
-  return db_.select()
+  const rows = await db_.select({
+    ...getTableColumns(upgradeApplications),
+    factoryName: factories.name,
+  })
     .from(upgradeApplications)
+    .leftJoin(factories, eq(upgradeApplications.factoryId, factories.id))
     .where(conditions.length ? and(...conditions) : undefined)
     .orderBy(desc(upgradeApplications.createdAt))
     .limit(opts?.limit ?? 100)
     .offset(opts?.offset ?? 0);
+  return rows as (UpgradeApplication & { factoryName: string | null })[];
 }
 
 export async function getUpgradeApplicationById(id: number): Promise<UpgradeApplication | undefined> {

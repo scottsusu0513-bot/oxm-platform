@@ -4294,7 +4294,7 @@ export const appRouter = router({
 
   // ===== 企業升級中心 =====
   upgradeCenter: router({
-    submitApplication: publicProcedure.input(z.object({
+    submitApplication: protectedProcedure.input(z.object({
       companyName: z.string().min(1).max(200),
       contactName: z.string().min(1).max(100),
       phone: z.string().min(7).max(30),
@@ -4312,7 +4312,23 @@ export const appRouter = router({
       exportStatus: z.string().min(1).max(30),
       notes: z.string().max(2000).optional(),
       consentAgreed: z.literal(true),
-    })).mutation(async ({ input }) => {
+      factoryId: z.number().int().positive(),
+    })).mutation(async ({ input, ctx }) => {
+      // Validate factoryId belongs to this user and is approved
+      const [owned, coManaged] = await Promise.all([
+        db.getFactoryByOwnerId(ctx.user.id),
+        db.getCoManagedFactories(ctx.user.id),
+      ]);
+      const isOwner = owned?.id === input.factoryId;
+      const coManagedFactory = coManaged.find(f => f.factoryId === input.factoryId);
+      const isCoManaged = !!coManagedFactory;
+      if (!isOwner && !isCoManaged) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "無法代表此工廠送出申請" });
+      }
+      const factoryStatus = isOwner ? owned?.status : coManagedFactory?.status;
+      if (factoryStatus !== "approved") {
+        throw new TRPCError({ code: "FORBIDDEN", message: "工廠通過審核後才能申請企業升級評估" });
+      }
       const isDuplicate = await db.findRecentUpgradeApplication(input.email, input.phone);
       if (isDuplicate) {
         throw new TRPCError({
@@ -4348,6 +4364,7 @@ export const appRouter = router({
         patentCount: input.patentCount ?? null,
         exportStatus: input.exportStatus,
         notes: input.notes ?? null,
+        factoryId: input.factoryId ?? null,
         consentAgreed: true,
         status,
         assignedConsultantId,

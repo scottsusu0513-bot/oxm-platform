@@ -850,6 +850,7 @@ export const upgradeApplications = mysqlTable("upgradeApplications", {
   patentCount: int("patentCount"),
   exportStatus: varchar("exportStatus", { length: 30 }).notNull(),
   notes: text("notes"),
+  factoryId: int("factoryId"), // nullable — OXM factory that submitted this application
   consentAgreed: boolean("consentAgreed").notNull().default(true),
   // status: new→viewed→contacted→consulting→submitted→completed / unassigned / archived
   status: mysqlEnum("status", ["new", "viewed", "contacted", "consulting", "submitted", "completed", "unassigned", "archived"]).notNull().default("new"),
@@ -861,6 +862,7 @@ export const upgradeApplications = mysqlTable("upgradeApplications", {
 }, (t) => ({
   statusCreatedIdx: index("ua_status_created_idx").on(t.status, t.createdAt),
   consultantIdx: index("ua_consultant_idx").on(t.assignedConsultantId, t.status, t.createdAt),
+  factoryIdx: index("ua_factory_idx").on(t.factoryId),
 }));
 
 export type UpgradeApplication = typeof upgradeApplications.$inferSelect;

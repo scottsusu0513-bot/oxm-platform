@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { AppLoading } from "@/components/AppLoading";
@@ -18,7 +18,8 @@ import {
 } from "@/components/ui/select";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import Navbar from "@/components/Navbar";
-import { ArrowLeft, CheckCircle2, Loader2 } from "lucide-react";
+import LoginDialog from "@/components/LoginDialog";
+import { ArrowLeft, CheckCircle2, Loader2, Building2, ExternalLink, LogIn, Clock, XCircle, AlertCircle } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
 
@@ -78,6 +79,40 @@ const EXPORT_MODE_OPTIONS = [
   { value: "multiple", label: "多種模式" },
 ];
 
+// ── 帶入提示 ──────────────────────────────────────────────────────────────────
+
+function AutoFillHint() {
+  return (
+    <p className="text-[11px] text-amber-600/80 dark:text-amber-400/70">
+      已由 OXM 工廠資料帶入，可修改
+    </p>
+  );
+}
+
+// ── 門禁畫面 ──────────────────────────────────────────────────────────────────
+
+function GateView({ icon, title, description, actions }: {
+  icon: React.ReactNode;
+  title: string;
+  description: string;
+  actions: React.ReactNode;
+}) {
+  return (
+    <div className="container py-24 flex flex-col items-center text-center space-y-6 max-w-sm mx-auto">
+      <div className="w-16 h-16 rounded-full bg-orange-50 dark:bg-orange-950/30 flex items-center justify-center">
+        {icon}
+      </div>
+      <div className="space-y-2">
+        <h2 className="text-xl font-bold">{title}</h2>
+        <p className="text-muted-foreground text-sm leading-relaxed">{description}</p>
+      </div>
+      <div className="flex flex-col sm:flex-row gap-3 w-full max-w-xs">
+        {actions}
+      </div>
+    </div>
+  );
+}
+
 // ── 成功畫面 ──────────────────────────────────────────────────────────────────
 
 function SuccessView() {
@@ -112,15 +147,30 @@ function SuccessView() {
 
 // ── 主頁面 ────────────────────────────────────────────────────────────────────
 
+type ApprovedFactory = {
+  id: number;
+  name: string;
+  region: string | null;
+  contactEmail: string | null;
+  phone: string | null;
+  contactPersonName: string | null;
+  capitalLevel: string | null;
+};
+
 export default function EnterpriseUpgradeApply() {
   const { user, loading } = useAuth();
   const [, navigate] = useLocation();
+  const [loginOpen, setLoginOpen] = useState(false);
 
-  useEffect(() => {
-    if (!loading && (!user || user.role !== "admin")) {
-      navigate("/", { replace: true });
-    }
-  }, [loading, user, navigate]);
+  // Factory queries — only when logged in
+  const { data: ownedFactory, isLoading: ownedLoading } = trpc.factory.getMine.useQuery(undefined, {
+    enabled: !!user,
+  });
+  const { data: coManaged, isLoading: coManagedLoading } = trpc.factory.getCoManagedFactories.useQuery(undefined, {
+    enabled: !!user,
+  });
+
+  const dataLoading = !!user && (ownedLoading || coManagedLoading);
 
   const [submitted, setSubmitted] = useState(false);
 
@@ -146,14 +196,87 @@ export default function EnterpriseUpgradeApply() {
     },
   });
 
+  // Find the single approved factory accessible by this user
+  const approvedFactory = useMemo((): ApprovedFactory | null => {
+    if (ownedFactory?.status === "approved") {
+      return {
+        id: ownedFactory.id,
+        name: ownedFactory.name,
+        region: ownedFactory.region ?? null,
+        contactEmail: ownedFactory.contactEmail ?? null,
+        phone: ownedFactory.phone ?? null,
+        contactPersonName: ownedFactory.contactPersonName ?? null,
+        capitalLevel: ownedFactory.capitalLevel ?? null,
+      };
+    }
+    const approvedCo = coManaged?.find(f => f.status === "approved");
+    if (approvedCo) {
+      return {
+        id: approvedCo.factoryId,
+        name: approvedCo.name,
+        region: approvedCo.region ?? null,
+        contactEmail: approvedCo.contactEmail ?? null,
+        phone: approvedCo.phone ?? null,
+        contactPersonName: approvedCo.contactPersonName ?? null,
+        capitalLevel: approvedCo.capitalLevel ?? null,
+      };
+    }
+    return null;
+  }, [ownedFactory, coManaged]);
+
+  // Best factory status for error gate (any factory, not necessarily approved)
+  const anyFactoryStatus: string | null = useMemo(() => {
+    if (ownedFactory) return ownedFactory.status;
+    if (coManaged && coManaged.length > 0) return coManaged[0].status;
+    return null;
+  }, [ownedFactory, coManaged]);
+
+  const hasAnyFactory = ownedFactory !== undefined
+    ? (ownedFactory !== null || (coManaged !== undefined && coManaged.length > 0))
+    : false;
+
+  // Auto-fill from approved factory (single effect, no switching)
+  useEffect(() => {
+    if (!approvedFactory) return;
+    if (approvedFactory.name) setValue("companyName", approvedFactory.name);
+    if (approvedFactory.contactPersonName) {
+      setValue("contactName", approvedFactory.contactPersonName);
+    } else if (user?.name) {
+      setValue("contactName", user.name);
+    }
+    if (approvedFactory.phone) {
+      setValue("phone", approvedFactory.phone);
+    } else if ((user as any)?.phone) {
+      setValue("phone", (user as any).phone);
+    }
+    const email = approvedFactory.contactEmail || user?.email || "";
+    if (email) setValue("email", email);
+    if (approvedFactory.region) setValue("city", approvedFactory.region);
+    if (approvedFactory.capitalLevel) setValue("capitalLevel", approvedFactory.capitalLevel);
+  }, [approvedFactory, user, setValue]);
+
   const hasGovProject = watch("hasGovProject");
   const hasAward = watch("hasAward");
   const hasPatent = watch("hasPatent");
   const agreeTerms = watch("agreeTerms");
+  // Controlled Select values
+  const capitalLevelValue = watch("capitalLevel") ?? "";
+  const employeeCountValue = watch("employeeCount") ?? "";
+  const factoryTypeValue = watch("factoryType") ?? "";
+  const exportModeValue = watch("exportMode") ?? "";
 
-  if (loading || !user || user.role !== "admin") return <AppLoading />;
+  // Which fields were auto-filled (for hints)
+  const autoFilled = useMemo(() => ({
+    companyName: !!approvedFactory?.name,
+    contactName: !!(approvedFactory?.contactPersonName || user?.name),
+    phone: !!(approvedFactory?.phone || (user as any)?.phone),
+    email: !!(approvedFactory?.contactEmail || user?.email),
+    city: !!approvedFactory?.region,
+    capitalLevel: !!approvedFactory?.capitalLevel,
+  }), [approvedFactory, user]);
 
   const onSubmit = (data: FormValues) => {
+    if (!approvedFactory) return;
     applyMutation.mutate({
       companyName: data.companyName,
       contactName: data.contactName,
@@ -172,11 +295,134 @@ export default function EnterpriseUpgradeApply() {
       exportStatus: data.exportMode,
       notes: data.notes || undefined,
       consentAgreed: true,
+      factoryId: approvedFactory.id,
     });
   };
 
+  // ── 成功畫面 ──
   if (submitted) return <SuccessView />;
 
+  // ── 載入中 ──
+  if (loading || dataLoading) return <AppLoading />;
+
+  // ── Gate 1: 未登入 ──
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-background">
+        <Helmet><title>免費評估資格｜企業升級中心｜OXM</title></Helmet>
+        <Navbar />
+        <GateView
+          icon={<LogIn className="w-8 h-8 text-orange-500" />}
+          title="請先登入"
+          description="登入後，即可申請企業升級評估服務。"
+          actions={
+            <>
+              <Button
+                className="w-full bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white border-0"
+                onClick={() => setLoginOpen(true)}
+              >
+                <LogIn className="w-4 h-4 mr-2" />
+                前往登入
+              </Button>
+              <Link href="/upgrade-center">
+                <Button variant="outline" className="w-full">返回企業升級中心</Button>
+              </Link>
+            </>
+          }
+        />
+        <LoginDialog open={loginOpen} onOpenChange={setLoginOpen} />
+      </div>
+    );
+  }
+
+  // ── Gate 2: 沒有工廠 ──
+  if (!hasAnyFactory && ownedFactory === null && coManaged !== undefined) {
+    return (
+      <div className="min-h-screen bg-background">
+        <Helmet><title>免費評估資格｜企業升級中心｜OXM</title></Helmet>
+        <Navbar />
+        <GateView
+          icon={<Building2 className="w-8 h-8 text-orange-500" />}
+          title="請先上架您的工廠"
+          description="請先在 OXM 平台上架工廠，通過審核後即可申請企業升級評估。"
+          actions={
+            <>
+              <Link href="/register-factory">
+                <Button className="w-full bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white border-0">
+                  前往上架工廠
+                </Button>
+              </Link>
+              <Link href="/upgrade-center">
+                <Button variant="outline" className="w-full">返回企業升級中心</Button>
+              </Link>
+            </>
+          }
+        />
+      </div>
+    );
+  }
+
+  // ── Gate 3: 有工廠但未 approved ──
+  if (!approvedFactory && anyFactoryStatus !== null) {
+    const isDraft = anyFactoryStatus === "draft";
+    const isPending = anyFactoryStatus === "pending";
+    const isRejected = anyFactoryStatus === "rejected";
+
+    const title = isPending
+      ? "工廠審核中"
+      : isRejected
+      ? "工廠審核未通過"
+      : "工廠資料尚未送審";
+
+    const description = isPending
+      ? "您的工廠資料正在審核中，通過後即可申請企業升級評估。"
+      : isRejected
+      ? "請依退件原因修正工廠資料後重新送審，通過審核即可申請企業升級評估。"
+      : "請先完成工廠資料並送出審核申請，通過後即可申請企業升級評估。";
+
+    const btnLabel = isPending ? "查看工廠狀態" : "前往工廠後台";
+
+    const StatusIcon = isPending
+      ? Clock
+      : isRejected
+      ? XCircle
+      : AlertCircle;
+
+    const iconColor = isPending
+      ? "text-yellow-500"
+      : isRejected
+      ? "text-red-500"
+      : "text-orange-500";
+
+    return (
+      <div className="min-h-screen bg-background">
+        <Helmet><title>免費評估資格｜企業升級中心｜OXM</title></Helmet>
+        <Navbar />
+        <GateView
+          icon={<StatusIcon className={`w-8 h-8 ${iconColor}`} />}
+          title={title}
+          description={description}
+          actions={
+            <>
+              <Link href="/dashboard">
+                <Button className="w-full bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white border-0">
+                  {btnLabel}
+                </Button>
+              </Link>
+              <Link href="/upgrade-center">
+                <Button variant="outline" className="w-full">返回企業升級中心</Button>
+              </Link>
+            </>
+          }
+        />
+      </div>
+    );
+  }
+
+  // ── 仍在載入工廠資料時（edge case：user 存在但 queries 還沒完成） ──
+  if (!approvedFactory) return <AppLoading />;
+
+  // ── 主表單 ──
   return (
     <div className="min-h-screen bg-background">
       <Helmet>
@@ -223,25 +469,46 @@ export default function EnterpriseUpgradeApply() {
           </p>
         </div>
 
+        {/* ── 申請工廠來源（不可編輯） ── */}
+        <div className="rounded-xl border border-orange-200 bg-orange-50/50 dark:border-orange-900/40 dark:bg-orange-950/20 px-4 py-3 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2 min-w-0">
+            <Building2 className="w-4 h-4 text-orange-500 shrink-0" />
+            <span className="text-sm text-muted-foreground shrink-0">已綁定 OXM 工廠：</span>
+            <span className="font-medium text-sm truncate">{approvedFactory.name}</span>
+          </div>
+          <a
+            href={`/factory/${approvedFactory.id}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400 shrink-0"
+          >
+            查看
+            <ExternalLink className="w-3 h-3" />
+          </a>
+        </div>
+
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-8">
           {/* ── 基本資料 ── */}
           <fieldset className="space-y-5 rounded-xl border border-border p-6">
             <legend className="px-1 text-sm font-semibold text-muted-foreground">基本資料</legend>
 
+            {/* 公司名稱 */}
             <div className="space-y-2">
               <Label htmlFor="companyName">
                 公司名稱 <span className="text-destructive">*</span>
               </Label>
               <Input
                 id="companyName"
-                placeholder="例：台灣精密工業股份有限公司"
+                placeholder="請輸入公司或工廠名稱"
                 {...register("companyName", { required: "請填寫公司名稱" })}
               />
               {errors.companyName && (
                 <p className="text-xs text-destructive">{errors.companyName.message}</p>
               )}
+              {autoFilled.companyName && <AutoFillHint />}
             </div>
 
+            {/* 聯絡人 */}
             <div className="space-y-2">
               <Label htmlFor="contactName">
                 聯絡人 <span className="text-destructive">*</span>
@@ -254,9 +521,11 @@ export default function EnterpriseUpgradeApply() {
               {errors.contactName && (
                 <p className="text-xs text-destructive">{errors.contactName.message}</p>
               )}
+              {autoFilled.contactName && <AutoFillHint />}
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {/* 電話 */}
               <div className="space-y-2">
                 <Label htmlFor="phone">
                   電話 <span className="text-destructive">*</span>
@@ -273,8 +542,10 @@ export default function EnterpriseUpgradeApply() {
                 {errors.phone && (
                   <p className="text-xs text-destructive">{errors.phone.message}</p>
                 )}
+                {autoFilled.phone && <AutoFillHint />}
               </div>
 
+              {/* Email */}
               <div className="space-y-2">
                 <Label htmlFor="email">
                   Email <span className="text-destructive">*</span>
@@ -282,7 +553,7 @@ export default function EnterpriseUpgradeApply() {
                 <Input
                   id="email"
                   type="email"
-                  placeholder="contact@company.com"
+                  placeholder="example@company.com"
                   {...register("email", {
                     required: "請填寫 Email",
                     pattern: { value: /^[^\s@]+@[^\s@]+\.[^\s@]+$/, message: "Email 格式不正確" },
@@ -291,21 +562,24 @@ export default function EnterpriseUpgradeApply() {
                 {errors.email && (
                   <p className="text-xs text-destructive">{errors.email.message}</p>
                 )}
+                {autoFilled.email && <AutoFillHint />}
               </div>
             </div>
 
+            {/* 公司所在地 */}
             <div className="space-y-2">
               <Label htmlFor="city">
                 公司所在地 <span className="text-destructive">*</span>
               </Label>
               <Input
                 id="city"
-                placeholder="例：台中市"
+                placeholder="例：新竹市、台中市"
                 {...register("city", { required: "請填寫公司所在地" })}
               />
               {errors.city && (
                 <p className="text-xs text-destructive">{errors.city.message}</p>
               )}
+              {autoFilled.city && <AutoFillHint />}
             </div>
           </fieldset>
 
@@ -313,11 +587,15 @@ export default function EnterpriseUpgradeApply() {
           <fieldset className="space-y-5 rounded-xl border border-border p-6">
             <legend className="px-1 text-sm font-semibold text-muted-foreground">企業規模</legend>
 
+            {/* 資本額 */}
             <div className="space-y-2">
               <Label htmlFor="capitalLevel">
                 資本額 <span className="text-destructive">*</span>
               </Label>
-              <Select onValueChange={(v) => setValue("capitalLevel", v)}>
+              <Select
+                value={capitalLevelValue}
+                onValueChange={(v) => setValue("capitalLevel", v)}
+              >
                 <SelectTrigger id="capitalLevel">
                   <SelectValue placeholder="請選擇資本額範圍" />
                 </SelectTrigger>
@@ -329,20 +607,22 @@ export default function EnterpriseUpgradeApply() {
                   ))}
                 </SelectContent>
               </Select>
-              <input
-                type="hidden"
-                {...register("capitalLevel", { required: "請選擇資本額" })}
-              />
+              <input type="hidden" {...register("capitalLevel", { required: "請選擇資本額" })} />
               {errors.capitalLevel && (
                 <p className="text-xs text-destructive">{errors.capitalLevel.message}</p>
               )}
+              {autoFilled.capitalLevel && <AutoFillHint />}
             </div>
 
+            {/* 員工人數 */}
             <div className="space-y-2">
               <Label htmlFor="employeeCount">
                 員工人數 <span className="text-destructive">*</span>
               </Label>
-              <Select onValueChange={(v) => setValue("employeeCount", v)}>
+              <Select
+                value={employeeCountValue}
+                onValueChange={(v) => setValue("employeeCount", v)}
+              >
                 <SelectTrigger id="employeeCount">
                   <SelectValue placeholder="請選擇員工人數範圍" />
                 </SelectTrigger>
@@ -354,20 +634,21 @@ export default function EnterpriseUpgradeApply() {
                   ))}
                 </SelectContent>
               </Select>
-              <input
-                type="hidden"
-                {...register("employeeCount", { required: "請選擇員工人數" })}
-              />
+              <input type="hidden" {...register("employeeCount", { required: "請選擇員工人數" })} />
               {errors.employeeCount && (
                 <p className="text-xs text-destructive">{errors.employeeCount.message}</p>
               )}
             </div>
 
+            {/* 工廠類型 */}
             <div className="space-y-2">
               <Label htmlFor="factoryType">
                 工廠類型 <span className="text-destructive">*</span>
               </Label>
-              <Select onValueChange={(v) => setValue("factoryType", v)}>
+              <Select
+                value={factoryTypeValue}
+                onValueChange={(v) => setValue("factoryType", v)}
+              >
                 <SelectTrigger id="factoryType">
                   <SelectValue placeholder="請選擇工廠類型" />
                 </SelectTrigger>
@@ -379,10 +660,7 @@ export default function EnterpriseUpgradeApply() {
                   ))}
                 </SelectContent>
               </Select>
-              <input
-                type="hidden"
-                {...register("factoryType", { required: "請選擇工廠類型" })}
-              />
+              <input type="hidden" {...register("factoryType", { required: "請選擇工廠類型" })} />
               {errors.factoryType && (
                 <p className="text-xs text-destructive">{errors.factoryType.message}</p>
               )}
@@ -393,7 +671,6 @@ export default function EnterpriseUpgradeApply() {
           <fieldset className="space-y-6 rounded-xl border border-border p-6">
             <legend className="px-1 text-sm font-semibold text-muted-foreground">研發與獎項</legend>
 
-            {/* 政府計畫 */}
             <div className="space-y-3">
               <Label>是否曾執行政府計畫 <span className="text-destructive">*</span></Label>
               <RadioGroup
@@ -413,16 +690,11 @@ export default function EnterpriseUpgradeApply() {
               {hasGovProject === "yes" && (
                 <div className="pl-1 space-y-2">
                   <Label htmlFor="govProjectName">計畫名稱</Label>
-                  <Input
-                    id="govProjectName"
-                    placeholder="例：SBIR 小型企業創新研發計畫"
-                    {...register("govProjectName")}
-                  />
+                  <Input id="govProjectName" placeholder="例：SBIR 小型企業創新研發計畫" {...register("govProjectName")} />
                 </div>
               )}
             </div>
 
-            {/* 政府獎項 */}
             <div className="space-y-3">
               <Label>是否曾獲政府獎項 <span className="text-destructive">*</span></Label>
               <RadioGroup
@@ -442,16 +714,11 @@ export default function EnterpriseUpgradeApply() {
               {hasAward === "yes" && (
                 <div className="pl-1 space-y-2">
                   <Label htmlFor="awardName">獎項名稱</Label>
-                  <Input
-                    id="awardName"
-                    placeholder="例：台灣精品獎"
-                    {...register("awardName")}
-                  />
+                  <Input id="awardName" placeholder="例：台灣精品獎" {...register("awardName")} />
                 </div>
               )}
             </div>
 
-            {/* 專利 */}
             <div className="space-y-3">
               <Label>是否持有專利 <span className="text-destructive">*</span></Label>
               <RadioGroup
@@ -471,13 +738,7 @@ export default function EnterpriseUpgradeApply() {
               {hasPatent === "yes" && (
                 <div className="pl-1 space-y-2">
                   <Label htmlFor="patentCount">專利數量</Label>
-                  <Input
-                    id="patentCount"
-                    type="number"
-                    min={1}
-                    placeholder="例：3"
-                    {...register("patentCount")}
-                  />
+                  <Input id="patentCount" type="number" min={1} placeholder="例：3" {...register("patentCount")} />
                 </div>
               )}
             </div>
@@ -489,7 +750,10 @@ export default function EnterpriseUpgradeApply() {
             <Label htmlFor="exportMode">
               產品是否出口 <span className="text-destructive">*</span>
             </Label>
-            <Select onValueChange={(v) => setValue("exportMode", v)}>
+            <Select
+              value={exportModeValue}
+              onValueChange={(v) => setValue("exportMode", v)}
+            >
               <SelectTrigger id="exportMode">
                 <SelectValue placeholder="請選擇出口模式" />
               </SelectTrigger>
@@ -501,10 +765,7 @@ export default function EnterpriseUpgradeApply() {
                 ))}
               </SelectContent>
             </Select>
-            <input
-              type="hidden"
-              {...register("exportMode", { required: "請選擇出口模式" })}
-            />
+            <input type="hidden" {...register("exportMode", { required: "請選擇出口模式" })} />
             {errors.exportMode && (
               <p className="text-xs text-destructive">{errors.exportMode.message}</p>
             )}
@@ -533,9 +794,6 @@ export default function EnterpriseUpgradeApply() {
               <span className="text-destructive ml-1">*</span>
             </Label>
           </div>
-          {!agreeTerms && errors.agreeTerms && (
-            <p className="text-xs text-destructive -mt-6">{errors.agreeTerms.message}</p>
-          )}
 
           {/* ── 送出 ── */}
           <div className="flex flex-col sm:flex-row gap-3 pt-2">

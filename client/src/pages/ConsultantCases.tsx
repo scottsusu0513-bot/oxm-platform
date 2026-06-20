@@ -69,6 +69,8 @@ type Case = {
   exportStatus: string;
   notes: string | null;
   status: string;
+  factoryId?: number | null;
+  factoryName?: string | null;
   createdAt: Date;
 };
 
@@ -90,6 +92,17 @@ function CaseCard({ item, onAcknowledge, acknowledging }: {
               <span className="font-semibold text-base">{item.companyName}</span>
               <Badge className={`${info.color} border-0 text-xs`}>{info.label}</Badge>
               {isNew && <span className="text-xs text-blue-600 font-medium">● 待查收</span>}
+              {item.factoryId && (
+                <a
+                  href={`/factory/${item.factoryId}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 dark:bg-blue-950/40 dark:text-blue-400 text-xs border border-blue-200 dark:border-blue-900/40 hover:bg-blue-100 transition-colors"
+                >
+                  <Building2 className="w-3 h-3" />
+                  {item.factoryName ? `OXM：${item.factoryName}` : "OXM 工廠"}
+                </a>
+              )}
             </div>
             <div className="flex items-center gap-3 text-xs text-muted-foreground mt-1 flex-wrap">
               <span className="flex items-center gap-1"><MapPin className="w-3 h-3" />{item.location}</span>
