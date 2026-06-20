@@ -67,7 +67,7 @@ const SUBSIDY_PLANS = [
     title: "海外市場拓展與通路布局",
     desc: "協助企業評估海外市場、建立通路合作、參展推廣與品牌能見度，提升國際接單機會。",
     tags: ["海外市場", "通路拓展", "品牌推廣"],
-    max: "依計畫核定",
+    max: "2,000 萬元",
     topBar: "from-sky-500 to-blue-500",
     badgeCls: "bg-sky-100 text-sky-700",
     maxCls: "from-sky-500 to-blue-500",
