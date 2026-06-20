@@ -4383,7 +4383,7 @@ export const appRouter = router({
     }),
 
     adminList: adminProcedure.input(z.object({
-      status: z.enum(["new", "viewed", "contacted", "consulting", "submitted", "completed", "unassigned", "archived"]).optional(),
+      status: z.enum(["new", "viewed", "contacted", "consulting", "submitted", "completed", "unassigned", "archived", "ineligible"]).optional(),
       limit: z.number().int().min(1).max(200).default(50),
       offset: z.number().int().min(0).default(0),
     })).query(async ({ input }) => {
@@ -4402,7 +4402,7 @@ export const appRouter = router({
 
     adminUpdateStatus: adminProcedure.input(z.object({
       id: z.number(),
-      status: z.enum(["new", "viewed", "contacted", "consulting", "submitted", "completed", "unassigned", "archived"]),
+      status: z.enum(["new", "viewed", "contacted", "consulting", "submitted", "completed", "unassigned", "archived", "ineligible"]),
     })).mutation(async ({ input }) => {
       await db.updateUpgradeApplicationStatus(input.id, input.status);
       return { success: true };
@@ -4418,7 +4418,7 @@ export const appRouter = router({
 
     // 顧問查看自己地區的案件（admin 可看全部）
     myCases: protectedProcedure.input(z.object({
-      status: z.enum(["new", "viewed", "contacted", "consulting", "submitted", "completed", "unassigned", "archived"]).optional(),
+      status: z.enum(["new", "viewed", "contacted", "consulting", "submitted", "completed", "unassigned", "archived", "ineligible"]).optional(),
       limit: z.number().int().min(1).max(200).default(50),
       offset: z.number().int().min(0).default(0),
     })).query(async ({ ctx, input }) => {
@@ -4458,10 +4458,10 @@ export const appRouter = router({
       return { success: true };
     }),
 
-    // 顧問推進案件狀態（嚴格順序：viewed→contacted→consulting→submitted→completed）
+    // 顧問推進案件狀態（嚴格順序，viewed/contacted/consulting 可標資格不符）
     updateCaseStatus: protectedProcedure.input(z.object({
       applicationId: z.number().int().positive(),
-      nextStatus: z.enum(["contacted", "consulting", "submitted", "completed"]),
+      nextStatus: z.enum(["contacted", "consulting", "submitted", "completed", "ineligible"]),
     })).mutation(async ({ ctx, input }) => {
       const app = await db.getUpgradeApplicationById(input.applicationId);
       if (!app) throw new TRPCError({ code: "NOT_FOUND", message: "找不到案件" });
@@ -4472,17 +4472,17 @@ export const appRouter = router({
         if (!active.some(c => c.id === app.assignedConsultantId))
           throw new TRPCError({ code: "FORBIDDEN", message: "此案件不屬於您的地區" });
       }
-      // 嚴格 transition 驗證，防止跳狀態
-      const ALLOWED: Record<string, string> = {
-        viewed:     "contacted",
-        contacted:  "consulting",
-        consulting: "submitted",
-        submitted:  "completed",
+      // 嚴格 transition 驗證（viewed/contacted/consulting 可推進或標資格不符）
+      const ALLOWED: Record<string, string[]> = {
+        viewed:     ["contacted", "ineligible"],
+        contacted:  ["consulting", "ineligible"],
+        consulting: ["submitted", "ineligible"],
+        submitted:  ["completed"],
       };
-      if (ALLOWED[app.status] !== input.nextStatus) {
+      if (!ALLOWED[app.status]?.includes(input.nextStatus)) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: `目前狀態「${app.status}」不能直接推進至「${input.nextStatus}」`,
+          message: `目前狀態「${app.status}」不能推進至「${input.nextStatus}」`,
         });
       }
       await db.updateUpgradeApplicationStatus(input.applicationId, input.nextStatus);

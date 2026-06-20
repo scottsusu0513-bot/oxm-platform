@@ -124,9 +124,9 @@ function SuccessView() {
         <div className="w-16 h-16 rounded-full bg-green-100 dark:bg-green-900/30 flex items-center justify-center">
           <CheckCircle2 className="w-8 h-8 text-green-600 dark:text-green-400" />
         </div>
-        <h1 className="text-2xl font-bold">評估資料已送出</h1>
+        <h1 className="text-2xl font-bold">已送出企業升級評估申請</h1>
         <p className="text-muted-foreground leading-relaxed">
-          感謝您填寫評估表單，OXM 團隊將在 3～5 個工作天內與您聯繫，為您說明適合的補助計畫。
+          系統將依您的公司所在地區分派合作顧問，顧問查收案件後將主動與您聯繫。
         </p>
         <div className="flex flex-col sm:flex-row gap-3">
           <Link href="/upgrade-center">

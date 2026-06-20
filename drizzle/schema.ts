@@ -852,8 +852,8 @@ export const upgradeApplications = mysqlTable("upgradeApplications", {
   notes: text("notes"),
   factoryId: int("factoryId"), // nullable — OXM factory that submitted this application
   consentAgreed: boolean("consentAgreed").notNull().default(true),
-  // status: new→viewed→contacted→consulting→submitted→completed / unassigned / archived
-  status: mysqlEnum("status", ["new", "viewed", "contacted", "consulting", "submitted", "completed", "unassigned", "archived"]).notNull().default("new"),
+  // status: new→viewed→contacted→consulting→submitted→completed / ineligible / unassigned / archived
+  status: mysqlEnum("status", ["new", "viewed", "contacted", "consulting", "submitted", "completed", "unassigned", "archived", "ineligible"]).notNull().default("new"),
   assignedConsultantId: int("assignedConsultantId").references(() => upgradeConsultants.id, { onDelete: "set null" }),
   viewedAt: timestamp("viewedAt"),
   viewedByUserId: int("viewedByUserId"), // no FK — audit trail even if user deleted

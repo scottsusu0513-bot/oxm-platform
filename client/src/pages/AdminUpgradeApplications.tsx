@@ -5,31 +5,35 @@ import { AppLoading } from "@/components/AppLoading";
 import { trpc } from "@/lib/trpc";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import { ArrowLeft, ChevronDown, ChevronUp, Building2, Phone, Mail, MapPin, AlertTriangle, Clock, Users } from "lucide-react";
+import {
+  ArrowLeft, ChevronDown, ChevronUp, Building2, Phone, Mail, MapPin,
+  AlertTriangle, Clock, Users, BarChart3,
+} from "lucide-react";
 import Navbar from "@/components/Navbar";
 
 // ── 狀態設定 ──────────────────────────────────────────────────────────────────
 
 const STATUSES = [
-  { value: "new",        label: "新案件",   color: "bg-blue-100 text-blue-700" },
-  { value: "viewed",     label: "已查收",   color: "bg-cyan-100 text-cyan-700" },
-  { value: "contacted",  label: "已聯繫",   color: "bg-indigo-100 text-indigo-700" },
-  { value: "consulting", label: "輔導中",   color: "bg-violet-100 text-violet-700" },
-  { value: "submitted",  label: "已送件",   color: "bg-green-100 text-green-700" },
-  { value: "completed",  label: "已完成",   color: "bg-emerald-100 text-emerald-700" },
-  { value: "unassigned", label: "未分派",   color: "bg-yellow-100 text-yellow-700" },
-  { value: "archived",   label: "封存",     color: "bg-gray-100 text-gray-500" },
+  { value: "new",        label: "新案件",     color: "bg-blue-100 text-blue-700" },
+  { value: "viewed",     label: "已查收",     color: "bg-cyan-100 text-cyan-700" },
+  { value: "contacted",  label: "已聯繫",     color: "bg-amber-100 text-amber-700" },
+  { value: "consulting", label: "輔導中",     color: "bg-violet-100 text-violet-700" },
+  { value: "submitted",  label: "已送件",     color: "bg-green-100 text-green-700" },
+  { value: "completed",  label: "已結案",     color: "bg-emerald-100 text-emerald-700" },
+  { value: "ineligible", label: "資格不符",   color: "bg-red-100 text-red-700" },
+  { value: "unassigned", label: "待分派顧問", color: "bg-yellow-100 text-yellow-700" },
+  { value: "archived",   label: "已封存",     color: "bg-gray-100 text-gray-500" },
 ] as const;
 
 type StatusValue = typeof STATUSES[number]["value"];
 
 function statusInfo(s: string) {
-  return STATUSES.find(x => x.value === s) ?? STATUSES[0];
+  return STATUSES.find(x => x.value === s) ?? { label: s, color: "bg-gray-100 text-gray-700" };
 }
 
 const CAPITAL_LABELS: Record<string, string> = {
@@ -111,7 +115,7 @@ function ApplicationCard({
   return (
     <Card className="overflow-hidden">
       <CardContent className="p-4 space-y-3">
-        {/* 頭部：公司名稱 + 狀態 + 日期 */}
+        {/* 頭部 */}
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
@@ -172,17 +176,17 @@ function ApplicationCard({
             </div>
             {item.notes && (
               <div className="rounded-lg bg-muted/50 px-3 py-2 text-xs">
-                <p className="font-medium text-foreground mb-1">補充說明</p>
+                <p className="font-medium text-foreground mb-1">備註</p>
                 <p className="text-muted-foreground whitespace-pre-wrap">{item.notes}</p>
               </div>
             )}
           </div>
         )}
 
-        {/* 狀態更新 */}
+        {/* 例外狀態調整（管理員監控用） */}
         <div className="border-t border-border/50 pt-3">
           <div className="flex items-center gap-2">
-            <span className="text-xs text-muted-foreground shrink-0">更新狀態</span>
+            <span className="text-xs text-muted-foreground shrink-0">例外調整</span>
             <Select
               defaultValue={item.status}
               onValueChange={(v) => onStatusChange(item.id, v as StatusValue)}
@@ -226,7 +230,7 @@ function ApplicationList({ status }: { status?: StatusValue }) {
     return (
       <div className="text-center py-16 text-muted-foreground">
         <Building2 className="w-10 h-10 mx-auto mb-3 opacity-30" />
-        <p className="text-sm">目前沒有申請案件</p>
+        <p className="text-sm">目前沒有案件</p>
       </div>
     );
   }
@@ -246,7 +250,7 @@ function ApplicationList({ status }: { status?: StatusValue }) {
   );
 }
 
-// ── 統計分頁 ──────────────────────────────────────────────────────────────────
+// ── 顧問處理總覽 ──────────────────────────────────────────────────────────────
 
 function StatsTab() {
   const query = trpc.upgradeConsultant.adminStats.useQuery(undefined, { refetchInterval: 60000 });
@@ -258,18 +262,18 @@ function StatsTab() {
 
   return (
     <div className="space-y-6">
-      {/* 總覽數字 */}
+      {/* 全域總覽 */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <Card>
           <CardContent className="p-4 text-center">
             <p className="text-2xl font-bold">{total}</p>
-            <p className="text-xs text-muted-foreground mt-1">總申請數</p>
+            <p className="text-xs text-muted-foreground mt-1">總案件數</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-4 text-center">
             <p className="text-2xl font-bold text-yellow-600">{unassigned}</p>
-            <p className="text-xs text-muted-foreground mt-1">未分派</p>
+            <p className="text-xs text-muted-foreground mt-1">待分派顧問</p>
           </CardContent>
         </Card>
         <Card>
@@ -289,26 +293,60 @@ function StatsTab() {
         </Card>
       </div>
 
-      {/* 各區域統計 */}
+      {/* 北中南顧問處理總覽 */}
       <div>
-        <h3 className="text-sm font-semibold mb-3">各區域案件數</h3>
-        <div className="space-y-2">
+        <div className="flex items-center gap-2 mb-3">
+          <BarChart3 className="w-4 h-4 text-muted-foreground" />
+          <h3 className="text-sm font-semibold">北中南顧問處理總覽</h3>
+        </div>
+        <div className="space-y-3">
           {(["north", "central", "south"] as const).map(region => {
             const stat = byRegion[region];
             if (!stat) return null;
             return (
-              <div key={region} className="flex items-center gap-3 p-3 rounded-lg border bg-card text-sm">
-                <span className="font-medium w-12">{REGION_LABELS[region]}</span>
-                <span className="text-muted-foreground text-xs">{stat.consultantName}</span>
-                <div className="ml-auto flex items-center gap-4 text-xs">
-                  <span>共 <strong>{stat.total}</strong> 筆</span>
+              <Card key={region}>
+                <CardContent className="p-4 space-y-3">
+                  {/* 顧問基本資訊 */}
+                  <div className="flex items-center gap-2">
+                    <Users className="w-4 h-4 text-muted-foreground shrink-0" />
+                    <div>
+                      <span className="font-medium text-sm">{stat.consultantName}</span>
+                      <span className="ml-2 text-xs text-muted-foreground">{REGION_LABELS[region]}地區</span>
+                    </div>
+                    <span className="ml-auto text-xs text-muted-foreground">共 <strong>{stat.total}</strong> 筆</span>
+                  </div>
+                  {/* 狀態細分 */}
+                  <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 text-xs">
+                    <div className="rounded-lg bg-blue-50 border border-blue-100 p-2 text-center">
+                      <p className="text-lg font-bold text-blue-700 leading-none">{stat.unviewed}</p>
+                      <p className="text-blue-600 mt-1 opacity-80">新案件</p>
+                    </div>
+                    <div className="rounded-lg bg-violet-50 border border-violet-100 p-2 text-center">
+                      <p className="text-lg font-bold text-violet-700 leading-none">{stat.inProgress}</p>
+                      <p className="text-violet-600 mt-1 opacity-80">處理中</p>
+                    </div>
+                    <div className="rounded-lg bg-green-50 border border-green-100 p-2 text-center">
+                      <p className="text-lg font-bold text-green-700 leading-none">{stat.submitted}</p>
+                      <p className="text-green-600 mt-1 opacity-80">已送件</p>
+                    </div>
+                    <div className="rounded-lg bg-emerald-50 border border-emerald-100 p-2 text-center">
+                      <p className="text-lg font-bold text-emerald-700 leading-none">{stat.completed}</p>
+                      <p className="text-emerald-600 mt-1 opacity-80">已結案</p>
+                    </div>
+                    <div className="rounded-lg bg-red-50 border border-red-100 p-2 text-center">
+                      <p className="text-lg font-bold text-red-700 leading-none">{stat.ineligible}</p>
+                      <p className="text-red-600 mt-1 opacity-80">資格不符</p>
+                    </div>
+                  </div>
+                  {/* 異常提醒 */}
                   {stat.unviewed > 0 && (
-                    <span className="flex items-center gap-1 text-blue-600">
-                      <Clock className="w-3 h-3" />新 {stat.unviewed}
-                    </span>
+                    <div className="flex items-center gap-1.5 text-xs text-blue-600 bg-blue-50 rounded px-2 py-1">
+                      <Clock className="w-3 h-3" />
+                      {stat.unviewed} 筆新案件待查收
+                    </div>
                   )}
-                </div>
-              </div>
+                </CardContent>
+              </Card>
             );
           })}
         </div>
@@ -412,31 +450,35 @@ export default function AdminUpgradeApplications() {
     <div className="min-h-screen bg-background">
       <Navbar />
       <div className="container py-8 max-w-3xl mx-auto space-y-6">
-        <div className="flex items-center gap-3">
-          <Button variant="ghost" size="sm" onClick={() => navigate("/admin")}>
-            <ArrowLeft className="w-4 h-4 mr-1" />
-            後台
-          </Button>
-          <h1 className="text-xl font-bold">企業升級中心申請</h1>
+        <div>
+          <div className="flex items-center gap-3 mb-1">
+            <Button variant="ghost" size="sm" onClick={() => navigate("/admin")}>
+              <ArrowLeft className="w-4 h-4 mr-1" />
+              後台
+            </Button>
+            <h1 className="text-xl font-bold">企業升級案件總覽</h1>
+          </div>
+          <p className="text-xs text-muted-foreground ml-1">查看北中南顧問案件分派與處理狀況</p>
         </div>
 
         <Tabs defaultValue="all">
           <TabsList className="flex-wrap h-auto gap-1">
             <TabsTrigger value="all">全部</TabsTrigger>
             <TabsTrigger value="new">新案件</TabsTrigger>
-            <TabsTrigger value="unassigned">未分派</TabsTrigger>
-            <TabsTrigger value="viewed">已查收</TabsTrigger>
-            <TabsTrigger value="consulting">輔導中</TabsTrigger>
-            <TabsTrigger value="completed">已完成</TabsTrigger>
+            <TabsTrigger value="unassigned">待分派</TabsTrigger>
+            <TabsTrigger value="ineligible">資格不符</TabsTrigger>
+            <TabsTrigger value="consulting">處理中</TabsTrigger>
+            <TabsTrigger value="submitted">已送件</TabsTrigger>
+            <TabsTrigger value="completed">已結案</TabsTrigger>
             <TabsTrigger value="archived">封存</TabsTrigger>
-            <TabsTrigger value="stats">統計</TabsTrigger>
+            <TabsTrigger value="stats">顧問總覽</TabsTrigger>
             <TabsTrigger value="consultants">顧問設定</TabsTrigger>
           </TabsList>
 
           <TabsContent value="all" className="mt-4">
             <ApplicationList />
           </TabsContent>
-          {(["new", "unassigned", "viewed", "consulting", "completed", "archived"] as const).map(s => (
+          {(["new", "unassigned", "ineligible", "consulting", "submitted", "completed", "archived"] as const).map(s => (
             <TabsContent key={s} value={s} className="mt-4">
               <ApplicationList status={s} />
             </TabsContent>

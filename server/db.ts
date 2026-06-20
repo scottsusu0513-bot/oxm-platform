@@ -5625,7 +5625,15 @@ export async function acknowledgeUpgradeApplication(
 
 export async function adminGetUpgradeStats(): Promise<{
   total: number;
-  byRegion: Record<string, { consultantName: string; total: number; unviewed: number }>;
+  byRegion: Record<string, {
+    consultantName: string;
+    total: number;
+    unviewed: number;
+    inProgress: number;
+    submitted: number;
+    completed: number;
+    ineligible: number;
+  }>;
   unviewed: number;
   overdue48h: number;
   unassigned: number;
@@ -5635,30 +5643,35 @@ export async function adminGetUpgradeStats(): Promise<{
 
   const cutoff48h = new Date(Date.now() - 48 * 60 * 60 * 1000);
 
-  const regionRows = await db_.select({
+  // Single query: status breakdown per region
+  const regionStatusRows = await db_.select({
     regionKey: upgradeConsultants.regionKey,
     consultantName: upgradeConsultants.name,
+    status: upgradeApplications.status,
     n: sql<number>`COUNT(*)`,
   })
     .from(upgradeApplications)
     .innerJoin(upgradeConsultants, eq(upgradeApplications.assignedConsultantId, upgradeConsultants.id))
-    .groupBy(upgradeConsultants.regionKey, upgradeConsultants.name);
+    .groupBy(upgradeConsultants.regionKey, upgradeConsultants.name, upgradeApplications.status);
 
-  const regionUnviewedRows = await db_.select({
-    regionKey: upgradeConsultants.regionKey,
-    n: sql<number>`COUNT(*)`,
-  })
-    .from(upgradeApplications)
-    .innerJoin(upgradeConsultants, eq(upgradeApplications.assignedConsultantId, upgradeConsultants.id))
-    .where(eq(upgradeApplications.status, "new"))
-    .groupBy(upgradeConsultants.regionKey);
-
-  const byRegion: Record<string, { consultantName: string; total: number; unviewed: number }> = {};
-  for (const r of regionRows) {
-    byRegion[r.regionKey] = { consultantName: r.consultantName, total: Number(r.n), unviewed: 0 };
-  }
-  for (const r of regionUnviewedRows) {
-    if (byRegion[r.regionKey]) byRegion[r.regionKey].unviewed = Number(r.n);
+  const byRegion: Record<string, {
+    consultantName: string; total: number; unviewed: number;
+    inProgress: number; submitted: number; completed: number; ineligible: number;
+  }> = {};
+  for (const r of regionStatusRows) {
+    if (!byRegion[r.regionKey]) {
+      byRegion[r.regionKey] = {
+        consultantName: r.consultantName,
+        total: 0, unviewed: 0, inProgress: 0, submitted: 0, completed: 0, ineligible: 0,
+      };
+    }
+    const count = Number(r.n);
+    byRegion[r.regionKey].total += count;
+    if (r.status === "new") byRegion[r.regionKey].unviewed += count;
+    if (["viewed", "contacted", "consulting"].includes(r.status)) byRegion[r.regionKey].inProgress += count;
+    if (r.status === "submitted") byRegion[r.regionKey].submitted += count;
+    if (r.status === "completed") byRegion[r.regionKey].completed += count;
+    if (r.status === "ineligible") byRegion[r.regionKey].ineligible += count;
   }
 
   const [{ total }] = await db_.select({ total: sql<number>`COUNT(*)` })

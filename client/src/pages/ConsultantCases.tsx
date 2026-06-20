@@ -12,7 +12,7 @@ import { toast } from "sonner";
 import {
   ChevronDown, ChevronUp, Building2, Phone, Mail, MapPin,
   CheckCircle2, Loader2, Briefcase, MessageCircle, ShieldAlert,
-  ArrowRight, Save, Clock,
+  ArrowRight, Save, Clock, XCircle,
 } from "lucide-react";
 import Navbar from "@/components/Navbar";
 
@@ -21,10 +21,11 @@ import Navbar from "@/components/Navbar";
 const STATUSES = [
   { value: "new",        label: "新案件",   color: "bg-blue-100 text-blue-700" },
   { value: "viewed",     label: "已查收",   color: "bg-cyan-100 text-cyan-700" },
-  { value: "contacted",  label: "已聯繫",   color: "bg-indigo-100 text-indigo-700" },
+  { value: "contacted",  label: "已聯繫",   color: "bg-amber-100 text-amber-700" },
   { value: "consulting", label: "輔導中",   color: "bg-violet-100 text-violet-700" },
   { value: "submitted",  label: "已送件",   color: "bg-green-100 text-green-700" },
   { value: "completed",  label: "已結案",   color: "bg-emerald-100 text-emerald-700" },
+  { value: "ineligible", label: "資格不符", color: "bg-red-100 text-red-700" },
 ] as const;
 
 type StatusValue = typeof STATUSES[number]["value"];
@@ -32,6 +33,17 @@ type StatusValue = typeof STATUSES[number]["value"];
 function statusInfo(s: string) {
   return STATUSES.find(x => x.value === s) ?? { label: s, color: "bg-gray-100 text-gray-700" };
 }
+
+// 下一步順序推進（不含 ineligible）
+const STATUS_NEXT: Partial<Record<string, { label: string; next: string }>> = {
+  viewed:     { label: "標記已聯繫", next: "contacted" },
+  contacted:  { label: "標記輔導中", next: "consulting" },
+  consulting: { label: "標記已送件", next: "submitted" },
+  submitted:  { label: "標記已結案", next: "completed" },
+};
+
+// 可標記資格不符的狀態（查收後才能標）
+const CAN_MARK_INELIGIBLE = new Set(["viewed", "contacted", "consulting"]);
 
 const CAPITAL_LABELS: Record<string, string> = {
   under_500w: "500 萬以下",
@@ -55,14 +67,6 @@ const EXPORT_LABELS: Record<string, string> = {
   trader: "透過貿易商出口",
   customer: "客戶代為出口",
   multiple: "多種模式",
-};
-
-// 狀態推進設定（new→viewed 由 acknowledge 處理）
-const STATUS_NEXT: Partial<Record<string, { label: string; next: string }>> = {
-  viewed:     { label: "標記已聯繫", next: "contacted" },
-  contacted:  { label: "標記輔導中", next: "consulting" },
-  consulting: { label: "標記已送件", next: "submitted" },
-  submitted:  { label: "標記已結案", next: "completed" },
 };
 
 // ── 型別 ────────────────────────────────────────────────────────────────────
@@ -100,6 +104,7 @@ const STAT_COLORS: Record<string, string> = {
   violet:  "bg-violet-50 border-violet-100 text-violet-700",
   green:   "bg-green-50 border-green-100 text-green-700",
   emerald: "bg-emerald-50 border-emerald-100 text-emerald-700",
+  red:     "bg-red-50 border-red-100 text-red-700",
 };
 
 function StatCard({ label, count, color }: { label: string; count: number; color: keyof typeof STAT_COLORS }) {
@@ -120,7 +125,9 @@ function CaseCard({ item }: { item: Case }) {
 
   const info = statusInfo(item.status);
   const isNew = item.status === "new";
+  const isIneligible = item.status === "ineligible";
   const nextStep = STATUS_NEXT[item.status];
+  const canIneligible = CAN_MARK_INELIGIBLE.has(item.status);
   const notesChanged = localNotes !== (item.notes ?? "");
 
   const invalidate = () => utils.upgradeConsultant.myCases.invalidate();
@@ -136,20 +143,30 @@ function CaseCard({ item }: { item: Case }) {
   });
 
   const notesMutation = trpc.upgradeConsultant.updateCaseNotes.useMutation({
-    onSuccess: () => {
-      invalidate();
-      toast.success("備註已儲存");
-    },
+    onSuccess: () => { invalidate(); toast.success("備註已儲存"); },
     onError: (err) => toast.error(err.message || "儲存失敗"),
   });
 
+  const handleMarkIneligible = () => {
+    if (!localNotes.trim()) {
+      toast.error("請先填寫資格不符原因");
+      return;
+    }
+    if (notesChanged) {
+      toast.error("請先儲存備註，再標記資格不符");
+      return;
+    }
+    statusMutation.mutate({ applicationId: item.id, nextStatus: "ineligible" });
+  };
+
   const updatedDate = new Date(item.updatedAt).toLocaleDateString("zh-TW");
   const createdDate = new Date(item.createdAt).toLocaleDateString("zh-TW");
-  const showUpdated = updatedDate !== createdDate ||
-    Math.abs(new Date(item.updatedAt).getTime() - new Date(item.createdAt).getTime()) > 5000;
+  const showUpdated = Math.abs(new Date(item.updatedAt).getTime() - new Date(item.createdAt).getTime()) > 5000;
+
+  const mutationBusy = acknowledgeMutation.isPending || statusMutation.isPending || notesMutation.isPending;
 
   return (
-    <Card className={`overflow-hidden ${isNew ? "border-blue-200 bg-blue-50/20 dark:border-blue-900/40 dark:bg-blue-950/10" : ""}`}>
+    <Card className={`overflow-hidden ${isNew ? "border-blue-200 bg-blue-50/20 dark:border-blue-900/40 dark:bg-blue-950/10" : ""} ${isIneligible ? "border-red-200 bg-red-50/10 dark:border-red-900/40 dark:bg-red-950/5" : ""}`}>
       <CardContent className="p-4 space-y-3">
         {/* 標題行 */}
         <div className="flex items-start justify-between gap-2">
@@ -216,13 +233,13 @@ function CaseCard({ item }: { item: Case }) {
           </div>
         )}
 
-        {/* 備註區 */}
+        {/* 備註區（顧問編輯） */}
         <div className="space-y-1.5">
-          <p className="text-xs font-medium text-muted-foreground">顧問備註</p>
+          <p className="text-xs font-medium text-muted-foreground">顧問備註{canIneligible ? "（標記資格不符前請先填寫原因）" : ""}</p>
           <Textarea
             value={localNotes}
             onChange={e => setLocalNotes(e.target.value)}
-            placeholder="記錄聯繫狀況、推薦補助方案等…"
+            placeholder="記錄聯繫狀況、推薦補助方案、資格不符原因等…"
             rows={2}
             className="text-xs resize-none"
           />
@@ -231,7 +248,7 @@ function CaseCard({ item }: { item: Case }) {
               size="sm"
               variant="secondary"
               className="h-7 text-xs"
-              disabled={notesMutation.isPending}
+              disabled={mutationBusy}
               onClick={() => notesMutation.mutate({ applicationId: item.id, notes: localNotes })}
             >
               {notesMutation.isPending
@@ -244,11 +261,12 @@ function CaseCard({ item }: { item: Case }) {
 
         {/* 動作區 */}
         <div className="border-t border-border/50 pt-3 flex items-center gap-2 flex-wrap">
+          {/* 查收 */}
           {isNew && (
             <Button
               size="sm"
               className="h-8 text-xs"
-              disabled={acknowledgeMutation.isPending}
+              disabled={mutationBusy}
               onClick={() => acknowledgeMutation.mutate({ applicationId: item.id })}
             >
               {acknowledgeMutation.isPending
@@ -257,12 +275,14 @@ function CaseCard({ item }: { item: Case }) {
               查收案件
             </Button>
           )}
-          {nextStep && !isNew && (
+
+          {/* 下一步推進 */}
+          {nextStep && (
             <Button
               size="sm"
               variant="secondary"
               className="h-8 text-xs"
-              disabled={statusMutation.isPending}
+              disabled={mutationBusy}
               onClick={() => statusMutation.mutate({
                 applicationId: item.id,
                 nextStatus: nextStep.next as "contacted" | "consulting" | "submitted" | "completed",
@@ -274,12 +294,39 @@ function CaseCard({ item }: { item: Case }) {
               {nextStep.label}
             </Button>
           )}
+
+          {/* 標記資格不符 */}
+          {canIneligible && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8 text-xs border-red-200 text-red-600 hover:bg-red-50 dark:border-red-900/40 dark:text-red-400"
+              disabled={mutationBusy}
+              onClick={handleMarkIneligible}
+            >
+              {statusMutation.isPending
+                ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" />
+                : <XCircle className="w-3.5 h-3.5 mr-1" />}
+              標記資格不符
+            </Button>
+          )}
+
+          {/* 已結案 */}
           {item.status === "completed" && (
             <span className="text-xs text-emerald-600 flex items-center gap-1">
               <CheckCircle2 className="w-3.5 h-3.5" />
               已結案
             </span>
           )}
+
+          {/* 資格不符 */}
+          {isIneligible && (
+            <span className="text-xs text-red-600 flex items-center gap-1">
+              <XCircle className="w-3.5 h-3.5" />
+              已標記資格不符（備註仍可更新）
+            </span>
+          )}
+
           {/* 私訊廠商 — 預留入口，本階段 disabled */}
           <Button
             size="sm"
@@ -380,6 +427,7 @@ export default function ConsultantCases() {
     consulting: allItems.filter(i => i.status === "contacted" || i.status === "consulting").length,
     submitted:  allItems.filter(i => i.status === "submitted").length,
     completed:  allItems.filter(i => i.status === "completed").length,
+    ineligible: allItems.filter(i => i.status === "ineligible").length,
   };
 
   return (
@@ -394,12 +442,13 @@ export default function ConsultantCases() {
         </div>
 
         {/* 統計卡 */}
-        <div className="grid grid-cols-3 sm:grid-cols-5 gap-3">
-          <StatCard label="新進案件" count={stats.new} color="blue" />
+        <div className="grid grid-cols-3 sm:grid-cols-6 gap-3">
+          <StatCard label="新案件" count={stats.new} color="blue" />
           <StatCard label="已查收" count={stats.viewed} color="cyan" />
-          <StatCard label="諮詢中" count={stats.consulting} color="violet" />
+          <StatCard label="處理中" count={stats.consulting} color="violet" />
           <StatCard label="已送件" count={stats.submitted} color="green" />
           <StatCard label="已結案" count={stats.completed} color="emerald" />
+          <StatCard label="資格不符" count={stats.ineligible} color="red" />
         </div>
 
         {/* 分頁案件列表 */}
@@ -410,13 +459,15 @@ export default function ConsultantCases() {
             <TabsTrigger value="viewed">已查收</TabsTrigger>
             <TabsTrigger value="contacted">已聯繫</TabsTrigger>
             <TabsTrigger value="consulting">輔導中</TabsTrigger>
+            <TabsTrigger value="submitted">已送件</TabsTrigger>
             <TabsTrigger value="completed">已結案</TabsTrigger>
+            <TabsTrigger value="ineligible">資格不符</TabsTrigger>
           </TabsList>
 
           <TabsContent value="all" className="mt-4">
             <CaseList />
           </TabsContent>
-          {(["new", "viewed", "contacted", "consulting", "completed"] as const).map(s => (
+          {(["new", "viewed", "contacted", "consulting", "submitted", "completed", "ineligible"] as const).map(s => (
             <TabsContent key={s} value={s} className="mt-4">
               <CaseList statusFilter={s} />
             </TabsContent>
