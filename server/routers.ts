@@ -4368,6 +4368,7 @@ export const appRouter = router({
         consentAgreed: true,
         status,
         assignedConsultantId,
+        statusTimeline: { [status]: new Date().toISOString() },
       });
       sendUpgradeApplicationEmail({
         companyName: input.companyName,

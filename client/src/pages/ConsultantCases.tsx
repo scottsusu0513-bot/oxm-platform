@@ -14,7 +14,7 @@ import {
   ChevronDown, ChevronUp, Building2, Phone, Mail, MapPin,
   CheckCircle2, Loader2, Briefcase, MessageCircle, ShieldAlert,
   ArrowRight, Save, Clock, XCircle, Ban, FileCheck, Send,
-  ThumbsDown, ThumbsUp, Rocket, FlagTriangleRight,
+  ThumbsDown, ThumbsUp, Rocket, FlagTriangleRight, History,
 } from "lucide-react";
 import Navbar from "@/components/Navbar";
 
@@ -126,6 +126,8 @@ type Case = {
   factoryName?: string | null;
   plannedSubsidyAmount?: number | null;
   approvedSubsidyAmount?: number | null;
+  statusTimeline?: Record<string, string> | null;
+  viewedAt?: Date | string | null;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -134,6 +136,88 @@ type Case = {
 
 function formatNTD(n: number) {
   return `NT$ ${n.toLocaleString("zh-TW")}`;
+}
+
+function fmtDt(d: Date | string): string {
+  const dt = new Date(d);
+  const Y = dt.getFullYear();
+  const M = String(dt.getMonth() + 1).padStart(2, "0");
+  const D = String(dt.getDate()).padStart(2, "0");
+  const h = String(dt.getHours()).padStart(2, "0");
+  const m = String(dt.getMinutes()).padStart(2, "0");
+  return `${Y}/${M}/${D} ${h}:${m}`;
+}
+
+// ── 案件流程時間軸 ──────────────────────────────────────────────────────────
+
+const TIMELINE_STAGES = [
+  { key: "new",          label: "送出申請",   dot: "bg-blue-400" },
+  { key: "evaluating",   label: "評估中",     dot: "bg-cyan-500" },
+  { key: "ineligible",   label: "資格不符",   dot: "bg-red-500" },
+  { key: "accepted",     label: "已立案處理", dot: "bg-violet-500" },
+  { key: "submitted",    label: "已送出審核", dot: "bg-amber-500" },
+  { key: "rejected",     label: "政府駁回",   dot: "bg-rose-500" },
+  { key: "transforming", label: "企業轉型中", dot: "bg-teal-500" },
+  { key: "completed",    label: "案件結案",   dot: "bg-emerald-500" },
+] as const;
+
+function CaseTimeline({ item }: { item: Case }) {
+  const tl = item.statusTimeline ?? {};
+  const eff = effectiveStatus(item.status);
+
+  const getTime = (key: string): string | null => {
+    if (key === "new") {
+      return tl.new ?? (item.createdAt instanceof Date
+        ? item.createdAt.toISOString()
+        : String(item.createdAt));
+    }
+    if (key === "evaluating") {
+      return tl.evaluating ?? (item.viewedAt
+        ? (item.viewedAt instanceof Date ? item.viewedAt.toISOString() : String(item.viewedAt))
+        : null);
+    }
+    return tl[key] ?? null;
+  };
+
+  const visibleStages = TIMELINE_STAGES.filter(s => {
+    if (s.key === "new") return true;
+    return !!getTime(s.key) || s.key === eff;
+  });
+
+  return (
+    <div className="relative pl-5 space-y-2.5 py-1">
+      <div className="absolute left-1.5 top-2 bottom-2 w-px bg-border" />
+      {visibleStages.map(s => {
+        const time = getTime(s.key);
+        const isCurrent = s.key === eff;
+        const isDone = !!time;
+
+        return (
+          <div key={s.key} className="relative flex gap-2.5 items-start">
+            <div className="absolute -left-[18px] mt-0.5 z-10">
+              {isCurrent && !isDone ? (
+                <div className={`w-3 h-3 rounded-full ring-2 ring-offset-1 ring-orange-300 ${s.dot}`} />
+              ) : isDone ? (
+                <div className={`w-3 h-3 rounded-full ${isCurrent ? `ring-2 ring-offset-1 ring-orange-300 ${s.dot}` : s.dot}`} />
+              ) : (
+                <div className="w-3 h-3 rounded-full bg-muted border border-border" />
+              )}
+            </div>
+            <div className="flex-1 min-w-0">
+              <span className={`text-xs font-medium ${isCurrent ? "text-orange-600" : isDone ? "text-foreground" : "text-muted-foreground/60"}`}>
+                {s.label}
+              </span>
+              {time ? (
+                <div className="text-xs text-muted-foreground leading-tight">{fmtDt(time)}</div>
+              ) : isCurrent ? (
+                <div className="text-xs text-muted-foreground/50 leading-tight">進行中</div>
+              ) : null}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 function parseAmount(s: string): number | null {
@@ -171,6 +255,7 @@ function CaseCard({ item }: { item: Case }) {
   const [, navigate] = useLocation();
   const utils = trpc.useUtils();
   const [expanded, setExpanded] = useState(false);
+  const [showTimeline, setShowTimeline] = useState(false);
   const [localNotes, setLocalNotes] = useState(item.notes ?? "");
   const [localPlanned, setLocalPlanned] = useState(
     item.plannedSubsidyAmount != null ? String(item.plannedSubsidyAmount) : ""
@@ -291,8 +376,22 @@ function CaseCard({ item }: { item: Case }) {
                 <Clock className="w-3 h-3" />{updatedDate}
               </div>
             )}
+            <button
+              className={`flex items-center gap-1 text-xs mt-0.5 ml-auto transition-colors ${showTimeline ? "text-orange-500" : "text-muted-foreground hover:text-foreground"}`}
+              onClick={() => setShowTimeline(v => !v)}
+            >
+              <History className="w-3 h-3" />
+              案件流程
+            </button>
           </div>
         </div>
+
+        {/* 案件流程時間軸（可展開） */}
+        {showTimeline && (
+          <div className="border-t border-border/50 pt-2 pb-1">
+            <CaseTimeline item={item} />
+          </div>
+        )}
 
         {/* 標籤列 */}
         <div className="flex flex-wrap gap-2 text-xs">
@@ -528,7 +627,6 @@ function CaseCard({ item }: { item: Case }) {
           {/* 企業轉型中：案件結案 */}
           {eff === "transforming" && (
             <div className="space-y-2 w-full">
-              <p className="text-xs text-teal-700">案件已通過政府審核並進入企業轉型期。請於一年期專案完成且政府補助尾款撥付後再結案。</p>
               <Button
                 size="sm"
                 variant="secondary"

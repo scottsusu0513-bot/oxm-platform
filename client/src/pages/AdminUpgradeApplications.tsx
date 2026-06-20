@@ -105,6 +105,8 @@ type Application = {
   factoryName?: string | null;
   plannedSubsidyAmount?: number | null;
   approvedSubsidyAmount?: number | null;
+  statusTimeline?: Record<string, string> | null;
+  viewedAt?: Date | string | null;
   createdAt: Date;
 };
 
@@ -198,6 +200,51 @@ function ApplicationCard({
                 <p className="text-muted-foreground whitespace-pre-wrap">{item.notes}</p>
               </div>
             )}
+            {/* 案件流程時間軸 */}
+            {(() => {
+              const tl = item.statusTimeline ?? {};
+              const stages = [
+                { key: "new",          label: "送出申請" },
+                { key: "evaluating",   label: "評估中" },
+                { key: "ineligible",   label: "資格不符" },
+                { key: "accepted",     label: "已立案處理" },
+                { key: "submitted",    label: "已送出審核" },
+                { key: "rejected",     label: "政府駁回" },
+                { key: "transforming", label: "企業轉型中" },
+                { key: "completed",    label: "案件結案" },
+              ];
+              const getT = (k: string) => {
+                if (k === "new") return tl.new ?? (item.createdAt instanceof Date ? item.createdAt.toISOString() : String(item.createdAt));
+                if (k === "evaluating") return tl.evaluating ?? (item.viewedAt ? String(item.viewedAt) : null);
+                return tl[k] ?? null;
+              };
+              const fmt = (s: string) => {
+                const d = new Date(s);
+                return `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,"0")}/${String(d.getDate()).padStart(2,"0")} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;
+              };
+              const visible = stages.filter(s => !!getT(s.key));
+              if (visible.length === 0) return null;
+              return (
+                <div className="space-y-0.5">
+                  <p className="text-xs font-medium text-muted-foreground mb-1.5">案件流程</p>
+                  <div className="relative pl-4 space-y-2">
+                    <div className="absolute left-1 top-1 bottom-1 w-px bg-border" />
+                    {visible.map(s => {
+                      const t = getT(s.key)!;
+                      return (
+                        <div key={s.key} className="relative flex gap-2 items-start">
+                          <div className="absolute -left-[14px] mt-0.5 w-2.5 h-2.5 rounded-full bg-primary/30 border border-primary/50" />
+                          <div>
+                            <span className="text-xs font-medium">{s.label}</span>
+                            <div className="text-xs text-muted-foreground">{fmt(t)}</div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         )}
 

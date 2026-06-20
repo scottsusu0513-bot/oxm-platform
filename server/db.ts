@@ -5617,8 +5617,11 @@ export async function acknowledgeUpgradeApplication(
       eq(upgradeApplications.status, "new"),
     ));
   if (!row) return { ok: false };
+  const now = new Date();
+  const tl = row.statusTimeline ?? {};
   await db_.update(upgradeApplications)
-    .set({ status: "evaluating", viewedAt: new Date(), viewedByUserId: userId })
+    .set({ status: "evaluating", viewedAt: now, viewedByUserId: userId,
+           statusTimeline: { ...tl, evaluating: now.toISOString() } })
     .where(eq(upgradeApplications.id, id));
   return { ok: true };
 }
@@ -5763,7 +5766,14 @@ export async function updateUpgradeApplicationStatus(
 ): Promise<void> {
   const db_ = await getDb();
   if (!db_) return;
-  await db_.update(upgradeApplications).set({ status }).where(eq(upgradeApplications.id, id));
+  const [cur] = await db_
+    .select({ tl: upgradeApplications.statusTimeline })
+    .from(upgradeApplications)
+    .where(eq(upgradeApplications.id, id));
+  const tl = cur?.tl ?? {};
+  await db_.update(upgradeApplications)
+    .set({ status, statusTimeline: { ...tl, [status]: new Date().toISOString() } })
+    .where(eq(upgradeApplications.id, id));
 }
 
 export async function updateUpgradeCaseNotes(id: number, notes: string | null): Promise<void> {

@@ -866,6 +866,7 @@ export const upgradeApplications = mysqlTable("upgradeApplications", {
   viewedByUserId: int("viewedByUserId"), // no FK — audit trail even if user deleted
   plannedSubsidyAmount: int("plannedSubsidyAmount"),
   approvedSubsidyAmount: int("approvedSubsidyAmount"),
+  statusTimeline: json("statusTimeline").$type<Record<string, string>>(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 }, (t) => ({
