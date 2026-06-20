@@ -52,6 +52,26 @@ const SUBSIDY_PLANS = [
     badgeCls: "bg-violet-100 text-violet-700",
     maxCls: "from-violet-500 to-indigo-500",
   },
+  {
+    code: "研發轉型補助",
+    title: "企業研發轉型與升級計畫",
+    desc: "協助企業投入產品開發、技術升級、研發流程優化與轉型布局，強化長期競爭力。",
+    tags: ["產品開發", "技術升級", "轉型布局"],
+    max: "4,000 萬元",
+    topBar: "from-teal-500 to-cyan-500",
+    badgeCls: "bg-teal-100 text-teal-700",
+    maxCls: "from-teal-500 to-cyan-500",
+  },
+  {
+    code: "海外通路計畫",
+    title: "海外市場拓展與通路布局",
+    desc: "協助企業評估海外市場、建立通路合作、參展推廣與品牌能見度，提升國際接單機會。",
+    tags: ["海外市場", "通路拓展", "品牌推廣"],
+    max: "依計畫核定",
+    topBar: "from-sky-500 to-blue-500",
+    badgeCls: "bg-sky-100 text-sky-700",
+    maxCls: "from-sky-500 to-blue-500",
+  },
 ];
 
 // ── 申請流程 ──────────────────────────────────────────────────────────────────
@@ -106,6 +126,18 @@ const PROCESS_STEPS = [
     stepCls: "text-violet-500",
   },
 ];
+
+// ── 平台數據（後續可替換為 API 資料） ─────────────────────────────────────────
+
+const upgradeStats = {
+  appliedFactories: 0,    // 有送出申請（家）
+  approvedCases: 0,       // 有過件（家）
+  approvalRate: 0,        // 過件率（%）
+  totalGrantAmountWan: 0, // 累積補助金額（萬元）
+  completedCases: 0,      // 已結案案件數（件）
+};
+
+const fmt = (n: number, digits: number) => String(n).padStart(digits, "0");
 
 // ── 七段數碼管數字 ────────────────────────────────────────────────────────────
 
@@ -324,25 +356,25 @@ export default function EnterpriseUpgradeCenter() {
                   icon={Building2}
                   color="#4ade80"
                   rows={[
-                    { label: "有送出申請", value: "00018", unit: "家" },
-                    { label: "有過件",     value: "00006", unit: "家" },
-                    { label: "過件率",     value: "33",    unit: "%" },
+                    { label: "有送出申請", value: fmt(upgradeStats.appliedFactories, 5), unit: "家" },
+                    { label: "有過件",     value: fmt(upgradeStats.approvedCases, 5),    unit: "家" },
+                    { label: "過件率",     value: fmt(upgradeStats.approvalRate, 2),     unit: "%" },
                   ]}
-                  bar={33}
+                  bar={upgradeStats.approvalRate}
                 />
                 <StatCard
                   title="總申請金額"
                   icon={TrendingUp}
                   color="#fb923c"
-                  rows={[{ label: "累積補助金額", value: "01250", unit: "萬元" }]}
-                  bar={42}
+                  rows={[{ label: "累積補助金額", value: fmt(upgradeStats.totalGrantAmountWan, 5), unit: "萬元" }]}
+                  bar={0}
                 />
                 <StatCard
                   title="已結案數量"
                   icon={CheckCircle}
                   color="#c084fc"
-                  rows={[{ label: "已結案案件數", value: "00015", unit: "件" }]}
-                  bar={83}
+                  rows={[{ label: "已結案案件數", value: fmt(upgradeStats.completedCases, 5), unit: "件" }]}
+                  bar={0}
                 />
               </div>
             </div>
@@ -350,15 +382,15 @@ export default function EnterpriseUpgradeCenter() {
         </div>
       </section>
 
-      {/* ── 三大政府補助方案 ───────────────────────────────────────────────── */}
+      {/* ── 多項政府補助方案 ───────────────────────────────────────────────── */}
       <section className="py-14 md:py-20">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-10">
           <div className="text-center space-y-2">
-            <h2 className="text-2xl md:text-3xl font-bold">三大政府補助方案</h2>
+            <h2 className="text-2xl md:text-3xl font-bold">多項政府補助方案</h2>
             <div className="w-12 h-1 bg-gradient-to-r from-orange-500 to-amber-500 mx-auto rounded-full" />
-            <p className="text-muted-foreground mt-3">OXM 協助媒合最適合您企業的政府計畫</p>
+            <p className="text-muted-foreground mt-3">OXM 協助媒合適合企業階段的政府計畫</p>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-stretch">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6 items-stretch">
             {SUBSIDY_PLANS.map((plan) => (
               <div key={plan.code} className="rounded-2xl border border-border bg-background flex flex-col overflow-hidden shadow-sm hover:shadow-md transition-shadow">
                 <div className={`h-1.5 bg-gradient-to-r ${plan.topBar}`} />
