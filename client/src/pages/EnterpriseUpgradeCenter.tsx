@@ -107,40 +107,40 @@ const PROCESS_STEPS = [
   },
 ];
 
-// ── LED 數字顯示 ──────────────────────────────────────────────────────────────
+// ── 七段數碼管數字 ────────────────────────────────────────────────────────────
 
-function LedNumber({
+function SevenSegmentNumber({
   value,
   color,
-  className = "text-5xl",
+  size = "large",
 }: {
   value: string;
   color: string;
-  className?: string;
+  size?: "small" | "medium" | "large";
 }) {
-  const font: React.CSSProperties = {
-    fontFamily: '"Courier New","Lucida Console","Monaco",ui-monospace,monospace',
-    fontWeight: 900,
-    letterSpacing: "0.08em",
-  };
+  const sizeClass = size === "large" ? "text-5xl" : size === "medium" ? "text-2xl" : "text-xl";
+  const glow = `0 0 6px ${color}, 0 0 14px ${color}99, 0 0 28px ${color}44`;
   return (
-    <span className="relative inline-flex leading-none">
-      {/* Ghost "8888" backdrop gives full-segment feel */}
+    <span
+      className={`relative inline-block ${sizeClass} leading-none`}
+      style={{
+        fontFamily:
+          '"DSEG7 Classic","DS-Digital","Digital-7","Orbitron","Share Tech Mono","Courier New",ui-monospace,monospace',
+        fontWeight: 700,
+        letterSpacing: "0.10em",
+        fontVariantNumeric: "tabular-nums",
+      }}
+    >
+      {/* Dim ghost "8888…" simulates unlit segments */}
       <span
         aria-hidden
-        className={`${className} absolute top-0 left-0 select-none pointer-events-none`}
-        style={{ ...font, color: `${color}18` }}
+        className="absolute top-0 left-0 select-none pointer-events-none"
+        style={{ color: `${color}15` }}
       >
         {"8".repeat(value.length)}
       </span>
-      <span
-        className={`${className} relative`}
-        style={{
-          ...font,
-          color,
-          textShadow: `0 0 8px ${color}, 0 0 20px ${color}70, 0 0 40px ${color}30`,
-        }}
-      >
+      {/* Lit digits */}
+      <span className="relative" style={{ color, textShadow: glow }}>
         {value}
       </span>
     </span>
@@ -164,59 +164,66 @@ function StatCard({
 }) {
   return (
     <div
-      className="rounded-xl p-5 flex flex-col"
+      className="rounded-xl flex flex-col overflow-hidden shadow-lg"
       style={{
-        background: "linear-gradient(145deg,#0f172a 0%,#0a0f1e 100%)",
+        background: "#07111f",
         border: `1px solid ${color}22`,
+        boxShadow: `0 4px 20px rgba(0,0,0,0.45), 0 0 24px ${color}06`,
       }}
     >
       {/* Header */}
-      <div className="flex items-center justify-between mb-3">
+      <div
+        className="flex items-center justify-between px-5 pt-4 pb-3"
+        style={{ borderBottom: `1px solid ${color}10` }}
+      >
         <div className="flex items-center gap-2">
           <span className="relative flex h-2 w-2">
             <span className="motion-safe:animate-ping absolute inline-flex h-full w-full rounded-full opacity-40" style={{ backgroundColor: color }} />
             <span className="relative inline-flex rounded-full h-2 w-2" style={{ backgroundColor: color, boxShadow: `0 0 6px ${color}` }} />
           </span>
-          <span className="text-[9px] font-mono tracking-[0.22em] uppercase" style={{ color: `${color}80` }}>{title}</span>
+          <span className="text-[10px] font-mono tracking-[0.20em] uppercase font-semibold" style={{ color: `${color}90` }}>{title}</span>
         </div>
-        <Icon className="w-3 h-3" style={{ color: `${color}44` }} />
+        <Icon className="w-3.5 h-3.5" style={{ color: `${color}50` }} />
       </div>
 
-      {/* Multi-row → horizontal 3-column; single-row → big centred number */}
+      {/* Body — 3-col for multi-row, big single for solo */}
       {rows.length > 1 ? (
-        <div className="flex-1 grid grid-cols-3">
+        <div className="flex-1 flex">
           {rows.map(({ label, value, unit }, idx) => (
             <div
               key={label}
-              className="flex flex-col items-center justify-center text-center px-2 py-1"
-              style={idx > 0 ? { borderLeft: `1px solid ${color}18` } : {}}
+              className="flex-1 min-w-0 flex flex-col items-center justify-center text-center px-2 py-5"
+              style={idx > 0 ? { borderLeft: "1px solid rgba(148,163,184,0.18)" } : {}}
             >
-              <div className="text-[7px] font-mono tracking-widest uppercase mb-1.5" style={{ color: "rgba(148,163,184,0.28)" }}>{label}</div>
-              <LedNumber value={value} color={color} className="text-3xl" />
-              <div className="text-[9px] font-mono mt-1" style={{ color: `${color}55` }}>{unit}</div>
+              <div className="text-[8px] font-mono tracking-widest uppercase mb-2" style={{ color: "rgba(148,163,184,0.35)" }}>{label}</div>
+              <SevenSegmentNumber value={value} color={color} size="medium" />
+              <div className="text-[10px] font-mono mt-1.5 font-semibold" style={{ color: `${color}60` }}>{unit}</div>
             </div>
           ))}
         </div>
       ) : (
-        <div className="flex-1 flex flex-col justify-center py-2">
-          <div className="text-[8px] font-mono tracking-widest uppercase mb-2" style={{ color: "rgba(148,163,184,0.28)" }}>{rows[0].label}</div>
-          <div className="flex items-baseline gap-2">
-            <LedNumber value={rows[0].value} color={color} className="text-5xl" />
-            <span className="font-mono text-sm" style={{ color: `${color}55` }}>{rows[0].unit}</span>
+        <div className="flex-1 flex flex-col justify-center px-5 py-5">
+          <div className="text-[8px] font-mono tracking-widest uppercase mb-2.5" style={{ color: "rgba(148,163,184,0.35)" }}>{rows[0].label}</div>
+          <div className="flex items-baseline gap-2.5">
+            <SevenSegmentNumber value={rows[0].value} color={color} size="large" />
+            <span className="font-mono font-bold text-sm" style={{ color: `${color}60` }}>{rows[0].unit}</span>
           </div>
         </div>
       )}
 
       {/* Footer */}
-      <div className="mt-3 space-y-1.5">
+      <div className="px-5 pb-4 pt-2 space-y-2">
         {bar !== undefined && (
-          <div className="h-0.5 rounded-full" style={{ background: "rgba(148,163,184,0.10)" }}>
-            <div className="h-full rounded-full" style={{ width: `${bar}%`, backgroundColor: color, boxShadow: `0 0 4px ${color}` }} />
+          <div className="h-1.5 rounded-full" style={{ background: "rgba(30,41,59,0.8)" }}>
+            <div
+              className="h-full rounded-full"
+              style={{ width: `${bar}%`, backgroundColor: color, boxShadow: `0 0 6px ${color}` }}
+            />
           </div>
         )}
-        <div className="flex items-center gap-1">
-          <span className="w-1 h-1 rounded-full bg-green-400" style={{ boxShadow: "0 0 3px #4ade80" }} />
-          <span className="text-[7px] font-mono tracking-widest uppercase" style={{ color: "rgba(148,163,184,0.18)" }}>DATA PENDING LAUNCH</span>
+        <div className="flex items-center gap-1.5">
+          <span className="w-1.5 h-1.5 rounded-full bg-green-400" style={{ boxShadow: "0 0 4px #4ade80" }} />
+          <span className="text-[7px] font-mono tracking-widest uppercase" style={{ color: "rgba(148,163,184,0.20)" }}>DATA PENDING LAUNCH</span>
         </div>
       </div>
     </div>
@@ -302,12 +309,12 @@ export default function EnterpriseUpgradeCenter() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="rounded-2xl bg-white shadow-sm border border-slate-100 p-6 md:p-8">
             <div className="flex flex-col md:flex-row gap-6 md:gap-8 items-start md:items-center">
-              {/* Left: label */}
-              <div className="md:w-36 shrink-0 space-y-2">
-                <h2 className="text-base font-bold text-slate-800">平台數據</h2>
-                <div className="flex items-start gap-1.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-green-400 mt-0.5 shrink-0" style={{ boxShadow: "0 0 4px #4ade80" }} />
-                  <p className="text-[10px] text-slate-400 leading-snug">數據將在平台正式啟動後持續更新</p>
+              {/* Left: title */}
+              <div className="md:w-44 shrink-0 space-y-3">
+                <h2 className="text-2xl font-bold text-slate-900">平台數據</h2>
+                <div className="flex items-start gap-2">
+                  <span className="w-2 h-2 rounded-full bg-green-400 mt-1 shrink-0" style={{ boxShadow: "0 0 6px #4ade80" }} />
+                  <p className="text-sm text-slate-500 leading-relaxed">數據將在平台正式啟動後持續更新</p>
                 </div>
               </div>
               {/* Right: 3 stat cards */}
