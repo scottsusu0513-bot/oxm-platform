@@ -4487,6 +4487,7 @@ export const appRouter = router({
         evaluating:  ["ineligible", "accepted"],
         accepted:    ["submitted"],
         submitted:   ["rejected", "approved"],
+        rejected:    ["submitted"],   // 政府駁回後可補件重新送審
         approved:    ["transforming"],
         transforming:["completed"],
         // Legacy backward compat

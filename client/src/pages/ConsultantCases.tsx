@@ -76,7 +76,7 @@ const TAB_ORDER = [
 ];
 
 // Terminal statuses: no next step
-const TERMINAL = new Set(["ineligible", "rejected", "completed"]);
+const TERMINAL = new Set(["ineligible", "completed"]);
 
 const CAPITAL_LABELS: Record<string, string> = {
   under_500w: "500 萬以下",
@@ -569,11 +569,23 @@ function CaseCard({ item }: { item: Case }) {
               已標記資格不符（備註仍可更新）
             </span>
           )}
+          {/* 政府駁回：可補件後重新送出審核 */}
           {eff === "rejected" && (
-            <span className="text-xs text-rose-600 flex items-center gap-1">
-              <XCircle className="w-3.5 h-3.5" />
-              政府審核駁回（備註仍可更新）
-            </span>
+            <div className="space-y-2 w-full">
+              <p className="text-xs text-rose-600">
+                政府駁回，請於備註補充修正內容，確認補件完成後再重新送出審核。
+              </p>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 text-xs border-amber-300 text-amber-700 hover:bg-amber-50"
+                disabled={busy}
+                onClick={() => statusMut.mutate({ applicationId: item.id, nextStatus: "submitted" })}
+              >
+                {statusMut.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <Send className="w-3.5 h-3.5 mr-1" />}
+                重新送出審核
+              </Button>
+            </div>
           )}
 
           {/* 私訊廠商（評估中以後，且需有 factoryId） */}
