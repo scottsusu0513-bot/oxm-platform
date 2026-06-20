@@ -852,11 +852,20 @@ export const upgradeApplications = mysqlTable("upgradeApplications", {
   notes: text("notes"),
   factoryId: int("factoryId"), // nullable — OXM factory that submitted this application
   consentAgreed: boolean("consentAgreed").notNull().default(true),
-  // status: new→viewed→contacted→consulting→submitted→completed / ineligible / unassigned / archived
-  status: mysqlEnum("status", ["new", "viewed", "contacted", "consulting", "submitted", "completed", "unassigned", "archived", "ineligible"]).notNull().default("new"),
+  // status flow: new → evaluating → accepted → submitted → rejected/approved → transforming → completed
+  // ineligible / unassigned / archived are exception states
+  // legacy: viewed/contacted/consulting kept for backward compat until data migration
+  status: mysqlEnum("status", [
+    "new", "evaluating", "ineligible", "accepted", "submitted",
+    "rejected", "approved", "transforming", "completed",
+    "unassigned", "archived",
+    "viewed", "contacted", "consulting",
+  ]).notNull().default("new"),
   assignedConsultantId: int("assignedConsultantId").references(() => upgradeConsultants.id, { onDelete: "set null" }),
   viewedAt: timestamp("viewedAt"),
   viewedByUserId: int("viewedByUserId"), // no FK — audit trail even if user deleted
+  plannedSubsidyAmount: int("plannedSubsidyAmount"),
+  approvedSubsidyAmount: int("approvedSubsidyAmount"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 }, (t) => ({

@@ -19,15 +19,21 @@ import Navbar from "@/components/Navbar";
 // ── 狀態設定 ──────────────────────────────────────────────────────────────────
 
 const STATUSES = [
-  { value: "new",        label: "新案件",     color: "bg-blue-100 text-blue-700" },
-  { value: "viewed",     label: "已查收",     color: "bg-cyan-100 text-cyan-700" },
-  { value: "contacted",  label: "已聯繫",     color: "bg-amber-100 text-amber-700" },
-  { value: "consulting", label: "輔導中",     color: "bg-violet-100 text-violet-700" },
-  { value: "submitted",  label: "已送件",     color: "bg-green-100 text-green-700" },
-  { value: "completed",  label: "已結案",     color: "bg-emerald-100 text-emerald-700" },
-  { value: "ineligible", label: "資格不符",   color: "bg-red-100 text-red-700" },
-  { value: "unassigned", label: "待分派顧問", color: "bg-yellow-100 text-yellow-700" },
-  { value: "archived",   label: "已封存",     color: "bg-gray-100 text-gray-500" },
+  { value: "new",         label: "新案件",     color: "bg-blue-100 text-blue-700" },
+  { value: "evaluating",  label: "評估中",     color: "bg-cyan-100 text-cyan-700" },
+  { value: "ineligible",  label: "資格不符",   color: "bg-red-100 text-red-700" },
+  { value: "accepted",    label: "已立案處理", color: "bg-violet-100 text-violet-700" },
+  { value: "submitted",   label: "已送出審核", color: "bg-amber-100 text-amber-700" },
+  { value: "rejected",    label: "政府駁回",   color: "bg-rose-100 text-rose-700" },
+  { value: "approved",    label: "案件通過",   color: "bg-green-100 text-green-700" },
+  { value: "transforming",label: "企業轉型中", color: "bg-teal-100 text-teal-700" },
+  { value: "completed",   label: "案件結案",   color: "bg-emerald-100 text-emerald-700" },
+  { value: "unassigned",  label: "待分派顧問", color: "bg-yellow-100 text-yellow-700" },
+  { value: "archived",    label: "已封存",     color: "bg-gray-100 text-gray-500" },
+  // Legacy（舊資料向下相容）
+  { value: "viewed",      label: "評估中（舊）",     color: "bg-cyan-100 text-cyan-600" },
+  { value: "contacted",   label: "評估中（舊）",     color: "bg-cyan-100 text-cyan-600" },
+  { value: "consulting",  label: "已立案（舊）",     color: "bg-violet-100 text-violet-600" },
 ] as const;
 
 type StatusValue = typeof STATUSES[number]["value"];
@@ -97,6 +103,8 @@ type Application = {
   status: string;
   factoryId?: number | null;
   factoryName?: string | null;
+  plannedSubsidyAmount?: number | null;
+  approvedSubsidyAmount?: number | null;
   createdAt: Date;
 };
 
@@ -174,9 +182,19 @@ function ApplicationCard({
               <div><span className="text-muted-foreground">政府獎項：</span>{item.hasGovernmentAward ? (item.governmentAwardName || "有（未填名稱）") : "無"}</div>
               <div><span className="text-muted-foreground">專利：</span>{item.hasPatent ? `有（${item.patentCount ?? "未填數量"}件）` : "無"}</div>
             </div>
+            {(item.plannedSubsidyAmount != null || item.approvedSubsidyAmount != null) && (
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
+                {item.plannedSubsidyAmount != null && (
+                  <div><span className="text-muted-foreground">預計送審金額：</span>NT$ {item.plannedSubsidyAmount.toLocaleString("zh-TW")}</div>
+                )}
+                {item.approvedSubsidyAmount != null && (
+                  <div><span className="text-muted-foreground">實際過案金額：</span><span className="text-green-700 font-medium">NT$ {item.approvedSubsidyAmount.toLocaleString("zh-TW")}</span></div>
+                )}
+              </div>
+            )}
             {item.notes && (
               <div className="rounded-lg bg-muted/50 px-3 py-2 text-xs">
-                <p className="font-medium text-foreground mb-1">備註</p>
+                <p className="font-medium text-foreground mb-1">顧問備註</p>
                 <p className="text-muted-foreground whitespace-pre-wrap">{item.notes}</p>
               </div>
             )}
@@ -327,11 +345,11 @@ function StatsTab() {
                     </div>
                     <div className="rounded-lg bg-green-50 border border-green-100 p-2 text-center">
                       <p className="text-lg font-bold text-green-700 leading-none">{stat.submitted}</p>
-                      <p className="text-green-600 mt-1 opacity-80">已送件</p>
+                      <p className="text-green-600 mt-1 opacity-80">已送出審核</p>
                     </div>
                     <div className="rounded-lg bg-emerald-50 border border-emerald-100 p-2 text-center">
                       <p className="text-lg font-bold text-emerald-700 leading-none">{stat.completed}</p>
-                      <p className="text-emerald-600 mt-1 opacity-80">已結案</p>
+                      <p className="text-emerald-600 mt-1 opacity-80">案件結案</p>
                     </div>
                     <div className="rounded-lg bg-red-50 border border-red-100 p-2 text-center">
                       <p className="text-lg font-bold text-red-700 leading-none">{stat.ineligible}</p>
@@ -463,22 +481,26 @@ export default function AdminUpgradeApplications() {
 
         <Tabs defaultValue="all">
           <TabsList className="flex-wrap h-auto gap-1">
-            <TabsTrigger value="all">全部</TabsTrigger>
-            <TabsTrigger value="new">新案件</TabsTrigger>
-            <TabsTrigger value="unassigned">待分派</TabsTrigger>
-            <TabsTrigger value="ineligible">資格不符</TabsTrigger>
-            <TabsTrigger value="consulting">處理中</TabsTrigger>
-            <TabsTrigger value="submitted">已送件</TabsTrigger>
-            <TabsTrigger value="completed">已結案</TabsTrigger>
-            <TabsTrigger value="archived">封存</TabsTrigger>
-            <TabsTrigger value="stats">顧問總覽</TabsTrigger>
-            <TabsTrigger value="consultants">顧問設定</TabsTrigger>
+            <TabsTrigger value="all" className="text-xs">全部</TabsTrigger>
+            <TabsTrigger value="new" className="text-xs">新案件</TabsTrigger>
+            <TabsTrigger value="unassigned" className="text-xs">待分派</TabsTrigger>
+            <TabsTrigger value="evaluating" className="text-xs">評估中</TabsTrigger>
+            <TabsTrigger value="ineligible" className="text-xs">資格不符</TabsTrigger>
+            <TabsTrigger value="accepted" className="text-xs">已立案</TabsTrigger>
+            <TabsTrigger value="submitted" className="text-xs">已送出審核</TabsTrigger>
+            <TabsTrigger value="rejected" className="text-xs">政府駁回</TabsTrigger>
+            <TabsTrigger value="approved" className="text-xs">案件通過</TabsTrigger>
+            <TabsTrigger value="transforming" className="text-xs">企業轉型中</TabsTrigger>
+            <TabsTrigger value="completed" className="text-xs">案件結案</TabsTrigger>
+            <TabsTrigger value="archived" className="text-xs">封存</TabsTrigger>
+            <TabsTrigger value="stats" className="text-xs">顧問總覽</TabsTrigger>
+            <TabsTrigger value="consultants" className="text-xs">顧問設定</TabsTrigger>
           </TabsList>
 
           <TabsContent value="all" className="mt-4">
             <ApplicationList />
           </TabsContent>
-          {(["new", "unassigned", "ineligible", "consulting", "submitted", "completed", "archived"] as const).map(s => (
+          {(["new","unassigned","evaluating","ineligible","accepted","submitted","rejected","approved","transforming","completed","archived"] as const).map(s => (
             <TabsContent key={s} value={s} className="mt-4">
               <ApplicationList status={s} />
             </TabsContent>

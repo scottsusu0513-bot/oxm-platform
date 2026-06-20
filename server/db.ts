@@ -5618,7 +5618,7 @@ export async function acknowledgeUpgradeApplication(
     ));
   if (!row) return { ok: false };
   await db_.update(upgradeApplications)
-    .set({ status: "viewed", viewedAt: new Date(), viewedByUserId: userId })
+    .set({ status: "evaluating", viewedAt: new Date(), viewedByUserId: userId })
     .where(eq(upgradeApplications.id, id));
   return { ok: true };
 }
@@ -5668,8 +5668,12 @@ export async function adminGetUpgradeStats(): Promise<{
     const count = Number(r.n);
     byRegion[r.regionKey].total += count;
     if (r.status === "new") byRegion[r.regionKey].unviewed += count;
-    if (["viewed", "contacted", "consulting"].includes(r.status)) byRegion[r.regionKey].inProgress += count;
-    if (r.status === "submitted") byRegion[r.regionKey].submitted += count;
+    // 評估中/已立案（含舊狀態 viewed/contacted/consulting）
+    if (["evaluating", "viewed", "contacted", "accepted", "consulting"].includes(r.status))
+      byRegion[r.regionKey].inProgress += count;
+    // 送件及政府審核流程中
+    if (["submitted", "rejected", "approved", "transforming"].includes(r.status))
+      byRegion[r.regionKey].submitted += count;
     if (r.status === "completed") byRegion[r.regionKey].completed += count;
     if (r.status === "ineligible") byRegion[r.regionKey].ineligible += count;
   }
@@ -5766,6 +5770,19 @@ export async function updateUpgradeCaseNotes(id: number, notes: string | null): 
   const db_ = await getDb();
   if (!db_) return;
   await db_.update(upgradeApplications).set({ notes }).where(eq(upgradeApplications.id, id));
+}
+
+export async function updateCaseAmounts(
+  id: number,
+  data: { plannedSubsidyAmount?: number | null; approvedSubsidyAmount?: number | null },
+): Promise<void> {
+  const db_ = await getDb();
+  if (!db_) return;
+  const update: Partial<{ plannedSubsidyAmount: number | null; approvedSubsidyAmount: number | null }> = {};
+  if ("plannedSubsidyAmount" in data) update.plannedSubsidyAmount = data.plannedSubsidyAmount;
+  if ("approvedSubsidyAmount" in data) update.approvedSubsidyAmount = data.approvedSubsidyAmount;
+  if (Object.keys(update).length === 0) return;
+  await db_.update(upgradeApplications).set(update).where(eq(upgradeApplications.id, id));
 }
 
 export async function countUpgradeApplications(status?: UpgradeApplication["status"]): Promise<number> {
