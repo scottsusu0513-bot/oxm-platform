@@ -107,6 +107,46 @@ const PROCESS_STEPS = [
   },
 ];
 
+// ── LED 數字顯示 ──────────────────────────────────────────────────────────────
+
+function LedNumber({
+  value,
+  color,
+  className = "text-5xl",
+}: {
+  value: string;
+  color: string;
+  className?: string;
+}) {
+  const font: React.CSSProperties = {
+    fontFamily: '"Courier New","Lucida Console","Monaco",ui-monospace,monospace',
+    fontWeight: 900,
+    letterSpacing: "0.08em",
+  };
+  return (
+    <span className="relative inline-flex leading-none">
+      {/* Ghost "8888" backdrop gives full-segment feel */}
+      <span
+        aria-hidden
+        className={`${className} absolute top-0 left-0 select-none pointer-events-none`}
+        style={{ ...font, color: `${color}18` }}
+      >
+        {"8".repeat(value.length)}
+      </span>
+      <span
+        className={`${className} relative`}
+        style={{
+          ...font,
+          color,
+          textShadow: `0 0 8px ${color}, 0 0 20px ${color}70, 0 0 40px ${color}30`,
+        }}
+      >
+        {value}
+      </span>
+    </span>
+  );
+}
+
 // ── 平台數據卡片 ────────────────────────────────────────────────────────────
 
 function StatCard({
@@ -124,13 +164,14 @@ function StatCard({
 }) {
   return (
     <div
-      className="rounded-xl p-4 flex flex-col gap-2.5"
+      className="rounded-xl p-5 flex flex-col"
       style={{
         background: "linear-gradient(145deg,#0f172a 0%,#0a0f1e 100%)",
-        border: `1px solid ${color}1a`,
+        border: `1px solid ${color}22`,
       }}
     >
-      <div className="flex items-center justify-between">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <span className="relative flex h-2 w-2">
             <span className="motion-safe:animate-ping absolute inline-flex h-full w-full rounded-full opacity-40" style={{ backgroundColor: color }} />
@@ -140,30 +181,43 @@ function StatCard({
         </div>
         <Icon className="w-3 h-3" style={{ color: `${color}44` }} />
       </div>
-      <div className="space-y-2">
-        {rows.map(({ label, value, unit }) => (
-          <div key={label}>
-            <div className="text-[8px] font-mono tracking-widest uppercase mb-0.5" style={{ color: "rgba(148,163,184,0.28)" }}>{label}</div>
-            <div className="flex items-baseline gap-1.5">
-              <span
-                className="font-mono font-black text-xl leading-none tracking-wider"
-                style={{ color, textShadow: `0 0 8px ${color}55, 0 0 20px ${color}25` }}
-              >
-                {value}
-              </span>
-              <span className="font-mono text-xs" style={{ color: `${color}44` }}>{unit}</span>
+
+      {/* Multi-row → horizontal 3-column; single-row → big centred number */}
+      {rows.length > 1 ? (
+        <div className="flex-1 grid grid-cols-3">
+          {rows.map(({ label, value, unit }, idx) => (
+            <div
+              key={label}
+              className="flex flex-col items-center justify-center text-center px-2 py-1"
+              style={idx > 0 ? { borderLeft: `1px solid ${color}18` } : {}}
+            >
+              <div className="text-[7px] font-mono tracking-widest uppercase mb-1.5" style={{ color: "rgba(148,163,184,0.28)" }}>{label}</div>
+              <LedNumber value={value} color={color} className="text-3xl" />
+              <div className="text-[9px] font-mono mt-1" style={{ color: `${color}55` }}>{unit}</div>
             </div>
+          ))}
+        </div>
+      ) : (
+        <div className="flex-1 flex flex-col justify-center py-2">
+          <div className="text-[8px] font-mono tracking-widest uppercase mb-2" style={{ color: "rgba(148,163,184,0.28)" }}>{rows[0].label}</div>
+          <div className="flex items-baseline gap-2">
+            <LedNumber value={rows[0].value} color={color} className="text-5xl" />
+            <span className="font-mono text-sm" style={{ color: `${color}55` }}>{rows[0].unit}</span>
           </div>
-        ))}
-      </div>
-      {bar !== undefined && (
-        <div className="h-px rounded-full mt-auto" style={{ background: "rgba(148,163,184,0.10)" }}>
-          <div className="h-px rounded-full" style={{ width: `${bar}%`, backgroundColor: color, boxShadow: `0 0 4px ${color}` }} />
         </div>
       )}
-      <div className="flex items-center gap-1">
-        <span className="w-1 h-1 rounded-full bg-green-400" style={{ boxShadow: "0 0 3px #4ade80" }} />
-        <span className="text-[7px] font-mono tracking-widest uppercase" style={{ color: "rgba(148,163,184,0.18)" }}>DATA PENDING LAUNCH</span>
+
+      {/* Footer */}
+      <div className="mt-3 space-y-1.5">
+        {bar !== undefined && (
+          <div className="h-0.5 rounded-full" style={{ background: "rgba(148,163,184,0.10)" }}>
+            <div className="h-full rounded-full" style={{ width: `${bar}%`, backgroundColor: color, boxShadow: `0 0 4px ${color}` }} />
+          </div>
+        )}
+        <div className="flex items-center gap-1">
+          <span className="w-1 h-1 rounded-full bg-green-400" style={{ boxShadow: "0 0 3px #4ade80" }} />
+          <span className="text-[7px] font-mono tracking-widest uppercase" style={{ color: "rgba(148,163,184,0.18)" }}>DATA PENDING LAUNCH</span>
+        </div>
       </div>
     </div>
   );
