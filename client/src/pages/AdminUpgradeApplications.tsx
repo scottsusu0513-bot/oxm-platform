@@ -489,7 +489,6 @@ export default function AdminUpgradeApplications() {
             <TabsTrigger value="accepted" className="text-xs">已立案</TabsTrigger>
             <TabsTrigger value="submitted" className="text-xs">已送出審核</TabsTrigger>
             <TabsTrigger value="rejected" className="text-xs">政府駁回</TabsTrigger>
-            <TabsTrigger value="approved" className="text-xs">案件通過</TabsTrigger>
             <TabsTrigger value="transforming" className="text-xs">企業轉型中</TabsTrigger>
             <TabsTrigger value="completed" className="text-xs">案件結案</TabsTrigger>
             <TabsTrigger value="archived" className="text-xs">封存</TabsTrigger>
@@ -500,7 +499,7 @@ export default function AdminUpgradeApplications() {
           <TabsContent value="all" className="mt-4">
             <ApplicationList />
           </TabsContent>
-          {(["new","unassigned","evaluating","ineligible","accepted","submitted","rejected","approved","transforming","completed","archived"] as const).map(s => (
+          {(["new","unassigned","evaluating","ineligible","accepted","submitted","rejected","transforming","completed","archived"] as const).map(s => (
             <TabsContent key={s} value={s} className="mt-4">
               <ApplicationList status={s} />
             </TabsContent>

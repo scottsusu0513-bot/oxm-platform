@@ -4471,7 +4471,7 @@ export const appRouter = router({
     // 顧問推進案件狀態（嚴格 transition，不含 new→evaluating，由 acknowledge 處理）
     updateCaseStatus: protectedProcedure.input(z.object({
       applicationId: z.number().int().positive(),
-      nextStatus: z.enum(["ineligible", "accepted", "submitted", "rejected", "approved", "transforming", "completed"]),
+      nextStatus: z.enum(["ineligible", "accepted", "submitted", "rejected", "transforming", "completed"]),
     })).mutation(async ({ ctx, input }) => {
       const app = await db.getUpgradeApplicationById(input.applicationId);
       if (!app) throw new TRPCError({ code: "NOT_FOUND", message: "找不到案件" });
@@ -4486,9 +4486,9 @@ export const appRouter = router({
       const ALLOWED: Record<string, string[]> = {
         evaluating:  ["ineligible", "accepted"],
         accepted:    ["submitted"],
-        submitted:   ["rejected", "approved"],
-        rejected:    ["submitted"],   // 政府駁回後可補件重新送審
-        approved:    ["transforming"],
+        submitted:   ["rejected", "transforming"],  // 政府通過後直接進企業轉型中
+        rejected:    ["submitted"],                  // 政府駁回後可補件重新送審
+        approved:    ["transforming"],               // backward compat：舊 approved 資料仍可推進
         transforming:["completed"],
         // Legacy backward compat
         viewed:      ["ineligible", "accepted"],
@@ -4500,6 +4500,12 @@ export const appRouter = router({
           code: "BAD_REQUEST",
           message: `目前狀態「${app.status}」不能推進至「${input.nextStatus}」`,
         });
+      }
+      // 政府通過進入轉型期前，必須已填寫實際過案金額
+      if (input.nextStatus === "transforming" && (app.status === "submitted" || app.status === "approved")) {
+        if (!app.approvedSubsidyAmount) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "請先填寫並儲存實際過案金額，再進行案件通過" });
+        }
       }
       await db.updateUpgradeApplicationStatus(input.applicationId, input.nextStatus);
       return { success: true };

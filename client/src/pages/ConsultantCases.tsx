@@ -46,6 +46,7 @@ function statusInfo(s: string) {
 function effectiveStatus(s: string): string {
   if (s === "viewed" || s === "contacted") return "evaluating";
   if (s === "consulting") return "accepted";
+  if (s === "approved") return "transforming";
   return s;
 }
 
@@ -57,8 +58,7 @@ const STATUS_GROUPS: Record<string, string[]> = {
   accepted:    ["accepted", "consulting"],
   submitted:   ["submitted"],
   rejected:    ["rejected"],
-  approved:    ["approved"],
-  transforming:["transforming"],
+  transforming:["transforming", "approved"],  // approved 舊資料映射到企業轉型中
   completed:   ["completed"],
   unassigned:  ["unassigned"],
 };
@@ -70,7 +70,6 @@ const TAB_ORDER = [
   { key: "accepted",     label: "已立案處理" },
   { key: "submitted",    label: "已送出審核" },
   { key: "rejected",     label: "政府駁回" },
-  { key: "approved",     label: "案件通過" },
   { key: "transforming", label: "企業轉型中" },
   { key: "completed",    label: "案件結案" },
 ];
@@ -249,7 +248,7 @@ function CaseCard({ item }: { item: Case }) {
     if (!approvedSaved) {
       await amountsMut.mutateAsync({ applicationId: item.id, approvedSubsidyAmount: amt });
     }
-    statusMut.mutate({ applicationId: item.id, nextStatus: "approved" });
+    statusMut.mutate({ applicationId: item.id, nextStatus: "transforming" });
   };
 
   const createdDate = new Date(item.createdAt).toLocaleDateString("zh-TW");
@@ -403,8 +402,8 @@ function CaseCard({ item }: { item: Case }) {
           </div>
         )}
 
-        {/* 實際過案金額（submitted 填寫、approved/transforming/completed 展示） */}
-        {(eff === "submitted" || eff === "approved" || eff === "transforming" || eff === "completed") && (
+        {/* 實際過案金額（submitted 填寫、transforming/completed 展示） */}
+        {(eff === "submitted" || eff === "transforming" || eff === "completed") && (
           <div className="space-y-1.5">
             <p className="text-xs font-medium text-muted-foreground">
               實際過案金額
@@ -526,23 +525,10 @@ function CaseCard({ item }: { item: Case }) {
             </>
           )}
 
-          {/* 案件通過：進入企業轉型中 */}
-          {eff === "approved" && (
-            <Button
-              size="sm"
-              className="h-8 text-xs"
-              disabled={busy}
-              onClick={() => statusMut.mutate({ applicationId: item.id, nextStatus: "transforming" })}
-            >
-              {statusMut.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <Rocket className="w-3.5 h-3.5 mr-1" />}
-              進入企業轉型中
-            </Button>
-          )}
-
           {/* 企業轉型中：案件結案 */}
           {eff === "transforming" && (
             <div className="space-y-2 w-full">
-              <p className="text-xs text-muted-foreground">一年期專案完成且政府補助尾款撥付後再結案</p>
+              <p className="text-xs text-teal-700">案件已通過政府審核並進入企業轉型期。請於一年期專案完成且政府補助尾款撥付後再結案。</p>
               <Button
                 size="sm"
                 variant="secondary"
@@ -665,7 +651,6 @@ export default function ConsultantCases() {
     accepted:    tabCount("accepted"),
     submitted:   tabCount("submitted"),
     rejected:    tabCount("rejected"),
-    approved:    tabCount("approved"),
     transforming:tabCount("transforming"),
     completed:   tabCount("completed"),
   };
@@ -696,7 +681,6 @@ export default function ConsultantCases() {
             <StatCard label="已立案處理" count={stats.accepted}     color="violet" />
             <StatCard label="已送出審核" count={stats.submitted}    color="amber" />
             <StatCard label="政府駁回"   count={stats.rejected}     color="rose" />
-            <StatCard label="案件通過"   count={stats.approved}     color="green" />
             <StatCard label="企業轉型中" count={stats.transforming}  color="teal" />
             <StatCard label="案件結案"   count={stats.completed}    color="emerald" />
           </div>
