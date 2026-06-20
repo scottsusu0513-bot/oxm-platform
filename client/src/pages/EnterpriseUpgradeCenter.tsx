@@ -264,81 +264,39 @@ export default function EnterpriseUpgradeCenter() {
 
       <Navbar />
 
-      {/* ── Hero Image ─────────────────────────────────────────────────────── */}
-      <section style={{ backgroundColor: "#06090f" }}>
-        <img
-          src="/images/upgrade-center/hero-bg.png"
-          alt="企業升級中心"
-          style={{ width: "100%", height: "auto", display: "block" }}
-        />
-      </section>
-
-      {/* ── Hero CTA ──────────────────────────────────────────────────────── */}
-      <section
-        className="py-12 md:py-16"
-        style={{
-          background: "linear-gradient(180deg,#06090f 0%,#040c1a 100%)",
-          borderBottom: "1px solid rgba(148,163,184,0.08)",
-        }}
-      >
-        <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      {/* ── Hero Banner Card ───────────────────────────────────────────────── */}
+      <section className="py-4 md:py-6" style={{ backgroundColor: "#06090f" }}>
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <h1 className="sr-only">企業升級中心</h1>
-          <div className="max-w-lg space-y-6 text-white">
-
-            {/* Live pill */}
+          <div className="relative rounded-2xl overflow-hidden shadow-2xl shadow-black/60">
+            <img
+              src="/images/upgrade-center/hero-bg.png"
+              alt="企業升級中心"
+              style={{
+                width: "100%",
+                height: "clamp(200px, 27vw, 400px)",
+                objectFit: "cover",
+                objectPosition: "center 30%",
+                display: "block",
+              }}
+            />
+            {/* Bottom gradient for button readability */}
             <div
-              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full"
-              style={{ border: "1px solid rgba(249,115,22,0.35)", background: "rgba(249,115,22,0.10)" }}
-            >
-              <span className="relative flex h-2 w-2">
-                <span className="motion-safe:animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-500 opacity-60" />
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-orange-500" />
-              </span>
-              <span className="text-sm font-medium text-orange-300">免費資格評估開放中</span>
-            </div>
-
-            {/* Tagline */}
-            <p className="text-2xl md:text-3xl font-bold leading-snug">
-              政府補助不用自己跑，
-              <br />
-              <span
-                style={{
-                  background: "linear-gradient(135deg,#f97316 0%,#fbbf24 100%)",
-                  WebkitBackgroundClip: "text",
-                  WebkitTextFillColor: "transparent",
-                  backgroundClip: "text",
-                }}
-              >
-                OXM 全程顧問陪跑
-              </span>
-            </p>
-
-            {/* Bullets */}
-            <div className="space-y-2.5">
-              {[
-                { Icon: CheckCircle, text: "全程顧問陪跑，從評估到送件" },
-                { Icon: TrendingUp,  text: "媒合最適合您企業的計畫類型" },
-                { Icon: Users,       text: "專人到廠評估，提高申請成功率" },
-              ].map(({ Icon, text }) => (
-                <div key={text} className="flex items-center gap-2.5">
-                  <Icon className="w-4 h-4 text-orange-400 shrink-0" />
-                  <span className="text-slate-200 text-sm">{text}</span>
-                </div>
-              ))}
-            </div>
-
-            {/* CTA */}
-            <div className="flex flex-col sm:flex-row items-start gap-3 pt-1">
+              className="absolute inset-x-0 bottom-0 h-20 pointer-events-none"
+              style={{ background: "linear-gradient(to top, rgba(4,7,18,0.85) 0%, transparent 100%)" }}
+            />
+            {/* Overlay CTA */}
+            <div className="absolute bottom-4 left-4 md:bottom-6 md:left-8 flex items-center gap-3">
               <Button
-                size="lg"
+                size="default"
                 onClick={handleApplyClick}
                 disabled={accessChecking && !!user}
-                className="bg-orange-500 hover:bg-orange-600 text-white border-0 text-base px-8 rounded-lg shadow-lg shadow-orange-500/25"
+                className="bg-orange-500 hover:bg-orange-600 text-white border-0 px-5 rounded-lg shadow-lg shadow-orange-500/40"
               >
                 免費評估資格
                 <ArrowRight className="w-4 h-4 ml-2" />
               </Button>
-              <span className="text-sm font-mono text-slate-400 self-center tracking-wider">
+              <span className="hidden sm:inline text-xs font-mono text-slate-300/70 tracking-wider">
                 SBIR · CITD · SIIR
               </span>
             </div>
@@ -348,7 +306,7 @@ export default function EnterpriseUpgradeCenter() {
 
       {/* ── LED 儀表板 ────────────────────────────────────────────────────── */}
       <section
-        className="relative py-14 md:py-18 overflow-hidden"
+        className="relative py-8 md:py-10 overflow-hidden"
         style={{
           background: "linear-gradient(180deg,#06090f 0%,#020508 70%,#040c1a 100%)",
           borderTop: "1px solid rgba(148,163,184,0.06)",
