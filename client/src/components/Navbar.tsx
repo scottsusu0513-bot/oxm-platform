@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 
 const COMING_SOON = [
+  "企業升級中心",
   "人才與技術中心",
   "產業採購與資源中心",
   "傳產知識與情報中心",
@@ -155,18 +156,7 @@ export default function Navbar() {
             )}
           </div>
 
-          {/* 2. 企業升級中心 — 已開放 */}
-          <Link href="/upgrade-center">
-            <Button
-              variant={location.startsWith("/upgrade-center") || location.startsWith("/upgrade-consultant") ? "secondary" : "ghost"}
-              size="sm"
-              className="text-[11px] px-2 h-8 whitespace-nowrap"
-            >
-              企業升級中心
-            </Button>
-          </Link>
-
-          {/* 3–6. 即將開放（不可互動） */}
+          {/* 2–6. 即將開放（不可互動） */}
           {COMING_SOON.map(label => (
             <span
               key={label}
@@ -369,13 +359,6 @@ export default function Navbar() {
               <Search className="w-4 h-4 mr-2 text-orange-500" />
               商機媒合中心
               <span className="ml-2 text-xs text-muted-foreground">搜尋工廠</span>
-            </Button>
-          </Link>
-
-          <Link href="/upgrade-center" onClick={() => setMobileOpen(false)}>
-            <Button variant="ghost" className="w-full justify-start text-sm">
-              <Briefcase className="w-4 h-4 mr-2 text-orange-500" />
-              企業升級中心
             </Button>
           </Link>
 
