@@ -201,22 +201,20 @@ export default function Navbar() {
                 </Button>
               </Link>
 
-              {/* 鈴鐺 icon（管理員才顯示） */}
-              {isAdmin && (
-                <Link href="/notifications">
-                  <Button
-                    variant={location.startsWith("/notifications") ? "secondary" : "ghost"}
-                    size="sm"
-                    className="relative h-8 w-8 p-0"
-                    title="通知中心"
-                  >
-                    <Bell className="w-4 h-4" />
-                    {communityUnread > 0 && (
-                      <span className="pointer-events-none absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-orange-500 ring-2 ring-background" />
-                    )}
-                  </Button>
-                </Link>
-              )}
+              {/* 鈴鐺 icon（已登入即顯示） */}
+              <Link href="/notifications">
+                <Button
+                  variant={location.startsWith("/notifications") ? "secondary" : "ghost"}
+                  size="sm"
+                  className="relative h-8 w-8 p-0"
+                  title="通知中心"
+                >
+                  <Bell className="w-4 h-4" />
+                  {communityUnread > 0 && (
+                    <span className="pointer-events-none absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-orange-500 ring-2 ring-background" />
+                  )}
+                </Button>
+              </Link>
             </>
           )}
 
@@ -338,16 +336,14 @@ export default function Navbar() {
                   )}
                 </Button>
               </Link>
-              {isAdmin && (
-                <Link href="/notifications">
-                  <Button variant="ghost" size="sm" className="relative h-8 w-8 p-0">
-                    <Bell className="w-4 h-4" />
-                    {communityUnread > 0 && (
-                      <span className="pointer-events-none absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-orange-500 ring-2 ring-background" />
-                    )}
-                  </Button>
-                </Link>
-              )}
+              <Link href="/notifications">
+                <Button variant="ghost" size="sm" className="relative h-8 w-8 p-0">
+                  <Bell className="w-4 h-4" />
+                  {communityUnread > 0 && (
+                    <span className="pointer-events-none absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-orange-500 ring-2 ring-background" />
+                  )}
+                </Button>
+              </Link>
             </>
           )}
           <Button variant="ghost" size="sm" className="relative" onClick={() => setMobileOpen(!mobileOpen)}>
