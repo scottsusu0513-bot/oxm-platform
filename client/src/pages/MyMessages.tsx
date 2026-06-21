@@ -278,8 +278,11 @@ export default function MyMessages() {
     <NativePullToRefreshLayout contentRef={contentRef} indicatorRef={indicatorRef} iconRef={iconRef} phase={phase} className="min-h-screen bg-background">
       <Navbar />
       <div className="container py-6 max-w-3xl">
-        <Button variant="ghost" size="sm" className="mb-4" onClick={() => navigate("/")}>
-          <ArrowLeft className="w-4 h-4 mr-1" /> 返回首頁
+        <Button variant="ghost" size="sm" className="mb-4" onClick={() => {
+          const from = (window.history.state as Record<string, string> | null)?.from;
+          navigate(from ?? "/");
+        }}>
+          <ArrowLeft className="w-4 h-4 mr-1" /> 返回
         </Button>
 
         <h1 className="text-2xl font-bold flex items-center gap-2 mb-4">

@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { useLocation } from "wouter";
+import { useState, useEffect, useRef } from "react";
+import { useLocation, useSearch } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { AppLoading } from "@/components/AppLoading";
 import { trpc } from "@/lib/trpc";
@@ -13,7 +13,7 @@ import { toast } from "sonner";
 import {
   ChevronDown, ChevronUp, Building2, Phone, Mail, MapPin,
   CheckCircle2, Loader2, Briefcase, MessageCircle, ShieldAlert,
-  ArrowRight, Save, Clock, XCircle, Ban, FileCheck, Send,
+  ArrowRight, ArrowLeft, Save, Clock, XCircle, Ban, FileCheck, Send,
   ThumbsDown, ThumbsUp, Rocket, FlagTriangleRight, History,
 } from "lucide-react";
 import Navbar from "@/components/Navbar";
@@ -251,10 +251,16 @@ function StatCard({ label, count, color }: { label: string; count: number; color
 
 // ── 案件卡片 ─────────────────────────────────────────────────────────────────
 
-function CaseCard({ item }: { item: Case }) {
+function CaseCard({ item, defaultExpanded }: { item: Case; defaultExpanded?: boolean }) {
   const [, navigate] = useLocation();
   const utils = trpc.useUtils();
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(defaultExpanded ?? false);
+  const cardRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (defaultExpanded && cardRef.current) {
+      cardRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, []);
   const [showTimeline, setShowTimeline] = useState(false);
   const [localNotes, setLocalNotes] = useState(item.notes ?? "");
   const [localPlanned, setLocalPlanned] = useState(
@@ -295,7 +301,7 @@ function CaseCard({ item }: { item: Case }) {
   });
 
   const chatMut = trpc.chat.getOrCreate.useMutation({
-    onSuccess: (conv) => navigate(`/chat/${conv.id}`),
+    onSuccess: (conv) => navigate(`/chat/${conv.id}`, { state: { from: `/upgrade-consultant/cases?caseId=${item.id}` } }),
     onError: (e) => toast.error(e.message || "無法開啟對話"),
   });
 
@@ -341,7 +347,7 @@ function CaseCard({ item }: { item: Case }) {
   const showUpdated = Math.abs(new Date(item.updatedAt).getTime() - new Date(item.createdAt).getTime()) > 5000;
 
   return (
-    <Card className={`overflow-hidden ${eff === "new" ? "border-blue-200 bg-blue-50/20" : ""} ${eff === "ineligible" ? "border-red-200 bg-red-50/10" : ""} ${eff === "rejected" ? "border-rose-200 bg-rose-50/10" : ""}`}>
+    <Card ref={cardRef} className={`overflow-hidden ${eff === "new" ? "border-blue-200 bg-blue-50/20" : ""} ${eff === "ineligible" ? "border-red-200 bg-red-50/10" : ""} ${eff === "rejected" ? "border-rose-200 bg-rose-50/10" : ""}`}>
       <CardContent className="p-4 space-y-3">
 
         {/* 標題行 */}
@@ -697,6 +703,8 @@ function CaseCard({ item }: { item: Case }) {
 export default function ConsultantCases() {
   const { user, loading } = useAuth();
   const [, navigate] = useLocation();
+  const searchString = useSearch();
+  const targetCaseId = new URLSearchParams(searchString).get("caseId");
 
   const isAdmin = user?.role === "admin";
 
@@ -764,6 +772,11 @@ export default function ConsultantCases() {
       <Navbar />
       <div className="container py-8 max-w-3xl mx-auto space-y-6">
 
+        {/* 返回按鈕 */}
+        <Button variant="ghost" size="sm" onClick={() => window.history.back()}>
+          <ArrowLeft className="w-4 h-4 mr-1" /> 返回
+        </Button>
+
         {/* 頁面標題 */}
         <div className="flex items-center gap-2">
           <Briefcase className="w-5 h-5 text-orange-500" />
@@ -822,7 +835,7 @@ export default function ConsultantCases() {
                 <div className="space-y-4">
                   <p className="text-xs text-muted-foreground">共 {tabItems(t.key).length} 筆</p>
                   {tabItems(t.key).map(item => (
-                    <CaseCard key={item.id} item={item as Case} />
+                    <CaseCard key={item.id} item={item as Case} defaultExpanded={String(item.id) === targetCaseId} />
                   ))}
                 </div>
               )}

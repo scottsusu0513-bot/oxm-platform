@@ -1009,7 +1009,7 @@ export default function ChatPage() {
 
       <div className="container py-4 flex-1 flex flex-col max-w-3xl overflow-hidden">
         <Button variant="ghost" size="sm" className="mb-3 self-start" onClick={() => navigate(backPath)}>
-          <ArrowLeft className="w-4 h-4 mr-1" /> {backPath.startsWith("/dashboard") ? "返回工廠管理後台" : "返回訊息列表"}
+          <ArrowLeft className="w-4 h-4 mr-1" /> {backPath.startsWith("/dashboard") ? "返回工廠管理後台" : backPath.startsWith("/upgrade-consultant") ? "返回顧問中心" : "返回訊息列表"}
         </Button>
 
         <Card className="flex-1 flex flex-col">
