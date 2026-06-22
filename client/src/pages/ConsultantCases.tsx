@@ -884,9 +884,9 @@ export default function ConsultantCases() {
         {/* Tabs */}
         <Tabs defaultValue="new">
           <div className="overflow-x-auto pb-1">
-            <TabsList className="flex h-auto gap-1 w-max">
+            <TabsList className="flex h-auto gap-1 w-max lg:w-full">
               {allTabs.map(t => (
-                <TabsTrigger key={t.key} value={t.key} className="text-xs whitespace-nowrap">
+                <TabsTrigger key={t.key} value={t.key} className="text-xs whitespace-nowrap lg:flex-1">
                   {t.label}
                   {tabCount(t.key) > 0 && (
                     <span className="ml-1.5 inline-flex items-center justify-center rounded-full bg-muted text-muted-foreground w-4 h-4 text-[10px] font-bold">
