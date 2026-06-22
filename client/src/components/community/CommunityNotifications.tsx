@@ -1,8 +1,9 @@
 import { useState } from "react";
+import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import Navbar from "@/components/Navbar";
 import { Helmet } from "react-helmet-async";
-import { Loader2, AlertTriangle, Bell, CheckCheck } from "lucide-react";
+import { Loader2, AlertTriangle, Bell, CheckCheck, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import CommunityNotificationItem from "./CommunityNotificationItem";
@@ -11,7 +12,16 @@ const PAGE_SIZE = 20;
 
 export default function CommunityNotifications() {
   const [page, setPage] = useState(1);
+  const [, navigate] = useLocation();
   const utils = trpc.useUtils();
+
+  const handleBack = () => {
+    if (window.history.length > 1) {
+      window.history.back();
+    } else {
+      navigate("/");
+    }
+  };
 
   const { data, isLoading, isError, refetch } = trpc.community.notificationList.useQuery(
     { page, pageSize: PAGE_SIZE },
@@ -65,7 +75,13 @@ export default function CommunityNotifications() {
 
       <Navbar />
 
-      <main className="container py-8 max-w-2xl">
+      <main className="container py-6 max-w-2xl">
+        {/* 返回鍵 */}
+        <Button variant="ghost" size="sm" className="mb-4 -ml-2" onClick={handleBack}>
+          <ArrowLeft className="w-4 h-4 mr-1" />
+          返回
+        </Button>
+
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
             <Bell className="w-5 h-5 text-orange-500" />

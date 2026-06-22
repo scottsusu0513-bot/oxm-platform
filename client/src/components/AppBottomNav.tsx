@@ -2,66 +2,28 @@ import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
-import { Home, Search, MessageCircle, Bell, User } from "lucide-react";
-
-type Tab = {
-  path: string;
-  icon: React.ComponentType<{ className?: string }>;
-  label: string;
-  /** Returns true when this tab should be highlighted for the given location. */
-  isActive: (loc: string) => boolean;
-};
-
-const TABS: Tab[] = [
-  {
-    path: "/",
-    icon: Home,
-    label: "首頁",
-    isActive: (loc) => loc === "/",
-  },
-  {
-    path: "/search",
-    icon: Search,
-    label: "搜尋",
-    isActive: (loc) => loc.startsWith("/search"),
-  },
-  {
-    path: "/messages",
-    icon: MessageCircle,
-    label: "訊息",
-    // /messages, /messages/*, and /chat/:conversationId all belong to the chat tab
-    isActive: (loc) => loc.startsWith("/messages") || loc.startsWith("/chat/"),
-  },
-  {
-    path: "/notifications",
-    icon: Bell,
-    label: "通知",
-    isActive: (loc) => loc.startsWith("/notifications"),
-  },
-  {
-    path: "/member",
-    icon: User,
-    label: "會員中心",
-    isActive: (loc) => loc.startsWith("/member"),
-  },
-];
+import { Home, Search, MessageCircle, User, Factory } from "lucide-react";
 
 export function AppBottomNav() {
   const [isNative, setIsNative] = useState(false);
   const [location, navigate] = useLocation();
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, user } = useAuth();
 
+  // Chat unread badge
   const chatUnreadQuery = trpc.chat.unreadCount.useQuery(undefined, {
     enabled: isNative && isAuthenticated,
     refetchInterval: 30000,
   });
   const userUnread = chatUnreadQuery.data?.userCount ?? 0;
 
-  const notifUnreadQuery = trpc.community.notificationUnreadCount.useQuery(undefined, {
-    enabled: isNative && isAuthenticated,
-    refetchInterval: 60000,
+  // Factory ownership check (mirrors Navbar logic)
+  const coManagedQuery = trpc.factory.getCoManagedFactories.useQuery(undefined, {
+    enabled: isNative && isAuthenticated && !user?.isFactoryOwner,
+    staleTime: 60000,
   });
-  const notifUnread = notifUnreadQuery.data?.count ?? 0;
+  const showDashboard =
+    user?.isFactoryOwner ||
+    (!coManagedQuery.isLoading && (coManagedQuery.data?.length ?? 0) > 0);
 
   useEffect(() => {
     import("@capacitor/core").then(({ Capacitor }) => {
@@ -70,6 +32,45 @@ export function AppBottomNav() {
   }, []);
 
   if (!isNative) return null;
+
+  const handleFactoryTap = () => {
+    if (!isAuthenticated) {
+      // 未登入：回首頁，讓使用者透過 Navbar 登入
+      navigate("/");
+      return;
+    }
+    navigate(showDashboard ? "/dashboard" : "/register-factory");
+  };
+
+  const isFactoryActive =
+    location.startsWith("/dashboard") || location.startsWith("/register-factory");
+
+  const staticTabs = [
+    {
+      path: "/",
+      Icon: Home,
+      label: "首頁",
+      isActive: location === "/",
+      badge: false,
+      onClick: () => navigate("/"),
+    },
+    {
+      path: "/search",
+      Icon: Search,
+      label: "搜尋",
+      isActive: location.startsWith("/search"),
+      badge: false,
+      onClick: () => navigate("/search"),
+    },
+    {
+      path: "/messages",
+      Icon: MessageCircle,
+      label: "訊息",
+      isActive: location.startsWith("/messages") || location.startsWith("/chat/"),
+      badge: userUnread > 0,
+      onClick: () => navigate("/messages"),
+    },
+  ];
 
   return (
     <>
@@ -85,34 +86,52 @@ export function AppBottomNav() {
         aria-label="主要導航"
       >
         <div className="flex items-center justify-around h-14">
-          {TABS.map(({ path, icon: Icon, label, isActive: checkActive }) => {
-            const isActive = checkActive(location);
+          {/* 靜態入口：首頁、搜尋、訊息 */}
+          {staticTabs.map(({ path, Icon, label, isActive, badge, onClick }) => (
+            <button
+              key={path}
+              className={`flex flex-col items-center gap-0.5 px-2 py-1 min-w-[48px] flex-1 transition-colors ${
+                isActive ? "text-orange-500" : "text-muted-foreground hover:text-foreground"
+              }`}
+              onClick={onClick}
+              aria-label={label}
+              aria-current={isActive ? "page" : undefined}
+            >
+              <div className="relative">
+                <Icon className="w-5 h-5" />
+                {badge && (
+                  <span className="pointer-events-none absolute -top-1 -right-1 h-2 w-2 rounded-full bg-orange-500" />
+                )}
+              </div>
+              <span className="text-[9px] font-medium leading-none whitespace-nowrap">{label}</span>
+            </button>
+          ))}
 
-            return (
-              <button
-                key={path}
-                className={`flex flex-col items-center gap-0.5 px-2 py-1 min-w-[48px] flex-1 transition-colors ${
-                  isActive
-                    ? "text-orange-500"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
-                onClick={() => navigate(path)}
-                aria-label={label}
-                aria-current={isActive ? "page" : undefined}
-              >
-                <div className="relative">
-                  <Icon className="w-5 h-5" />
-                  {path === "/messages" && userUnread > 0 && (
-                    <span className="pointer-events-none absolute -top-1 -right-1 h-2 w-2 rounded-full bg-orange-500" />
-                  )}
-                  {path === "/notifications" && notifUnread > 0 && (
-                    <span className="pointer-events-none absolute -top-1 -right-1 h-2 w-2 rounded-full bg-orange-500" />
-                  )}
-                </div>
-                <span className="text-[9px] font-medium leading-none whitespace-nowrap">{label}</span>
-              </button>
-            );
-          })}
+          {/* 工廠管理（動態：有工廠→/dashboard，無工廠→/register-factory，未登入→/） */}
+          <button
+            className={`flex flex-col items-center gap-0.5 px-2 py-1 min-w-[48px] flex-1 transition-colors ${
+              isFactoryActive ? "text-orange-500" : "text-muted-foreground hover:text-foreground"
+            }`}
+            onClick={handleFactoryTap}
+            aria-label="工廠管理"
+            aria-current={isFactoryActive ? "page" : undefined}
+          >
+            <Factory className="w-5 h-5" />
+            <span className="text-[9px] font-medium leading-none whitespace-nowrap">工廠管理</span>
+          </button>
+
+          {/* 會員中心 */}
+          <button
+            className={`flex flex-col items-center gap-0.5 px-2 py-1 min-w-[48px] flex-1 transition-colors ${
+              location.startsWith("/member") ? "text-orange-500" : "text-muted-foreground hover:text-foreground"
+            }`}
+            onClick={() => navigate("/member")}
+            aria-label="會員中心"
+            aria-current={location.startsWith("/member") ? "page" : undefined}
+          >
+            <User className="w-5 h-5" />
+            <span className="text-[9px] font-medium leading-none whitespace-nowrap">會員中心</span>
+          </button>
         </div>
       </nav>
     </>
