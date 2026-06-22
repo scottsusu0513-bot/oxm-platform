@@ -5821,11 +5821,11 @@ export async function getUpgradePublicStats() {
     .from(upgradeApplications)
     .where(inArray(upgradeApplications.status, ["accepted", "submitted", "rejected", "approved", "transforming", "completed"]));
 
-  // 累積補助金額：企業轉型中（含 legacy approved）且已填入實際過案金額的案件加總（單位：元）
+  // 累積補助金額：企業轉型中、案件結案（含 legacy approved）且已填入實際過案金額的案件加總（單位：元）
   const [gRow] = await db_
     .select({ n: sql<number>`COALESCE(SUM(${upgradeApplications.approvedSubsidyAmount}), 0)` })
     .from(upgradeApplications)
-    .where(inArray(upgradeApplications.status, ["transforming", "approved"]));
+    .where(inArray(upgradeApplications.status, ["transforming", "completed", "approved"]));
 
   // 已結案：status = completed
   const [cRow] = await db_
