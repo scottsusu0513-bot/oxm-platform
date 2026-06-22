@@ -848,10 +848,8 @@ export default function ConsultantCases() {
     completed:   tabCount("completed"),
   };
 
-  // TAB_ORDER 不含 unassigned，管理員的待分派顧問 tab 單獨用 isAdmin 控制
-  const allTabs = isAdmin
-    ? [...TAB_ORDER, { key: "unassigned", label: "待分派顧問" }]
-    : TAB_ORDER;
+  // 顧問中心不顯示待分派顧問（包含管理員身份）；待分派案件移至管理員後台
+  const allTabs = TAB_ORDER;
 
   return (
     <div className="min-h-screen bg-background">

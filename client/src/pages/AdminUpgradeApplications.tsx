@@ -18,6 +18,7 @@ import Navbar from "@/components/Navbar";
 
 // ── 狀態設定 ──────────────────────────────────────────────────────────────────
 
+// 完整狀態清單（用於 badge 顯示 / statusInfo）
 const STATUSES = [
   { value: "new",         label: "新案件",     color: "bg-blue-100 text-blue-700" },
   { value: "evaluating",  label: "評估中",     color: "bg-cyan-100 text-cyan-700" },
@@ -30,13 +31,18 @@ const STATUSES = [
   { value: "completed",   label: "案件結案",   color: "bg-emerald-100 text-emerald-700" },
   { value: "unassigned",  label: "待分派顧問", color: "bg-yellow-100 text-yellow-700" },
   { value: "archived",    label: "已封存",     color: "bg-gray-100 text-gray-500" },
-  // Legacy（舊資料向下相容）
-  { value: "viewed",      label: "評估中（舊）",     color: "bg-cyan-100 text-cyan-600" },
-  { value: "contacted",   label: "評估中（舊）",     color: "bg-cyan-100 text-cyan-600" },
-  { value: "consulting",  label: "已立案（舊）",     color: "bg-violet-100 text-violet-600" },
+  // Legacy（舊資料向下相容，不可再選）
+  { value: "viewed",      label: "評估中（舊）", color: "bg-cyan-100 text-cyan-600" },
+  { value: "contacted",   label: "評估中（舊）", color: "bg-cyan-100 text-cyan-600" },
+  { value: "consulting",  label: "已立案（舊）", color: "bg-violet-100 text-violet-600" },
 ] as const;
 
 type StatusValue = typeof STATUSES[number]["value"];
+
+// 例外調整下拉可選範圍：移除已封存與所有舊狀態
+const SELECTABLE_STATUSES = STATUSES.filter(
+  s => !["archived", "viewed", "contacted", "consulting"].includes(s.value)
+);
 
 function statusInfo(s: string) {
   return STATUSES.find(x => x.value === s) ?? { label: s, color: "bg-gray-100 text-gray-700" };
@@ -127,35 +133,35 @@ function ApplicationCard({
       <CardContent className="p-4 space-y-3">
         {/* 頭部 */}
         <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="font-semibold text-base">{item.companyName}</span>
-              <Badge className={`${info.color} border-0 text-xs`}>{info.label}</Badge>
+              <span className="font-semibold text-base break-all">{item.companyName}</span>
+              <Badge className={`${info.color} border-0 text-xs shrink-0`}>{info.label}</Badge>
               {item.factoryId && (
                 <a
                   href={`/factory/${item.factoryId}`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 dark:bg-blue-950/40 dark:text-blue-400 text-xs border border-blue-200 dark:border-blue-900/40 hover:bg-blue-100 transition-colors"
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 text-xs border border-blue-200 hover:bg-blue-100 transition-colors shrink-0"
                 >
                   <Building2 className="w-3 h-3" />
                   {item.factoryName ? `OXM：${item.factoryName}` : "OXM 工廠"}
                 </a>
               )}
             </div>
-            <div className="flex items-center gap-3 text-xs text-muted-foreground mt-1 flex-wrap">
-              <span className="flex items-center gap-1"><MapPin className="w-3 h-3" />{item.location}</span>
-              <span className="flex items-center gap-1"><Phone className="w-3 h-3" />{item.phone}</span>
-              <span className="flex items-center gap-1"><Mail className="w-3 h-3" />{item.email}</span>
+            <div className="flex items-center gap-2 text-xs text-muted-foreground mt-1 flex-wrap">
+              <span className="flex items-center gap-1 shrink-0"><MapPin className="w-3 h-3" />{item.location}</span>
+              <span className="flex items-center gap-1 min-w-0 truncate"><Phone className="w-3 h-3 shrink-0" />{item.phone}</span>
+              <span className="flex items-center gap-1 min-w-0 truncate"><Mail className="w-3 h-3 shrink-0" />{item.email}</span>
             </div>
           </div>
-          <span className="text-xs text-muted-foreground whitespace-nowrap shrink-0">
+          <span className="text-xs text-muted-foreground whitespace-nowrap shrink-0 ml-2">
             {new Date(item.createdAt).toLocaleDateString("zh-TW")}
           </span>
         </div>
 
         {/* 快速摘要 */}
-        <div className="flex flex-wrap gap-2 text-xs">
+        <div className="flex flex-wrap gap-1.5 text-xs">
           <span className="px-2 py-0.5 rounded-full bg-muted">{CAPITAL_LABELS[item.capitalAmount] ?? item.capitalAmount}</span>
           <span className="px-2 py-0.5 rounded-full bg-muted">{EMPLOYEE_LABELS[item.employeeCount] ?? item.employeeCount}</span>
           <span className="px-2 py-0.5 rounded-full bg-muted">{FACTORY_TYPE_LABELS[item.factoryType] ?? item.factoryType}</span>
@@ -173,7 +179,8 @@ function ApplicationCard({
 
         {expanded && (
           <div className="border-t border-border/50 pt-3 space-y-3">
-            <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
+            {/* 手機版 1 欄，桌面版 2 欄 */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
               <div><span className="text-muted-foreground">聯絡人：</span>{item.contactName}</div>
               <div><span className="text-muted-foreground">所在地：</span>{item.location}</div>
               <div><span className="text-muted-foreground">資本額：</span>{CAPITAL_LABELS[item.capitalAmount] ?? item.capitalAmount}</div>
@@ -185,7 +192,7 @@ function ApplicationCard({
               <div><span className="text-muted-foreground">專利：</span>{item.hasPatent ? `有（${item.patentCount ?? "未填數量"}件）` : "無"}</div>
             </div>
             {(item.plannedSubsidyAmount != null || item.approvedSubsidyAmount != null) && (
-              <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
                 {item.plannedSubsidyAmount != null && (
                   <div><span className="text-muted-foreground">預計送審金額：</span>NT$ {item.plannedSubsidyAmount.toLocaleString("zh-TW")}</div>
                 )}
@@ -248,7 +255,7 @@ function ApplicationCard({
           </div>
         )}
 
-        {/* 例外狀態調整（管理員監控用） */}
+        {/* 例外狀態調整（管理員監控用，不含已封存與舊狀態） */}
         <div className="border-t border-border/50 pt-3">
           <div className="flex items-center gap-2">
             <span className="text-xs text-muted-foreground shrink-0">例外調整</span>
@@ -261,7 +268,7 @@ function ApplicationCard({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {STATUSES.map(s => (
+                {SELECTABLE_STATUSES.map(s => (
                   <SelectItem key={s.value} value={s.value} className="text-xs">{s.label}</SelectItem>
                 ))}
               </SelectContent>
@@ -311,6 +318,56 @@ function ApplicationList({ status }: { status?: StatusValue }) {
           isPending={updateMutation.isPending}
         />
       ))}
+    </div>
+  );
+}
+
+// ── 待分派案件（管理員專屬檢視） ──────────────────────────────────────────────
+
+function UnassignedTab() {
+  const utils = trpc.useUtils();
+  const query = trpc.upgradeCenter.adminList.useQuery(
+    { status: "unassigned", limit: 100, offset: 0 },
+    { refetchInterval: 60000 }
+  );
+
+  const updateMutation = trpc.upgradeCenter.adminUpdateStatus.useMutation({
+    onSuccess: () => {
+      utils.upgradeCenter.adminList.invalidate();
+      toast.success("狀態已更新");
+    },
+    onError: (err) => toast.error(err.message || "更新失敗"),
+  });
+
+  if (query.isLoading) return <AppLoading />;
+
+  const items = query.data?.items ?? [];
+
+  return (
+    <div className="space-y-4">
+      {/* 說明 */}
+      <div className="rounded-xl border border-yellow-200 bg-yellow-50 px-4 py-3 text-sm text-yellow-800 space-y-1">
+        <p className="font-medium">尚未分派給顧問公司的案件</p>
+        <p className="text-xs text-yellow-700/80">這些申請來自目前尚無北中南顧問承接的地區，可作為與顧問公司洽談合作的籌碼。</p>
+      </div>
+      <p className="text-xs text-muted-foreground">共 {items.length} 筆待分派案件</p>
+      {items.length === 0 ? (
+        <div className="text-center py-16 text-muted-foreground">
+          <Building2 className="w-10 h-10 mx-auto mb-3 opacity-30" />
+          <p className="text-sm">目前沒有待分派案件</p>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {items.map(item => (
+            <ApplicationCard
+              key={item.id}
+              item={item as Application}
+              onStatusChange={(id, st) => updateMutation.mutate({ id, status: st })}
+              isPending={updateMutation.isPending}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -371,7 +428,6 @@ function StatsTab() {
             return (
               <Card key={region}>
                 <CardContent className="p-4 space-y-3">
-                  {/* 顧問基本資訊 */}
                   <div className="flex items-center gap-2">
                     <Users className="w-4 h-4 text-muted-foreground shrink-0" />
                     <div>
@@ -380,7 +436,6 @@ function StatsTab() {
                     </div>
                     <span className="ml-auto text-xs text-muted-foreground">共 <strong>{stat.total}</strong> 筆</span>
                   </div>
-                  {/* 狀態細分 */}
                   <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 text-xs">
                     <div className="rounded-lg bg-blue-50 border border-blue-100 p-2 text-center">
                       <p className="text-lg font-bold text-blue-700 leading-none">{stat.unviewed}</p>
@@ -403,7 +458,6 @@ function StatsTab() {
                       <p className="text-red-600 mt-1 opacity-80">資格不符</p>
                     </div>
                   </div>
-                  {/* 異常提醒 */}
                   {stat.unviewed > 0 && (
                     <div className="flex items-center gap-1.5 text-xs text-blue-600 bg-blue-50 rounded px-2 py-1">
                       <Clock className="w-3 h-3" />
@@ -527,32 +581,40 @@ export default function AdminUpgradeApplications() {
         </div>
 
         <Tabs defaultValue="all">
-          <TabsList className="flex-wrap h-auto gap-1">
-            <TabsTrigger value="all" className="text-xs">全部</TabsTrigger>
-            <TabsTrigger value="new" className="text-xs">新案件</TabsTrigger>
-            <TabsTrigger value="unassigned" className="text-xs">待分派</TabsTrigger>
-            <TabsTrigger value="evaluating" className="text-xs">評估中</TabsTrigger>
-            <TabsTrigger value="ineligible" className="text-xs">資格不符</TabsTrigger>
-            <TabsTrigger value="accepted" className="text-xs">已立案</TabsTrigger>
-            <TabsTrigger value="submitted" className="text-xs">已送出審核</TabsTrigger>
-            <TabsTrigger value="rejected" className="text-xs">政府駁回</TabsTrigger>
-            <TabsTrigger value="transforming" className="text-xs">企業轉型中</TabsTrigger>
-            <TabsTrigger value="completed" className="text-xs">案件結案</TabsTrigger>
-            <TabsTrigger value="archived" className="text-xs">封存</TabsTrigger>
-            <TabsTrigger value="stats" className="text-xs">顧問總覽</TabsTrigger>
-            <TabsTrigger value="consultants" className="text-xs">顧問設定</TabsTrigger>
-          </TabsList>
+          {/* 橫向捲動以防多 tab 爆版 */}
+          <div className="overflow-x-auto pb-1">
+            <TabsList className="flex h-auto gap-1 w-max">
+              {/* 案件狀態過濾 */}
+              <TabsTrigger value="all"         className="text-xs whitespace-nowrap">全部</TabsTrigger>
+              <TabsTrigger value="new"         className="text-xs whitespace-nowrap">新案件</TabsTrigger>
+              <TabsTrigger value="evaluating"  className="text-xs whitespace-nowrap">評估中</TabsTrigger>
+              <TabsTrigger value="ineligible"  className="text-xs whitespace-nowrap">資格不符</TabsTrigger>
+              <TabsTrigger value="accepted"    className="text-xs whitespace-nowrap">已立案</TabsTrigger>
+              <TabsTrigger value="submitted"   className="text-xs whitespace-nowrap">已送出審核</TabsTrigger>
+              <TabsTrigger value="rejected"    className="text-xs whitespace-nowrap">政府駁回</TabsTrigger>
+              <TabsTrigger value="transforming"className="text-xs whitespace-nowrap">企業轉型中</TabsTrigger>
+              <TabsTrigger value="completed"   className="text-xs whitespace-nowrap">案件結案</TabsTrigger>
+              <TabsTrigger value="archived"    className="text-xs whitespace-nowrap">封存</TabsTrigger>
+              {/* 管理工具（顧問總覽 → 待分派案件 → 顧問設定） */}
+              <TabsTrigger value="stats"       className="text-xs whitespace-nowrap font-semibold">顧問總覽</TabsTrigger>
+              <TabsTrigger value="unassigned"  className="text-xs whitespace-nowrap font-semibold">待分派案件</TabsTrigger>
+              <TabsTrigger value="consultants" className="text-xs whitespace-nowrap font-semibold">顧問設定</TabsTrigger>
+            </TabsList>
+          </div>
 
           <TabsContent value="all" className="mt-4">
             <ApplicationList />
           </TabsContent>
-          {(["new","unassigned","evaluating","ineligible","accepted","submitted","rejected","transforming","completed","archived"] as const).map(s => (
+          {(["new","evaluating","ineligible","accepted","submitted","rejected","transforming","completed","archived"] as const).map(s => (
             <TabsContent key={s} value={s} className="mt-4">
               <ApplicationList status={s} />
             </TabsContent>
           ))}
           <TabsContent value="stats" className="mt-4">
             <StatsTab />
+          </TabsContent>
+          <TabsContent value="unassigned" className="mt-4">
+            <UnassignedTab />
           </TabsContent>
           <TabsContent value="consultants" className="mt-4">
             <ConsultantBindTab />
