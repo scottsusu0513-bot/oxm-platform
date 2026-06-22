@@ -101,6 +101,22 @@ const EXPORT_LABELS: Record<string, string> = {
   multiple: "多種模式",
 };
 
+// ── 資本額分級 ───────────────────────────────────────────────────────────────
+
+type CapitalTier = "under_500" | "over_500" | "unknown";
+
+function getCapitalTier(capitalAmount: string): CapitalTier {
+  if (capitalAmount === "under_500w") return "under_500";
+  if (["500w_1000w", "1000w_5000w", "5000w_1y", "over_1y"].includes(capitalAmount)) return "over_500";
+  return "unknown";
+}
+
+const CAPITAL_TIER_BADGE: Record<CapitalTier, { label: string; cls: string }> = {
+  under_500: { label: "< 500萬", cls: "bg-sky-100 text-sky-700 border-sky-200" },
+  over_500:  { label: "≥ 500萬", cls: "bg-violet-100 text-violet-700 border-violet-200" },
+  unknown:   { label: "資本額未標示", cls: "bg-slate-100 text-slate-500 border-slate-200" },
+};
+
 // ── 型別 ─────────────────────────────────────────────────────────────────────
 
 type Case = {
@@ -249,6 +265,68 @@ function StatCard({ label, count, color }: { label: string; count: number; color
   );
 }
 
+// ── 新案件分區（依資本額） ──────────────────────────────────────────────────
+
+function NewCasesSplit({ items, targetCaseId }: { items: Case[]; targetCaseId: string | null }) {
+  const under   = items.filter(i => getCapitalTier(i.capitalAmount) === "under_500");
+  const over    = items.filter(i => getCapitalTier(i.capitalAmount) === "over_500");
+  const unknown = items.filter(i => getCapitalTier(i.capitalAmount) === "unknown");
+
+  if (items.length === 0) {
+    return (
+      <div className="text-center py-16 text-muted-foreground">
+        <Building2 className="w-10 h-10 mx-auto mb-3 opacity-30" />
+        <p className="text-sm">目前沒有新案件</p>
+      </div>
+    );
+  }
+
+  const renderGroup = (
+    label: string,
+    lineCls: string,
+    badgeCls: string,
+    groupItems: Case[],
+    emptyMsg: string,
+  ) => (
+    <div>
+      <div className="flex items-center gap-2 mb-3">
+        <div className={`h-px flex-1 ${lineCls}`} />
+        <span className={`text-[11px] font-semibold px-3 py-1 rounded-full border whitespace-nowrap ${badgeCls}`}>
+          {label} · {groupItems.length} 筆
+        </span>
+        <div className={`h-px flex-1 ${lineCls}`} />
+      </div>
+      {groupItems.length === 0 ? (
+        <p className="text-xs text-muted-foreground text-center py-4">{emptyMsg}</p>
+      ) : (
+        <div className="space-y-4">
+          {groupItems.map(item => (
+            <CaseCard key={item.id} item={item} defaultExpanded={String(item.id) === targetCaseId} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
+  return (
+    <div className="space-y-6">
+      <p className="text-xs text-muted-foreground">共 {items.length} 筆新案件</p>
+      {renderGroup(
+        "資本額低於 500 萬", "bg-sky-200", "text-sky-700 bg-sky-50 border-sky-200",
+        under, "目前沒有低於 500 萬資本額的新案件",
+      )}
+      {renderGroup(
+        "資本額 500 萬以上", "bg-violet-200", "text-violet-700 bg-violet-50 border-violet-200",
+        over, "目前沒有 500 萬以上資本額的新案件",
+      )}
+      {unknown.length > 0 && renderGroup(
+        "資本額未標示", "bg-slate-200", "text-slate-500 bg-slate-50 border-slate-200",
+        unknown, "",
+      )}
+    </div>
+  );
+}
+
 // ── 案件卡片 ─────────────────────────────────────────────────────────────────
 
 function CaseCard({ item, defaultExpanded }: { item: Case; defaultExpanded?: boolean }) {
@@ -277,6 +355,10 @@ function CaseCard({ item, defaultExpanded }: { item: Case; defaultExpanded?: boo
   const plannedSaved = item.plannedSubsidyAmount != null && String(item.plannedSubsidyAmount) === localPlanned;
   const approvedSaved = item.approvedSubsidyAmount != null && String(item.approvedSubsidyAmount) === localApproved;
   const canChat = eff !== "new" && !!item.factoryId;
+
+  // Capital tier badge
+  const tier = getCapitalTier(item.capitalAmount);
+  const tierBadge = CAPITAL_TIER_BADGE[tier];
 
   const invalidate = () => utils.upgradeConsultant.myCases.invalidate();
 
@@ -352,30 +434,34 @@ function CaseCard({ item, defaultExpanded }: { item: Case; defaultExpanded?: boo
 
         {/* 標題行 */}
         <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="font-semibold text-base">{item.companyName}</span>
-              <Badge className={`${info.color} border-0 text-xs`}>{info.label}</Badge>
-              {eff === "new" && <span className="text-xs text-blue-600 font-medium">● 待查收</span>}
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="font-semibold text-base break-all">{item.companyName}</span>
+              <Badge className={`${info.color} border-0 text-xs shrink-0`}>{info.label}</Badge>
+              {/* 資本額級距標籤 */}
+              <span className={`inline-flex items-center px-2 py-0.5 rounded-full border text-[10px] font-medium shrink-0 ${tierBadge.cls}`}>
+                {tierBadge.label}
+              </span>
+              {eff === "new" && <span className="text-xs text-blue-600 font-medium shrink-0">● 待查收</span>}
               {item.factoryId && (
                 <a
                   href={`/factory/${item.factoryId}`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-orange-50 text-orange-600 text-xs border border-orange-200 hover:bg-orange-100 transition-colors"
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-orange-50 text-orange-600 text-xs border border-orange-200 hover:bg-orange-100 transition-colors shrink-0"
                 >
                   <Building2 className="w-3 h-3" />
                   {item.factoryName ? `OXM：${item.factoryName}` : "OXM 工廠"}
                 </a>
               )}
             </div>
-            <div className="flex items-center gap-3 text-xs text-muted-foreground mt-1 flex-wrap">
-              <span className="flex items-center gap-1"><MapPin className="w-3 h-3" />{item.location}</span>
-              <span className="flex items-center gap-1"><Phone className="w-3 h-3" />{item.phone}</span>
-              <span className="flex items-center gap-1"><Mail className="w-3 h-3" />{item.email}</span>
+            <div className="flex items-center gap-2 text-xs text-muted-foreground mt-1 flex-wrap">
+              <span className="flex items-center gap-1 shrink-0"><MapPin className="w-3 h-3" />{item.location}</span>
+              <span className="flex items-center gap-1 min-w-0 truncate"><Phone className="w-3 h-3 shrink-0" />{item.phone}</span>
+              <span className="flex items-center gap-1 min-w-0 truncate"><Mail className="w-3 h-3 shrink-0" />{item.email}</span>
             </div>
           </div>
-          <div className="text-right shrink-0 space-y-0.5">
+          <div className="text-right shrink-0 space-y-0.5 ml-2">
             <div className="text-xs text-muted-foreground whitespace-nowrap">{createdDate}</div>
             {showUpdated && (
               <div className="text-xs text-muted-foreground/60 whitespace-nowrap flex items-center gap-1 justify-end">
@@ -400,7 +486,7 @@ function CaseCard({ item, defaultExpanded }: { item: Case; defaultExpanded?: boo
         )}
 
         {/* 標籤列 */}
-        <div className="flex flex-wrap gap-2 text-xs">
+        <div className="flex flex-wrap gap-1.5 text-xs">
           <span className="px-2 py-0.5 rounded-full bg-muted">{CAPITAL_LABELS[item.capitalAmount] ?? item.capitalAmount}</span>
           <span className="px-2 py-0.5 rounded-full bg-muted">{EMPLOYEE_LABELS[item.employeeCount] ?? item.employeeCount}</span>
           <span className="px-2 py-0.5 rounded-full bg-muted">{EXPORT_LABELS[item.exportStatus] ?? item.exportStatus}</span>
@@ -417,7 +503,8 @@ function CaseCard({ item, defaultExpanded }: { item: Case; defaultExpanded?: boo
 
         {expanded && (
           <div className="border-t border-border/50 pt-3">
-            <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
+            {/* 手機版 1 欄，桌面版 2 欄 */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
               <div><span className="text-muted-foreground">聯絡人：</span>{item.contactName}</div>
               <div><span className="text-muted-foreground">所在地：</span>{item.location}</div>
               <div><span className="text-muted-foreground">資本額：</span>{CAPITAL_LABELS[item.capitalAmount] ?? item.capitalAmount}</div>
@@ -426,10 +513,10 @@ function CaseCard({ item, defaultExpanded }: { item: Case; defaultExpanded?: boo
               <div><span className="text-muted-foreground">政府獎項：</span>{item.hasGovernmentAward ? (item.governmentAwardName || "有（未填名稱）") : "無"}</div>
               <div><span className="text-muted-foreground">專利：</span>{item.hasPatent ? `有（${item.patentCount ?? "未填"}件）` : "無"}</div>
               {item.plannedSubsidyAmount != null && (
-                <div className="col-span-2"><span className="text-muted-foreground">預計送審金額：</span>{formatNTD(item.plannedSubsidyAmount)}</div>
+                <div className="sm:col-span-2"><span className="text-muted-foreground">預計送審金額：</span>{formatNTD(item.plannedSubsidyAmount)}</div>
               )}
               {item.approvedSubsidyAmount != null && (
-                <div className="col-span-2"><span className="text-muted-foreground">實際過案金額：</span><span className="text-green-700 font-medium">{formatNTD(item.approvedSubsidyAmount)}</span></div>
+                <div className="sm:col-span-2"><span className="text-muted-foreground">實際過案金額：</span><span className="text-green-700 font-medium">{formatNTD(item.approvedSubsidyAmount)}</span></div>
               )}
             </div>
           </div>
@@ -745,8 +832,8 @@ export default function ConsultantCases() {
 
   const allItems = allCasesQuery.data?.items ?? [];
 
-  const tabItems = (tabKey: string) =>
-    allItems.filter(i => STATUS_GROUPS[tabKey]?.includes(i.status) ?? false);
+  const tabItems = (tabKey: string): Case[] =>
+    allItems.filter(i => STATUS_GROUPS[tabKey]?.includes(i.status) ?? false) as Case[];
 
   const tabCount = (tabKey: string) => tabItems(tabKey).length;
 
@@ -761,11 +848,10 @@ export default function ConsultantCases() {
     completed:   tabCount("completed"),
   };
 
-  const visibleTabs = TAB_ORDER.filter(t => {
-    // Admin: show unassigned tab too
-    if (t.key === "unassigned" && !isAdmin) return false;
-    return true;
-  });
+  // TAB_ORDER 不含 unassigned，管理員的待分派顧問 tab 單獨用 isAdmin 控制
+  const allTabs = isAdmin
+    ? [...TAB_ORDER, { key: "unassigned", label: "待分派顧問" }]
+    : TAB_ORDER;
 
   return (
     <div className="min-h-screen bg-background">
@@ -783,7 +869,7 @@ export default function ConsultantCases() {
           <h1 className="text-xl font-bold">顧問中心</h1>
         </div>
 
-        {/* 統計卡（橫向捲動） */}
+        {/* 統計卡（橫向捲動，不含待分派顧問） */}
         <div className="overflow-x-auto pb-1">
           <div className="flex gap-3 min-w-max">
             <StatCard label="新案件"     count={stats.new}          color="blue" />
@@ -797,35 +883,29 @@ export default function ConsultantCases() {
           </div>
         </div>
 
-        {/* Tabs — 預設顯示新案件，無「全部」 */}
+        {/* Tabs */}
         <Tabs defaultValue="new">
-          <TabsList className="flex-wrap h-auto gap-1">
-            {visibleTabs.map(t => (
-              <TabsTrigger key={t.key} value={t.key} className="text-xs">
-                {t.label}
-                {tabCount(t.key) > 0 && (
-                  <span className="ml-1.5 inline-flex items-center justify-center rounded-full bg-muted text-muted-foreground w-4 h-4 text-[10px] font-bold">
-                    {tabCount(t.key)}
-                  </span>
-                )}
-              </TabsTrigger>
-            ))}
-            {isAdmin && (
-              <TabsTrigger value="unassigned" className="text-xs">
-                待分派顧問
-                {tabCount("unassigned") > 0 && (
-                  <span className="ml-1.5 inline-flex items-center justify-center rounded-full bg-muted text-muted-foreground w-4 h-4 text-[10px] font-bold">
-                    {tabCount("unassigned")}
-                  </span>
-                )}
-              </TabsTrigger>
-            )}
-          </TabsList>
+          <div className="overflow-x-auto pb-1">
+            <TabsList className="flex h-auto gap-1 w-max">
+              {allTabs.map(t => (
+                <TabsTrigger key={t.key} value={t.key} className="text-xs whitespace-nowrap">
+                  {t.label}
+                  {tabCount(t.key) > 0 && (
+                    <span className="ml-1.5 inline-flex items-center justify-center rounded-full bg-muted text-muted-foreground w-4 h-4 text-[10px] font-bold">
+                      {tabCount(t.key)}
+                    </span>
+                  )}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </div>
 
-          {[...visibleTabs, ...(isAdmin ? [{ key: "unassigned", label: "待分派顧問" }] : [])].map(t => (
+          {allTabs.map(t => (
             <TabsContent key={t.key} value={t.key} className="mt-4">
               {allCasesQuery.isLoading ? (
                 <AppLoading />
+              ) : t.key === "new" ? (
+                <NewCasesSplit items={tabItems("new")} targetCaseId={targetCaseId} />
               ) : tabItems(t.key).length === 0 ? (
                 <div className="text-center py-16 text-muted-foreground">
                   <Building2 className="w-10 h-10 mx-auto mb-3 opacity-30" />
@@ -835,7 +915,7 @@ export default function ConsultantCases() {
                 <div className="space-y-4">
                   <p className="text-xs text-muted-foreground">共 {tabItems(t.key).length} 筆</p>
                   {tabItems(t.key).map(item => (
-                    <CaseCard key={item.id} item={item as Case} defaultExpanded={String(item.id) === targetCaseId} />
+                    <CaseCard key={item.id} item={item} defaultExpanded={String(item.id) === targetCaseId} />
                   ))}
                 </div>
               )}
