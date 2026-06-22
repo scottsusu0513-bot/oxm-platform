@@ -4408,6 +4408,10 @@ export const appRouter = router({
       await db.updateUpgradeApplicationStatus(input.id, input.status);
       return { success: true };
     }),
+
+    publicStats: publicProcedure.query(async () => {
+      return await db.getUpgradePublicStats();
+    }),
   }),
 
   // ===== 顧問案件管理 =====

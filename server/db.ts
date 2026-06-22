@@ -5804,3 +5804,39 @@ export async function countUpgradeApplications(status?: UpgradeApplication["stat
     .where(conditions.length ? and(...conditions) : undefined);
   return Number(row?.n ?? 0);
 }
+
+export async function getUpgradePublicStats() {
+  const db_ = await getDb();
+  if (!db_) return { appliedFactories: 0, approvedCases: 0, totalGrantAmountYen: 0, completedCases: 0 };
+
+  // 申請廠商：distinct factoryId（排除未綁定工廠的邊緣案件）
+  const [fRow] = await db_
+    .select({ n: sql<number>`COUNT(DISTINCT ${upgradeApplications.factoryId})` })
+    .from(upgradeApplications)
+    .where(isNotNull(upgradeApplications.factoryId));
+
+  // 有過件：進入「已立案處理」及之後所有階段的案件數
+  const [aRow] = await db_
+    .select({ n: sql<number>`COUNT(*)` })
+    .from(upgradeApplications)
+    .where(inArray(upgradeApplications.status, ["accepted", "submitted", "rejected", "approved", "transforming", "completed"]));
+
+  // 累積補助金額：企業轉型中（含 legacy approved）且已填入實際過案金額的案件加總（單位：元）
+  const [gRow] = await db_
+    .select({ n: sql<number>`COALESCE(SUM(${upgradeApplications.approvedSubsidyAmount}), 0)` })
+    .from(upgradeApplications)
+    .where(inArray(upgradeApplications.status, ["transforming", "approved"]));
+
+  // 已結案：status = completed
+  const [cRow] = await db_
+    .select({ n: sql<number>`COUNT(*)` })
+    .from(upgradeApplications)
+    .where(eq(upgradeApplications.status, "completed"));
+
+  return {
+    appliedFactories: Number(fRow?.n ?? 0),
+    approvedCases: Number(aRow?.n ?? 0),
+    totalGrantAmountYen: Number(gRow?.n ?? 0),
+    completedCases: Number(cRow?.n ?? 0),
+  };
+}

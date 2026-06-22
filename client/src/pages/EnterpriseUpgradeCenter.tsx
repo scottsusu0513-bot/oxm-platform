@@ -127,16 +127,6 @@ const PROCESS_STEPS = [
   },
 ];
 
-// ── 平台數據（後續可替換為 API 資料） ─────────────────────────────────────────
-
-const upgradeStats = {
-  appliedFactories: 0,    // 有送出申請（家）
-  approvedCases: 0,       // 有過件（家）
-  approvalRate: 0,        // 過件率（%）
-  totalGrantAmountWan: 0, // 累積補助金額（萬元）
-  completedCases: 0,      // 已結案案件數（件）
-};
-
 const fmt = (n: number, digits: number) => String(n).padStart(digits, "0");
 
 // ── 七段數碼管數字 ────────────────────────────────────────────────────────────
@@ -275,6 +265,21 @@ export default function EnterpriseUpgradeCenter() {
   const { data: coManaged, isLoading: coManagedLoading } = trpc.factory.getCoManagedFactories.useQuery(undefined, {
     enabled: !!user,
   });
+  const { data: rawStats } = trpc.upgradeCenter.publicStats.useQuery(undefined, {
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const upgradeStats = useMemo(() => {
+    const applied = rawStats?.appliedFactories ?? 0;
+    const approved = rawStats?.approvedCases ?? 0;
+    return {
+      appliedFactories: applied,
+      approvedCases: approved,
+      approvalRate: applied > 0 ? Math.round((approved / applied) * 100) : 0,
+      totalGrantAmountWan: Math.floor((rawStats?.totalGrantAmountYen ?? 0) / 10000),
+      completedCases: rawStats?.completedCases ?? 0,
+    };
+  }, [rawStats]);
 
   const hasFactoryAccess = useMemo(() => {
     if (!user) return false;
