@@ -767,7 +767,7 @@ export default function EnterpriseUpgradeCenter() {
                                     : stage.isCompleted
                                     ? "bg-green-500 border-green-500"
                                     : stage.isPastNoRecord
-                                    ? "bg-muted border-border"
+                                    ? "bg-green-500/20 border-green-500/40"
                                     : "bg-background border-gray-300"
                                 )} />
                                 {/* 內容 */}
@@ -778,6 +778,8 @@ export default function EnterpriseUpgradeCenter() {
                                       ? "text-orange-500"
                                       : stage.isCompleted
                                       ? "text-foreground"
+                                      : stage.isPastNoRecord
+                                      ? "text-muted-foreground"
                                       : "text-muted-foreground"
                                   )}>
                                     {stage.label}

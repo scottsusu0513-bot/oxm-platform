@@ -5621,9 +5621,14 @@ export async function acknowledgeUpgradeApplication(
   const existingTl = (row.statusTimeline ?? {}) as Record<string, string>;
   const newTl = { ...existingTl };
   if (!newTl.evaluating) newTl.evaluating = now.toISOString();
+  // Only set viewedAt / viewedByUserId on first acknowledge — never overwrite
+  const firstView = row.viewedAt == null;
   await db_.update(upgradeApplications)
-    .set({ status: "evaluating", viewedAt: now, viewedByUserId: userId,
-           statusTimeline: newTl })
+    .set({
+      status: "evaluating",
+      ...(firstView ? { viewedAt: now, viewedByUserId: userId } : {}),
+      statusTimeline: newTl,
+    })
     .where(eq(upgradeApplications.id, id));
   return { ok: true };
 }
