@@ -15,13 +15,14 @@ import Navbar from "@/components/Navbar";
 import { trpc } from "@/lib/trpc";
 import { Fragment } from "react";
 import { Capacitor } from "@capacitor/core";
+import { cn } from "@/lib/utils";
 import {
   ArrowRight, CheckCircle, Building2, Users,
   ClipboardList, ClipboardCheck, FileText, Send,
   TrendingUp, FileSearch, Loader2,
 } from "lucide-react";
 
-// ── 查詢進度：狀態對照 ──────────────────────────────────────────────────────────
+// ── 查詢進度：狀態 Badge 對照 ─────────────────────────────────────────────────
 
 const PROGRESS_STATUS_INFO: Record<string, { label: string; color: string }> = {
   new:         { label: "等待顧問查收",     color: "bg-blue-100 text-blue-700" },
@@ -30,7 +31,7 @@ const PROGRESS_STATUS_INFO: Record<string, { label: string; color: string }> = {
   accepted:    { label: "已立案處理",       color: "bg-violet-100 text-violet-700" },
   submitted:   { label: "已送出審核",       color: "bg-amber-100 text-amber-700" },
   rejected:    { label: "政府駁回",         color: "bg-rose-100 text-rose-700" },
-  approved:    { label: "案件通過",         color: "bg-green-100 text-green-700" },
+  approved:    { label: "企業轉型中",       color: "bg-teal-100 text-teal-700" },
   transforming:{ label: "企業轉型中",       color: "bg-teal-100 text-teal-700" },
   completed:   { label: "案件結案",         color: "bg-emerald-100 text-emerald-700" },
   unassigned:  { label: "等待顧問中心分派", color: "bg-yellow-100 text-yellow-700" },
@@ -42,6 +43,95 @@ const PROGRESS_STATUS_INFO: Record<string, { label: string; color: string }> = {
 
 function progressStatusInfo(status: string) {
   return PROGRESS_STATUS_INFO[status] ?? { label: status, color: "bg-gray-100 text-gray-700" };
+}
+
+// ── 查詢進度：Timeline 邏輯 ───────────────────────────────────────────────────
+
+// 每個 status key 對應到 Timeline 的哪個「顯示階段」
+const STATUS_TO_STAGE: Record<string, string> = {
+  new:          "new",
+  unassigned:   "new",
+  viewed:       "evaluating",
+  contacted:    "evaluating",
+  evaluating:   "evaluating",
+  consulting:   "accepted",
+  ineligible:   "ineligible",
+  accepted:     "accepted",
+  submitted:    "submitted",
+  rejected:     "rejected",
+  approved:     "transforming",
+  transforming: "transforming",
+  completed:    "completed",
+  archived:     "completed",
+};
+
+function fmtTimestamp(s: string): string {
+  const d = new Date(s);
+  return `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+function buildProgressTimeline(app: {
+  status: string;
+  statusTimeline?: Record<string, string> | null;
+  viewedAt?: Date | string | null;
+  createdAt: Date | string;
+}) {
+  const tl = (app.statusTimeline as Record<string, string | undefined>) ?? {};
+  const currentStageKey = STATUS_TO_STAGE[app.status] ?? app.status;
+  const hasIneligible = app.status === "ineligible" || !!tl.ineligible;
+  const hasRejected = app.status === "rejected" || !!tl.rejected;
+
+  // 決定要顯示的流程節點
+  let stages: { key: string; label: string }[];
+  if (hasIneligible) {
+    stages = [
+      { key: "new",        label: "送出申請" },
+      { key: "evaluating", label: "顧問評估中" },
+      { key: "ineligible", label: "資格不符" },
+    ];
+  } else {
+    stages = [
+      { key: "new",          label: "送出申請" },
+      { key: "evaluating",   label: "顧問評估中" },
+      { key: "accepted",     label: "已立案處理" },
+      { key: "submitted",    label: "已送出審核" },
+    ];
+    if (hasRejected) stages.push({ key: "rejected",    label: "政府駁回" });
+    stages.push({ key: "transforming", label: "企業轉型中" });
+    stages.push({ key: "completed",    label: "案件結案" });
+  }
+
+  return stages.map(stage => {
+    // 取得該階段的時間戳（優先 statusTimeline，再 fallback）
+    let timestamp: string | null = null;
+    switch (stage.key) {
+      case "new":
+        timestamp = tl.new ?? (app.createdAt instanceof Date
+          ? app.createdAt.toISOString()
+          : String(app.createdAt));
+        break;
+      case "evaluating":
+        timestamp = tl.evaluating ?? tl.viewed ?? tl.contacted ?? (
+          app.viewedAt
+            ? (app.viewedAt instanceof Date ? app.viewedAt.toISOString() : String(app.viewedAt))
+            : null
+        );
+        break;
+      case "accepted":
+        timestamp = tl.accepted ?? tl.consulting ?? null;
+        break;
+      case "transforming":
+        timestamp = tl.transforming ?? tl.approved ?? null;
+        break;
+      default:
+        timestamp = tl[stage.key] ?? null;
+    }
+
+    const isCurrent = stage.key === currentStageKey;
+    const isCompleted = !!timestamp && !isCurrent;
+
+    return { key: stage.key, label: stage.label, timestamp, isCurrent, isCompleted };
+  });
 }
 
 const isNativePlatform = Capacitor.isNativePlatform();
@@ -642,32 +732,64 @@ export default function EnterpriseUpgradeCenter() {
               <div className="space-y-3">
                 {progressData.applications.map((app) => {
                   const si = progressStatusInfo(app.status);
-                  const createdDate = new Date(app.createdAt).toLocaleDateString("zh-TW");
-                  const hasAcknowledged = !!app.viewedAt;
+                  const timelineStages = buildProgressTimeline(app);
                   return (
                     <div key={app.id} className="rounded-xl border border-border bg-muted/20 p-4 space-y-3">
-                      {/* 公司名稱 + 狀態 */}
+                      {/* 公司名稱 + 狀態 Badge */}
                       <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0">
-                          <p className="font-semibold text-sm leading-snug break-all">{app.companyName}</p>
-                          <p className="text-xs text-muted-foreground mt-0.5">申請日期：{createdDate}</p>
-                        </div>
+                        <p className="font-semibold text-sm leading-snug break-all min-w-0">{app.companyName}</p>
                         <Badge className={`${si.color} border-0 text-xs shrink-0`}>{si.label}</Badge>
                       </div>
 
-                      {/* 顧問查收狀態 */}
-                      <div className="flex items-center gap-1.5 text-xs">
-                        <span
-                          className={`inline-block w-2 h-2 rounded-full shrink-0 ${
-                            hasAcknowledged ? "bg-green-500" : "bg-yellow-400"
-                          }`}
-                        />
-                        <span className="text-muted-foreground">
-                          {hasAcknowledged ? "顧問已查收" : "等待顧問查收"}
-                        </span>
+                      {/* 案件進度 Timeline */}
+                      <div className="pt-0.5">
+                        <p className="text-xs font-medium text-muted-foreground mb-2">案件進度</p>
+                        <div className="relative pl-4 space-y-2.5">
+                          {/* 垂直連線 */}
+                          <div className="absolute left-1 top-1.5 bottom-1.5 w-px bg-border" />
+                          {timelineStages.map(stage => {
+                            const isFuture = !stage.timestamp && !stage.isCurrent;
+                            return (
+                              <div key={stage.key} className="relative flex gap-2 items-start">
+                                {/* 圓點 */}
+                                <div className={cn(
+                                  "absolute -left-[14px] mt-[3px] w-2.5 h-2.5 rounded-full border-2 shrink-0",
+                                  stage.isCurrent
+                                    ? "bg-orange-500 border-orange-500 shadow-sm shadow-orange-300"
+                                    : stage.isCompleted
+                                    ? "bg-green-500 border-green-500"
+                                    : "bg-background border-gray-300"
+                                )} />
+                                {/* 內容 */}
+                                <div className={cn("min-w-0 flex-1", isFuture && "opacity-40")}>
+                                  <span className={cn(
+                                    "text-xs font-medium leading-snug",
+                                    stage.isCurrent
+                                      ? "text-orange-500"
+                                      : stage.isCompleted
+                                      ? "text-foreground"
+                                      : "text-muted-foreground"
+                                  )}>
+                                    {stage.label}
+                                    {stage.isCurrent && (
+                                      <span className="ml-1 text-[10px] font-normal text-orange-400">← 目前進度</span>
+                                    )}
+                                  </span>
+                                  {stage.timestamp ? (
+                                    <div className="text-[10px] text-muted-foreground mt-0.5">
+                                      {fmtTimestamp(stage.timestamp)}
+                                    </div>
+                                  ) : isFuture ? null : (
+                                    <div className="text-[10px] text-muted-foreground mt-0.5">處理中</div>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
                       </div>
 
-                      {/* 備註 */}
+                      {/* 顧問備註 */}
                       {app.notes && (
                         <div className="rounded-lg bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
                           <p className="font-medium text-foreground mb-0.5">顧問備註</p>
