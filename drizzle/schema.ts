@@ -866,6 +866,12 @@ export const upgradeApplications = mysqlTable("upgradeApplications", {
   viewedByUserId: int("viewedByUserId"), // no FK — audit trail even if user deleted
   plannedSubsidyAmount: int("plannedSubsidyAmount"),
   approvedSubsidyAmount: int("approvedSubsidyAmount"),
+  // 顧問服務費與 OXM 抽成
+  consultantFeeMode: varchar("consultantFeeMode", { length: 20 }),          // "percentage" | "fixed" | null
+  consultantFeePercentage: decimal("consultantFeePercentage", { precision: 5, scale: 2 }), // e.g. "10.00"
+  consultantFeeAmount: int("consultantFeeAmount"),                           // 顧問服務費金額（元）
+  oxmCommissionRate: decimal("oxmCommissionRate", { precision: 5, scale: 2 }), // OXM 抽成比例，預設 10
+  oxmCommissionAmount: int("oxmCommissionAmount"),                           // OXM 收入（元）
   statusTimeline: json("statusTimeline").$type<Record<string, string>>(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),

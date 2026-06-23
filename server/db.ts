@@ -5861,15 +5861,49 @@ export async function updateUpgradeCaseNotes(id: number, notes: string | null): 
 
 export async function updateCaseAmounts(
   id: number,
-  data: { plannedSubsidyAmount?: number | null; approvedSubsidyAmount?: number | null },
+  data: {
+    plannedSubsidyAmount?: number | null;
+    approvedSubsidyAmount?: number | null;
+    consultantFeeMode?: string | null;
+    consultantFeePercentage?: string | null;
+    consultantFeeAmount?: number | null;
+    oxmCommissionRate?: string | null;
+    oxmCommissionAmount?: number | null;
+  },
 ): Promise<void> {
   const db_ = await getDb();
   if (!db_) return;
-  const update: Partial<{ plannedSubsidyAmount: number | null; approvedSubsidyAmount: number | null }> = {};
-  if ("plannedSubsidyAmount" in data) update.plannedSubsidyAmount = data.plannedSubsidyAmount;
-  if ("approvedSubsidyAmount" in data) update.approvedSubsidyAmount = data.approvedSubsidyAmount;
+  const update: Partial<{
+    plannedSubsidyAmount: number | null;
+    approvedSubsidyAmount: number | null;
+    consultantFeeMode: string | null;
+    consultantFeePercentage: string | null;
+    consultantFeeAmount: number | null;
+    oxmCommissionRate: string | null;
+    oxmCommissionAmount: number | null;
+  }> = {};
+  if ("plannedSubsidyAmount" in data)    update.plannedSubsidyAmount    = data.plannedSubsidyAmount;
+  if ("approvedSubsidyAmount" in data)   update.approvedSubsidyAmount   = data.approvedSubsidyAmount;
+  if ("consultantFeeMode" in data)       update.consultantFeeMode       = data.consultantFeeMode;
+  if ("consultantFeePercentage" in data) update.consultantFeePercentage = data.consultantFeePercentage;
+  if ("consultantFeeAmount" in data)     update.consultantFeeAmount     = data.consultantFeeAmount;
+  if ("oxmCommissionRate" in data)       update.oxmCommissionRate       = data.oxmCommissionRate;
+  if ("oxmCommissionAmount" in data)     update.oxmCommissionAmount     = data.oxmCommissionAmount;
   if (Object.keys(update).length === 0) return;
   await db_.update(upgradeApplications).set(update).where(eq(upgradeApplications.id, id));
+}
+
+// 政府駁回時清除「實際過案金額」與「顧問服務費/OXM收入」，避免語意矛盾
+export async function clearApprovalAndFeeData(id: number): Promise<void> {
+  const db_ = await getDb();
+  if (!db_) return;
+  await db_.update(upgradeApplications).set({
+    approvedSubsidyAmount: null,
+    consultantFeeMode: null,
+    consultantFeePercentage: null,
+    consultantFeeAmount: null,
+    oxmCommissionAmount: null,
+  }).where(eq(upgradeApplications.id, id));
 }
 
 export async function countUpgradeApplications(status?: UpgradeApplication["status"]): Promise<number> {

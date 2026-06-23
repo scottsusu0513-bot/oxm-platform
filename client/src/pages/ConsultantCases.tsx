@@ -142,6 +142,11 @@ type Case = {
   factoryName?: string | null;
   plannedSubsidyAmount?: number | null;
   approvedSubsidyAmount?: number | null;
+  consultantFeeMode?: string | null;
+  consultantFeePercentage?: string | null;
+  consultantFeeAmount?: number | null;
+  oxmCommissionRate?: string | null;
+  oxmCommissionAmount?: number | null;
   statusTimeline?: Record<string, string> | null;
   viewedAt?: Date | string | null;
   createdAt: Date;
@@ -347,6 +352,17 @@ function CaseCard({ item, defaultExpanded }: { item: Case; defaultExpanded?: boo
   const [localApproved, setLocalApproved] = useState(
     item.approvedSubsidyAmount != null ? String(item.approvedSubsidyAmount) : ""
   );
+  // 顧問服務費
+  const [localFeeMode, setLocalFeeMode] = useState<"percentage" | "fixed" | "">(
+    (item.consultantFeeMode as "percentage" | "fixed") ?? ""
+  );
+  const [localFeePct, setLocalFeePct] = useState(
+    item.consultantFeePercentage ? String(parseFloat(item.consultantFeePercentage)) : ""
+  );
+  const [localFeeAmt, setLocalFeeAmt] = useState(
+    item.consultantFeeAmount != null ? String(item.consultantFeeAmount) : ""
+  );
+  const [feeDirty, setFeeDirty] = useState(false);
 
   const eff = effectiveStatus(item.status);
   const info = statusInfo(item.status);
@@ -415,11 +431,31 @@ function CaseCard({ item, defaultExpanded }: { item: Case; defaultExpanded?: boo
     statusMut.mutate({ applicationId: item.id, nextStatus: "submitted" });
   };
 
+  const handleSaveFee = async () => {
+    if (!localFeeMode) { toast.error("請選擇服務費計算方式"); return; }
+    if (localFeeMode === "percentage") {
+      const pct = parseFloat(localFeePct);
+      if (isNaN(pct) || pct < 0 || pct > 100) { toast.error("請填寫有效的服務費成數（0～100）"); return; }
+      if (!item.approvedSubsidyAmount) { toast.error("請先填寫並儲存政府實際過案金額，再填寫百分比服務費"); return; }
+      await amountsMut.mutateAsync({ applicationId: item.id, consultantFeeMode: "percentage", consultantFeePercentage: pct });
+    } else {
+      const amt = parseAmount(localFeeAmt);
+      if (amt === null) { toast.error("請填寫有效的服務費金額（0～1億）"); return; }
+      await amountsMut.mutateAsync({ applicationId: item.id, consultantFeeMode: "fixed", consultantFeeAmount: amt });
+    }
+    setFeeDirty(false);
+  };
+
   const handleApproved = async () => {
     const amt = parseAmount(localApproved);
     if (!amt) { toast.error("案件通過前請填寫實際過案金額（1～1億）"); return; }
     if (!approvedSaved) {
       await amountsMut.mutateAsync({ applicationId: item.id, approvedSubsidyAmount: amt });
+    }
+    // 顧問服務費必須已儲存
+    if (feeDirty) { toast.error("請先儲存顧問服務費，再進行案件通過"); return; }
+    if (!item.consultantFeeMode || item.consultantFeeAmount == null) {
+      toast.error("案件通過前請先填寫並儲存顧問服務費"); return;
     }
     statusMut.mutate({ applicationId: item.id, nextStatus: "transforming" });
   };
@@ -634,6 +670,84 @@ function CaseCard({ item, defaultExpanded }: { item: Case; defaultExpanded?: boo
               <p className="text-sm font-medium text-green-700">
                 {item.approvedSubsidyAmount != null ? formatNTD(item.approvedSubsidyAmount) : "—"}
               </p>
+            )}
+          </div>
+        )}
+
+        {/* 顧問服務費（submitted 填寫，transforming/completed 展示） */}
+        {(eff === "submitted" || eff === "transforming" || eff === "completed") && (
+          <div className="space-y-1.5">
+            <p className="text-xs font-medium text-muted-foreground">
+              顧問服務費
+              {eff === "submitted" && <span className="text-green-600 ml-1">（案件通過前必填）</span>}
+            </p>
+            {eff === "submitted" ? (
+              <div className="space-y-2">
+                {/* 模式切換 */}
+                <div className="flex gap-2">
+                  {(["percentage", "fixed"] as const).map(mode => (
+                    <Button
+                      key={mode}
+                      size="sm"
+                      variant={localFeeMode === mode ? "default" : "outline"}
+                      className="h-7 text-xs"
+                      onClick={() => { setLocalFeeMode(mode); setFeeDirty(true); }}
+                    >
+                      {mode === "percentage" ? "百分比" : "固定金額"}
+                    </Button>
+                  ))}
+                </div>
+                {localFeeMode === "percentage" && (
+                  <div className="space-y-1">
+                    <div className="flex gap-2 items-center">
+                      <Input
+                        type="number" min={0} max={100} step={0.01}
+                        value={localFeePct}
+                        onChange={e => { setLocalFeePct(e.target.value); setFeeDirty(true); }}
+                        placeholder="例：10"
+                        className="h-8 text-xs w-28"
+                      />
+                      <span className="text-xs text-muted-foreground">%</span>
+                    </div>
+                    {localFeePct && item.approvedSubsidyAmount && (
+                      <p className="text-xs text-muted-foreground pl-1">
+                        顧問服務費：約 {formatNTD(Math.round(item.approvedSubsidyAmount * parseFloat(localFeePct) / 100))}
+                      </p>
+                    )}
+                  </div>
+                )}
+                {localFeeMode === "fixed" && (
+                  <div className="flex gap-2 items-center">
+                    <span className="text-xs text-muted-foreground shrink-0">NT$</span>
+                    <Input
+                      type="number" min={0} max={100000000}
+                      value={localFeeAmt}
+                      onChange={e => { setLocalFeeAmt(e.target.value); setFeeDirty(true); }}
+                      placeholder="例：300000"
+                      className="h-8 text-xs"
+                    />
+                  </div>
+                )}
+                {localFeeMode && feeDirty && (
+                  <Button size="sm" variant="secondary" className="h-8 text-xs" disabled={busy} onClick={handleSaveFee}>
+                    {amountsMut.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3 mr-1" />}
+                    儲存服務費
+                  </Button>
+                )}
+                {item.consultantFeeAmount != null && !feeDirty && (
+                  <p className="text-xs text-green-700">✓ 顧問服務費：{formatNTD(item.consultantFeeAmount)} 已儲存</p>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-0.5 text-sm font-medium">
+                {item.consultantFeeAmount != null ? (
+                  <p>
+                    {item.consultantFeeMode === "percentage" && item.consultantFeePercentage
+                      ? `${parseFloat(item.consultantFeePercentage)}%（${formatNTD(item.consultantFeeAmount)}）`
+                      : `固定 ${formatNTD(item.consultantFeeAmount)}`}
+                  </p>
+                ) : <p className="text-muted-foreground text-xs">尚未填寫</p>}
+              </div>
             )}
           </div>
         )}

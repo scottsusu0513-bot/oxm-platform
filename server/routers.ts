@@ -4547,11 +4547,18 @@ export const appRouter = router({
           message: `目前狀態「${app.status}」不能推進至「${input.nextStatus}」`,
         });
       }
-      // 政府通過進入轉型期前，必須已填寫實際過案金額
+      // 政府通過進入轉型期前：必須已填寫實際過案金額、顧問服務費、OXM 收入
       if (input.nextStatus === "transforming" && (app.status === "submitted" || app.status === "approved")) {
         if (!app.approvedSubsidyAmount) {
           throw new TRPCError({ code: "BAD_REQUEST", message: "請先填寫並儲存實際過案金額，再進行案件通過" });
         }
+        if (!app.consultantFeeMode || !app.consultantFeeAmount || !app.oxmCommissionAmount) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "請先填寫並儲存顧問服務費，再進行案件通過" });
+        }
+      }
+      // 政府駁回：清除實際過案金額與顧問服務費，避免語意矛盾
+      if (input.nextStatus === "rejected") {
+        await db.clearApprovalAndFeeData(input.applicationId);
       }
       await db.updateUpgradeApplicationStatus(input.applicationId, input.nextStatus);
       return { success: true };
@@ -4575,11 +4582,15 @@ export const appRouter = router({
       return { success: true };
     }),
 
-    // 顧問更新金額欄位（預計送審金額 / 實際過案金額）
+    // 顧問更新金額欄位（預計送審金額 / 實際過案金額 / 顧問服務費）
     updateCaseAmounts: protectedProcedure.input(z.object({
       applicationId: z.number().int().positive(),
       plannedSubsidyAmount: z.number().int().positive().max(100_000_000).nullable().optional(),
       approvedSubsidyAmount: z.number().int().positive().max(100_000_000).nullable().optional(),
+      // 顧問服務費
+      consultantFeeMode: z.enum(["percentage", "fixed"]).nullable().optional(),
+      consultantFeePercentage: z.number().min(0).max(100).nullable().optional(),
+      consultantFeeAmount: z.number().int().min(0).max(100_000_000).nullable().optional(),
     })).mutation(async ({ ctx, input }) => {
       const app = await db.getUpgradeApplicationById(input.applicationId);
       if (!app) throw new TRPCError({ code: "NOT_FOUND", message: "找不到案件" });
@@ -4590,9 +4601,42 @@ export const appRouter = router({
         if (!active.some(c => c.id === app.assignedConsultantId))
           throw new TRPCError({ code: "FORBIDDEN", message: "此案件不屬於您的地區" });
       }
+
+      // ── 後端計算顧問服務費與 OXM 收入 ────────────────────────────────────────
+      const OXM_RATE = 10; // 固定 10%，存入 DB 以便歷史保存
+      let derivedFeeAmount: number | undefined;
+      let derivedOxmAmount: number | undefined;
+
+      if (input.consultantFeeMode === "percentage") {
+        if (input.consultantFeePercentage == null) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "百分比模式需要填寫服務費成數" });
+        }
+        const approvedAmt = input.approvedSubsidyAmount ?? app.approvedSubsidyAmount;
+        if (!approvedAmt) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "請先填寫並儲存政府實際過案金額，再填寫百分比服務費" });
+        }
+        derivedFeeAmount = Math.round(approvedAmt * input.consultantFeePercentage / 100);
+        derivedOxmAmount = Math.round(derivedFeeAmount * OXM_RATE / 100);
+      } else if (input.consultantFeeMode === "fixed") {
+        if (input.consultantFeeAmount == null) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "固定金額模式需要填寫服務費金額" });
+        }
+        derivedFeeAmount = input.consultantFeeAmount;
+        derivedOxmAmount = Math.round(derivedFeeAmount * OXM_RATE / 100);
+      } else if (input.consultantFeeMode === null) {
+        // 清除
+        derivedFeeAmount = undefined; // handled via explicit null in payload
+      }
+
       await db.updateCaseAmounts(input.applicationId, {
-        plannedSubsidyAmount: input.plannedSubsidyAmount,
-        approvedSubsidyAmount: input.approvedSubsidyAmount,
+        ...(input.plannedSubsidyAmount !== undefined  ? { plannedSubsidyAmount: input.plannedSubsidyAmount }   : {}),
+        ...(input.approvedSubsidyAmount !== undefined ? { approvedSubsidyAmount: input.approvedSubsidyAmount } : {}),
+        ...(input.consultantFeeMode !== undefined     ? { consultantFeeMode: input.consultantFeeMode }         : {}),
+        ...(input.consultantFeePercentage !== undefined
+          ? { consultantFeePercentage: input.consultantFeePercentage != null ? String(input.consultantFeePercentage) : null }
+          : {}),
+        ...(derivedFeeAmount !== undefined ? { consultantFeeAmount: derivedFeeAmount } : {}),
+        ...(derivedOxmAmount !== undefined ? { oxmCommissionRate: String(OXM_RATE), oxmCommissionAmount: derivedOxmAmount } : {}),
       });
       return { success: true };
     }),

@@ -111,6 +111,11 @@ type Application = {
   factoryName?: string | null;
   plannedSubsidyAmount?: number | null;
   approvedSubsidyAmount?: number | null;
+  consultantFeeMode?: string | null;
+  consultantFeePercentage?: string | null;
+  consultantFeeAmount?: number | null;
+  oxmCommissionRate?: string | null;
+  oxmCommissionAmount?: number | null;
   statusTimeline?: Record<string, string> | null;
   viewedAt?: Date | string | null;
   createdAt: Date;
@@ -191,13 +196,30 @@ function ApplicationCard({
               <div><span className="text-muted-foreground">政府獎項：</span>{item.hasGovernmentAward ? (item.governmentAwardName || "有（未填名稱）") : "無"}</div>
               <div><span className="text-muted-foreground">專利：</span>{item.hasPatent ? `有（${item.patentCount ?? "未填數量"}件）` : "無"}</div>
             </div>
-            {(item.plannedSubsidyAmount != null || item.approvedSubsidyAmount != null) && (
+            {(item.plannedSubsidyAmount != null || item.approvedSubsidyAmount != null || item.oxmCommissionAmount != null) && (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
                 {item.plannedSubsidyAmount != null && (
                   <div><span className="text-muted-foreground">預計送審金額：</span>NT$ {item.plannedSubsidyAmount.toLocaleString("zh-TW")}</div>
                 )}
                 {item.approvedSubsidyAmount != null && (
                   <div><span className="text-muted-foreground">實際過案金額：</span><span className="text-green-700 font-medium">NT$ {item.approvedSubsidyAmount.toLocaleString("zh-TW")}</span></div>
+                )}
+                {item.consultantFeeAmount != null && (
+                  <div>
+                    <span className="text-muted-foreground">顧問服務費：</span>
+                    {item.consultantFeeMode === "percentage" && item.consultantFeePercentage
+                      ? `${parseFloat(item.consultantFeePercentage)}%（NT$ ${item.consultantFeeAmount.toLocaleString("zh-TW")}）`
+                      : `固定 NT$ ${item.consultantFeeAmount.toLocaleString("zh-TW")}`}
+                  </div>
+                )}
+                {item.oxmCommissionAmount != null && (
+                  <div>
+                    <span className="text-muted-foreground">OXM 收入（{item.oxmCommissionRate ? parseFloat(item.oxmCommissionRate) : 10}%抽成）：</span>
+                    <span className="text-orange-700 font-medium">NT$ {item.oxmCommissionAmount.toLocaleString("zh-TW")}</span>
+                  </div>
+                )}
+                {item.approvedSubsidyAmount != null && item.oxmCommissionAmount == null && (
+                  <div className="text-muted-foreground sm:col-span-2">顧問服務費：尚未填寫</div>
                 )}
               </div>
             )}
