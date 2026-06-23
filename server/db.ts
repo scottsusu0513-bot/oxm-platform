@@ -5618,10 +5618,12 @@ export async function acknowledgeUpgradeApplication(
     ));
   if (!row) return { ok: false };
   const now = new Date();
-  const tl = row.statusTimeline ?? {};
+  const existingTl = (row.statusTimeline ?? {}) as Record<string, string>;
+  const newTl = { ...existingTl };
+  if (!newTl.evaluating) newTl.evaluating = now.toISOString();
   await db_.update(upgradeApplications)
     .set({ status: "evaluating", viewedAt: now, viewedByUserId: userId,
-           statusTimeline: { ...tl, evaluating: now.toISOString() } })
+           statusTimeline: newTl })
     .where(eq(upgradeApplications.id, id));
   return { ok: true };
 }
@@ -5770,9 +5772,12 @@ export async function updateUpgradeApplicationStatus(
     .select({ tl: upgradeApplications.statusTimeline })
     .from(upgradeApplications)
     .where(eq(upgradeApplications.id, id));
-  const tl = cur?.tl ?? {};
+  const existing = (cur?.tl ?? {}) as Record<string, string>;
+  const newTl = { ...existing };
+  // Only record first entry time — never overwrite once a status has been reached
+  if (!newTl[status]) newTl[status] = new Date().toISOString();
   await db_.update(upgradeApplications)
-    .set({ status, statusTimeline: { ...tl, [status]: new Date().toISOString() } })
+    .set({ status, statusTimeline: newTl })
     .where(eq(upgradeApplications.id, id));
 }
 

@@ -101,8 +101,8 @@ function buildProgressTimeline(app: {
     stages.push({ key: "completed",    label: "案件結案" });
   }
 
-  return stages.map(stage => {
-    // 取得該階段的時間戳（優先 statusTimeline，再 fallback）
+  // 第一步：取得每個 stage 的時間戳
+  const withTimestamps = stages.map(stage => {
     let timestamp: string | null = null;
     switch (stage.key) {
       case "new":
@@ -126,11 +126,19 @@ function buildProgressTimeline(app: {
       default:
         timestamp = tl[stage.key] ?? null;
     }
+    return { key: stage.key, label: stage.label, timestamp };
+  });
 
-    const isCurrent = stage.key === currentStageKey;
+  // 第二步：找到目前階段的 index，判斷每個 stage 的狀態
+  const currentStageIdx = withTimestamps.findIndex(s => s.key === currentStageKey);
+
+  return withTimestamps.map(({ key, label, timestamp }, idx) => {
+    const isCurrent = key === currentStageKey;
     const isCompleted = !!timestamp && !isCurrent;
+    // 已走過但 statusTimeline 無記錄（舊案件缺紀錄，或被跳躍的中間階段）
+    const isPastNoRecord = !timestamp && !isCurrent && currentStageIdx >= 0 && idx < currentStageIdx;
 
-    return { key: stage.key, label: stage.label, timestamp, isCurrent, isCompleted };
+    return { key, label, timestamp, isCurrent, isCompleted, isPastNoRecord };
   });
 }
 
@@ -748,7 +756,7 @@ export default function EnterpriseUpgradeCenter() {
                           {/* 垂直連線 */}
                           <div className="absolute left-1 top-1.5 bottom-1.5 w-px bg-border" />
                           {timelineStages.map(stage => {
-                            const isFuture = !stage.timestamp && !stage.isCurrent;
+                            const isFuture = !stage.timestamp && !stage.isCurrent && !stage.isPastNoRecord;
                             return (
                               <div key={stage.key} className="relative flex gap-2 items-start">
                                 {/* 圓點 */}
@@ -758,6 +766,8 @@ export default function EnterpriseUpgradeCenter() {
                                     ? "bg-orange-500 border-orange-500 shadow-sm shadow-orange-300"
                                     : stage.isCompleted
                                     ? "bg-green-500 border-green-500"
+                                    : stage.isPastNoRecord
+                                    ? "bg-muted border-border"
                                     : "bg-background border-gray-300"
                                 )} />
                                 {/* 內容 */}
@@ -779,9 +789,11 @@ export default function EnterpriseUpgradeCenter() {
                                     <div className="text-[10px] text-muted-foreground mt-0.5">
                                       {fmtTimestamp(stage.timestamp)}
                                     </div>
-                                  ) : isFuture ? null : (
+                                  ) : stage.isPastNoRecord ? (
+                                    <div className="text-[10px] text-muted-foreground/50 mt-0.5">尚未記錄時間</div>
+                                  ) : stage.isCurrent ? (
                                     <div className="text-[10px] text-muted-foreground mt-0.5">處理中</div>
-                                  )}
+                                  ) : null}
                                 </div>
                               </div>
                             );
