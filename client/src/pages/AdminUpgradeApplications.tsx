@@ -520,11 +520,29 @@ function ConsultantBindTab() {
               服務縣市：{(consultant.serviceAreas as string[]).join("、")}
             </div>
 
-            <div className="flex items-center gap-2">
-              <span className="text-xs shrink-0">目前 userId：</span>
-              <span className="text-xs font-mono bg-muted px-2 py-0.5 rounded">
-                {consultant.userId ?? "（未綁定）"}
-              </span>
+            <div className="space-y-1.5">
+              {consultant.userId == null ? (
+                <p className="text-xs text-muted-foreground">目前尚未綁定使用者</p>
+              ) : (
+                <>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs shrink-0 text-muted-foreground">userId：</span>
+                    <span className="text-xs font-mono bg-muted px-2 py-0.5 rounded">{consultant.userId}</span>
+                  </div>
+                  {consultant.boundUser ? (
+                    <div className="text-xs text-muted-foreground space-y-0.5 pl-2 border-l-2 border-muted ml-1">
+                      <p>使用者名稱：{consultant.boundUser.name ?? "未提供名稱"}</p>
+                      <p className="break-all">Email：{consultant.boundUser.email ?? "—"}</p>
+                      <p>建立時間：{new Date(consultant.boundUser.createdAt).toLocaleString("zh-TW", {
+                        timeZone: "Asia/Taipei", year: "numeric", month: "2-digit",
+                        day: "2-digit", hour: "2-digit", minute: "2-digit",
+                      })}</p>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-amber-600">查無此使用者資料，請確認 userId 是否正確</p>
+                  )}
+                </>
+              )}
             </div>
 
             <div className="flex gap-2">

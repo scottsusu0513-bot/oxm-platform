@@ -5532,10 +5532,30 @@ export async function ensureConsultantsSeeded(): Promise<void> {
   }
 }
 
-export async function listAllConsultants(): Promise<UpgradeConsultant[]> {
+export type BoundUserInfo = { id: number; name: string | null; email: string | null; createdAt: Date };
+export type ConsultantWithBoundUser = UpgradeConsultant & { boundUser: BoundUserInfo | null };
+
+export async function listAllConsultants(): Promise<ConsultantWithBoundUser[]> {
   const db_ = await getDb();
   if (!db_) return [];
-  return db_.select().from(upgradeConsultants).orderBy(upgradeConsultants.regionKey);
+
+  const consultants = await db_.select().from(upgradeConsultants).orderBy(upgradeConsultants.regionKey);
+
+  const userIds = consultants.map(c => c.userId).filter((id): id is number => id != null);
+  const userMap = new Map<number, BoundUserInfo>();
+
+  if (userIds.length > 0) {
+    const fetched = await db_
+      .select({ id: users.id, name: users.name, email: users.email, createdAt: users.createdAt })
+      .from(users)
+      .where(inArray(users.id, userIds));
+    fetched.forEach(u => userMap.set(u.id, u));
+  }
+
+  return consultants.map(c => ({
+    ...c,
+    boundUser: c.userId != null ? (userMap.get(c.userId) ?? null) : null,
+  }));
 }
 
 export async function getConsultantByRegion(regionKey: "north" | "central" | "south"): Promise<UpgradeConsultant | undefined> {
