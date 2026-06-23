@@ -581,26 +581,23 @@ export default function AdminUpgradeApplications() {
         </div>
 
         <Tabs defaultValue="all">
-          {/* 橫向捲動以防多 tab 爆版 */}
-          <div className="overflow-x-auto pb-1">
-            <TabsList className="flex h-auto gap-1 w-max">
-              {/* 案件狀態過濾 */}
-              <TabsTrigger value="all"         className="text-xs whitespace-nowrap">全部</TabsTrigger>
-              <TabsTrigger value="new"         className="text-xs whitespace-nowrap">新案件</TabsTrigger>
-              <TabsTrigger value="evaluating"  className="text-xs whitespace-nowrap">評估中</TabsTrigger>
-              <TabsTrigger value="ineligible"  className="text-xs whitespace-nowrap">資格不符</TabsTrigger>
-              <TabsTrigger value="accepted"    className="text-xs whitespace-nowrap">已立案</TabsTrigger>
-              <TabsTrigger value="submitted"   className="text-xs whitespace-nowrap">已送出審核</TabsTrigger>
-              <TabsTrigger value="rejected"    className="text-xs whitespace-nowrap">政府駁回</TabsTrigger>
-              <TabsTrigger value="transforming"className="text-xs whitespace-nowrap">企業轉型中</TabsTrigger>
-              <TabsTrigger value="completed"   className="text-xs whitespace-nowrap">案件結案</TabsTrigger>
-              <TabsTrigger value="archived"    className="text-xs whitespace-nowrap">封存</TabsTrigger>
-              {/* 管理工具（顧問總覽 → 待分派案件 → 顧問設定） */}
-              <TabsTrigger value="stats"       className="text-xs whitespace-nowrap font-semibold">顧問總覽</TabsTrigger>
-              <TabsTrigger value="unassigned"  className="text-xs whitespace-nowrap font-semibold">待分派案件</TabsTrigger>
-              <TabsTrigger value="consultants" className="text-xs whitespace-nowrap font-semibold">顧問設定</TabsTrigger>
-            </TabsList>
-          </div>
+          <TabsList className="flex flex-wrap h-auto gap-1 w-full justify-start">
+            {/* 案件狀態過濾 */}
+            <TabsTrigger value="all"         className="text-xs whitespace-nowrap">全部</TabsTrigger>
+            <TabsTrigger value="new"         className="text-xs whitespace-nowrap">新案件</TabsTrigger>
+            <TabsTrigger value="evaluating"  className="text-xs whitespace-nowrap">評估中</TabsTrigger>
+            <TabsTrigger value="ineligible"  className="text-xs whitespace-nowrap">資格不符</TabsTrigger>
+            <TabsTrigger value="accepted"    className="text-xs whitespace-nowrap">已立案</TabsTrigger>
+            <TabsTrigger value="submitted"   className="text-xs whitespace-nowrap">已送出審核</TabsTrigger>
+            <TabsTrigger value="rejected"    className="text-xs whitespace-nowrap">政府駁回</TabsTrigger>
+            <TabsTrigger value="transforming"className="text-xs whitespace-nowrap">企業轉型中</TabsTrigger>
+            <TabsTrigger value="completed"   className="text-xs whitespace-nowrap">案件結案</TabsTrigger>
+            <TabsTrigger value="archived"    className="text-xs whitespace-nowrap">封存</TabsTrigger>
+            {/* 管理工具（顧問總覽 → 待分派案件 → 顧問設定） */}
+            <TabsTrigger value="stats"       className="text-xs whitespace-nowrap font-semibold">顧問總覽</TabsTrigger>
+            <TabsTrigger value="unassigned"  className="text-xs whitespace-nowrap font-semibold">待分派案件</TabsTrigger>
+            <TabsTrigger value="consultants" className="text-xs whitespace-nowrap font-semibold">顧問設定</TabsTrigger>
+          </TabsList>
 
           <TabsContent value="all" className="mt-4">
             <ApplicationList />

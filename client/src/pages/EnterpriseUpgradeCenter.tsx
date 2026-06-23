@@ -3,6 +3,7 @@ import { Link, useLocation } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Helmet } from "react-helmet-async";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
   DialogContent,
@@ -13,11 +14,40 @@ import {
 import Navbar from "@/components/Navbar";
 import { trpc } from "@/lib/trpc";
 import { Fragment } from "react";
+import { Capacitor } from "@capacitor/core";
 import {
   ArrowRight, CheckCircle, Building2, Users,
   ClipboardList, ClipboardCheck, FileText, Send,
-  TrendingUp,
+  TrendingUp, FileSearch, Loader2,
 } from "lucide-react";
+
+// ── 查詢進度：狀態對照 ──────────────────────────────────────────────────────────
+
+const PROGRESS_STATUS_INFO: Record<string, { label: string; color: string }> = {
+  new:         { label: "等待顧問查收",     color: "bg-blue-100 text-blue-700" },
+  evaluating:  { label: "顧問評估中",       color: "bg-cyan-100 text-cyan-700" },
+  ineligible:  { label: "資格不符",         color: "bg-red-100 text-red-700" },
+  accepted:    { label: "已立案處理",       color: "bg-violet-100 text-violet-700" },
+  submitted:   { label: "已送出審核",       color: "bg-amber-100 text-amber-700" },
+  rejected:    { label: "政府駁回",         color: "bg-rose-100 text-rose-700" },
+  approved:    { label: "案件通過",         color: "bg-green-100 text-green-700" },
+  transforming:{ label: "企業轉型中",       color: "bg-teal-100 text-teal-700" },
+  completed:   { label: "案件結案",         color: "bg-emerald-100 text-emerald-700" },
+  unassigned:  { label: "等待顧問中心分派", color: "bg-yellow-100 text-yellow-700" },
+  archived:    { label: "已封存",           color: "bg-gray-100 text-gray-500" },
+  viewed:      { label: "顧問評估中",       color: "bg-cyan-100 text-cyan-700" },
+  contacted:   { label: "顧問評估中",       color: "bg-cyan-100 text-cyan-700" },
+  consulting:  { label: "已立案處理",       color: "bg-violet-100 text-violet-700" },
+};
+
+function progressStatusInfo(status: string) {
+  return PROGRESS_STATUS_INFO[status] ?? { label: status, color: "bg-gray-100 text-gray-700" };
+}
+
+const isNativePlatform = Capacitor.isNativePlatform();
+const floatingBtnBottom = isNativePlatform
+  ? "calc(56px + 1.5rem + env(safe-area-inset-bottom, 0px))"
+  : "calc(1.5rem + env(safe-area-inset-bottom, 0px))";
 
 // ── 補助方案 ──────────────────────────────────────────────────────────────────
 
@@ -258,12 +288,17 @@ export default function EnterpriseUpgradeCenter() {
   const { user } = useAuth();
   const [, navigate] = useLocation();
   const [showDialog, setShowDialog] = useState(false);
+  const [showProgressDialog, setShowProgressDialog] = useState(false);
 
   const { data: ownedFactory, isLoading: ownedLoading } = trpc.factory.getMine.useQuery(undefined, {
     enabled: !!user,
   });
   const { data: coManaged, isLoading: coManagedLoading } = trpc.factory.getCoManagedFactories.useQuery(undefined, {
     enabled: !!user,
+  });
+
+  const { data: progressData, isLoading: progressLoading } = trpc.upgradeCenter.myApplicationProgress.useQuery(undefined, {
+    enabled: showProgressDialog && !!user,
   });
   const { data: rawStats } = trpc.upgradeCenter.publicStats.useQuery(undefined, {
     staleTime: 5 * 60 * 1000,
@@ -519,6 +554,141 @@ export default function EnterpriseUpgradeCenter() {
             <Button variant="outline" className="w-full" onClick={() => setShowDialog(false)}>
               我知道了
             </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── 查詢進度浮動按鈕 ─────────────────────────────────────────────── */}
+      <div
+        className="fixed right-5 z-40"
+        style={{ bottom: floatingBtnBottom }}
+      >
+        <button
+          onClick={() => setShowProgressDialog(true)}
+          aria-label="查詢申請進度"
+          className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-orange-500 to-amber-500 text-white font-medium rounded-full shadow-lg hover:shadow-xl hover:-translate-y-0.5 transition-all duration-200 select-none"
+        >
+          <FileSearch className="w-4 h-4 shrink-0" />
+          <span className="text-sm">查詢進度</span>
+        </button>
+      </div>
+
+      {/* ── 申請進度查詢 Dialog ──────────────────────────────────────────── */}
+      <Dialog open={showProgressDialog} onOpenChange={setShowProgressDialog}>
+        <DialogContent className="max-w-lg max-h-[80vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <FileSearch className="w-5 h-5 text-orange-500" />
+              申請進度查詢
+            </DialogTitle>
+            <DialogDescription className="text-sm leading-relaxed pt-1">
+              系統將依您目前登入帳號綁定的工廠，自動查詢企業升級案件進度。
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="overflow-y-auto flex-1 mt-2">
+            {/* 未登入 */}
+            {!user && (
+              <div className="text-center py-8 space-y-3">
+                <p className="text-sm text-muted-foreground">請先登入後查詢申請進度</p>
+                <Link href="/login" onClick={() => setShowProgressDialog(false)}>
+                  <Button className="bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white border-0">
+                    前往登入
+                  </Button>
+                </Link>
+              </div>
+            )}
+
+            {/* 已登入 — 載入中 */}
+            {user && progressLoading && (
+              <div className="flex flex-col items-center justify-center py-10 gap-3">
+                <Loader2 className="w-8 h-8 animate-spin text-orange-500" />
+                <p className="text-sm text-muted-foreground">正在查詢您的申請進度...</p>
+              </div>
+            )}
+
+            {/* 已登入 — 無綁定工廠 */}
+            {user && !progressLoading && progressData && !progressData.hasFactory && (
+              <div className="text-center py-8 space-y-3">
+                <Building2 className="w-10 h-10 mx-auto text-muted-foreground/40" />
+                <p className="text-sm text-muted-foreground">
+                  目前查無綁定工廠，請先上架工廠後再申請企業升級服務。
+                </p>
+                <Link href="/register-factory" onClick={() => setShowProgressDialog(false)}>
+                  <Button variant="outline" size="sm">
+                    前往上架工廠
+                  </Button>
+                </Link>
+              </div>
+            )}
+
+            {/* 已登入 — 有工廠但無申請 */}
+            {user && !progressLoading && progressData?.hasFactory && progressData.applications.length === 0 && (
+              <div className="text-center py-8 space-y-3">
+                <FileSearch className="w-10 h-10 mx-auto text-muted-foreground/40" />
+                <p className="text-sm text-muted-foreground">目前尚未查到企業升級申請紀錄。</p>
+                <Button
+                  size="sm"
+                  onClick={() => { setShowProgressDialog(false); navigate("/upgrade-center/apply"); }}
+                  className="bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white border-0"
+                >
+                  開始免費資格評估
+                </Button>
+              </div>
+            )}
+
+            {/* 已登入 — 有申請紀錄 */}
+            {user && !progressLoading && progressData?.applications && progressData.applications.length > 0 && (
+              <div className="space-y-3">
+                {progressData.applications.map((app) => {
+                  const si = progressStatusInfo(app.status);
+                  const createdDate = new Date(app.createdAt).toLocaleDateString("zh-TW");
+                  const hasAcknowledged = !!app.viewedAt;
+                  return (
+                    <div key={app.id} className="rounded-xl border border-border bg-muted/20 p-4 space-y-3">
+                      {/* 公司名稱 + 狀態 */}
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="font-semibold text-sm leading-snug break-all">{app.companyName}</p>
+                          <p className="text-xs text-muted-foreground mt-0.5">申請日期：{createdDate}</p>
+                        </div>
+                        <Badge className={`${si.color} border-0 text-xs shrink-0`}>{si.label}</Badge>
+                      </div>
+
+                      {/* 顧問查收狀態 */}
+                      <div className="flex items-center gap-1.5 text-xs">
+                        <span
+                          className={`inline-block w-2 h-2 rounded-full shrink-0 ${
+                            hasAcknowledged ? "bg-green-500" : "bg-yellow-400"
+                          }`}
+                        />
+                        <span className="text-muted-foreground">
+                          {hasAcknowledged ? "顧問已查收" : "等待顧問查收"}
+                        </span>
+                      </div>
+
+                      {/* 備註 */}
+                      {app.notes && (
+                        <div className="rounded-lg bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
+                          <p className="font-medium text-foreground mb-0.5">顧問備註</p>
+                          <p className="whitespace-pre-wrap">{app.notes}</p>
+                        </div>
+                      )}
+
+                      {/* 實際過案金額 */}
+                      {app.approvedSubsidyAmount != null && (
+                        <div className="text-xs">
+                          <span className="text-muted-foreground">實際過案金額：</span>
+                          <span className="font-semibold text-green-700">
+                            NT$ {app.approvedSubsidyAmount.toLocaleString("zh-TW")}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </DialogContent>
       </Dialog>

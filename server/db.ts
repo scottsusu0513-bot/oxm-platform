@@ -5840,3 +5840,16 @@ export async function getUpgradePublicStats() {
     completedCases: Number(cRow?.n ?? 0),
   };
 }
+
+export async function getUpgradeApplicationsByFactoryIds(
+  factoryIds: number[],
+): Promise<UpgradeApplication[]> {
+  const db_ = await getDb();
+  if (!db_) return [];
+  if (factoryIds.length === 0) return [];
+  const rows = await db_.select()
+    .from(upgradeApplications)
+    .where(inArray(upgradeApplications.factoryId, factoryIds))
+    .orderBy(desc(upgradeApplications.createdAt));
+  return rows;
+}

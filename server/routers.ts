@@ -1,7 +1,7 @@
 import { COOKIE_NAME, THIRTY_DAYS_MS, COMMUNITY_FEATURE_STATUS, PLATFORM_NOTIFICATION_TYPES, COMMUNITY_PUBLIC_ENTRY_ENABLED } from "@shared/const";
 import { sdk } from "./_core/sdk";
 import { enhanceSearchKeyword, getSearchIntent } from './semantic-search';
-import { sendNewInquiryEmail, sendFactoryApprovedEmail, sendFactoryRejectedEmail, sendFactorySubmittedEmail, sendReportEmail, sendSupportTicketEmail, sendReviewReplyEmail, sendNewMessageNotificationEmail, sendReportStatusUpdateEmail, sendTicketStatusUpdateEmail, sendMessageReplyNotificationEmail, sendEmailVerificationEmail, sendAdminBroadcastEmail, sendRevisionSubmittedEmail, sendRevisionApprovedEmail, sendRevisionRejectedEmail, sendUpgradeApplicationEmail } from './email';
+import { sendNewInquiryEmail, sendFactoryApprovedEmail, sendFactoryRejectedEmail, sendFactorySubmittedEmail, sendReportEmail, sendSupportTicketEmail, sendReviewReplyEmail, sendNewMessageNotificationEmail, sendReportStatusUpdateEmail, sendTicketStatusUpdateEmail, sendMessageReplyNotificationEmail, sendEmailVerificationEmail, sendAdminBroadcastEmail, sendRevisionSubmittedEmail, sendRevisionApprovedEmail, sendRevisionRejectedEmail, sendUpgradeApplicationEmail, sendUpgradeNewCaseConsultantEmail } from './email';
 import { sha256Hex, generateRawToken } from './_core/oauthHelpers';
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
@@ -4340,11 +4340,13 @@ export const appRouter = router({
       const regionKey = db.resolveRegionKey(input.location);
       let assignedConsultantId: number | null = null;
       let status: "new" | "unassigned" = "unassigned";
+      let assignedConsultant: Awaited<ReturnType<typeof db.getConsultantByRegion>> = undefined;
       if (regionKey) {
         const consultant = await db.getConsultantByRegion(regionKey);
         if (consultant) {
           assignedConsultantId = consultant.id;
           status = "new";
+          assignedConsultant = consultant;
         }
       }
       const id = await db.createUpgradeApplication({
@@ -4370,6 +4372,7 @@ export const appRouter = router({
         assignedConsultantId,
         statusTimeline: { [status]: new Date().toISOString() },
       });
+      // Notify admin (fire-and-forget)
       sendUpgradeApplicationEmail({
         companyName: input.companyName,
         contactName: input.contactName,
@@ -4380,6 +4383,27 @@ export const appRouter = router({
       }).catch((err) => {
         console.error("[Email] upgrade center notification failed:", err);
       });
+      // Notify assigned consultant (fire-and-forget, only when status=new)
+      if (status === "new" && assignedConsultant?.isActive && assignedConsultant.userId) {
+        const notifyConsultant = assignedConsultant;
+        void db.getUserById(notifyConsultant.userId!).then(async (consultantUser) => {
+          if (!consultantUser?.email) return;
+          await sendUpgradeNewCaseConsultantEmail({
+            consultantName: notifyConsultant.name,
+            consultantEmail: consultantUser.email,
+            companyName: input.companyName,
+            location: input.location,
+            contactName: input.contactName,
+            email: input.email,
+            phone: input.phone,
+            capitalAmount: input.capitalAmount,
+            applicationId: id,
+            appliedAt: new Date().toLocaleString("zh-TW", { timeZone: "Asia/Taipei" }),
+          });
+        }).catch((err) => {
+          console.warn("[Email] consultant new case notification failed:", err);
+        });
+      }
       return { success: true, id };
     }),
 
@@ -4407,6 +4431,23 @@ export const appRouter = router({
     })).mutation(async ({ input }) => {
       await db.updateUpgradeApplicationStatus(input.id, input.status);
       return { success: true };
+    }),
+
+    myApplicationProgress: protectedProcedure.query(async ({ ctx }) => {
+      const [owned, coManaged] = await Promise.all([
+        db.getFactoryByOwnerId(ctx.user.id),
+        db.getCoManagedFactories(ctx.user.id),
+      ]);
+      const factoryIds: number[] = [];
+      if (owned?.id) factoryIds.push(owned.id);
+      for (const f of coManaged) {
+        if (!factoryIds.includes(f.factoryId)) factoryIds.push(f.factoryId);
+      }
+      if (factoryIds.length === 0) {
+        return { hasFactory: false, applications: [] };
+      }
+      const applications = await db.getUpgradeApplicationsByFactoryIds(factoryIds);
+      return { hasFactory: true, applications };
     }),
 
     publicStats: publicProcedure.query(async () => {

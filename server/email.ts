@@ -699,6 +699,70 @@ export async function sendRevisionRejectedEmail(params: {
   }
 }
 
+// ===== 企業升級中心：通知顧問有新案件 =====
+
+const CAPITAL_AMOUNT_LABELS: Record<string, string> = {
+  under_500w: "500 萬以下",
+  "500w_1000w": "500 萬～1,000 萬",
+  "1000w_5000w": "1,000 萬～5,000 萬",
+  "5000w_1y": "5,000 萬～1 億",
+  over_1y: "1 億以上",
+};
+
+export async function sendUpgradeNewCaseConsultantEmail(params: {
+  consultantName: string;
+  consultantEmail: string;
+  companyName: string;
+  location: string;
+  contactName: string;
+  email: string;
+  phone: string;
+  capitalAmount: string;
+  applicationId: number;
+  appliedAt: string;
+}) {
+  if (!isEmailEnabled()) {
+    console.log('[Email] 未設定 RESEND_API_KEY，跳過顧問新案通知');
+    return;
+  }
+  const resend = getResend();
+  if (!resend) return;
+  const appUrl = process.env.VITE_APP_URL ?? 'http://localhost:3000';
+  const capitalLabel = CAPITAL_AMOUNT_LABELS[params.capitalAmount] ?? params.capitalAmount;
+
+  try {
+    await resend.emails.send({
+      from: FROM_EMAIL,
+      to: params.consultantEmail,
+      subject: `OXM 企業升級中心｜您有新的案件待查收`,
+      html: `
+        <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #f97316;">您有一筆新的企業升級案件待查收</h2>
+          <p>親愛的 <strong>${params.consultantName}</strong> 您好，</p>
+          <p>您有一筆新的企業升級案件待查收，請登入 OXM 顧問中心查看案件內容並進行後續評估。</p>
+          <table style="border-collapse:collapse; width:100%; margin: 16px 0;">
+            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">公司名稱</td><td style="padding:8px;">${params.companyName}</td></tr>
+            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">所在地區</td><td style="padding:8px;">${params.location}</td></tr>
+            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">聯絡人</td><td style="padding:8px;">${params.contactName}</td></tr>
+            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">聯絡 Email</td><td style="padding:8px;">${params.email}</td></tr>
+            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">聯絡電話</td><td style="padding:8px;">${params.phone}</td></tr>
+            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">資本額</td><td style="padding:8px;">${capitalLabel}</td></tr>
+            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">申請時間</td><td style="padding:8px;">${params.appliedAt}</td></tr>
+          </table>
+          <a href="${appUrl}/upgrade-consultant/cases"
+            style="background:#f97316;color:white;padding:12px 24px;border-radius:6px;text-decoration:none;display:inline-block;">
+            前往顧問中心查收
+          </a>
+          <p style="color:#999;font-size:12px;margin-top:24px;">此信件由 OXM 平台自動發送，請勿直接回覆。</p>
+        </div>
+      `,
+    });
+    console.log(`[Email] 已寄送新案件通知給顧問 ${params.consultantEmail}`);
+  } catch (err) {
+    console.warn('[Email] sendUpgradeNewCaseConsultantEmail failed:', err);
+  }
+}
+
 // ===== 企業升級中心：通知管理員有新申請 =====
 export async function sendUpgradeApplicationEmail(params: {
   companyName: string;
