@@ -182,6 +182,21 @@ export default function Navbar() {
         {/* ── Desktop: 六大方向入口（lg: 1024px+） ── */}
         <nav className="hidden lg:flex items-center gap-1 flex-1 justify-center min-w-0 mx-1">
           {HUB_ITEMS.map((hub) => {
+            // 企業升級中心：admin 或 active 顧問才可點
+            if (hub.label === "企業升級中心" && showConsultantCenter) {
+              return (
+                <Link key={hub.label} href="/upgrade-center">
+                  <button
+                    type="button"
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold transition-all duration-150 whitespace-nowrap cursor-pointer bg-gradient-to-br from-blue-600/10 to-violet-600/10 border-blue-300/40 text-blue-700 hover:from-blue-600/20 hover:to-violet-600/20 hover:border-blue-400/60 hover:shadow-sm hover:shadow-blue-500/10 hover:-translate-y-px"
+                  >
+                    <hub.Icon className="w-3.5 h-3.5 shrink-0 text-blue-500" />
+                    {hub.short}
+                  </button>
+                </Link>
+              );
+            }
+
             if (!hub.soon) {
               // 商機媒合中心 — 可互動，hover/click 下拉
               return (
@@ -423,6 +438,19 @@ export default function Navbar() {
           <div className="grid grid-cols-2 gap-2">
             {HUB_ITEMS.map((hub) => {
               const cardBase = `flex flex-col items-center gap-2 p-3 rounded-xl border bg-gradient-to-br ${hub.mCard} transition-colors`;
+
+              // 企業升級中心：admin 或 active 顧問才可點
+              if (hub.label === "企業升級中心" && showConsultantCenter) {
+                return (
+                  <Link key={hub.label} href="/upgrade-center" onClick={() => setMobileOpen(false)}>
+                    <div className={`${cardBase} active:opacity-80`}>
+                      <hub.Icon className="w-5 h-5 text-blue-500" />
+                      <span className="text-xs font-semibold text-center text-blue-700">{hub.short}</span>
+                      <span className="text-[9px] text-blue-500/70">進入中心 →</span>
+                    </div>
+                  </Link>
+                );
+              }
 
               if (!hub.soon) {
                 return (
