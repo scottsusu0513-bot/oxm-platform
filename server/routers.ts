@@ -4602,13 +4602,63 @@ export const appRouter = router({
       return db.listAllConsultants();
     }),
 
-    // 管理員：綁定 / 解除顧問 userId
+    // 管理員：綁定 / 解除顧問 userId，綁定後自動補派舊 unassigned 案件
     adminBindUser: adminProcedure.input(z.object({
       consultantId: z.number(),
       userId: z.number().nullable(),
     })).mutation(async ({ input }) => {
       await db.bindConsultantUser(input.consultantId, input.userId);
-      return { success: true };
+
+      // 解除綁定：不補派
+      if (input.userId == null) {
+        return { success: true, backfilledCount: 0, backfilledApplicationIds: [] as number[] };
+      }
+
+      const consultant = await db.getConsultantById(input.consultantId);
+      // inactive 顧問不補派
+      if (!consultant?.isActive) {
+        return { success: true, backfilledCount: 0, backfilledApplicationIds: [] as number[] };
+      }
+
+      const { backfilledIds, backfilledApps } = await db.backfillUnassignedCasesToConsultant(
+        consultant.id,
+        consultant.regionKey,
+      );
+
+      // Fire-and-forget: 每筆補派案件各寄一封新案件通知給顧問
+      if (backfilledApps.length > 0) {
+        const consultantSnapshot = consultant;
+        void db.getUserById(input.userId).then(async (consultantUser) => {
+          if (!consultantUser?.email) {
+            console.warn("[Email] backfill: consultant user has no email, skipping");
+            return;
+          }
+          for (const app of backfilledApps) {
+            try {
+              await sendUpgradeNewCaseConsultantEmail({
+                consultantName: consultantSnapshot.name,
+                consultantEmail: consultantUser.email,
+                companyName: app.companyName,
+                location: app.location,
+                contactName: app.contactName,
+                email: app.email,
+                phone: app.phone,
+                capitalAmount: app.capitalAmount,
+                applicationId: app.id,
+                appliedAt: new Date(app.createdAt).toLocaleString("zh-TW", { timeZone: "Asia/Taipei" }),
+              });
+            } catch (err) {
+              console.warn(`[Email] backfill notification failed for app ${app.id}:`, err);
+            }
+          }
+        });
+      }
+
+      return {
+        success: true,
+        backfilledCount: backfilledIds.length,
+        backfilledApplicationIds: backfilledIds,
+      };
     }),
 
     // 管理員：統計

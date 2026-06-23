@@ -5562,6 +5562,53 @@ export async function bindConsultantUser(consultantId: number, userId: number | 
     .where(eq(upgradeConsultants.id, consultantId));
 }
 
+export async function getConsultantById(id: number): Promise<UpgradeConsultant | undefined> {
+  const db_ = await getDb();
+  if (!db_) return undefined;
+  const [row] = await db_.select().from(upgradeConsultants).where(eq(upgradeConsultants.id, id));
+  return row;
+}
+
+// Backfill existing unassigned cases to a newly-bound consultant.
+// Only processes status="unassigned" cases whose location resolves to the consultant's regionKey.
+// Each case gets assignedConsultantId, status="new", and statusTimeline.new (only if not already set).
+export async function backfillUnassignedCasesToConsultant(
+  consultantId: number,
+  regionKey: "north" | "central" | "south",
+): Promise<{ backfilledIds: number[]; backfilledApps: UpgradeApplication[] }> {
+  const db_ = await getDb();
+  if (!db_) return { backfilledIds: [], backfilledApps: [] };
+
+  const candidates = await db_.select()
+    .from(upgradeApplications)
+    .where(and(
+      eq(upgradeApplications.status, "unassigned"),
+      isNull(upgradeApplications.assignedConsultantId),
+    ));
+
+  const matching = candidates.filter(app => resolveRegionKey(app.location) === regionKey);
+  if (matching.length === 0) return { backfilledIds: [], backfilledApps: [] };
+
+  const nowIso = new Date().toISOString();
+  const backfilledIds: number[] = [];
+  const backfilledApps: UpgradeApplication[] = [];
+
+  for (const app of matching) {
+    const existingTl = (app.statusTimeline ?? {}) as Record<string, string>;
+    const newTl = { ...existingTl };
+    if (!newTl.new) newTl.new = nowIso;
+
+    await db_.update(upgradeApplications)
+      .set({ assignedConsultantId: consultantId, status: "new", statusTimeline: newTl })
+      .where(eq(upgradeApplications.id, app.id));
+
+    backfilledIds.push(app.id);
+    backfilledApps.push({ ...app, assignedConsultantId: consultantId, status: "new", statusTimeline: newTl });
+  }
+
+  return { backfilledIds, backfilledApps };
+}
+
 export async function listApplicationsByConsultantIds(
   consultantIds: number[],
   opts?: { status?: UpgradeApplication["status"]; limit?: number; offset?: number },

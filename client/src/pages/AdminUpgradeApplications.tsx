@@ -480,10 +480,16 @@ function ConsultantBindTab() {
   const utils = trpc.useUtils();
   const query = trpc.upgradeConsultant.adminListConsultants.useQuery();
   const bindMutation = trpc.upgradeConsultant.adminBindUser.useMutation({
-    onSuccess: () => {
+    onSuccess: (data) => {
       utils.upgradeConsultant.adminListConsultants.invalidate();
       utils.upgradeConsultant.adminStats.invalidate();
-      toast.success("綁定已更新");
+      utils.upgradeCenter.adminList.invalidate();
+      const count = data.backfilledCount ?? 0;
+      if (count > 0) {
+        toast.success(`顧問綁定成功，已自動補派 ${count} 筆待分派案件。`);
+      } else {
+        toast.success("顧問綁定成功，目前沒有待補派案件。");
+      }
     },
     onError: (err) => toast.error(err.message || "操作失敗"),
   });
