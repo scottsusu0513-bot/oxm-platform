@@ -503,19 +503,25 @@ export default function EnterpriseUpgradeCenter() {
                   <p className="text-xs md:text-sm text-slate-500 leading-relaxed">數據正式啟動後持續更新</p>
                 </div>
               </div>
-              {/* Right: 3 stat cards — 2 col on mobile, 3 col on sm+ */}
+              {/* Right: 3 stat cards
+                  Mobile:  row1 = 申請廠商 (full width); row2 = 總申請金額 + 已結案數量
+                  sm+   :  3 cols equal */}
               <div className="flex-1 grid grid-cols-2 sm:grid-cols-3 gap-3 md:gap-4">
-                <StatCard
-                  title="申請廠商"
-                  icon={Building2}
-                  color="#4ade80"
-                  rows={[
-                    { label: "有送出申請", value: fmt(upgradeStats.appliedFactories, 5), unit: "家" },
-                    { label: "有過件",     value: fmt(upgradeStats.approvedCases, 5),    unit: "家" },
-                    { label: "過件率",     value: fmt(upgradeStats.approvalRate, 2),     unit: "%" },
-                  ]}
-                  bar={upgradeStats.approvalRate}
-                />
+                {/* 申請廠商：手機佔滿整排，sm+ 正常 1/3 */}
+                <div className="col-span-2 sm:col-span-1">
+                  <StatCard
+                    title="申請廠商"
+                    icon={Building2}
+                    color="#4ade80"
+                    rows={[
+                      { label: "有送出申請", value: fmt(upgradeStats.appliedFactories, 5), unit: "家" },
+                      { label: "有過件",     value: fmt(upgradeStats.approvedCases, 5),    unit: "家" },
+                      { label: "過件率",     value: fmt(upgradeStats.approvalRate, 2),     unit: "%" },
+                    ]}
+                    bar={upgradeStats.approvalRate}
+                  />
+                </div>
+                {/* 總申請金額：手機 1/2 欄，sm+ 正常 1/3 */}
                 <StatCard
                   title="總申請金額"
                   icon={TrendingUp}
@@ -523,15 +529,14 @@ export default function EnterpriseUpgradeCenter() {
                   rows={[{ label: "累積補助金額", value: fmt(upgradeStats.totalGrantAmountWan, 5), unit: "萬元" }]}
                   bar={0}
                 />
-                <div className="col-span-2 sm:col-span-1">
-                  <StatCard
-                    title="已結案數量"
-                    icon={CheckCircle}
-                    color="#c084fc"
-                    rows={[{ label: "已結案案件數", value: fmt(upgradeStats.completedCases, 5), unit: "件" }]}
-                    bar={0}
-                  />
-                </div>
+                {/* 已結案數量：手機 1/2 欄，sm+ 正常 1/3 */}
+                <StatCard
+                  title="已結案數量"
+                  icon={CheckCircle}
+                  color="#c084fc"
+                  rows={[{ label: "已結案案件數", value: fmt(upgradeStats.completedCases, 5), unit: "件" }]}
+                  bar={0}
+                />
               </div>
             </div>
           </div>
@@ -546,31 +551,43 @@ export default function EnterpriseUpgradeCenter() {
             <div className="w-10 h-1 bg-gradient-to-r from-orange-500 to-amber-500 mx-auto rounded-full" />
             <p className="text-sm md:text-base text-muted-foreground mt-2 md:mt-3">OXM 協助媒合適合企業階段的政府計畫</p>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 md:gap-6 items-stretch">
-            {SUBSIDY_PLANS.map((plan) => (
-              <div key={plan.code} className="rounded-xl md:rounded-2xl border border-border bg-background flex flex-col overflow-hidden shadow-sm hover:shadow-md transition-shadow">
-                <div className={`h-1 md:h-1.5 bg-gradient-to-r ${plan.topBar}`} />
-                <div className="p-4 md:p-6 flex flex-col gap-3 md:gap-4 flex-1">
-                  <div className="flex items-center justify-between">
-                    <span className={`px-2.5 py-0.5 md:px-3 md:py-1 rounded-full text-xs md:text-sm font-extrabold tracking-wide ${plan.badgeCls}`}>{plan.code}</span>
-                    <span className="text-xs text-muted-foreground">政府補助計畫</span>
-                  </div>
-                  <div className="flex-1 space-y-1">
-                    <h3 className="font-bold text-base md:text-lg leading-snug">{plan.title}</h3>
-                    <p className="text-xs md:text-sm text-muted-foreground leading-relaxed line-clamp-2 md:line-clamp-none">{plan.desc}</p>
-                  </div>
-                  <div className="flex flex-wrap gap-1">
-                    {plan.tags.map((tag) => (
-                      <span key={tag} className="px-1.5 py-0.5 rounded bg-muted text-[10px] md:text-xs text-muted-foreground font-medium">{tag}</span>
-                    ))}
-                  </div>
-                  <div className="flex items-center justify-between pt-3 md:pt-4 border-t border-border">
-                    <span className="text-xs text-muted-foreground font-medium">最高補助金額</span>
-                    <span className={`text-lg md:text-xl font-extrabold bg-gradient-to-r ${plan.maxCls} bg-clip-text text-transparent`}>{plan.max}</span>
+          <div className="grid grid-cols-2 md:grid-cols-2 xl:grid-cols-3 gap-3 md:gap-6 items-stretch">
+            {SUBSIDY_PLANS.map((plan, idx) => {
+              // 手機 2 欄時，若總數為奇數，最後一張滿版
+              const isLastOdd = idx === SUBSIDY_PLANS.length - 1 && SUBSIDY_PLANS.length % 2 === 1;
+              return (
+                <div
+                  key={plan.code}
+                  className={`rounded-xl md:rounded-2xl border border-border bg-background flex flex-col overflow-hidden shadow-sm hover:shadow-md transition-shadow${isLastOdd ? " col-span-2 md:col-span-1" : ""}`}
+                >
+                  <div className={`h-1 md:h-1.5 bg-gradient-to-r ${plan.topBar}`} />
+                  <div className="p-3 md:p-6 flex flex-col gap-2 md:gap-4 flex-1">
+                    {/* code badge row */}
+                    <div className="flex items-center justify-between gap-1">
+                      <span className={`px-2 py-0.5 md:px-3 md:py-1 rounded-full text-[10px] md:text-sm font-extrabold tracking-wide leading-tight ${plan.badgeCls}`}>{plan.code}</span>
+                      <span className="hidden md:block text-xs text-muted-foreground shrink-0">政府補助計畫</span>
+                    </div>
+                    {/* title — mobile 2 lines max */}
+                    <div className="flex-1">
+                      <h3 className="font-bold text-[11px] md:text-lg leading-snug line-clamp-2">{plan.title}</h3>
+                      {/* desc — hidden on mobile */}
+                      <p className="hidden md:block text-sm text-muted-foreground leading-relaxed mt-1">{plan.desc}</p>
+                    </div>
+                    {/* tags — hidden on mobile */}
+                    <div className="hidden md:flex flex-wrap gap-1">
+                      {plan.tags.map((tag) => (
+                        <span key={tag} className="px-1.5 py-0.5 rounded bg-muted text-xs text-muted-foreground font-medium">{tag}</span>
+                      ))}
+                    </div>
+                    {/* max amount */}
+                    <div className="flex items-center justify-between pt-2 md:pt-4 border-t border-border">
+                      <span className="text-[9px] md:text-xs text-muted-foreground font-medium leading-tight">最高<br className="md:hidden" />補助</span>
+                      <span className={`text-sm md:text-xl font-extrabold bg-gradient-to-r ${plan.maxCls} bg-clip-text text-transparent`}>{plan.max}</span>
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       </section>
