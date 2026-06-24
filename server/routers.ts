@@ -4555,13 +4555,19 @@ export const appRouter = router({
           message: `目前狀態「${app.status}」不能推進至「${input.nextStatus}」`,
         });
       }
-      // 政府通過進入轉型期前：必須已填寫實際過案金額、顧問服務費、OXM 收入
+      // 政府通過進入轉型期前：必須已填寫實際過案金額、顧問服務費、OXM 收入、送審補助方案
       if (input.nextStatus === "transforming" && (app.status === "submitted" || app.status === "approved")) {
         if (!app.approvedSubsidyAmount) {
           throw new TRPCError({ code: "BAD_REQUEST", message: "請先填寫並儲存實際過案金額，再進行案件通過" });
         }
         if (!app.consultantFeeMode || !app.consultantFeeAmount || !app.oxmCommissionAmount) {
           throw new TRPCError({ code: "BAD_REQUEST", message: "請先填寫並儲存顧問服務費，再進行案件通過" });
+        }
+        if (!app.submittedSubsidyProgram) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "請選擇送審補助方案，再進行案件通過" });
+        }
+        if (app.submittedSubsidyProgram === "其他" && !app.submittedSubsidyProgramOther?.trim()) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "補助方案選擇「其他」時，請填寫實際方案名稱" });
         }
       }
       // 政府駁回：清除實際過案金額與顧問服務費，避免語意矛盾
@@ -4590,7 +4596,7 @@ export const appRouter = router({
       return { success: true };
     }),
 
-    // 顧問更新金額欄位（預計送審金額 / 實際過案金額 / 顧問服務費）
+    // 顧問更新金額欄位（預計送審金額 / 實際過案金額 / 顧問服務費 / 送審補助方案）
     updateCaseAmounts: protectedProcedure.input(z.object({
       applicationId: z.number().int().positive(),
       plannedSubsidyAmount: z.number().int().positive().max(100_000_000).nullable().optional(),
@@ -4599,6 +4605,9 @@ export const appRouter = router({
       consultantFeeMode: z.enum(["percentage", "fixed"]).nullable().optional(),
       consultantFeePercentage: z.number().min(0).max(100).nullable().optional(),
       consultantFeeAmount: z.number().int().min(0).max(100_000_000).nullable().optional(),
+      // 送審補助方案
+      submittedSubsidyProgram: z.enum(["SBIR","CITD","SIIR","研發轉型補助","海外通路計畫","其他"]).nullable().optional(),
+      submittedSubsidyProgramOther: z.string().max(100).nullable().optional(),
     })).mutation(async ({ ctx, input }) => {
       const app = await db.getUpgradeApplicationById(input.applicationId);
       if (!app) throw new TRPCError({ code: "NOT_FOUND", message: "找不到案件" });
@@ -4636,6 +4645,22 @@ export const appRouter = router({
         derivedFeeAmount = undefined; // handled via explicit null in payload
       }
 
+      // ── 送審補助方案驗證 ──────────────────────────────────────────────────────
+      if (input.submittedSubsidyProgram !== undefined) {
+        if (input.submittedSubsidyProgram === "其他") {
+          const otherTrimmed = input.submittedSubsidyProgramOther?.trim();
+          if (!otherTrimmed) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "補助方案選擇「其他」時，請填寫實際方案名稱" });
+          }
+        }
+      }
+      // 非「其他」時 programOther 強制清空
+      const programOtherValue = input.submittedSubsidyProgram !== undefined
+        ? (input.submittedSubsidyProgram === "其他"
+          ? (input.submittedSubsidyProgramOther?.trim() ?? null)
+          : null)
+        : undefined;
+
       await db.updateCaseAmounts(input.applicationId, {
         ...(input.plannedSubsidyAmount !== undefined  ? { plannedSubsidyAmount: input.plannedSubsidyAmount }   : {}),
         ...(input.approvedSubsidyAmount !== undefined ? { approvedSubsidyAmount: input.approvedSubsidyAmount } : {}),
@@ -4645,6 +4670,8 @@ export const appRouter = router({
           : {}),
         ...(derivedFeeAmount !== undefined ? { consultantFeeAmount: derivedFeeAmount } : {}),
         ...(derivedOxmAmount !== undefined ? { oxmCommissionRate: String(OXM_RATE), oxmCommissionAmount: derivedOxmAmount } : {}),
+        ...(input.submittedSubsidyProgram !== undefined ? { submittedSubsidyProgram: input.submittedSubsidyProgram } : {}),
+        ...(programOtherValue !== undefined             ? { submittedSubsidyProgramOther: programOtherValue }           : {}),
       });
       return { success: true };
     }),

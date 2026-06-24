@@ -5869,6 +5869,8 @@ export async function updateCaseAmounts(
     consultantFeeAmount?: number | null;
     oxmCommissionRate?: string | null;
     oxmCommissionAmount?: number | null;
+    submittedSubsidyProgram?: string | null;
+    submittedSubsidyProgramOther?: string | null;
   },
 ): Promise<void> {
   const db_ = await getDb();
@@ -5881,14 +5883,18 @@ export async function updateCaseAmounts(
     consultantFeeAmount: number | null;
     oxmCommissionRate: string | null;
     oxmCommissionAmount: number | null;
+    submittedSubsidyProgram: string | null;
+    submittedSubsidyProgramOther: string | null;
   }> = {};
-  if ("plannedSubsidyAmount" in data)    update.plannedSubsidyAmount    = data.plannedSubsidyAmount;
-  if ("approvedSubsidyAmount" in data)   update.approvedSubsidyAmount   = data.approvedSubsidyAmount;
-  if ("consultantFeeMode" in data)       update.consultantFeeMode       = data.consultantFeeMode;
-  if ("consultantFeePercentage" in data) update.consultantFeePercentage = data.consultantFeePercentage;
-  if ("consultantFeeAmount" in data)     update.consultantFeeAmount     = data.consultantFeeAmount;
-  if ("oxmCommissionRate" in data)       update.oxmCommissionRate       = data.oxmCommissionRate;
-  if ("oxmCommissionAmount" in data)     update.oxmCommissionAmount     = data.oxmCommissionAmount;
+  if ("plannedSubsidyAmount" in data)         update.plannedSubsidyAmount         = data.plannedSubsidyAmount;
+  if ("approvedSubsidyAmount" in data)        update.approvedSubsidyAmount        = data.approvedSubsidyAmount;
+  if ("consultantFeeMode" in data)            update.consultantFeeMode            = data.consultantFeeMode;
+  if ("consultantFeePercentage" in data)      update.consultantFeePercentage      = data.consultantFeePercentage;
+  if ("consultantFeeAmount" in data)          update.consultantFeeAmount          = data.consultantFeeAmount;
+  if ("oxmCommissionRate" in data)            update.oxmCommissionRate            = data.oxmCommissionRate;
+  if ("oxmCommissionAmount" in data)          update.oxmCommissionAmount          = data.oxmCommissionAmount;
+  if ("submittedSubsidyProgram" in data)      update.submittedSubsidyProgram      = data.submittedSubsidyProgram;
+  if ("submittedSubsidyProgramOther" in data) update.submittedSubsidyProgramOther = data.submittedSubsidyProgramOther;
   if (Object.keys(update).length === 0) return;
   await db_.update(upgradeApplications).set(update).where(eq(upgradeApplications.id, id));
 }
@@ -5903,6 +5909,8 @@ export async function clearApprovalAndFeeData(id: number): Promise<void> {
     consultantFeePercentage: null,
     consultantFeeAmount: null,
     oxmCommissionAmount: null,
+    submittedSubsidyProgram: null,
+    submittedSubsidyProgramOther: null,
   }).where(eq(upgradeApplications.id, id));
 }
 

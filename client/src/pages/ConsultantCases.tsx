@@ -151,6 +151,8 @@ type Case = {
   consultantFeeAmount?: number | null;
   oxmCommissionRate?: string | null;
   oxmCommissionAmount?: number | null;
+  submittedSubsidyProgram?: string | null;
+  submittedSubsidyProgramOther?: string | null;
   statusTimeline?: Record<string, string> | null;
   viewedAt?: Date | string | null;
   createdAt: Date;
@@ -367,6 +369,10 @@ function CaseCard({ item, defaultExpanded }: { item: Case; defaultExpanded?: boo
     item.consultantFeeAmount != null ? String(item.consultantFeeAmount) : ""
   );
   const [feeDirty, setFeeDirty] = useState(false);
+  // 送審補助方案
+  const [localProgram, setLocalProgram] = useState(item.submittedSubsidyProgram ?? "");
+  const [localProgramOther, setLocalProgramOther] = useState(item.submittedSubsidyProgramOther ?? "");
+  const [programDirty, setProgramDirty] = useState(false);
 
   const eff = effectiveStatus(item.status);
   const info = statusInfo(item.status);
@@ -435,6 +441,19 @@ function CaseCard({ item, defaultExpanded }: { item: Case; defaultExpanded?: boo
     statusMut.mutate({ applicationId: item.id, nextStatus: "submitted" });
   };
 
+  const handleSaveProgram = async () => {
+    if (!localProgram) { toast.error("請選擇送審補助方案"); return; }
+    if (localProgram === "其他" && !localProgramOther.trim()) {
+      toast.error("請填寫實際補助方案名稱"); return;
+    }
+    await amountsMut.mutateAsync({
+      applicationId: item.id,
+      submittedSubsidyProgram: localProgram as "SBIR" | "CITD" | "SIIR" | "研發轉型補助" | "海外通路計畫" | "其他",
+      submittedSubsidyProgramOther: localProgram === "其他" ? localProgramOther.trim() : null,
+    });
+    setProgramDirty(false);
+  };
+
   const handleSaveFee = async () => {
     if (!localFeeMode) { toast.error("請選擇服務費計算方式"); return; }
     if (localFeeMode === "percentage") {
@@ -460,6 +479,11 @@ function CaseCard({ item, defaultExpanded }: { item: Case; defaultExpanded?: boo
     if (feeDirty) { toast.error("請先儲存顧問服務費，再進行案件通過"); return; }
     if (!item.consultantFeeMode || item.consultantFeeAmount == null) {
       toast.error("案件通過前請先填寫並儲存顧問服務費"); return;
+    }
+    // 送審補助方案必須已儲存
+    if (programDirty) { toast.error("請先儲存送審補助方案，再進行案件通過"); return; }
+    if (!item.submittedSubsidyProgram) {
+      toast.error("案件通過前請先選擇並儲存送審補助方案"); return;
     }
     statusMut.mutate({ applicationId: item.id, nextStatus: "transforming" });
   };
@@ -752,6 +776,63 @@ function CaseCard({ item, defaultExpanded }: { item: Case; defaultExpanded?: boo
                   </p>
                 ) : <p className="text-muted-foreground text-xs">尚未填寫</p>}
               </div>
+            )}
+          </div>
+        )}
+
+        {/* 送審補助方案（submitted 填寫，transforming/completed 展示） */}
+        {(eff === "submitted" || eff === "transforming" || eff === "completed") && (
+          <div className="space-y-1.5">
+            <p className="text-xs font-medium text-muted-foreground">
+              送審補助方案
+              {eff === "submitted" && <span className="text-green-600 ml-1">（案件通過前必填）</span>}
+            </p>
+            {eff === "submitted" ? (
+              <div className="space-y-2">
+                {/* 下拉選單 */}
+                <select
+                  value={localProgram}
+                  onChange={e => { setLocalProgram(e.target.value); setProgramDirty(true); setLocalProgramOther(""); }}
+                  className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs"
+                >
+                  <option value="">請選擇補助方案</option>
+                  {["SBIR","CITD","SIIR","研發轉型補助","海外通路計畫","其他"].map(opt => (
+                    <option key={opt} value={opt}>{opt}</option>
+                  ))}
+                </select>
+                {/* 其他 — 手寫欄位 */}
+                {localProgram === "其他" && (
+                  <Input
+                    value={localProgramOther}
+                    onChange={e => { setLocalProgramOther(e.target.value); setProgramDirty(true); }}
+                    placeholder="請輸入補助方案名稱"
+                    maxLength={100}
+                    className="h-8 text-xs"
+                  />
+                )}
+                {/* 儲存按鈕 */}
+                {localProgram && programDirty && (
+                  <Button size="sm" variant="secondary" className="h-8 text-xs" disabled={busy} onClick={handleSaveProgram}>
+                    {amountsMut.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3 mr-1" />}
+                    儲存補助方案
+                  </Button>
+                )}
+                {item.submittedSubsidyProgram && !programDirty && (
+                  <p className="text-xs text-green-700">
+                    ✓ 已儲存：{item.submittedSubsidyProgram === "其他" && item.submittedSubsidyProgramOther
+                      ? `其他：${item.submittedSubsidyProgramOther}`
+                      : item.submittedSubsidyProgram}
+                  </p>
+                )}
+              </div>
+            ) : (
+              <p className="text-sm font-medium">
+                {item.submittedSubsidyProgram
+                  ? (item.submittedSubsidyProgram === "其他" && item.submittedSubsidyProgramOther
+                    ? `其他：${item.submittedSubsidyProgramOther}`
+                    : item.submittedSubsidyProgram)
+                  : <span className="text-muted-foreground text-xs">尚未填寫</span>}
+              </p>
             )}
           </div>
         )}

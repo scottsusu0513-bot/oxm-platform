@@ -872,6 +872,9 @@ export const upgradeApplications = mysqlTable("upgradeApplications", {
   consultantFeeAmount: int("consultantFeeAmount"),                           // 顧問服務費金額（元）
   oxmCommissionRate: decimal("oxmCommissionRate", { precision: 5, scale: 2 }), // OXM 抽成比例，預設 10
   oxmCommissionAmount: int("oxmCommissionAmount"),                           // OXM 收入（元）
+  // 送審補助方案
+  submittedSubsidyProgram: varchar("submittedSubsidyProgram", { length: 50 }), // SBIR / CITD / SIIR / 研發轉型補助 / 海外通路計畫 / 其他
+  submittedSubsidyProgramOther: varchar("submittedSubsidyProgramOther", { length: 100 }), // 選「其他」時手寫
   statusTimeline: json("statusTimeline").$type<Record<string, string>>(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
