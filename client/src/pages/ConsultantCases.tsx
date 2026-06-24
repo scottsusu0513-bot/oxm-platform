@@ -106,8 +106,12 @@ const EXPORT_LABELS: Record<string, string> = {
 type CapitalTier = "under_500" | "over_500" | "unknown";
 
 function getCapitalTier(capitalAmount: string): CapitalTier {
+  // 舊英文格式
   if (capitalAmount === "under_500w") return "under_500";
   if (["500w_1000w", "1000w_5000w", "5000w_1y", "over_1y"].includes(capitalAmount)) return "over_500";
+  // 新中文格式（shared/constants.ts CAPITAL_OPTIONS）
+  if (["100萬以下", "100~500萬"].includes(capitalAmount)) return "under_500";
+  if (["500~2000萬", "2000~5000萬", "5000萬以上"].includes(capitalAmount)) return "over_500";
   return "unknown";
 }
 
