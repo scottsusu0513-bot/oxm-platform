@@ -153,27 +153,34 @@ export default function Navbar() {
   const showDashboardBtn = user?.isFactoryOwner || (!coManagedQuery.isLoading && (coManagedQuery.data?.length ?? 0) > 0);
 
   const isAdmin = user?.role === "admin";
+  const userId = user?.id;
   const consultantProfilesQuery = trpc.upgradeConsultant.myProfiles.useQuery(undefined, {
     enabled: isAuthenticated && !isAdmin,
     staleTime: 120000,
+    refetchOnMount: "always",
   });
 
-  // 用 localStorage 快取顧問身份，避免手機版選單在 query 尚未解析前就渲染而看不到入口
-  const [consultantActiveCache, setConsultantActiveCache] = useState<boolean>(() => {
-    try { return localStorage.getItem("oxm_consultant_active") === "1"; } catch { return false; }
-  });
+  // 用 localStorage 快取顧問身份（key 依 user id 區分，避免 App WebView 跨帳號快取污染）
+  // 初始值設 false；useEffect 在 userId 與 query 資料都就位後正確更新
+  const [consultantActiveCache, setConsultantActiveCache] = useState(false);
   useEffect(() => {
-    if (!isAuthenticated) {
-      try { localStorage.removeItem("oxm_consultant_active"); } catch {}
+    if (!isAuthenticated || !userId) {
+      try { localStorage.removeItem("oxm_consultant_active"); } catch {}   // 清除舊版全域 key
       setConsultantActiveCache(false);
       return;
     }
+    const userKey = `oxm_consultant_active_${userId}`;
     if (consultantProfilesQuery.data !== undefined) {
+      // Query 已回傳：以伺服器結果為準，更新此 user 的快取
       const active = consultantProfilesQuery.data.some(p => p.isActive);
-      try { localStorage.setItem("oxm_consultant_active", active ? "1" : "0"); } catch {}
+      try { localStorage.setItem(userKey, active ? "1" : "0"); } catch {}
+      try { localStorage.removeItem("oxm_consultant_active"); } catch {}   // 清除舊版全域 key
       setConsultantActiveCache(active);
+      return;
     }
-  }, [consultantProfilesQuery.data, isAuthenticated]);
+    // Query 尚未回傳：先讀此 user 的快取值作為初始顯示，避免閃爍
+    try { setConsultantActiveCache(localStorage.getItem(userKey) === "1"); } catch {}
+  }, [isAuthenticated, userId, consultantProfilesQuery.data]);
 
   const showConsultantCenter = isAdmin || consultantActiveCache;
 
