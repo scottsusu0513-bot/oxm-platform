@@ -157,7 +157,25 @@ export default function Navbar() {
     enabled: isAuthenticated && !isAdmin,
     staleTime: 120000,
   });
-  const showConsultantCenter = isAdmin || (consultantProfilesQuery.data?.some(p => p.isActive) ?? false);
+
+  // 用 localStorage 快取顧問身份，避免手機版選單在 query 尚未解析前就渲染而看不到入口
+  const [consultantActiveCache, setConsultantActiveCache] = useState<boolean>(() => {
+    try { return localStorage.getItem("oxm_consultant_active") === "1"; } catch { return false; }
+  });
+  useEffect(() => {
+    if (!isAuthenticated) {
+      try { localStorage.removeItem("oxm_consultant_active"); } catch {}
+      setConsultantActiveCache(false);
+      return;
+    }
+    if (consultantProfilesQuery.data !== undefined) {
+      const active = consultantProfilesQuery.data.some(p => p.isActive);
+      try { localStorage.setItem("oxm_consultant_active", active ? "1" : "0"); } catch {}
+      setConsultantActiveCache(active);
+    }
+  }, [consultantProfilesQuery.data, isAuthenticated]);
+
+  const showConsultantCenter = isAdmin || consultantActiveCache;
 
   const pendingCount = pendingCountQuery.data?.count ?? 0;
   const hasAdminNotification = !!(adminNotifQuery.data?.hasMessageReplies || adminNotifQuery.data?.hasSupportPending);

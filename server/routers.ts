@@ -4384,10 +4384,15 @@ export const appRouter = router({
         console.error("[Email] upgrade center notification failed:", err);
       });
       // Notify assigned consultant (fire-and-forget, only when status=new)
+      console.log(`[UpgradeApp #${id}] status=${status} regionKey=${regionKey} consultant=${assignedConsultant ? `id=${assignedConsultant.id} userId=${assignedConsultant.userId} isActive=${assignedConsultant.isActive}` : "null"}`);
       if (status === "new" && assignedConsultant?.isActive && assignedConsultant.userId) {
         const notifyConsultant = assignedConsultant;
         void db.getUserById(notifyConsultant.userId!).then(async (consultantUser) => {
-          if (!consultantUser?.email) return;
+          if (!consultantUser?.email) {
+            console.warn(`[Email] Consultant #${notifyConsultant.id} userId=${notifyConsultant.userId} has no email — skipping new-case notification for app #${id}`);
+            return;
+          }
+          console.log(`[Email] Sending new-case email to consultant ${notifyConsultant.name} <${consultantUser.email}> for app #${id}`);
           await sendUpgradeNewCaseConsultantEmail({
             consultantName: notifyConsultant.name,
             consultantEmail: consultantUser.email,
@@ -4400,9 +4405,12 @@ export const appRouter = router({
             applicationId: id,
             appliedAt: new Date().toLocaleString("zh-TW", { timeZone: "Asia/Taipei" }),
           });
+          console.log(`[Email] New-case email sent to ${consultantUser.email} for app #${id}`);
         }).catch((err) => {
-          console.warn("[Email] consultant new case notification failed:", err);
+          console.warn(`[Email] New-case notification FAILED for app #${id} consultant #${notifyConsultant.id}:`, err);
         });
+      } else if (status === "new") {
+        console.warn(`[Email] Skipping consultant email for app #${id}: consultant=${assignedConsultant ? `id=${assignedConsultant.id} userId=${assignedConsultant.userId} isActive=${assignedConsultant.isActive}` : "null"}`);
       }
       return { success: true, id };
     }),
