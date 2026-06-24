@@ -391,6 +391,7 @@ export default function EnterpriseUpgradeCenter() {
   const [, navigate] = useLocation();
   const [showDialog, setShowDialog] = useState(false);
   const [showProgressDialog, setShowProgressDialog] = useState(false);
+  const [selectedGrant, setSelectedGrant] = useState<typeof SUBSIDY_PLANS[number] | null>(null);
 
   const { data: ownedFactory, isLoading: ownedLoading } = trpc.factory.getMine.useQuery(undefined, {
     enabled: !!user,
@@ -553,36 +554,51 @@ export default function EnterpriseUpgradeCenter() {
           </div>
           <div className="grid grid-cols-2 md:grid-cols-2 xl:grid-cols-3 gap-3 md:gap-6 items-stretch">
             {SUBSIDY_PLANS.map((plan, idx) => {
-              // 手機 2 欄時，若總數為奇數，最後一張滿版
               const isLastOdd = idx === SUBSIDY_PLANS.length - 1 && SUBSIDY_PLANS.length % 2 === 1;
               return (
                 <div
                   key={plan.code}
-                  className={`rounded-xl md:rounded-2xl border border-border bg-background flex flex-col overflow-hidden shadow-sm hover:shadow-md transition-shadow${isLastOdd ? " col-span-2 md:col-span-1" : ""}`}
+                  className={`rounded-xl md:rounded-2xl border border-border bg-background flex flex-col overflow-hidden shadow-sm transition-shadow${isLastOdd ? " col-span-2 md:col-span-1" : ""} md:hover:shadow-md`}
                 >
                   <div className={`h-1 md:h-1.5 bg-gradient-to-r ${plan.topBar}`} />
-                  <div className="p-3 md:p-6 flex flex-col gap-2 md:gap-4 flex-1">
-                    {/* code badge row */}
+
+                  {/* ── 手機版：可點擊的 compact 卡片 ── */}
+                  <button
+                    type="button"
+                    className="md:hidden p-3 flex flex-col gap-2 flex-1 text-left active:scale-[0.97] transition-transform cursor-pointer"
+                    onClick={() => setSelectedGrant(plan)}
+                  >
                     <div className="flex items-center justify-between gap-1">
-                      <span className={`px-2 py-0.5 md:px-3 md:py-1 rounded-full text-[10px] md:text-sm font-extrabold tracking-wide leading-tight ${plan.badgeCls}`}>{plan.code}</span>
-                      <span className="hidden md:block text-xs text-muted-foreground shrink-0">政府補助計畫</span>
+                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold tracking-wide leading-tight ${plan.badgeCls}`}>{plan.code}</span>
+                      <span className="text-[9px] text-muted-foreground/60">點擊查看</span>
                     </div>
-                    {/* title — mobile 2 lines max */}
                     <div className="flex-1">
-                      <h3 className="font-bold text-[11px] md:text-lg leading-snug line-clamp-2">{plan.title}</h3>
-                      {/* desc — hidden on mobile */}
-                      <p className="hidden md:block text-sm text-muted-foreground leading-relaxed mt-1">{plan.desc}</p>
+                      <h3 className="font-bold text-[11px] leading-snug line-clamp-2">{plan.title}</h3>
                     </div>
-                    {/* tags — hidden on mobile */}
-                    <div className="hidden md:flex flex-wrap gap-1">
+                    <div className="flex items-center justify-between pt-2 border-t border-border">
+                      <span className="text-[9px] text-muted-foreground font-medium leading-tight">最高<br />補助</span>
+                      <span className={`text-sm font-extrabold bg-gradient-to-r ${plan.maxCls} bg-clip-text text-transparent`}>{plan.max}</span>
+                    </div>
+                  </button>
+
+                  {/* ── 桌機版：完整靜態卡片內容 ── */}
+                  <div className="hidden md:flex p-6 flex-col gap-4 flex-1">
+                    <div className="flex items-center justify-between gap-1">
+                      <span className={`px-3 py-1 rounded-full text-sm font-extrabold tracking-wide ${plan.badgeCls}`}>{plan.code}</span>
+                      <span className="text-xs text-muted-foreground shrink-0">政府補助計畫</span>
+                    </div>
+                    <div className="flex-1 space-y-1">
+                      <h3 className="font-bold text-lg leading-snug">{plan.title}</h3>
+                      <p className="text-sm text-muted-foreground leading-relaxed">{plan.desc}</p>
+                    </div>
+                    <div className="flex flex-wrap gap-1">
                       {plan.tags.map((tag) => (
                         <span key={tag} className="px-1.5 py-0.5 rounded bg-muted text-xs text-muted-foreground font-medium">{tag}</span>
                       ))}
                     </div>
-                    {/* max amount */}
-                    <div className="flex items-center justify-between pt-2 md:pt-4 border-t border-border">
-                      <span className="text-[9px] md:text-xs text-muted-foreground font-medium leading-tight">最高<br className="md:hidden" />補助</span>
-                      <span className={`text-sm md:text-xl font-extrabold bg-gradient-to-r ${plan.maxCls} bg-clip-text text-transparent`}>{plan.max}</span>
+                    <div className="flex items-center justify-between pt-4 border-t border-border">
+                      <span className="text-xs text-muted-foreground font-medium">最高補助金額</span>
+                      <span className={`text-xl font-extrabold bg-gradient-to-r ${plan.maxCls} bg-clip-text text-transparent`}>{plan.max}</span>
                     </div>
                   </div>
                 </div>
@@ -688,6 +704,60 @@ export default function EnterpriseUpgradeCenter() {
               我知道了
             </Button>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── 補助方案詳情 Dialog（手機點擊小卡觸發） ──────────────────────── */}
+      <Dialog open={!!selectedGrant} onOpenChange={(open) => { if (!open) setSelectedGrant(null); }}>
+        <DialogContent className="w-[calc(100vw-32px)] max-w-sm max-h-[80vh] flex flex-col p-0 overflow-hidden">
+          {selectedGrant && (
+            <>
+              {/* 頂部色條 */}
+              <div className={`h-1.5 bg-gradient-to-r ${selectedGrant.topBar} shrink-0`} />
+              <div className="overflow-y-auto flex-1 p-5 space-y-4">
+                {/* Header */}
+                <DialogHeader className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <span className={`px-2.5 py-0.5 rounded-full text-xs font-extrabold tracking-wide ${selectedGrant.badgeCls}`}>
+                      {selectedGrant.code}
+                    </span>
+                    <span className="text-xs text-muted-foreground">政府補助計畫</span>
+                  </div>
+                  <DialogTitle className="text-base font-bold leading-snug pt-0.5">
+                    {selectedGrant.title}
+                  </DialogTitle>
+                </DialogHeader>
+
+                {/* Desc */}
+                <p className="text-sm text-muted-foreground leading-relaxed">{selectedGrant.desc}</p>
+
+                {/* Tags */}
+                <div className="flex flex-wrap gap-1.5">
+                  {selectedGrant.tags.map((tag) => (
+                    <span key={tag} className="px-2 py-0.5 rounded-md bg-muted text-xs text-muted-foreground font-medium">{tag}</span>
+                  ))}
+                </div>
+
+                {/* Max amount */}
+                <div className="flex items-center justify-between rounded-xl bg-muted/40 px-4 py-3 border border-border">
+                  <span className="text-xs text-muted-foreground font-medium">最高補助金額</span>
+                  <span className={`text-xl font-extrabold bg-gradient-to-r ${selectedGrant.maxCls} bg-clip-text text-transparent`}>
+                    {selectedGrant.max}
+                  </span>
+                </div>
+
+                {/* CTA */}
+                <Button
+                  className="w-full bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white border-0 h-11"
+                  onClick={() => { setSelectedGrant(null); handleApplyClick(); }}
+                  disabled={accessChecking && !!user}
+                >
+                  立即免費評估資格
+                  <ArrowRight className="w-4 h-4 ml-2" />
+                </Button>
+              </div>
+            </>
+          )}
         </DialogContent>
       </Dialog>
 
