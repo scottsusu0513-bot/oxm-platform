@@ -268,7 +268,11 @@ function SevenSegmentNumber({
   color: string;
   size?: "small" | "medium" | "large";
 }) {
-  const sizeClass = size === "large" ? "text-5xl" : size === "medium" ? "text-2xl" : "text-xl";
+  const sizeClass = size === "large"
+    ? "text-3xl md:text-5xl"
+    : size === "medium"
+    ? "text-lg md:text-2xl"
+    : "text-base md:text-xl";
   const glow = `0 0 6px ${color}, 0 0 14px ${color}99, 0 0 28px ${color}44`;
   return (
     <span
@@ -323,7 +327,7 @@ function StatCard({
     >
       {/* Header */}
       <div
-        className="flex items-center justify-between px-5 pt-4 pb-3"
+        className="flex items-center justify-between px-3 pt-3 pb-2 md:px-5 md:pt-4 md:pb-3"
         style={{ borderBottom: `1px solid ${color}10` }}
       >
         <div className="flex items-center gap-2">
@@ -342,7 +346,7 @@ function StatCard({
           {rows.map(({ label, value, unit }, idx) => (
             <div
               key={label}
-              className="flex-1 min-w-0 flex flex-col items-center justify-center text-center px-2 py-5"
+              className="flex-1 min-w-0 flex flex-col items-center justify-center text-center px-1 py-2.5 md:px-2 md:py-5"
               style={idx > 0 ? { borderLeft: "1px solid rgba(148,163,184,0.18)" } : {}}
             >
               <div className="text-[8px] font-mono tracking-widest uppercase mb-2" style={{ color: "rgba(148,163,184,0.35)" }}>{label}</div>
@@ -352,7 +356,7 @@ function StatCard({
           ))}
         </div>
       ) : (
-        <div className="flex-1 flex flex-col justify-center px-5 py-5">
+        <div className="flex-1 flex flex-col justify-center px-3 py-3 md:px-5 md:py-5">
           <div className="text-[8px] font-mono tracking-widest uppercase mb-2.5" style={{ color: "rgba(148,163,184,0.35)" }}>{rows[0].label}</div>
           <div className="flex items-baseline gap-2.5">
             <SevenSegmentNumber value={rows[0].value} color={color} size="large" />
@@ -362,7 +366,7 @@ function StatCard({
       )}
 
       {/* Footer */}
-      <div className="px-5 pb-4 pt-2 space-y-2">
+      <div className="px-3 pb-3 pt-1.5 space-y-1.5 md:px-5 md:pb-4 md:pt-2 md:space-y-2">
         {bar !== undefined && (
           <div className="h-1.5 rounded-full" style={{ background: "rgba(30,41,59,0.8)" }}>
             <div
@@ -449,7 +453,7 @@ export default function EnterpriseUpgradeCenter() {
               alt="企業升級中心"
               style={{
                 width: "100%",
-                height: "clamp(200px, 27vw, 400px)",
+                height: "clamp(160px, 27vw, 400px)",
                 objectFit: "cover",
                 objectPosition: "center 30%",
                 display: "block",
@@ -471,24 +475,36 @@ export default function EnterpriseUpgradeCenter() {
               </Button>
             </div>
           </div>
+          {/* Mobile-only CTA — overlaid at bottom of image */}
+          <div className="sm:hidden pt-3">
+            <Button
+              size="default"
+              onClick={handleApplyClick}
+              disabled={accessChecking && !!user}
+              className="w-full h-11 bg-orange-500 hover:bg-orange-600 text-white border-0 rounded-lg shadow-lg shadow-orange-500/30 font-semibold"
+            >
+              免費評估資格
+              <ArrowRight className="w-4 h-4 ml-2" />
+            </Button>
+          </div>
         </div>
       </section>
 
       {/* ── 平台數據 ────────────────────────────────────────────────────── */}
-      <section className="bg-slate-50 py-8 md:py-10">
+      <section className="bg-slate-50 py-5 md:py-8 lg:py-10">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="rounded-2xl bg-white shadow-sm border border-slate-100 p-6 md:p-8">
-            <div className="flex flex-col md:flex-row gap-6 md:gap-8 items-start md:items-center">
+          <div className="rounded-2xl bg-white shadow-sm border border-slate-100 p-4 md:p-6 lg:p-8">
+            <div className="flex flex-col md:flex-row gap-4 md:gap-8 items-start md:items-center">
               {/* Left: title */}
-              <div className="md:w-44 shrink-0 space-y-3">
-                <h2 className="text-2xl font-bold text-slate-900">平台數據</h2>
-                <div className="flex items-start gap-2">
-                  <span className="w-2 h-2 rounded-full bg-green-400 mt-1 shrink-0" style={{ boxShadow: "0 0 6px #4ade80" }} />
-                  <p className="text-sm text-slate-500 leading-relaxed">數據將在平台正式啟動後持續更新</p>
+              <div className="md:w-44 shrink-0 flex flex-row md:flex-col items-center md:items-start gap-3 md:space-y-3">
+                <h2 className="text-xl md:text-2xl font-bold text-slate-900">平台數據</h2>
+                <div className="flex items-start gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-green-400 mt-0.5 shrink-0" style={{ boxShadow: "0 0 6px #4ade80" }} />
+                  <p className="text-xs md:text-sm text-slate-500 leading-relaxed">數據正式啟動後持續更新</p>
                 </div>
               </div>
-              {/* Right: 3 stat cards */}
-              <div className="flex-1 grid grid-cols-1 sm:grid-cols-3 gap-4">
+              {/* Right: 3 stat cards — 2 col on mobile, 3 col on sm+ */}
+              <div className="flex-1 grid grid-cols-2 sm:grid-cols-3 gap-3 md:gap-4">
                 <StatCard
                   title="申請廠商"
                   icon={Building2}
@@ -507,13 +523,15 @@ export default function EnterpriseUpgradeCenter() {
                   rows={[{ label: "累積補助金額", value: fmt(upgradeStats.totalGrantAmountWan, 5), unit: "萬元" }]}
                   bar={0}
                 />
-                <StatCard
-                  title="已結案數量"
-                  icon={CheckCircle}
-                  color="#c084fc"
-                  rows={[{ label: "已結案案件數", value: fmt(upgradeStats.completedCases, 5), unit: "件" }]}
-                  bar={0}
-                />
+                <div className="col-span-2 sm:col-span-1">
+                  <StatCard
+                    title="已結案數量"
+                    icon={CheckCircle}
+                    color="#c084fc"
+                    rows={[{ label: "已結案案件數", value: fmt(upgradeStats.completedCases, 5), unit: "件" }]}
+                    bar={0}
+                  />
+                </div>
               </div>
             </div>
           </div>
@@ -521,34 +539,34 @@ export default function EnterpriseUpgradeCenter() {
       </section>
 
       {/* ── 多項政府補助方案 ───────────────────────────────────────────────── */}
-      <section className="py-14 md:py-20">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-10">
-          <div className="text-center space-y-2">
-            <h2 className="text-2xl md:text-3xl font-bold">多項政府補助方案</h2>
-            <div className="w-12 h-1 bg-gradient-to-r from-orange-500 to-amber-500 mx-auto rounded-full" />
-            <p className="text-muted-foreground mt-3">OXM 協助媒合適合企業階段的政府計畫</p>
+      <section className="py-8 md:py-14 lg:py-20">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-6 md:space-y-10">
+          <div className="text-center space-y-1.5 md:space-y-2">
+            <h2 className="text-xl md:text-2xl lg:text-3xl font-bold">多項政府補助方案</h2>
+            <div className="w-10 h-1 bg-gradient-to-r from-orange-500 to-amber-500 mx-auto rounded-full" />
+            <p className="text-sm md:text-base text-muted-foreground mt-2 md:mt-3">OXM 協助媒合適合企業階段的政府計畫</p>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6 items-stretch">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 md:gap-6 items-stretch">
             {SUBSIDY_PLANS.map((plan) => (
-              <div key={plan.code} className="rounded-2xl border border-border bg-background flex flex-col overflow-hidden shadow-sm hover:shadow-md transition-shadow">
-                <div className={`h-1.5 bg-gradient-to-r ${plan.topBar}`} />
-                <div className="p-6 flex flex-col gap-4 flex-1">
+              <div key={plan.code} className="rounded-xl md:rounded-2xl border border-border bg-background flex flex-col overflow-hidden shadow-sm hover:shadow-md transition-shadow">
+                <div className={`h-1 md:h-1.5 bg-gradient-to-r ${plan.topBar}`} />
+                <div className="p-4 md:p-6 flex flex-col gap-3 md:gap-4 flex-1">
                   <div className="flex items-center justify-between">
-                    <span className={`px-3 py-1 rounded-full text-sm font-extrabold tracking-wide ${plan.badgeCls}`}>{plan.code}</span>
+                    <span className={`px-2.5 py-0.5 md:px-3 md:py-1 rounded-full text-xs md:text-sm font-extrabold tracking-wide ${plan.badgeCls}`}>{plan.code}</span>
                     <span className="text-xs text-muted-foreground">政府補助計畫</span>
                   </div>
-                  <div className="flex-1 space-y-1.5">
-                    <h3 className="font-bold text-lg leading-snug">{plan.title}</h3>
-                    <p className="text-sm text-muted-foreground leading-relaxed">{plan.desc}</p>
+                  <div className="flex-1 space-y-1">
+                    <h3 className="font-bold text-base md:text-lg leading-snug">{plan.title}</h3>
+                    <p className="text-xs md:text-sm text-muted-foreground leading-relaxed line-clamp-2 md:line-clamp-none">{plan.desc}</p>
                   </div>
-                  <div className="flex flex-wrap gap-1.5">
+                  <div className="flex flex-wrap gap-1">
                     {plan.tags.map((tag) => (
-                      <span key={tag} className="px-2 py-0.5 rounded-md bg-muted text-xs text-muted-foreground font-medium">{tag}</span>
+                      <span key={tag} className="px-1.5 py-0.5 rounded bg-muted text-[10px] md:text-xs text-muted-foreground font-medium">{tag}</span>
                     ))}
                   </div>
-                  <div className="flex items-center justify-between pt-4 border-t border-border">
+                  <div className="flex items-center justify-between pt-3 md:pt-4 border-t border-border">
                     <span className="text-xs text-muted-foreground font-medium">最高補助金額</span>
-                    <span className={`text-xl font-extrabold bg-gradient-to-r ${plan.maxCls} bg-clip-text text-transparent`}>{plan.max}</span>
+                    <span className={`text-lg md:text-xl font-extrabold bg-gradient-to-r ${plan.maxCls} bg-clip-text text-transparent`}>{plan.max}</span>
                   </div>
                 </div>
               </div>
@@ -558,11 +576,11 @@ export default function EnterpriseUpgradeCenter() {
       </section>
 
       {/* ── 申請流程 ──────────────────────────────────────────────────────── */}
-      <section className="py-14 md:py-20 bg-muted/20">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-10">
-          <div className="text-center space-y-2">
-            <h2 className="text-2xl md:text-3xl font-bold">申請流程</h2>
-            <p className="text-muted-foreground">六個步驟，OXM 企業升級顧問全程陪跑</p>
+      <section className="py-8 md:py-14 lg:py-20 bg-muted/20">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-6 md:space-y-10">
+          <div className="text-center space-y-1.5 md:space-y-2">
+            <h2 className="text-xl md:text-2xl lg:text-3xl font-bold">申請流程</h2>
+            <p className="text-sm md:text-base text-muted-foreground">六個步驟，OXM 顧問全程陪跑</p>
           </div>
           {/* Desktop: horizontal */}
           <div className="hidden lg:flex items-start">
@@ -586,17 +604,17 @@ export default function EnterpriseUpgradeCenter() {
               </Fragment>
             ))}
           </div>
-          {/* Mobile */}
-          <div className="lg:hidden grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {/* Mobile / Tablet: compact 2-col vertical stepper */}
+          <div className="lg:hidden grid grid-cols-1 sm:grid-cols-2 gap-3">
             {PROCESS_STEPS.map((step) => (
-              <div key={step.num} className="flex items-start gap-4">
-                <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${step.accent} flex items-center justify-center shadow-md shrink-0`}>
-                  <step.Icon className="w-4 h-4 text-white" />
+              <div key={step.num} className="flex items-start gap-3">
+                <div className={`w-8 h-8 rounded-lg bg-gradient-to-br ${step.accent} flex items-center justify-center shadow-md shrink-0`}>
+                  <step.Icon className="w-3.5 h-3.5 text-white" />
                 </div>
-                <div className="space-y-0.5">
-                  <span className={`text-[10px] font-extrabold tracking-widest opacity-60 block ${step.stepCls}`}>STEP {step.num}</span>
-                  <p className="font-semibold text-sm">{step.title}</p>
-                  <p className="text-xs text-muted-foreground leading-relaxed">{step.desc}</p>
+                <div className="space-y-0.5 pt-0.5">
+                  <span className={`text-[9px] font-extrabold tracking-widest opacity-60 block ${step.stepCls}`}>STEP {step.num}</span>
+                  <p className="font-semibold text-xs">{step.title}</p>
+                  <p className="text-[11px] text-muted-foreground leading-relaxed">{step.desc}</p>
                 </div>
               </div>
             ))}
@@ -605,23 +623,23 @@ export default function EnterpriseUpgradeCenter() {
       </section>
 
       {/* ── Bottom CTA ────────────────────────────────────────────────────── */}
-      <section className="py-14 md:py-20">
+      <section className="py-8 md:py-14 lg:py-20">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-orange-500 via-amber-500 to-violet-600 p-10 md:p-16 text-white text-center space-y-6 shadow-xl shadow-orange-500/20">
+          <div className="relative overflow-hidden rounded-2xl md:rounded-3xl bg-gradient-to-br from-orange-500 via-amber-500 to-violet-600 p-6 md:p-10 lg:p-16 text-white text-center space-y-4 md:space-y-6 shadow-xl shadow-orange-500/20">
             <div
               className="absolute inset-0 pointer-events-none opacity-10"
               aria-hidden="true"
               style={{ backgroundImage: "radial-gradient(circle,white 1px,transparent 1px)", backgroundSize: "24px 24px" }}
             />
-            <div className="relative space-y-4">
-              <h2 className="text-2xl md:text-3xl font-extrabold">不確定適合哪項補助？</h2>
-              <p className="text-white/80 text-lg">讓 OXM 協助免費評估，找到最適合您企業的計畫</p>
-              <div className="pt-2">
+            <div className="relative space-y-2.5 md:space-y-4">
+              <h2 className="text-xl md:text-2xl lg:text-3xl font-extrabold">不確定適合哪項補助？</h2>
+              <p className="text-white/80 text-sm md:text-base lg:text-lg">讓 OXM 協助免費評估，找到最適合您企業的計畫</p>
+              <div className="pt-1 md:pt-2">
                 <Button
-                  size="lg"
+                  size="default"
                   onClick={handleApplyClick}
                   disabled={accessChecking && !!user}
-                  className="bg-white text-orange-600 hover:bg-orange-50 border-0 text-base px-8 font-bold shadow-lg"
+                  className="h-11 bg-white text-orange-600 hover:bg-orange-50 border-0 text-sm md:text-base px-6 md:px-8 font-bold shadow-lg"
                 >
                   立即免費評估
                   <ArrowRight className="w-4 h-4 ml-2" />
@@ -664,16 +682,16 @@ export default function EnterpriseUpgradeCenter() {
         <button
           onClick={() => setShowProgressDialog(true)}
           aria-label="查詢申請進度"
-          className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-orange-500 to-amber-500 text-white font-medium rounded-full shadow-lg hover:shadow-xl hover:-translate-y-0.5 transition-all duration-200 select-none"
+          className="flex items-center gap-1.5 px-3 py-2 sm:px-4 sm:py-2.5 bg-gradient-to-r from-orange-500 to-amber-500 text-white font-medium rounded-full shadow-lg hover:shadow-xl hover:-translate-y-0.5 transition-all duration-200 select-none"
         >
-          <FileSearch className="w-4 h-4 shrink-0" />
-          <span className="text-sm">查詢進度</span>
+          <FileSearch className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+          <span className="text-xs sm:text-sm">查詢進度</span>
         </button>
       </div>
 
       {/* ── 申請進度查詢 Dialog ──────────────────────────────────────────── */}
       <Dialog open={showProgressDialog} onOpenChange={setShowProgressDialog}>
-        <DialogContent className="max-w-lg max-h-[80vh] flex flex-col">
+        <DialogContent className="w-[calc(100vw-2rem)] sm:max-w-lg max-h-[82vh] flex flex-col p-4 sm:p-6">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <FileSearch className="w-5 h-5 text-orange-500" />
@@ -751,8 +769,8 @@ export default function EnterpriseUpgradeCenter() {
 
                       {/* 案件進度 Timeline */}
                       <div className="pt-0.5">
-                        <p className="text-xs font-medium text-muted-foreground mb-2">案件進度</p>
-                        <div className="relative pl-4 space-y-2.5">
+                        <p className="text-xs font-medium text-muted-foreground mb-1.5">案件進度</p>
+                        <div className="relative pl-4 space-y-1.5">
                           {/* 垂直連線 */}
                           <div className="absolute left-1 top-1.5 bottom-1.5 w-px bg-border" />
                           {timelineStages.map(stage => {
