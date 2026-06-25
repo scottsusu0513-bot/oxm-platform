@@ -391,6 +391,7 @@ export default function EnterpriseUpgradeCenter() {
   const [, navigate] = useLocation();
   const [showDialog, setShowDialog] = useState(false);
   const [showProgressDialog, setShowProgressDialog] = useState(false);
+  const [progressDialogMode, setProgressDialogMode] = useState<"query" | "duplicate">("query");
   const [selectedGrant, setSelectedGrant] = useState<typeof SUBSIDY_PLANS[number] | null>(null);
 
   const { data: ownedFactory, isLoading: ownedLoading } = trpc.factory.getMine.useQuery(undefined, {
@@ -400,8 +401,10 @@ export default function EnterpriseUpgradeCenter() {
     enabled: !!user,
   });
 
+  // 提前載入（不等 Dialog 打開），讓 handleApplyClick 能立即判斷是否已有申請
   const { data: progressData, isLoading: progressLoading } = trpc.upgradeCenter.myApplicationProgress.useQuery(undefined, {
-    enabled: showProgressDialog && !!user,
+    enabled: !!user,
+    staleTime: 60_000,
   });
   const { data: rawStats } = trpc.upgradeCenter.publicStats.useQuery(undefined, {
     staleTime: 5 * 60 * 1000,
@@ -432,6 +435,12 @@ export default function EnterpriseUpgradeCenter() {
     if (!user) { setShowDialog(true); return; }
     if (accessChecking) return;
     if (!hasFactoryAccess) { setShowDialog(true); return; }
+    // 已有進行中的申請：顯示進度 Dialog，不導向表單
+    if (progressData?.applications && progressData.applications.length > 0) {
+      setProgressDialogMode("duplicate");
+      setShowProgressDialog(true);
+      return;
+    }
     navigate("/upgrade-center/apply");
   };
 
@@ -777,15 +786,17 @@ export default function EnterpriseUpgradeCenter() {
       </div>
 
       {/* ── 申請進度查詢 Dialog ──────────────────────────────────────────── */}
-      <Dialog open={showProgressDialog} onOpenChange={setShowProgressDialog}>
+      <Dialog open={showProgressDialog} onOpenChange={(open) => { setShowProgressDialog(open); if (!open) setProgressDialogMode("query"); }}>
         <DialogContent className="w-[calc(100vw-2rem)] sm:max-w-lg max-h-[82vh] flex flex-col p-4 sm:p-6">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <FileSearch className="w-5 h-5 text-orange-500" />
-              申請進度查詢
+              {progressDialogMode === "duplicate" ? "你已送出企業升級申請" : "申請進度查詢"}
             </DialogTitle>
             <DialogDescription className="text-sm leading-relaxed pt-1">
-              系統將依您目前登入帳號綁定的工廠，自動查詢企業升級案件進度。
+              {progressDialogMode === "duplicate"
+                ? "我們已收到你的申請，目前案件進度如下。"
+                : "系統將依您目前登入帳號綁定的工廠，自動查詢企業升級案件進度。"}
             </DialogDescription>
           </DialogHeader>
 

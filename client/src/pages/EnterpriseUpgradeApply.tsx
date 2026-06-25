@@ -170,7 +170,14 @@ export default function EnterpriseUpgradeApply() {
     enabled: !!user,
   });
 
-  const dataLoading = !!user && (ownedLoading || coManagedLoading);
+  // 防重複送件：提前查詢是否已有進行中申請
+  const { data: myProgressData, isLoading: myProgressLoading } = trpc.upgradeCenter.myApplicationProgress.useQuery(undefined, {
+    enabled: !!user,
+    staleTime: 60_000,
+  });
+  const existingApplication = myProgressData?.applications?.[0] ?? null;
+
+  const dataLoading = !!user && (ownedLoading || coManagedLoading || myProgressLoading);
 
   const [submitted, setSubmitted] = useState(false);
 
@@ -421,6 +428,41 @@ export default function EnterpriseUpgradeApply() {
 
   // ── 仍在載入工廠資料時（edge case：user 存在但 queries 還沒完成） ──
   if (!approvedFactory) return <AppLoading />;
+
+  // ── Gate 4: 已有進行中的申請，禁止重複送件 ──
+  if (existingApplication) {
+    const APPLY_STATUS_LABELS: Record<string, string> = {
+      new: "等待顧問查收", evaluating: "顧問評估中", ineligible: "資格不符",
+      accepted: "評估通過", submitted: "已送審", transforming: "補助核定",
+      completed: "已完成", unassigned: "待分派", viewed: "顧問已查收",
+      contacted: "已聯繫", consulting: "諮詢中",
+      rejected: "未通過", qualification_failed: "資格不符",
+    };
+    const statusLabel = APPLY_STATUS_LABELS[existingApplication.status] ?? existingApplication.status;
+    return (
+      <div className="min-h-screen bg-background">
+        <Helmet><title>免費評估資格｜企業升級中心｜OXM</title></Helmet>
+        <Navbar />
+        <GateView
+          icon={<CheckCircle2 className="w-8 h-8 text-green-500" />}
+          title="你已送出企業升級申請"
+          description={`「${existingApplication.companyName}」的申請已送出，目前狀態：${statusLabel}。如需查看詳細進度，請至企業升級中心。`}
+          actions={
+            <>
+              <Link href="/upgrade-center">
+                <Button className="w-full bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white border-0">
+                  查看目前進度
+                </Button>
+              </Link>
+              <Link href="/upgrade-center">
+                <Button variant="outline" className="w-full">返回企業升級中心</Button>
+              </Link>
+            </>
+          }
+        />
+      </div>
+    );
+  }
 
   // ── 主表單 ──
   return (
