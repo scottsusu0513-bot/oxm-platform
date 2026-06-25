@@ -40,42 +40,42 @@ interface HubItem {
 
 const HUB_ITEMS: HubItem[] = [
   {
-    label: "商機媒合中心", short: "商機媒合", soon: false,
+    label: "商機媒合中心", short: "找工廠", soon: false,
     Icon: Search, iconCls: "text-orange-500",
     card: "bg-gradient-to-br from-orange-500/10 to-purple-600/10 border-orange-300/40 text-orange-700",
     cardHover: "hover:from-orange-500/20 hover:to-purple-600/20 hover:border-orange-400/60 hover:shadow-sm hover:shadow-orange-500/10 hover:-translate-y-px",
     mCard: "from-orange-500/10 to-purple-600/10 border-orange-300/40", mText: "text-orange-700",
   },
   {
-    label: "企業升級中心", short: "企業升級", soon: true,
+    label: "企業升級中心", short: "找補助", soon: true,
     Icon: Rocket, iconCls: "text-blue-400/60",
     card: "bg-gradient-to-br from-blue-600/8 to-violet-600/8 border-blue-300/20 text-blue-900/30",
     cardHover: "",
     mCard: "from-blue-600/8 to-violet-600/8 border-blue-300/20", mText: "text-blue-600/40",
   },
   {
-    label: "人才與技術中心", short: "人才技術", soon: true,
+    label: "人才與技術中心", short: "找人才", soon: true,
     Icon: Users, iconCls: "text-teal-400/60",
     card: "bg-gradient-to-br from-teal-500/8 to-cyan-600/8 border-teal-300/20 text-teal-900/30",
     cardHover: "",
     mCard: "from-teal-500/8 to-cyan-600/8 border-teal-300/20", mText: "text-teal-600/40",
   },
   {
-    label: "產業採購與資源中心", short: "產業採購", soon: true,
+    label: "產業採購與資源中心", short: "找採購", soon: true,
     Icon: Package, iconCls: "text-amber-400/60",
     card: "bg-gradient-to-br from-amber-500/8 to-orange-600/8 border-amber-300/20 text-amber-900/30",
     cardHover: "",
     mCard: "from-amber-500/8 to-orange-600/8 border-amber-300/20", mText: "text-amber-600/40",
   },
   {
-    label: "傳產知識與情報中心", short: "產業情報", soon: true,
+    label: "傳產知識與情報中心", short: "找消息", soon: true,
     Icon: BookOpen, iconCls: "text-indigo-400/60",
     card: "bg-gradient-to-br from-indigo-600/8 to-purple-700/8 border-indigo-300/20 text-indigo-900/30",
     cardHover: "",
     mCard: "from-indigo-600/8 to-purple-700/8 border-indigo-300/20", mText: "text-indigo-600/40",
   },
   {
-    label: "產業討論區", short: "產業討論", soon: true,
+    label: "產業討論區", short: "找討論", soon: true,
     Icon: MessageSquare, iconCls: "text-rose-400/60",
     card: "bg-gradient-to-br from-rose-500/8 to-pink-600/8 border-rose-300/20 text-rose-900/30",
     cardHover: "",
