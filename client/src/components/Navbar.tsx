@@ -205,7 +205,7 @@ export default function Navbar() {
         </Link>
 
         {/* ── Desktop: 六大方向入口（lg: 1024px+） ── */}
-        <nav className="hidden lg:flex items-center gap-1 flex-1 justify-center min-w-0 mx-1">
+        <nav className="hidden lg:flex items-center gap-3 flex-1 justify-center min-w-0 mx-2">
           {HUB_ITEMS.map((hub) => {
             // 企業升級中心：admin 或 active 顧問才可點
             if (hub.label === "企業升級中心" && showConsultantCenter) {
@@ -213,7 +213,7 @@ export default function Navbar() {
                 <Link key={hub.label} href="/upgrade-center">
                   <button
                     type="button"
-                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold transition-all duration-150 whitespace-nowrap cursor-pointer bg-gradient-to-br from-blue-600/10 to-violet-600/10 border-blue-300/40 text-blue-700 hover:from-blue-600/20 hover:to-violet-600/20 hover:border-blue-400/60 hover:shadow-sm hover:shadow-blue-500/10 hover:-translate-y-px"
+                    className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg border text-[11px] font-semibold transition-all duration-150 whitespace-nowrap cursor-pointer bg-gradient-to-br from-blue-600/10 to-violet-600/10 border-blue-300/40 text-blue-700 hover:from-blue-600/20 hover:to-violet-600/20 hover:border-blue-400/60 hover:shadow-sm hover:shadow-blue-500/10 hover:-translate-y-px"
                   >
                     <hub.Icon className="w-3.5 h-3.5 shrink-0 text-blue-500" />
                     {hub.short}
@@ -223,7 +223,7 @@ export default function Navbar() {
             }
 
             if (!hub.soon) {
-              // 商機媒合中心 — 可互動，hover/click 下拉
+              // 商機媒合中心 — click 導向媒合首頁，hover 顯示下拉
               return (
                 <div
                   key={hub.label}
@@ -231,17 +231,18 @@ export default function Navbar() {
                   onMouseEnter={openSearchDrop}
                   onMouseLeave={closeSearchDropDelayed}
                 >
-                  <button
-                    type="button"
-                    aria-label={hub.label}
-                    title={hub.label}
-                    onClick={() => setSearchDropOpen(v => !v)}
-                    className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold transition-all duration-150 whitespace-nowrap cursor-pointer ${hub.card} ${hub.cardHover}`}
-                  >
-                    <hub.Icon className={`w-3.5 h-3.5 shrink-0 ${hub.iconCls}`} />
-                    {hub.short}
-                    <ChevronDown className={`w-2.5 h-2.5 opacity-50 transition-transform duration-150 ${searchDropOpen ? "rotate-180" : ""}`} />
-                  </button>
+                  <Link href="/">
+                    <button
+                      type="button"
+                      aria-label={hub.label}
+                      title={hub.label}
+                      className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg border text-[11px] font-semibold transition-all duration-150 whitespace-nowrap cursor-pointer ${hub.card} ${hub.cardHover}`}
+                    >
+                      <hub.Icon className={`w-3.5 h-3.5 shrink-0 ${hub.iconCls}`} />
+                      {hub.short}
+                      <ChevronDown className={`w-2.5 h-2.5 opacity-50 transition-transform duration-150 ${searchDropOpen ? "rotate-180" : ""}`} />
+                    </button>
+                  </Link>
                   {searchDropOpen && (
                     <div
                       className="absolute top-full left-0 mt-1.5 bg-white border border-border rounded-xl shadow-lg z-[200] min-w-[140px] py-1.5 overflow-hidden"
@@ -267,7 +268,7 @@ export default function Navbar() {
                 aria-disabled="true"
                 aria-label={`${hub.label}（即將開放）`}
                 title="即將開放"
-                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold whitespace-nowrap cursor-not-allowed select-none ${hub.card}`}
+                className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg border text-[11px] font-semibold whitespace-nowrap cursor-not-allowed select-none ${hub.card}`}
               >
                 <hub.Icon className={`w-3.5 h-3.5 shrink-0 ${hub.iconCls}`} />
                 {hub.short}
@@ -479,11 +480,11 @@ export default function Navbar() {
 
               if (!hub.soon) {
                 return (
-                  <Link key={hub.label} href="/search" onClick={() => setMobileOpen(false)}>
+                  <Link key={hub.label} href="/" onClick={() => setMobileOpen(false)}>
                     <div className={`${cardBase} active:opacity-80`}>
                       <hub.Icon className={`w-5 h-5 ${hub.iconCls}`} />
                       <span className={`text-xs font-semibold text-center ${hub.mText}`}>{hub.short}</span>
-                      <span className="text-[9px] text-orange-500/70">搜尋工廠 →</span>
+                      <span className="text-[9px] text-orange-500/70">進入首頁 →</span>
                     </div>
                   </Link>
                 );
