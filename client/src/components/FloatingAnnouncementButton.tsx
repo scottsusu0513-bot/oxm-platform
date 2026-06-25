@@ -3,10 +3,12 @@ import { createPortal } from "react-dom";
 import { useLocation } from "wouter";
 import { Capacitor } from "@capacitor/core";
 import { trpc } from "@/lib/trpc";
-import { Megaphone, BookOpen, HelpCircle } from "lucide-react";
+import { Megaphone, BookOpen, HelpCircle, CalendarCheck, X } from "lucide-react";
 import { MANUAL_ENTRY_ENABLED } from "@/lib/manual";
 
 const isNativePlatform = Capacitor.isNativePlatform();
+
+const OXM_LINE_URL = "https://page.line.me/@785bsmsr";
 
 const LS_KEY = "oxm:lastViewedAnnouncementsAt";
 
@@ -27,10 +29,22 @@ const bottomStyle = isNativePlatform
   ? "calc(56px + 1.5rem + env(safe-area-inset-bottom, 0px))"
   : "calc(1.5rem + env(safe-area-inset-bottom, 0px))";
 
+async function openLineUrl() {
+  if (isNativePlatform) {
+    try {
+      const { Browser } = await import("@capacitor/browser");
+      await Browser.open({ url: OXM_LINE_URL });
+      return;
+    } catch {}
+  }
+  window.open(OXM_LINE_URL, "_blank", "noopener,noreferrer");
+}
+
 export default function FloatingAnnouncementButton() {
   const [, navigate] = useLocation();
   const { data: items = [] } = trpc.announcement.list.useQuery({ limit: 20 });
   const [lastViewed, setLastViewedState] = useState<number>(getLastViewed);
+  const [showVisitCard, setShowVisitCard] = useState(false);
 
   const hasNew = items.some(item => {
     const t = item.createdAt instanceof Date
@@ -53,6 +67,65 @@ export default function FloatingAnnouncementButton() {
       className="fixed right-5 z-40 flex flex-col items-end gap-2"
       style={{ bottom: bottomStyle }}
     >
+      {/* 預約說明展開卡片（點擊按鈕後顯示，預設收起） */}
+      {showVisitCard && (
+        <div className="w-72 max-w-[calc(100vw-2.5rem)] bg-white rounded-2xl shadow-2xl border border-orange-100 overflow-hidden">
+          {/* 卡片 header */}
+          <div className="bg-gradient-to-r from-orange-500 to-amber-500 px-4 py-3 flex items-center justify-between">
+            <span className="text-white font-semibold text-sm">預約 OXM 到廠說明</span>
+            <button
+              onClick={() => setShowVisitCard(false)}
+              className="text-white/80 hover:text-white transition-colors ml-2 shrink-0"
+              aria-label="關閉"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          {/* 卡片內容 */}
+          <div className="px-4 py-3 space-y-3 max-h-[60vh] overflow-y-auto">
+            <p className="text-sm text-gray-700 leading-relaxed">
+              還在觀望 OXM 是否適合你的工廠？<br />
+              可以透過官方 LINE 預約到廠說明，我們會簡單介紹平台功能、上架方式與未來合作方向。
+            </p>
+            <div>
+              <p className="text-xs font-semibold text-gray-500 mb-1.5">適合：</p>
+              <ul className="space-y-1">
+                {[
+                  "想了解 OXM 平台理念",
+                  "想知道工廠如何免費曝光",
+                  "想評估是否適合上架",
+                  "想了解媒合、補助與產業資源",
+                  "想當面交換名片與合作資訊",
+                ].map(item => (
+                  <li key={item} className="flex items-start gap-1.5 text-xs text-gray-600">
+                    <span className="shrink-0 text-orange-400 leading-relaxed">・</span>
+                    <span className="leading-relaxed">{item}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+            {/* LINE CTA */}
+            <button
+              onClick={openLineUrl}
+              className="w-full py-2.5 bg-gradient-to-r from-orange-500 to-amber-500 text-white text-sm font-semibold rounded-xl hover:from-orange-600 hover:to-amber-600 transition-all shadow-sm hover:shadow-md active:scale-[0.98]"
+            >
+              加入官方 LINE 預約
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 預約說明浮動入口（主按鈕） */}
+      <button
+        onClick={() => setShowVisitCard(v => !v)}
+        aria-label="預約說明"
+        aria-expanded={showVisitCard}
+        className={`${btnBase} bg-gradient-to-r from-orange-500 to-amber-500`}
+      >
+        <CalendarCheck className="w-4 h-4 shrink-0" />
+        <span className="hidden sm:inline text-sm">預約說明</span>
+      </button>
+
       {/* 使用手冊（MANUAL_ENTRY_ENABLED 為 true 時才顯示） */}
       {MANUAL_ENTRY_ENABLED && (
         <button
