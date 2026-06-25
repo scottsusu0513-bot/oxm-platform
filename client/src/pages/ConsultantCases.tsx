@@ -94,9 +94,15 @@ const EMPLOYEE_LABELS: Record<string, string> = {
 };
 
 const EXPORT_LABELS: Record<string, string> = {
-  none: "無出口",
-  direct: "直接出口",
-  trader: "透過貿易商出口",
+  // 新選項（2026-06 起）
+  direct_with_export_quote:   "直接出口（含出口報價單）",
+  indirect_trading_company:   "間接出口－透過貿易商",
+  indirect_distributor_agent: "間接出口－有經銷商／代理商",
+  no_export:                  "無出口",
+  // 舊選項（向下相容，不刪除）
+  none:     "無出口",
+  direct:   "直接出口",
+  trader:   "透過貿易商出口",
   customer: "客戶代為出口",
   multiple: "多種模式",
 };

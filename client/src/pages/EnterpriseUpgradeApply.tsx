@@ -73,11 +73,10 @@ const FACTORY_TYPE_OPTIONS = [
 ];
 
 const EXPORT_MODE_OPTIONS = [
-  { value: "none", label: "無出口" },
-  { value: "direct", label: "直接出口" },
-  { value: "trader", label: "透過貿易商出口" },
-  { value: "customer", label: "客戶代為出口" },
-  { value: "multiple", label: "多種模式" },
+  { value: "direct_with_export_quote",   label: "直接出口（含出口報價單）" },
+  { value: "indirect_trading_company",   label: "間接出口－透過貿易商" },
+  { value: "indirect_distributor_agent", label: "間接出口－有經銷商／代理商" },
+  { value: "no_export",                  label: "無出口" },
 ];
 
 // ── 帶入提示 ──────────────────────────────────────────────────────────────────
