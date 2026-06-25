@@ -72,16 +72,24 @@ export function registerOAuthRoutes(app: Express) {
 
     const baseUrl = process.env.OAUTH_SERVER_URL || `${req.protocol}://${req.get("host")}`;
     const redirectUri = `${baseUrl}/api/oauth/callback`;
+    const isApp = getQueryParam(req, "source") === "app";
 
-    res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${new URLSearchParams({
+    // App（Chrome Custom Tab）時不帶 access_type=offline 和 prompt=select_account，
+    // 降低 Google Prompt / YouTube App 跨 App 2FA 驗證被觸發的機率。
+    // Web 版保留 prompt=select_account 讓用戶可切換帳號。
+    const params: Record<string, string> = {
       client_id: ENV.googleClientId,
       redirect_uri: redirectUri,
       response_type: "code",
       scope: "openid email profile",
       state,
-      access_type: "offline",
-      prompt: "select_account",
-    }).toString()}`);
+    };
+    if (!isApp) {
+      params.access_type = "offline";
+      params.prompt = "select_account";
+    }
+
+    res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${new URLSearchParams(params).toString()}`);
   });
 
   // ── Google: Callback ────────────────────────────────────────────────────────
