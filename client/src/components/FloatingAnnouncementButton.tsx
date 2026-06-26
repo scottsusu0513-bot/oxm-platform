@@ -104,12 +104,24 @@ export default function FloatingAnnouncementButton() {
                 ))}
               </ul>
             </div>
+            {/* QR Code 區塊 */}
+            <div className="flex flex-col items-center gap-1.5 py-1">
+              <div className="bg-white rounded-xl border border-gray-200 shadow-md p-2 inline-block">
+                <img
+                  src="/images/oxm-line-qr.png"
+                  alt="OXM 官方 LINE QR Code"
+                  className="w-[130px] h-[130px] object-contain block"
+                />
+              </div>
+              <p className="text-xs font-semibold text-gray-600 text-center">掃描加入 OXM 官方 LINE</p>
+              <p className="text-xs text-gray-400 text-center">也可以點下方按鈕直接開啟</p>
+            </div>
             {/* LINE CTA */}
             <button
               onClick={openLineUrl}
               className="w-full py-2.5 bg-gradient-to-r from-orange-500 to-amber-500 text-white text-sm font-semibold rounded-xl hover:from-orange-600 hover:to-amber-600 transition-all shadow-sm hover:shadow-md active:scale-[0.98]"
             >
-              加入官方 LINE 預約
+              開啟官方 LINE 預約
             </button>
           </div>
         </div>
