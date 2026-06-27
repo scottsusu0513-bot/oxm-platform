@@ -207,8 +207,7 @@ export default function Navbar() {
         {/* ── Desktop: 六大方向入口（lg: 1024px+） ── */}
         <nav className="hidden lg:flex items-center gap-3 flex-1 justify-center min-w-0 mx-2">
           {HUB_ITEMS.map((hub) => {
-            // 企業升級中心：admin 或 active 顧問才可點
-            if (hub.label === "企業升級中心" && showConsultantCenter) {
+            if (hub.label === "企業升級中心") {
               return (
                 <Link key={hub.label} href="/upgrade-center">
                   <button
@@ -465,8 +464,7 @@ export default function Navbar() {
             {HUB_ITEMS.map((hub) => {
               const cardBase = `flex flex-col items-center gap-2 p-3 rounded-xl border bg-gradient-to-br ${hub.mCard} transition-colors`;
 
-              // 企業升級中心：admin 或 active 顧問才可點
-              if (hub.label === "企業升級中心" && showConsultantCenter) {
+              if (hub.label === "企業升級中心") {
                 return (
                   <Link key={hub.label} href="/upgrade-center" onClick={() => setMobileOpen(false)}>
                     <div className={`${cardBase} active:opacity-80`}>
@@ -589,8 +587,8 @@ export default function Navbar() {
               <Button type="button" className="w-full bg-gradient-to-r from-orange-500 to-amber-500 text-white border-0" onClick={(e) => { e.preventDefault(); setMobileOpen(false); setLoginDialogOpen(true); }}>
                 登入
               </Button>
-              <p className="text-xs text-muted-foreground text-center pt-1">
-                手機建議使用 OXM APP 登入，避免內建瀏覽器阻擋帳號登入或綁定。
+              <p className="text-xs text-muted-foreground text-center pt-1 leading-5">
+                手機建議使用 OXM APP 登入<br />避免內建瀏覽器阻擋帳號登入或綁定
               </p>
             </div>
           )}
