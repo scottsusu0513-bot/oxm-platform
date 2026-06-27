@@ -590,7 +590,7 @@ export default function Navbar() {
                 登入
               </Button>
               <p className="text-xs text-muted-foreground text-center pt-1">
-                手機請使用 Chrome 或 Safari 登入
+                手機建議使用 OXM APP 登入，避免內建瀏覽器阻擋帳號登入或綁定。
               </p>
             </div>
           )}
