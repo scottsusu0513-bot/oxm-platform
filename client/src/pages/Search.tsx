@@ -57,8 +57,6 @@ function useInquiryCart() {
   return { cart, add, remove, clear, has };
 }
 
-
-
 function MultiSelect({ options, value, onChange, placeholder, className, withClear }: {
   options: readonly string[];
   value: string[];
@@ -113,7 +111,6 @@ function BusinessTypeBadge({ businessType }: { businessType?: string }) {
   );
 }
 
-// ── 改造重點：FavButton 不再自己查詢，改由父元件傳入狀態 ──
 function FavButton({ factoryId, initialIsFav, onToggle }: {
   factoryId: number;
   initialIsFav: boolean;
@@ -148,7 +145,6 @@ function FavButton({ factoryId, initialIsFav, onToggle }: {
   );
 }
 
-// ── 圖片比例 hook ─────────────────────────────────────────────────────────
 function useImageAspectRatio(url: string | null | undefined): number | null {
   const [ratio, setRatio] = useState<number | null>(null);
   useEffect(() => {
@@ -163,7 +159,6 @@ function useImageAspectRatio(url: string | null | undefined): number | null {
   return ratio;
 }
 
-// ── 搜尋結果卡片（需要 hook，不能放在 map 裡）────────────────────────────
 type FactoryCardProps = {
   factory: any;
   getFavState: (id: number) => boolean;
@@ -184,7 +179,6 @@ function FactoryCard({ factory, getFavState, handleFavToggle, cartHas, cartAdd, 
       <Link href={`/factory/${factory.id}`}>
         <Card className="hover:shadow-md transition-shadow cursor-pointer h-full overflow-hidden">
           {isWide ? (
-            /* Wide layout: image banner on top */
             <>
               <div className="relative h-28 bg-orange-50/40 flex items-center justify-center p-3 overflow-hidden">
                 <img src={avatarUrl!} alt={factory.name} className="w-full h-full object-contain" loading="lazy" />
@@ -197,7 +191,6 @@ function FactoryCard({ factory, getFavState, handleFavToggle, cartHas, cartAdd, 
               </CardContent>
             </>
           ) : (
-            /* Compact layout: left image / right content on desktop */
             <div className="flex flex-col md:flex-row h-full">
               <div className="relative h-36 md:h-auto md:w-40 shrink-0 bg-orange-50/40 flex items-center justify-center p-4 overflow-hidden">
                 {avatarUrl ? (
@@ -333,22 +326,48 @@ function FactoryCardContent({ factory, cartHas, cartAdd, cartRemove, setCartOpen
   );
 }
 
-export default function Search() {
-  const [location, navigate] = useLocation();
-const params = new URLSearchParams(window.location.search);
-const { isAuthenticated } = useAuth();
+// ── URL ↔ filter state 轉換 ───────────────────────────────────────────────
+function buildParams(vals: {
+  mfgMode: string;
+  industry: string[];
+  subIndustry: string[];
+  region: string[];
+  keyword: string;
+  businessType: string;
+  sortBy: string;
+  page: number;
+}) {
+  const p = new URLSearchParams();
+  if (vals.mfgMode) p.set("mfgMode", vals.mfgMode);
+  vals.industry.forEach(i => p.append("industry", i));
+  vals.subIndustry.forEach(s => p.append("subIndustry", s));
+  vals.region.forEach(r => p.append("region", r));
+  if (vals.keyword) p.set("keyword", vals.keyword);
+  if (vals.businessType && vals.businessType !== "all") p.set("businessType", vals.businessType);
+  if (vals.sortBy && vals.sortBy !== "rating") p.set("sortBy", vals.sortBy);
+  if (vals.page > 1) p.set("page", String(vals.page));
+  return p;
+}
 
-  const [mfgMode, setMfgMode] = useState("");
-  const [industry, setIndustry] = useState<string[]>([]);
-  const [subIndustry, setSubIndustry] = useState<string[]>([]);
-  const [region, setRegion] = useState<string[]>([]);
-  const [keyword, setKeyword] = useState("");          // input display value (every keypress)
-  const [committedKeyword, setCommittedKeyword] = useState(() => params.get("keyword") ?? ""); // drives query
-  const [businessType, setBusinessType] = useState("all");
+export default function Search() {
+  const [, navigate] = useLocation();
+  // Parsed once per mount — lazy initialisers below read from this snapshot.
+  const params = new URLSearchParams(window.location.search);
+  const { isAuthenticated } = useAuth();
+
+  // All filter state is initialised directly from the URL so that a browser
+  // back-navigation restores the exact conditions without a double-fetch.
+  const [mfgMode, setMfgMode] = useState(() => params.get("mfgMode") ?? "");
+  const [industry, setIndustry] = useState<string[]>(() => params.getAll("industry").filter(Boolean));
+  const [subIndustry, setSubIndustry] = useState<string[]>(() => params.getAll("subIndustry").filter(Boolean));
+  const [region, setRegion] = useState<string[]>(() => params.getAll("region").filter(Boolean));
+  const [keyword, setKeyword] = useState(() => params.get("keyword") ?? "");
+  const [committedKeyword, setCommittedKeyword] = useState(() => params.get("keyword") ?? "");
+  const [businessType, setBusinessType] = useState(() => params.get("businessType") ?? "all");
   const isComposing = useRef(false);
   const [showHistory, setShowHistory] = useState(false);
-  const [page, setPage] = useState(1);
-  const [sortBy, setSortBy] = useState("rating");
+  const [page, setPage] = useState(() => Math.max(1, parseInt(params.get("page") ?? "1", 10) || 1));
+  const [sortBy, setSortBy] = useState(() => params.get("sortBy") ?? "rating");
 
   const { cart, add: cartAdd, remove: cartRemove, clear: cartClear, has: cartHas } = useInquiryCart();
   const [inquiryTitle, setInquiryTitle] = useState("");
@@ -357,7 +376,7 @@ const { isAuthenticated } = useAuth();
   const [mobileCartOpen, setMobileCartOpen] = useState(false);
 
   const createAndSendMut = trpc.inquiryBatch.createAndSend.useMutation({
-    onSuccess: (data, vars) => {
+    onSuccess: (data) => {
       toast.success(`已成功送出一鍵詢價給 ${data.successCount} 間工廠`);
       cartClear();
       setInquiryTitle("");
@@ -379,36 +398,72 @@ const { isAuthenticated } = useAuth();
   };
 
   const [searchHistory, setSearchHistory] = useState<string[]>(() => {
-    try {
-      return JSON.parse(localStorage.getItem("oxm_search_history") || "[]");
-    } catch {
-      return [];
-    }
+    try { return JSON.parse(localStorage.getItem("oxm_search_history") || "[]"); } catch { return []; }
   });
 
   const saveToHistory = (term: string) => {
     if (!term.trim()) return;
-    const updated = [term, ...searchHistory.filter((h) => h !== term)].slice(0, 10);
+    const updated = [term, ...searchHistory.filter(h => h !== term)].slice(0, 10);
     setSearchHistory(updated);
     localStorage.setItem("oxm_search_history", JSON.stringify(updated));
   };
 
-  useEffect(() => {
-    setMfgMode(params.get("mfgMode") ?? "");
-    setIndustry(params.getAll("industry").filter(Boolean));
-    setSubIndustry(params.getAll("subIndustry").filter(Boolean));
-    setRegion(params.getAll("region").filter(Boolean));
-    const kw = params.get("keyword") ?? "";
-    setKeyword(kw);
-    setCommittedKeyword(kw);
-    setBusinessType(params.get("businessType") ?? "all");
-    setPage(1);
-  }, []);
-
-  // 收藏狀態：以伺服器資料為底，toggle 後用 override 即時更新 UI
   const [favOverrides, setFavOverrides] = useState<Record<number, boolean>>({});
 
-    const searchInput = useMemo(() => ({
+  // ── URL 同步 helper（每次 filter 變更都呼叫，使用 replace 避免塞滿 history）
+  // overrides 提供本次變更的新值；其餘欄位取自當前 render 的 state closure。
+  const syncURL = (overrides: Partial<{
+    mfgMode: string; industry: string[]; subIndustry: string[];
+    region: string[]; keyword: string; businessType: string;
+    sortBy: string; page: number;
+  }> = {}) => {
+    const vals = {
+      mfgMode, industry, subIndustry, region,
+      keyword: committedKeyword, businessType, sortBy, page,
+      ...overrides,
+    };
+    const qs = buildParams(vals).toString();
+    navigate(qs ? `/search?${qs}` : "/search", { replace: true });
+  };
+
+  // ── 共用 filter handlers（桌面側欄 + 手機篩選欄共用）──────────────────
+  const onBusinessTypeChange = (v: string) => {
+    setBusinessType(v); setPage(1);
+    syncURL({ businessType: v, page: 1 });
+  };
+
+  const onMfgModeChange = (v: string) => {
+    setMfgMode(v); setPage(1);
+    syncURL({ mfgMode: v, page: 1 });
+  };
+
+  const onIndustryChange = (val: string[]) => {
+    setIndustry(val); setSubIndustry([]); setPage(1);
+    syncURL({ industry: val, subIndustry: [], page: 1 });
+  };
+
+  const onSubIndustryChange = (val: string[]) => {
+    setSubIndustry(val); setPage(1);
+    syncURL({ subIndustry: val, page: 1 });
+  };
+
+  const onRegionChange = (val: string[]) => {
+    setRegion(val); setPage(1);
+    syncURL({ region: val, page: 1 });
+  };
+
+  const onSortByChange = (v: string) => {
+    setSortBy(v); setPage(1);
+    syncURL({ sortBy: v, page: 1 });
+  };
+
+  const onPageChange = (newPage: number) => {
+    setPage(newPage);
+    syncURL({ page: newPage });
+  };
+  // ─────────────────────────────────────────────────────────────────────────
+
+  const searchInput = useMemo(() => ({
     mfgMode: mfgMode || undefined,
     industry: industry.length > 0 ? industry : undefined,
     subIndustry: subIndustry.length > 0 ? subIndustry : undefined,
@@ -432,17 +487,21 @@ const { isAuthenticated } = useAuth();
   }, [mfgMode, industry, subIndustry, region, committedKeyword, businessType]);
 
   const removeFilter = (key: string) => {
-    if (key === "businessType") setBusinessType("all");
-    else if (key === "mfgMode") setMfgMode("");
-    else if (key === "industry") { setIndustry([]); setSubIndustry([]); }
-    else if (key === "subIndustry") setSubIndustry([]);
-    else if (key === "region") setRegion([]);
-    else if (key === "keyword") { setKeyword(""); setCommittedKeyword(""); }
+    let nMfgMode = mfgMode, nIndustry = industry, nSubIndustry = subIndustry;
+    let nRegion = region, nKeyword = committedKeyword, nBT = businessType;
+    if (key === "businessType") { setBusinessType("all"); nBT = "all"; }
+    else if (key === "mfgMode") { setMfgMode(""); nMfgMode = ""; }
+    else if (key === "industry") { setIndustry([]); setSubIndustry([]); nIndustry = []; nSubIndustry = []; }
+    else if (key === "subIndustry") { setSubIndustry([]); nSubIndustry = []; }
+    else if (key === "region") { setRegion([]); nRegion = []; }
+    else if (key === "keyword") { setKeyword(""); setCommittedKeyword(""); nKeyword = ""; }
     setPage(1);
+    const qs = buildParams({ mfgMode: nMfgMode, industry: nIndustry, subIndustry: nSubIndustry, region: nRegion, keyword: nKeyword, businessType: nBT, sortBy, page: 1 }).toString();
+    navigate(qs ? `/search?${qs}` : "/search", { replace: true });
   };
 
   const { data, isLoading } = trpc.factory.search.useQuery(searchInput);
-const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 API
+  const ads = data?.ads ?? [];
 
   const filteredItems = useMemo(() => {
     if (!data?.items) return [];
@@ -452,18 +511,16 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
 
   const sortedItems = filteredItems;
 
-  // ── 批次查詢收藏狀態（只在登入且有結果時才打一支 API）──
   const factoryIdsInResult = useMemo(
-  () => data?.items.map(f => f.id) ?? [],
-  [data?.items]
-);
+    () => data?.items.map(f => f.id) ?? [],
+    [data?.items]
+  );
 
   const { data: batchFavData } = trpc.favorite.batchIsLiked.useQuery(
     { factoryIds: factoryIdsInResult },
     { enabled: isAuthenticated && factoryIdsInResult.length > 0 }
   );
 
-  // 伺服器資料更新時清掉本地 override
   useEffect(() => {
     if (batchFavData) setFavOverrides({});
   }, [batchFavData]);
@@ -481,15 +538,9 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
     if (isComposing.current) return;
     setPage(1);
     setCommittedKeyword(keyword);
-    const p = new URLSearchParams();
-    if (mfgMode) p.set("mfgMode", mfgMode);
-    industry.forEach(i => p.append("industry", i));
-    subIndustry.forEach(s => p.append("subIndustry", s));
-    region.forEach(r => p.append("region", r));
-    if (keyword) p.set("keyword", keyword);
     if (keyword) saveToHistory(keyword);
-    if (businessType && businessType !== "all") p.set("businessType", businessType);
-    navigate(`/search?${p.toString()}`, { replace: true });
+    const qs = buildParams({ mfgMode, industry, subIndustry, region, keyword, businessType, sortBy, page: 1 }).toString();
+    navigate(qs ? `/search?${qs}` : "/search", { replace: true });
   };
 
   const clearFilters = () => {
@@ -542,7 +593,7 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
                         key={t.v}
                         size="sm"
                         variant={businessType === t.v ? "default" : "outline"}
-                        onClick={() => { setBusinessType(t.v); setPage(1); }}
+                        onClick={() => onBusinessTypeChange(t.v)}
                         className="justify-start"
                       >
                         {t.v === "factory" && <Factory className="w-3 h-3 mr-1" />}
@@ -558,7 +609,7 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
                   <div className="flex flex-col gap-2">
                     {[{ l: "ODM", v: "ODM" }, { l: "OEM", v: "OEM" }, { l: "全部", v: "" }].map(m => (
                       <Button key={m.v} size="sm" variant={mfgMode === m.v ? "default" : "outline"}
-                        onClick={() => { setMfgMode(m.v); setPage(1); }} className="justify-start">
+                        onClick={() => onMfgModeChange(m.v)} className="justify-start">
                         {m.l}
                       </Button>
                     ))}
@@ -570,7 +621,7 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
                   <MultiSelect
                     options={INDUSTRY_OPTIONS}
                     value={industry}
-                    onChange={(val) => { setIndustry(val); setSubIndustry([]); setPage(1); }}
+                    onChange={onIndustryChange}
                     placeholder="不限"
                     className="h-9 w-full"
                     withClear
@@ -589,7 +640,7 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
                       <MultiSelect
                         options={subOptions}
                         value={subIndustry}
-                        onChange={(val) => { setSubIndustry(val); setPage(1); }}
+                        onChange={onSubIndustryChange}
                         placeholder="不限"
                         className="h-9 w-full"
                       />
@@ -602,7 +653,7 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
                   <MultiSelect
                     options={TAIWAN_REGIONS}
                     value={region}
-                    onChange={(val) => { setRegion(val); setPage(1); }}
+                    onChange={onRegionChange}
                     placeholder="不限"
                     className="h-9 w-full"
                     withClear
@@ -726,7 +777,7 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
                     {[{ l: "全部", v: "all" }, { l: "代工廠", v: "factory" }, { l: "工作室", v: "studio" }].map(t => (
                       <Button key={t.v} size="sm" variant={businessType === t.v ? "default" : "outline"}
                         className="h-8 text-xs px-2"
-                        onClick={() => { setBusinessType(t.v); setPage(1); }}>
+                        onClick={() => onBusinessTypeChange(t.v)}>
                         {t.l}
                       </Button>
                     ))}
@@ -735,14 +786,14 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
                     {[{ l: "ODM", v: "ODM" }, { l: "OEM", v: "OEM" }, { l: "全部", v: "" }].map(m => (
                       <Button key={m.v} size="sm" variant={mfgMode === m.v ? "default" : "outline"}
                         className="h-8 text-xs px-2"
-                        onClick={() => { setMfgMode(m.v); setPage(1); }}>{m.l}
+                        onClick={() => onMfgModeChange(m.v)}>{m.l}
                       </Button>
                     ))}
                   </div>
                   <MultiSelect
                     options={INDUSTRY_OPTIONS}
                     value={industry}
-                    onChange={(val) => { setIndustry(val); setSubIndustry([]); setPage(1); }}
+                    onChange={onIndustryChange}
                     placeholder="主產業"
                     className="w-[120px] h-8 text-xs"
                     withClear
@@ -757,7 +808,7 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
                       <MultiSelect
                         options={subOptions}
                         value={subIndustry}
-                        onChange={(val) => { setSubIndustry(val); setPage(1); }}
+                        onChange={onSubIndustryChange}
                         placeholder="子產業"
                         className="w-[120px] h-8 text-xs"
                       />
@@ -766,7 +817,7 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
                   <MultiSelect
                     options={TAIWAN_REGIONS}
                     value={region}
-                    onChange={(val) => { setRegion(val); setPage(1); }}
+                    onChange={onRegionChange}
                     placeholder="地區"
                     className="w-[120px] h-8 text-xs"
                     withClear
@@ -782,7 +833,7 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
               </CardContent>
             </Card>
 
-            {/* 手機版一鍵詢價送出入口（lg 以上隱藏，一律顯示） */}
+            {/* 手機版一鍵詢價送出入口 */}
             <div className="lg:hidden mb-3 rounded-xl border border-orange-200 bg-orange-50/70 p-3 shadow-sm">
               <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
@@ -883,7 +934,7 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
               {!isLoading && (data?.total ?? 0) > 0 && (
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-muted-foreground">排序：</span>
-                  <Select value={sortBy} onValueChange={(v) => { setSortBy(v); setPage(1); }}>
+                  <Select value={sortBy} onValueChange={onSortByChange}>
                     <SelectTrigger className="w-[120px] h-8"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="rating">評分最高</SelectItem>
@@ -928,13 +979,13 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
             {/* 分頁 */}
             {totalPages > 1 && (
               <div className="flex justify-center gap-2 mt-8">
-                <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>
+                <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => onPageChange(page - 1)}>
                   <ChevronLeft className="w-4 h-4" />
                 </Button>
                 <span className="flex items-center px-3 text-sm text-muted-foreground">
                   第 {page} / {totalPages} 頁
                 </span>
-                <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => setPage(p => p + 1)}>
+                <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => onPageChange(page + 1)}>
                   <ChevronRight className="w-4 h-4" />
                 </Button>
               </div>
@@ -943,7 +994,7 @@ const ads = data?.ads ?? [];  // 從 search 結果直接取廣告，不另打 AP
         </div>
       </div>
 
-      {/* 手機版底部一鍵詢價 bar（lg 以上隱藏） */}
+      {/* 手機版底部一鍵詢價 bar */}
       {cart.length > 0 && (
         <div className="fixed bottom-0 left-0 right-0 z-50 px-4 py-3 bg-white border-t shadow-lg lg:hidden">
           <Button
