@@ -574,12 +574,12 @@ export default function Navbar() {
 
           {!isAuthenticated && (
             <div className="border-t border-border/50 pt-2 mt-3 space-y-2">
-              <Button type="button" variant="outline" className="w-full justify-start" onClick={(e) => { e.preventDefault(); setMobileOpen(false); setLoginDialogOpen(true); }}>
+              <Button type="button" variant="outline" className="w-full justify-center" onClick={(e) => { e.preventDefault(); setMobileOpen(false); setLoginDialogOpen(true); }}>
                 <UserPlus className="w-4 h-4 mr-2" />
                 註冊用戶
               </Button>
               <Link href="/register-factory" onClick={() => setMobileOpen(false)}>
-                <Button variant="outline" className="w-full justify-start">
+                <Button variant="outline" className="w-full justify-center">
                   <Factory className="w-4 h-4 mr-2" />
                   註冊工廠
                 </Button>
