@@ -76,6 +76,14 @@ export default function FactoryDetail() {
   const [, navigate] = useLocation();
   const { user, isAuthenticated } = useAuth();
 
+  const handleBackToSearch = () => {
+    if (window.history.length > 1) {
+      window.history.back();
+    } else {
+      navigate("/search");
+    }
+  };
+
   const { data: factory, isLoading } = trpc.factory.getById.useQuery({ id: factoryId }, { enabled: !!factoryId });
   const { data: reviewData } = trpc.review.getByFactory.useQuery({ factoryId, page: 1, pageSize: 10 }, { enabled: !!factoryId });
   const { data: isFavData } = trpc.favorite.isLiked.useQuery({ factoryId }, { enabled: !!factoryId && isAuthenticated });
@@ -266,7 +274,7 @@ export default function FactoryDetail() {
         <Navbar />
         <div className="container py-16 text-center">
           <p className="text-muted-foreground">找不到此工廠</p>
-          <Button variant="link" onClick={() => navigate("/search")}>返回搜尋</Button>
+          <Button variant="link" onClick={handleBackToSearch}>返回搜尋</Button>
         </div>
       </div>
     );
@@ -316,7 +324,7 @@ export default function FactoryDetail() {
       <Navbar />
 
       <div className="container py-6">
-        <Button variant="ghost" size="sm" className="mb-4" onClick={() => navigate("/search")}>
+        <Button variant="ghost" size="sm" className="mb-4" onClick={handleBackToSearch}>
           <ArrowLeft className="w-4 h-4 mr-1" /> 返回搜尋
         </Button>
 
