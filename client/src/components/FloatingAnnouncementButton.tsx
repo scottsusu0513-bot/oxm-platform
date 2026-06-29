@@ -150,15 +150,15 @@ export default function FloatingAnnouncementButton() {
         </button>
       )}
 
-      {/* 找代工指南 */}
-      <button
+      {/* 找代工指南 — 暫時隱藏，未來改造成「平台 QA 區」入口 */}
+      {/* <button
         onClick={() => document.getElementById("guides")?.scrollIntoView({ behavior: "smooth" })}
         aria-label="找代工指南"
         className={`${btnBase} bg-gradient-to-r from-purple-500 to-violet-500`}
       >
         <BookOpen className="w-4 h-4 shrink-0" />
         <span className="hidden sm:inline text-sm">找代工指南</span>
-      </button>
+      </button> */}
 
       {/* 平台公告（有公告才顯示） */}
       {items.length > 0 && (
