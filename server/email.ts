@@ -848,3 +848,45 @@ export async function sendPlatformAnnouncementEmail(params: {
     `,
   });
 }
+
+// ===== 首次聯繫通知（任一方向首次私訊接觸時寄出）=====
+export async function sendFirstContactEmail(params: {
+  toEmail: string;
+  toName: string | null;
+  conversationId: number;
+}) {
+  if (!isEmailEnabled()) {
+    console.log('[Email] 未設定 RESEND_API_KEY，跳過首次聯繫通知');
+    return;
+  }
+  try {
+    const resend = getResend();
+    if (!resend) return;
+    const appUrl = process.env.VITE_APP_URL ?? 'http://localhost:3000';
+    await resend.emails.send({
+      from: FROM_EMAIL,
+      to: params.toEmail,
+      subject: `【OXM】有新的使用者透過 OXM 聯繫你`,
+      html: `
+        <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #f97316;">有新的使用者透過 OXM 聯繫你</h2>
+          <p>您好${params.toName ? `，<strong>${params.toName}</strong>` : ''}，</p>
+          <p>您在 OXM 收到一位新使用者的聯繫。</p>
+          <p>對方已透過平台向您發送訊息，這可能是新的詢價、合作需求或媒合機會。</p>
+          <p>請回到 OXM 查看並回覆，避免錯過新的合作機會。</p>
+          <a href="${appUrl}/messages/${params.conversationId}"
+            style="background: #f97316; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none; display: inline-block; margin-top: 8px;">
+            前往查看訊息
+          </a>
+          <p style="color: #999; font-size: 12px; margin-top: 24px;">
+            此信件由 OXM 平台自動發送，請勿直接回覆。<br>
+            如不希望收到此類通知，可至 <a href="${appUrl}/member" style="color: #f97316;">會員中心 → 通知設定</a> 關閉「詢價有新訊息」Email 通知。
+          </p>
+        </div>
+      `,
+    });
+    console.log(`[Email] 首次聯繫通知已寄送至 ${params.toEmail}`);
+  } catch (error) {
+    console.error('[Email] sendFirstContactEmail 失敗:', error);
+  }
+}

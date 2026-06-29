@@ -1,7 +1,7 @@
 import { COOKIE_NAME, THIRTY_DAYS_MS, COMMUNITY_FEATURE_STATUS, PLATFORM_NOTIFICATION_TYPES, COMMUNITY_PUBLIC_ENTRY_ENABLED } from "@shared/const";
 import { sdk } from "./_core/sdk";
 import { enhanceSearchKeyword, getSearchIntent } from './semantic-search';
-import { sendNewInquiryEmail, sendFactoryApprovedEmail, sendFactoryRejectedEmail, sendFactorySubmittedEmail, sendReportEmail, sendSupportTicketEmail, sendReviewReplyEmail, sendNewMessageNotificationEmail, sendReportStatusUpdateEmail, sendTicketStatusUpdateEmail, sendMessageReplyNotificationEmail, sendEmailVerificationEmail, sendAdminBroadcastEmail, sendRevisionSubmittedEmail, sendRevisionApprovedEmail, sendRevisionRejectedEmail, sendUpgradeApplicationEmail, sendUpgradeNewCaseConsultantEmail, sendPlatformAnnouncementEmail } from './email';
+import { sendNewInquiryEmail, sendFactoryApprovedEmail, sendFactoryRejectedEmail, sendFactorySubmittedEmail, sendReportEmail, sendSupportTicketEmail, sendReviewReplyEmail, sendNewMessageNotificationEmail, sendReportStatusUpdateEmail, sendTicketStatusUpdateEmail, sendMessageReplyNotificationEmail, sendEmailVerificationEmail, sendAdminBroadcastEmail, sendRevisionSubmittedEmail, sendRevisionApprovedEmail, sendRevisionRejectedEmail, sendUpgradeApplicationEmail, sendUpgradeNewCaseConsultantEmail, sendPlatformAnnouncementEmail, sendFirstContactEmail } from './email';
 import { sha256Hex, generateRawToken } from './_core/oauthHelpers';
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
@@ -1167,54 +1167,92 @@ export const appRouter = router({
       const isUser = conv.userId === ctx.user.id;
       if (!isFactoryOwner && !isCoMgr && !isUser) throw new Error("無權限");
       const senderRole = (isFactoryOwner || isCoMgr) ? "factory" as const : "user" as const;
+
+      // ── 首次聯繫判斷（必須在 saveMessage 前完成，避免新訊息被誤判為歷史紀錄）
+      // 判斷邏輯：以 senderUserId / recipientUserId 為核心，與角色、factoryId、conversationId 無關
+      const senderUserId = ctx.user.id;
+      type FirstContactEntry = { email: string; name: string | null };
+      const firstContactEntries: FirstContactEntry[] = [];
+
+      // 預先取得買家資料（factory→buyer 路徑複用，避免重複查詢）
+      const buyerForNotif = senderRole === "factory" ? await db.getUserById(conv.userId) : null;
+
+      if (senderRole === "factory" && buyerForNotif?.email) {
+        const alreadyContacted = await db.hasContactBetweenUsers(senderUserId, conv.userId);
+        if (!alreadyContacted) {
+          const s = (buyerForNotif.notificationSettings as Record<string, boolean> | null) ?? {};
+          if (s.newMessage !== false) {
+            firstContactEntries.push({ email: buyerForNotif.email, name: buyerForNotif.name });
+          }
+        }
+      } else if (senderRole === "user" && factory) {
+        const [owner, coMgrs] = await Promise.all([
+          db.getUserById(factory.ownerId),
+          db.getFactoryCoManagersFullProfile(factory.id),
+        ]);
+        if (owner) {
+          const alreadyContacted = await db.hasContactBetweenUsers(senderUserId, factory.ownerId);
+          if (!alreadyContacted) {
+            const s = (owner.notificationSettings as Record<string, boolean> | null) ?? {};
+            const emailDest = factory.contactEmail || owner.email;
+            if (emailDest && s.newMessage !== false) {
+              firstContactEntries.push({ email: emailDest, name: owner.name });
+            }
+          }
+        }
+        for (const cm of coMgrs) {
+          if (!cm.email || cm.email === ctx.user.email) continue;
+          const alreadyContacted = await db.hasContactBetweenUsers(senderUserId, cm.userId);
+          if (!alreadyContacted) {
+            const s = (cm.notificationSettings as Record<string, boolean> | null) ?? {};
+            if (s.newMessage !== false) {
+              firstContactEntries.push({ email: cm.email, name: cm.name ?? null });
+            }
+          }
+        }
+      }
+
       await db.saveMessage(input.conversationId, ctx.user.id, senderRole, input.content);
 
-      // 工廠回覆時通知使用者（若有開啟 newMessage 通知設定）
-      if (senderRole === "factory") {
-        db.getUserById(conv.userId).then((convUser) => {
-          const settings = (convUser?.notificationSettings as Record<string, boolean> | null) ?? {};
-          if (convUser?.email && settings.newMessage !== false) {
-            sendNewMessageNotificationEmail({
-              userEmail: convUser.email,
-              userName: convUser.name ?? '您',
-              factoryName: factory?.name ?? '工廠',
-              messagePreview: input.content.substring(0, 200),
-              conversationId: input.conversationId,
-            }).catch(() => {});
-          }
-          if (settings.pushNewMessage !== false) {
-            sendPushToRecipients({
-              userIds: [conv.userId],
-              excludeUserId: ctx.user.id,
-              title: "OXM 有新的訊息",
-              body: `${factory?.name ?? "工廠"} 傳來一則新訊息`,
-              data: {
-                type: "chat_message",
-                conversationId: String(input.conversationId),
-                targetPath: `/chat/${input.conversationId}`,
-              },
-            }).catch(() => {});
-          }
-          // 站內通知
-          createPlatformNotifications([{
-            recipientUserId: conv.userId,
-            actorUserId: ctx.user.id,
-            actorFactoryId: factory?.id ?? null,
-            actorFactoryName: factory?.name ?? null,
-            actorName: factory?.name ?? "",
-            eventType: "chat_message",
-            eventGroup: "chat",
-            message: `${factory?.name ?? "工廠"} 傳了一則新訊息`,
-            actionUrl: `/chat/${input.conversationId}`,
-            dedupeKey: `chat_message:conv:${input.conversationId}:ts:${Date.now()}`,
-          }]).catch(() => {});
-        }).catch(() => {});
+      // ── 首次聯繫 Email（fire-and-forget）
+      for (const { email, name } of firstContactEntries) {
+        sendFirstContactEmail({ toEmail: email, toName: name, conversationId: input.conversationId }).catch(() => {});
+      }
+
+      // ── 工廠回覆：push + 站內通知（buyerForNotif 已在首次判斷時預取，不重複查詢）
+      if (senderRole === "factory" && buyerForNotif) {
+        const settings = (buyerForNotif.notificationSettings as Record<string, boolean> | null) ?? {};
+        if (settings.pushNewMessage !== false) {
+          sendPushToRecipients({
+            userIds: [conv.userId],
+            excludeUserId: ctx.user.id,
+            title: "OXM 有新的訊息",
+            body: `${factory?.name ?? "工廠"} 傳來一則新訊息`,
+            data: {
+              type: "chat_message",
+              conversationId: String(input.conversationId),
+              targetPath: `/chat/${input.conversationId}`,
+            },
+          }).catch(() => {});
+        }
+        createPlatformNotifications([{
+          recipientUserId: conv.userId,
+          actorUserId: ctx.user.id,
+          actorFactoryId: factory?.id ?? null,
+          actorFactoryName: factory?.name ?? null,
+          actorName: factory?.name ?? "",
+          eventType: "chat_message",
+          eventGroup: "chat",
+          message: `${factory?.name ?? "工廠"} 傳了一則新訊息`,
+          actionUrl: `/chat/${input.conversationId}`,
+          dedupeKey: `chat_message:conv:${input.conversationId}:ts:${Date.now()}`,
+        }]).catch(() => {});
       }
 
       if (senderRole === "user") {
         const productInfo = conv.productId ? await db.getProductById(conv.productId) : null;
 
-        // notifyOwner 獨立 fire-and-forget，失敗不影響 Email
+        // notifyOwner 獨立 fire-and-forget（管理員監控用，不影響 Email）
         notifyOwner({
           title: `[OXM] 新客戶詢問 - ${factory?.name ?? "工廠"}`,
           content: [
@@ -1230,48 +1268,6 @@ export const appRouter = router({
             `請登入 OXM 平台回覆客戶。`,
           ].filter(Boolean).join("\n"),
         }).catch((e) => { console.warn("[chat.send] notifyOwner 失敗（非嚴重）", e); });
-
-        // 寄 Email 通知工廠端：factory.contactEmail 受 owner 的 newMessage 設定控制，co-manager 各自判斷
-        if (factory) {
-          Promise.all([
-            db.getUserById(factory.ownerId),
-            db.getFactoryCoManagersWithPreferences(factory.id),
-          ]).then(([owner, coMgrs]) => {
-            const recipients = new Set<string>();
-            const ownerSettings = (owner?.notificationSettings as Record<string, boolean> | null) ?? {};
-            if (factory.contactEmail && ownerSettings.newMessage !== false) {
-              recipients.add(factory.contactEmail);
-            }
-            for (const { email, notificationSettings } of coMgrs) {
-              if (email === ctx.user.email) continue;
-              const s = (notificationSettings as Record<string, boolean> | null) ?? {};
-              if (s.newMessage !== false) recipients.add(email);
-            }
-            recipients.forEach((email) => {
-              sendNewInquiryEmail({
-                factoryName: factory.name,
-                factoryEmail: email,
-                userName: ctx.user.name ?? '匿名',
-                productName: productInfo?.name,
-                message: input.content,
-              }).catch(() => {});
-            });
-          }).catch((e) => {
-            console.warn('[chat.send] 通知設定查詢失敗，fallback 寄送所有收件人', e);
-            const fallback = new Set<string>();
-            if (factory.contactEmail) fallback.add(factory.contactEmail);
-            db.getFactoryCoManagerEmails(factory.id).then((emails) => {
-              emails.forEach(e => { if (e && e !== ctx.user.email) fallback.add(e); });
-              fallback.forEach(email => sendNewInquiryEmail({
-                factoryName: factory.name,
-                factoryEmail: email,
-                userName: ctx.user.name ?? '匿名',
-                productName: productInfo?.name,
-                message: input.content,
-              }).catch(() => {}));
-            }).catch(() => {});
-          });
-        }
 
         // 手機推播：通知工廠端（buyer 傳訊時）
         if (factory) {

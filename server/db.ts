@@ -2330,6 +2330,24 @@ export async function getFactoryCoManagersWithPreferences(factoryId: number): Pr
   return rows.filter(r => typeof r.email === 'string' && r.email.length > 0) as { email: string; notificationSettings: Record<string, boolean> | null }[];
 }
 
+export async function getFactoryCoManagersFullProfile(factoryId: number): Promise<{ userId: number; email: string; name: string | null; notificationSettings: Record<string, boolean> | null }[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.select({
+    userId: factoryCoManagers.userId,
+    email: users.email,
+    name: users.name,
+    notificationSettings: users.notificationSettings,
+  })
+    .from(factoryCoManagers)
+    .innerJoin(users, eq(factoryCoManagers.userId, users.id))
+    .where(and(
+      eq(factoryCoManagers.factoryId, factoryId),
+      isNull(factoryCoManagers.removedAt)
+    ));
+  return rows.filter(r => typeof r.email === 'string' && r.email.length > 0) as { userId: number; email: string; name: string | null; notificationSettings: Record<string, boolean> | null }[];
+}
+
 export async function getFactoryCoManagerUserIdsWithPreferences(factoryId: number): Promise<{ userId: number; notificationSettings: Record<string, boolean> | null }[]> {
   const db = await getDb();
   if (!db) return [];
@@ -5980,4 +5998,88 @@ export async function getUpgradeApplicationsByFactoryIds(
     .where(inArray(upgradeApplications.factoryId, factoryIds))
     .orderBy(desc(upgradeApplications.createdAt));
   return rows;
+}
+
+// ── 首次接觸判斷：判斷兩個 userId 之間是否曾有任一方向的訊息紀錄
+// 必須在新訊息寫入前呼叫，否則新訊息本身會被誤判為歷史紀錄
+export async function hasContactBetweenUsers(userIdA: number, userIdB: number): Promise<boolean> {
+  if (userIdA === userIdB) return true;
+  const db_ = await getDb();
+  if (!db_) return false;
+
+  // Case 1: A sent as factory side, B is the buyer in that conversation
+  const [r1] = await db_.select({ id: messages.id })
+    .from(messages)
+    .innerJoin(conversations, eq(messages.conversationId, conversations.id))
+    .where(and(eq(messages.senderId, userIdA), eq(conversations.userId, userIdB)))
+    .limit(1);
+  if (r1) return true;
+
+  // Case 2: B sent as factory side, A is the buyer in that conversation
+  const [r2] = await db_.select({ id: messages.id })
+    .from(messages)
+    .innerJoin(conversations, eq(messages.conversationId, conversations.id))
+    .where(and(eq(messages.senderId, userIdB), eq(conversations.userId, userIdA)))
+    .limit(1);
+  if (r2) return true;
+
+  // Case 3: A sent as buyer to a factory owned by B
+  const [r3] = await db_.select({ id: messages.id })
+    .from(messages)
+    .innerJoin(conversations, eq(messages.conversationId, conversations.id))
+    .innerJoin(factories, eq(conversations.factoryId, factories.id))
+    .where(and(
+      eq(messages.senderId, userIdA),
+      eq(conversations.userId, userIdA),
+      eq(factories.ownerId, userIdB),
+    ))
+    .limit(1);
+  if (r3) return true;
+
+  // Case 4: B sent as buyer to a factory owned by A
+  const [r4] = await db_.select({ id: messages.id })
+    .from(messages)
+    .innerJoin(conversations, eq(messages.conversationId, conversations.id))
+    .innerJoin(factories, eq(conversations.factoryId, factories.id))
+    .where(and(
+      eq(messages.senderId, userIdB),
+      eq(conversations.userId, userIdB),
+      eq(factories.ownerId, userIdA),
+    ))
+    .limit(1);
+  if (r4) return true;
+
+  // Case 5: A sent as buyer to a factory co-managed by B
+  const [r5] = await db_.select({ id: messages.id })
+    .from(messages)
+    .innerJoin(conversations, eq(messages.conversationId, conversations.id))
+    .innerJoin(
+      factoryCoManagers,
+      and(
+        eq(factoryCoManagers.factoryId, conversations.factoryId),
+        eq(factoryCoManagers.userId, userIdB),
+        isNull(factoryCoManagers.removedAt),
+      ),
+    )
+    .where(and(eq(messages.senderId, userIdA), eq(conversations.userId, userIdA)))
+    .limit(1);
+  if (r5) return true;
+
+  // Case 6: B sent as buyer to a factory co-managed by A
+  const [r6] = await db_.select({ id: messages.id })
+    .from(messages)
+    .innerJoin(conversations, eq(messages.conversationId, conversations.id))
+    .innerJoin(
+      factoryCoManagers,
+      and(
+        eq(factoryCoManagers.factoryId, conversations.factoryId),
+        eq(factoryCoManagers.userId, userIdA),
+        isNull(factoryCoManagers.removedAt),
+      ),
+    )
+    .where(and(eq(messages.senderId, userIdB), eq(conversations.userId, userIdB)))
+    .limit(1);
+  if (r6) return true;
+
+  return false;
 }
