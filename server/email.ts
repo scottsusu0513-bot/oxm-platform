@@ -812,3 +812,39 @@ export async function sendUpgradeApplicationEmail(params: {
     console.error('[Email] sendUpgradeApplicationEmail failed:', err);
   }
 }
+
+// ===== 寄送平台公告 Email =====
+export async function sendPlatformAnnouncementEmail(params: {
+  toEmail: string;
+  toName: string | null;
+  announcementTitle: string;
+  announcementContent: string;
+}) {
+  if (!isEmailEnabled()) throw new Error('[Email] 未設定 RESEND_API_KEY，無法寄送平台公告信');
+  if (!FROM_EMAIL) throw new Error('[Email] 未設定 FROM_EMAIL，無法寄送 Email');
+  const resend = getResend()!;
+  const appUrl = process.env.VITE_APP_URL ?? 'http://localhost:3000';
+  await resend.emails.send({
+    from: FROM_EMAIL,
+    to: params.toEmail,
+    subject: `【OXM 平台公告】${params.announcementTitle}`,
+    html: `
+      <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #f97316;">OXM 平台公告</h2>
+        <p>親愛的 ${params.toName ?? '用戶'}，您好：</p>
+        <h3 style="color: #1f2937; margin: 16px 0 8px;">${params.announcementTitle}</h3>
+        <div style="background: #f5f5f5; padding: 16px; border-radius: 8px; margin: 16px 0; white-space: pre-wrap; line-height: 1.7;">
+          ${params.announcementContent.replace(/\n/g, '<br>')}
+        </div>
+        <a href="${appUrl}/announcements"
+          style="background: #f97316; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none; display: inline-block; margin-top: 8px;">
+          前往查看平台公告
+        </a>
+        <p style="color: #999; font-size: 12px; margin-top: 24px;">
+          此信件由 OXM 平台自動發送，請勿直接回覆。<br>
+          如不希望收到此類通知，可至 <a href="${appUrl}/member" style="color: #f97316;">會員中心 → 通知設定</a> 關閉「平台公告」Email 通知。
+        </p>
+      </div>
+    `,
+  });
+}

@@ -1,7 +1,7 @@
 import { COOKIE_NAME, THIRTY_DAYS_MS, COMMUNITY_FEATURE_STATUS, PLATFORM_NOTIFICATION_TYPES, COMMUNITY_PUBLIC_ENTRY_ENABLED } from "@shared/const";
 import { sdk } from "./_core/sdk";
 import { enhanceSearchKeyword, getSearchIntent } from './semantic-search';
-import { sendNewInquiryEmail, sendFactoryApprovedEmail, sendFactoryRejectedEmail, sendFactorySubmittedEmail, sendReportEmail, sendSupportTicketEmail, sendReviewReplyEmail, sendNewMessageNotificationEmail, sendReportStatusUpdateEmail, sendTicketStatusUpdateEmail, sendMessageReplyNotificationEmail, sendEmailVerificationEmail, sendAdminBroadcastEmail, sendRevisionSubmittedEmail, sendRevisionApprovedEmail, sendRevisionRejectedEmail, sendUpgradeApplicationEmail, sendUpgradeNewCaseConsultantEmail } from './email';
+import { sendNewInquiryEmail, sendFactoryApprovedEmail, sendFactoryRejectedEmail, sendFactorySubmittedEmail, sendReportEmail, sendSupportTicketEmail, sendReviewReplyEmail, sendNewMessageNotificationEmail, sendReportStatusUpdateEmail, sendTicketStatusUpdateEmail, sendMessageReplyNotificationEmail, sendEmailVerificationEmail, sendAdminBroadcastEmail, sendRevisionSubmittedEmail, sendRevisionApprovedEmail, sendRevisionRejectedEmail, sendUpgradeApplicationEmail, sendUpgradeNewCaseConsultantEmail, sendPlatformAnnouncementEmail } from './email';
 import { sha256Hex, generateRawToken } from './_core/oauthHelpers';
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
@@ -2629,7 +2629,94 @@ export const appRouter = router({
       type: z.enum(["update", "maintenance", "news"]).default("news"),
       isPinned: z.boolean().default(false),
     })).mutation(async ({ input }) => {
-      await db.createAnnouncement(input);
+      const announcementId = await db.createAnnouncement(input);
+
+      // 站內通知 + Email 廣播：fire-and-forget，不阻塞公告建立
+      (async () => {
+        const INTER_EMAIL_DELAY_MS = 500;
+        const RETRY_DELAYS_MS = [1500, 3000, 5000];
+        const isRateLimitError = (err: unknown): boolean => {
+          if (!err || typeof err !== 'object') return false;
+          const e = err as Record<string, unknown>;
+          const status = e['statusCode'] ?? e['status'] ?? (e['response'] as Record<string, unknown>)?.['status'];
+          return status === 429;
+        };
+
+        try {
+          const allUsers = await db.getActiveUsersForAnnouncement();
+          const allIds = allUsers.map(u => u.id);
+          const titleSnap = input.title.length > 100 ? input.title.slice(0, 97) + "..." : input.title;
+
+          // 站內通知：發給所有 active users
+          if (allIds.length > 0) {
+            try {
+              await createPlatformNotifications(allIds.map(uid => ({
+                recipientUserId: uid,
+                eventType: "admin_announcement",
+                eventGroup: "platform",
+                message: `平台公告：${titleSnap}`,
+                actionUrl: `/announcements`,
+                titleSnapshot: titleSnap,
+                dedupeKey: `platform_announcement:${announcementId}:${uid}`,
+              })));
+            } catch (err) {
+              console.warn("[announcement] notification error:", err instanceof Error ? err.message : String(err));
+            }
+          }
+
+          // Email：opt-out，notificationSettings.announcement !== false 就寄
+          const withEmail = allUsers.filter(u => {
+            if (!u.email) return false;
+            const s = (u.notificationSettings as Record<string, boolean> | null) ?? {};
+            return s['announcement'] !== false;
+          });
+          const skipped = allUsers.length - withEmail.length;
+          console.log(`[announcement] email queue start id=${announcementId} total=${allUsers.length} withEmail=${withEmail.length} skipped=${skipped}`);
+
+          let successCount = 0;
+          let failCount = 0;
+
+          for (const u of withEmail) {
+            let lastErr: unknown;
+            let sent = false;
+
+            for (let attempt = 1; attempt <= RETRY_DELAYS_MS.length + 1; attempt++) {
+              try {
+                await sendPlatformAnnouncementEmail({
+                  toEmail: u.email!,
+                  toName: u.name,
+                  announcementTitle: input.title,
+                  announcementContent: input.content,
+                });
+                successCount++;
+                sent = true;
+                break;
+              } catch (err) {
+                lastErr = err;
+                if (attempt <= RETRY_DELAYS_MS.length && isRateLimitError(err)) {
+                  const wait = RETRY_DELAYS_MS[attempt - 1];
+                  console.warn(`[announcement] email retry id=${announcementId} email=${u.email} attempt=${attempt + 1} waitMs=${wait}`);
+                  await new Promise(res => setTimeout(res, wait));
+                } else {
+                  break;
+                }
+              }
+            }
+
+            if (!sent) {
+              failCount++;
+              console.error(`[announcement] email failed id=${announcementId} email=${u.email}`, lastErr);
+            }
+
+            await new Promise(res => setTimeout(res, INTER_EMAIL_DELAY_MS));
+          }
+
+          console.log(`[announcement] email queue done id=${announcementId} success=${successCount} failed=${failCount} skipped=${skipped}`);
+        } catch (err) {
+          console.error(`[announcement] broadcast failed id=${announcementId}:`, err);
+        }
+      })();
+
       return { success: true };
     }),
     update: adminProcedure.input(z.object({

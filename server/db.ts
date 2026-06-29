@@ -2614,6 +2614,15 @@ export async function getAllActiveUserIds(): Promise<number[]> {
   return rows.map(r => r.id);
 }
 
+export async function getActiveUsersForAnnouncement(): Promise<{ id: number; email: string | null; name: string | null; notificationSettings: Record<string, boolean> | null }[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select({ id: users.id, email: users.email, name: users.name, notificationSettings: users.notificationSettings })
+    .from(users)
+    .where(isNull(users.deletedAt));
+}
+
 export async function getFactoryManagerIds(): Promise<number[]> {
   const db = await getDb();
   if (!db) return [];
