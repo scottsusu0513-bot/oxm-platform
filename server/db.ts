@@ -3291,7 +3291,7 @@ export async function createCollaborationOrder(data: CreateCollaborationOrderDat
     finalPaymentDueDate: data.finalPaymentDueDate ?? null,
     note: data.note ?? null,
   });
-  return (result as any).insertId as number;
+  return (result as any)[0].insertId as number;
 }
 
 export async function getCollaborationOrderById(id: number) {
