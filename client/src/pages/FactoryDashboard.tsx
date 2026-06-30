@@ -276,7 +276,7 @@ export default function FactoryDashboard() {
             </TabsTrigger>
             <TabsTrigger value="orders" className="gap-1.5 text-xs sm:text-sm">
               <ClipboardList className="w-3.5 h-3.5 shrink-0" />
-              合作紀錄
+              訂單管理
             </TabsTrigger>
           </TabsList>
 
@@ -1758,7 +1758,7 @@ function CoManagerPanel({ factoryId }: { factoryId: number }) {
   );
 }
 
-// ===== 合作紀錄 Tab =====
+// ===== 訂單管理 Tab =====
 const ORDER_STATUS_LABEL: Record<string, string> = {
   pending: "待需求方同意",
   accepted: "已成立",
@@ -1814,7 +1814,7 @@ function CollaborationOrdersTab({ factoryId }: { factoryId: number }) {
       <div className="flex flex-col items-center justify-center py-20 text-center text-muted-foreground gap-3">
         <ClipboardList className="w-12 h-12 opacity-30" />
         <div>
-          <p className="text-lg font-medium text-foreground">尚無合作紀錄</p>
+          <p className="text-lg font-medium text-foreground">尚無訂單紀錄</p>
           <p className="text-sm mt-1">透過對話中的「建立合作確認單」功能與需求方確認合作內容。</p>
         </div>
       </div>
@@ -1838,7 +1838,7 @@ function CollaborationOrdersTab({ factoryId }: { factoryId: number }) {
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             <ClipboardList className="w-4 h-4 text-orange-500" />
-            合作紀錄
+            訂單管理
           </CardTitle>
           <CardDescription>管理所有合作確認單的進度與狀態</CardDescription>
         </CardHeader>

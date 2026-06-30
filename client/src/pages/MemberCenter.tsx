@@ -16,7 +16,7 @@ import { toast } from "sonner";
 import {
   User, Heart, Clock, Star, MessageCircle, Flag, Bell, Shield, HeadphonesIcon,
   ExternalLink, Edit2, Trash2, AlertTriangle, Phone, ArrowLeft, History, FileText, ScrollText,
-  Smartphone, Mail,
+  Smartphone, Mail, ClipboardList,
 } from "lucide-react";
 import { Link } from "wouter";
 import { StatusTimeline } from "@/components/StatusTimeline";
@@ -120,7 +120,7 @@ export default function MemberCenter() {
             <TabsTrigger value="profile" className="gap-1.5"><User className="w-3.5 h-3.5" />我的資料</TabsTrigger>
             <TabsTrigger value="favorites" className="gap-1.5"><Heart className="w-3.5 h-3.5" />我的收藏</TabsTrigger>
             <TabsTrigger value="recent" className="gap-1.5"><Clock className="w-3.5 h-3.5" />近期瀏覽</TabsTrigger>
-            <TabsTrigger value="reviews" className="gap-1.5"><Star className="w-3.5 h-3.5" />我的評價</TabsTrigger>
+            <TabsTrigger value="orders" className="gap-1.5"><ClipboardList className="w-3.5 h-3.5" />個人訂單</TabsTrigger>
             <TabsTrigger value="messages" className="gap-1.5"><MessageCircle className="w-3.5 h-3.5" />詢價紀錄</TabsTrigger>
             <TabsTrigger value="reports" className="gap-1.5"><Flag className="w-3.5 h-3.5" />我的檢舉</TabsTrigger>
             <TabsTrigger value="notifications" className="gap-1.5"><Bell className="w-3.5 h-3.5" />通知設定</TabsTrigger>
@@ -131,7 +131,7 @@ export default function MemberCenter() {
           <TabsContent value="profile"><ProfileTab user={user} /></TabsContent>
           <TabsContent value="favorites"><RedirectTab icon={<Heart className="w-5 h-5 text-red-500" />} title="我的收藏" description="查看所有收藏的工廠" href="/favorites" /></TabsContent>
           <TabsContent value="recent"><RedirectTab icon={<Clock className="w-5 h-5 text-blue-500" />} title="近期瀏覽" description="查看最近瀏覽過的工廠" href="/favorites" /></TabsContent>
-          <TabsContent value="reviews"><ReviewsTab /></TabsContent>
+          <TabsContent value="orders"><PersonalOrdersTab /></TabsContent>
           <TabsContent value="messages"><RedirectTab icon={<MessageCircle className="w-5 h-5 text-green-500" />} title="詢價/對話紀錄" description="查看所有與工廠的對話" href="/messages" /></TabsContent>
           <TabsContent value="reports"><ReportsTab /></TabsContent>
           <TabsContent value="notifications"><NotificationsTab user={user} /></TabsContent>
@@ -837,6 +837,26 @@ function SupportTab() {
             )}
           </div>
         )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ─── 個人訂單 ─────────────────────────────────────────────────────────────────
+function PersonalOrdersTab() {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>個人訂單</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="flex flex-col items-center justify-center py-16 text-center text-muted-foreground gap-3">
+          <ClipboardList className="w-12 h-12 opacity-30" />
+          <div>
+            <p className="text-base font-medium text-foreground">以個人身分建立或承接的訂單，未來會顯示在這裡。</p>
+            <p className="text-sm mt-2 text-muted-foreground">如果你選擇以工廠身分承接訂單，該訂單會顯示在對應工廠後台的「訂單管理」中。</p>
+          </div>
+        </div>
       </CardContent>
     </Card>
   );
