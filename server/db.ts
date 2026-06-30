@@ -3314,12 +3314,15 @@ export async function respondCollaborationOrder(
   if (!db) throw new Error("DB not available");
   const now = new Date();
   if (action === "accepted") {
+    if (!acceptedAs?.acceptedByUserId) {
+      throw new Error("acceptedByUserId is required when accepting a collaboration order");
+    }
     await db.update(collaborationOrders).set({
       status: "accepted",
       acceptedAt: now,
-      acceptedByUserId: acceptedAs?.acceptedByUserId ?? null,
-      acceptedAsType: acceptedAs?.acceptedAsType ?? "user",
-      acceptedAsFactoryId: acceptedAs?.acceptedAsFactoryId ?? null,
+      acceptedByUserId: acceptedAs.acceptedByUserId,
+      acceptedAsType: acceptedAs.acceptedAsType ?? "user",
+      acceptedAsFactoryId: acceptedAs.acceptedAsFactoryId,
     }).where(eq(collaborationOrders.id, id));
   } else {
     await db.update(collaborationOrders).set({ status: "rejected", rejectedAt: now }).where(eq(collaborationOrders.id, id));
