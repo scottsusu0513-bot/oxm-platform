@@ -376,6 +376,11 @@ export const appRouter = router({
       return { ...factory, products: prods, latestRevision: latestRevision ?? null };
     }),
 
+    // Phase 3C: 取得目前登入者可代表接受訂單的工廠清單（approved + owner/active co-manager）
+    myApprovedFactories: protectedProcedure.query(async ({ ctx }) => {
+      return db.getApprovedFactoriesForUser(ctx.user.id);
+    }),
+
     create: protectedProcedure.input(z.object({
       name: z.string().min(1).max(200),
       industry: z.array(z.string()).min(1),
