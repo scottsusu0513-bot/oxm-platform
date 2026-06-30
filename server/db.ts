@@ -3301,12 +3301,26 @@ export async function getCollaborationOrderById(id: number) {
   return rows[0] ?? null;
 }
 
-export async function respondCollaborationOrder(id: number, action: "accepted" | "rejected"): Promise<void> {
+export async function respondCollaborationOrder(
+  id: number,
+  action: "accepted" | "rejected",
+  acceptedAs?: {
+    acceptedByUserId: number;
+    acceptedAsType: "user" | "factory";
+    acceptedAsFactoryId: number | null;
+  }
+): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
   const now = new Date();
   if (action === "accepted") {
-    await db.update(collaborationOrders).set({ status: "accepted", acceptedAt: now }).where(eq(collaborationOrders.id, id));
+    await db.update(collaborationOrders).set({
+      status: "accepted",
+      acceptedAt: now,
+      acceptedByUserId: acceptedAs?.acceptedByUserId ?? null,
+      acceptedAsType: acceptedAs?.acceptedAsType ?? "user",
+      acceptedAsFactoryId: acceptedAs?.acceptedAsFactoryId ?? null,
+    }).where(eq(collaborationOrders.id, id));
   } else {
     await db.update(collaborationOrders).set({ status: "rejected", rejectedAt: now }).where(eq(collaborationOrders.id, id));
   }

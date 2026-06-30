@@ -1540,12 +1540,39 @@ export const appRouter = router({
     respond: protectedProcedure.input(z.object({
       orderId: z.number(),
       action: z.enum(["accepted", "rejected"]),
+      // Phase 3C: 選填，前端尚未傳時預設 'user'，不破壞現有流程
+      acceptedAsType: z.enum(["user", "factory"]).optional(),
+      acceptedAsFactoryId: z.number().optional(),
     })).mutation(async ({ ctx, input }) => {
       const order = await db.getCollaborationOrderById(input.orderId);
       if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "找不到合作確認單" });
       if (order.buyerUserId !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN", message: "僅需求方可回應" });
       if (order.status !== "pending") throw new TRPCError({ code: "BAD_REQUEST", message: "此合作確認單已不是待回應狀態" });
-      await db.respondCollaborationOrder(order.id, input.action);
+
+      // 決定接受方身分（只在 action=accepted 時有意義）
+      let acceptedAs: Parameters<typeof db.respondCollaborationOrder>[2];
+      if (input.action === "accepted") {
+        // 防呆：acceptedAsFactoryId 有值但 acceptedAsType 不是 factory → 矛盾
+        if (input.acceptedAsFactoryId && input.acceptedAsType !== "factory") {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "acceptedAsFactoryId requires acceptedAsType=factory" });
+        }
+        const asType = input.acceptedAsType ?? "user";
+        let asFactoryId: number | null = null;
+        if (asType === "factory") {
+          if (!input.acceptedAsFactoryId) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "以工廠身分接受時需提供 acceptedAsFactoryId" });
+          }
+          const factory = await db.getFactoryById(input.acceptedAsFactoryId);
+          if (!factory) throw new TRPCError({ code: "NOT_FOUND", message: "找不到指定工廠" });
+          const isOwner = factory.ownerId === ctx.user.id;
+          const isCoMgr = !isOwner && await db.isActiveCoManager(factory.id, ctx.user.id);
+          if (!isOwner && !isCoMgr) throw new TRPCError({ code: "FORBIDDEN", message: "無權代表此工廠接受訂單" });
+          asFactoryId = factory.id;
+        }
+        acceptedAs = { acceptedByUserId: ctx.user.id, acceptedAsType: asType, acceptedAsFactoryId: asFactoryId };
+      }
+
+      await db.respondCollaborationOrder(order.id, input.action, acceptedAs);
       const sysMsg = input.action === "accepted"
         ? "需求方已同意合作確認單，本筆合作已成立"
         : "需求方已拒絕此合作確認單";
