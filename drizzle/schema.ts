@@ -167,6 +167,10 @@ export const collaborationOrders = mysqlTable("collaborationOrders", {
   cancelRequestedAt: timestamp("cancelRequestedAt"),
   cancelRequestReason: text("cancelRequestReason"),
   cancelRequestedFromStatus: varchar("cancelRequestedFromStatus", { length: 30 }),
+  // 接受方身分（Phase 3B）：NULL 視同 'user'
+  acceptedAsType: mysqlEnum("acceptedAsType", ["user", "factory"]),
+  acceptedAsFactoryId: int("acceptedAsFactoryId"),
+  acceptedByUserId: int("acceptedByUserId"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
