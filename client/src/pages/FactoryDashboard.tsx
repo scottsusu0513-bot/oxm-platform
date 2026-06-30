@@ -1904,9 +1904,14 @@ function ReceivedOrdersPanel({ factoryId }: { factoryId: number }) {
                   )}
                 </div>
 
-                <Link href={`/chat/${order.conversationId}`} className="text-xs text-blue-600 hover:underline">
-                  查看對話 →
-                </Link>
+                <div className="flex gap-3">
+                  <Link href={`/orders/${order.id}`} className="text-xs text-orange-600 hover:underline font-medium">
+                    查看訂單 →
+                  </Link>
+                  <Link href={`/chat/${order.conversationId}`} className="text-xs text-blue-600 hover:underline">
+                    查看對話 →
+                  </Link>
+                </div>
               </div>
             );
           })}
@@ -2005,9 +2010,14 @@ function PlacedOrdersPanel({ factoryId }: { factoryId: number }) {
               {order.expectedShipmentDate && <span>預計出貨：{order.expectedShipmentDate}</span>}
               <span>建立：{new Date(order.createdAt).toLocaleDateString("zh-TW")}</span>
             </div>
-            <Link href={`/chat/${order.conversationId}`} className="text-xs text-blue-600 hover:underline">
-              查看對話 →
-            </Link>
+            <div className="flex gap-3">
+              <Link href={`/orders/${order.id}`} className="text-xs text-orange-600 hover:underline font-medium">
+                查看訂單 →
+              </Link>
+              <Link href={`/chat/${order.conversationId}`} className="text-xs text-blue-600 hover:underline">
+                查看對話 →
+              </Link>
+            </div>
           </div>
         ))}
       </CardContent>

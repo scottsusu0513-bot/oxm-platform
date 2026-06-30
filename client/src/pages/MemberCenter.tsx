@@ -922,9 +922,14 @@ function PersonalOrdersTab() {
               {order.finalPaymentDueDate && <span>尾款日：{order.finalPaymentDueDate}</span>}
               <span>建立：{new Date(order.createdAt).toLocaleDateString("zh-TW")}</span>
             </div>
-            <Link href={`/chat/${order.conversationId}`} className="text-xs text-blue-600 hover:underline">
-              查看對話 →
-            </Link>
+            <div className="flex gap-3">
+              <Link href={`/orders/${order.id}`} className="text-xs text-orange-600 hover:underline font-medium">
+                查看訂單 →
+              </Link>
+              <Link href={`/chat/${order.conversationId}`} className="text-xs text-blue-600 hover:underline">
+                查看對話 →
+              </Link>
+            </div>
           </div>
         ))}
         <p className="text-xs text-muted-foreground text-center pt-2">

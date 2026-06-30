@@ -3301,6 +3301,50 @@ export async function getCollaborationOrderById(id: number) {
   return rows[0] ?? null;
 }
 
+// Phase 4A: 單筆訂單詳情（含 factory name / buyer name + email join）
+export async function getCollaborationOrderDetail(id: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const buyerAlias = users;
+  const rows = await db.select({
+    id: collaborationOrders.id,
+    conversationId: collaborationOrders.conversationId,
+    factoryId: collaborationOrders.factoryId,
+    factoryName: factories.name,
+    buyerUserId: collaborationOrders.buyerUserId,
+    buyerName: buyerAlias.name,
+    buyerEmail: buyerAlias.email,
+    createdByUserId: collaborationOrders.createdByUserId,
+    productId: collaborationOrders.productId,
+    projectName: collaborationOrders.projectName,
+    description: collaborationOrders.description,
+    note: collaborationOrders.note,
+    depositDueDate: collaborationOrders.depositDueDate,
+    productionStartDate: collaborationOrders.productionStartDate,
+    expectedCompletionDate: collaborationOrders.expectedCompletionDate,
+    expectedShipmentDate: collaborationOrders.expectedShipmentDate,
+    finalPaymentDueDate: collaborationOrders.finalPaymentDueDate,
+    status: collaborationOrders.status,
+    acceptedAt: collaborationOrders.acceptedAt,
+    rejectedAt: collaborationOrders.rejectedAt,
+    completedAt: collaborationOrders.completedAt,
+    cancelledAt: collaborationOrders.cancelledAt,
+    cancelRequestedAt: collaborationOrders.cancelRequestedAt,
+    cancelRequestReason: collaborationOrders.cancelRequestReason,
+    cancelRequestedFromStatus: collaborationOrders.cancelRequestedFromStatus,
+    acceptedAsType: collaborationOrders.acceptedAsType,
+    acceptedAsFactoryId: collaborationOrders.acceptedAsFactoryId,
+    acceptedByUserId: collaborationOrders.acceptedByUserId,
+    createdAt: collaborationOrders.createdAt,
+    updatedAt: collaborationOrders.updatedAt,
+  }).from(collaborationOrders)
+    .leftJoin(factories, eq(collaborationOrders.factoryId, factories.id))
+    .leftJoin(buyerAlias, eq(collaborationOrders.buyerUserId, buyerAlias.id))
+    .where(eq(collaborationOrders.id, id))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
 export async function respondCollaborationOrder(
   id: number,
   action: "accepted" | "rejected",

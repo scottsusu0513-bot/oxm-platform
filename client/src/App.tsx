@@ -36,6 +36,7 @@ const Notifications         = lazy(() => import("./pages/Notifications"));
 const EnterpriseUpgradeCenter = lazy(() => import("./pages/EnterpriseUpgradeCenter"));
 const EnterpriseUpgradeApply  = lazy(() => import("./pages/EnterpriseUpgradeApply"));
 const NotFound              = lazy(() => import("./pages/NotFound"));
+const OrderDetail           = lazy(() => import("./pages/OrderDetail"));
 
 // ── Admin 頁面（獨立 chunk，一般使用者不會載入）──────────────────────────
 const AdminDashboard        = lazy(() => import("./pages/AdminDashboard"));
@@ -285,6 +286,7 @@ function Router() {
         <Route path="/verify-email" component={VerifyEmailPage} />
         <Route path="/notifications" component={Notifications} />
         <Route path="/community/*?" component={Community} />
+        <Route path="/orders/:orderId" component={OrderDetail} />
         <Route path="/upgrade-center/apply" component={EnterpriseUpgradeApply} />
         <Route path="/upgrade-center" component={EnterpriseUpgradeCenter} />
         <Route path="/upgrade-consultant/cases" component={ConsultantCases} />

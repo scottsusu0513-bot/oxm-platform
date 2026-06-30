@@ -1708,6 +1708,38 @@ export const appRouter = router({
       return db.listUserPersonalCollaborationOrders(ctx.user.id);
     }),
 
+    // Phase 4A: 單筆訂單詳情查詢（buyer / factoryId owner+co-mgr / acceptedAsFactoryId owner+co-mgr / createdBy）
+    getById: protectedProcedure.input(z.object({
+      orderId: z.number(),
+    })).query(async ({ ctx, input }) => {
+      const order = await db.getCollaborationOrderDetail(input.orderId);
+      if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "找不到訂單" });
+
+      const uid = ctx.user.id;
+      const isBuyer = order.buyerUserId === uid;
+      const isCreator = order.createdByUserId === uid;
+
+      // 承接工廠（factoryId）權限
+      const sellerFactory = await db.getFactoryById(order.factoryId);
+      const isSellerOwner = sellerFactory?.ownerId === uid;
+      const isSellerCoMgr = !isSellerOwner && !!sellerFactory && await db.isActiveCoManager(sellerFactory.id, uid);
+
+      // 下訂工廠（acceptedAsFactoryId）權限
+      let isPlacedFactoryMember = false;
+      if (order.acceptedAsFactoryId) {
+        const placedFactory = await db.getFactoryById(order.acceptedAsFactoryId);
+        const isPlacedOwner = placedFactory?.ownerId === uid;
+        const isPlacedCoMgr = !isPlacedOwner && !!placedFactory && await db.isActiveCoManager(order.acceptedAsFactoryId, uid);
+        isPlacedFactoryMember = isPlacedOwner || isPlacedCoMgr;
+      }
+
+      if (!isBuyer && !isCreator && !isSellerOwner && !isSellerCoMgr && !isPlacedFactoryMember) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "無權限查看此訂單" });
+      }
+
+      return order;
+    }),
+
     getForConversation: protectedProcedure.input(z.object({
       conversationId: z.number(),
     })).query(async ({ ctx, input }) => {
