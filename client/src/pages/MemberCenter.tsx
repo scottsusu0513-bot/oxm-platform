@@ -843,20 +843,93 @@ function SupportTab() {
 }
 
 // ─── 個人訂單 ─────────────────────────────────────────────────────────────────
+const PERSONAL_ORDER_STATUS_LABEL: Record<string, string> = {
+  pending: "待需求方同意",
+  accepted: "已成立",
+  rejected: "已拒絕",
+  in_progress: "製作中",
+  shipped: "已出貨",
+  completed: "已完成",
+  cancelled: "已取消",
+  cancel_requested: "取消申請中",
+};
+
+const PERSONAL_ORDER_STATUS_CLASS: Record<string, string> = {
+  pending: "bg-yellow-100 text-yellow-800",
+  accepted: "bg-green-100 text-green-800",
+  rejected: "bg-red-100 text-red-800",
+  in_progress: "bg-blue-100 text-blue-800",
+  shipped: "bg-purple-100 text-purple-800",
+  completed: "bg-orange-100 text-orange-800",
+  cancelled: "bg-gray-100 text-gray-600",
+  cancel_requested: "bg-red-100 text-red-700",
+};
+
 function PersonalOrdersTab() {
+  const { data: orders = [], isLoading } = trpc.collaborationOrder.listPersonal.useQuery();
+
+  if (isLoading) {
+    return (
+      <Card>
+        <CardContent className="py-12 text-center text-muted-foreground text-sm">載入中…</CardContent>
+      </Card>
+    );
+  }
+
+  if (orders.length === 0) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>個人訂單</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex flex-col items-center justify-center py-16 text-center text-muted-foreground gap-3">
+            <ClipboardList className="w-12 h-12 opacity-30" />
+            <div>
+              <p className="text-base font-medium text-foreground">尚無個人訂單</p>
+              <p className="text-sm mt-2 text-muted-foreground">以個人身分建立或承接的訂單，未來會顯示在這裡。</p>
+              <p className="text-xs mt-2 text-muted-foreground">如果你選擇以工廠身分承接訂單，該訂單會顯示在對應工廠後台的「訂單管理」中。</p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
   return (
     <Card>
       <CardHeader>
         <CardTitle>個人訂單</CardTitle>
+        <CardDescription>以個人身分建立或承接的合作確認單</CardDescription>
       </CardHeader>
-      <CardContent>
-        <div className="flex flex-col items-center justify-center py-16 text-center text-muted-foreground gap-3">
-          <ClipboardList className="w-12 h-12 opacity-30" />
-          <div>
-            <p className="text-base font-medium text-foreground">以個人身分建立或承接的訂單，未來會顯示在這裡。</p>
-            <p className="text-sm mt-2 text-muted-foreground">如果你選擇以工廠身分承接訂單，該訂單會顯示在對應工廠後台的「訂單管理」中。</p>
+      <CardContent className="space-y-4">
+        {orders.map(order => (
+          <div key={order.id} className="rounded-lg border p-4 space-y-2">
+            <div className="flex flex-wrap items-start gap-2 justify-between">
+              <p className="font-medium">{order.projectName}</p>
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium shrink-0 ${PERSONAL_ORDER_STATUS_CLASS[order.status] ?? PERSONAL_ORDER_STATUS_CLASS.pending}`}>
+                {PERSONAL_ORDER_STATUS_LABEL[order.status] ?? order.status}
+              </span>
+            </div>
+            {order.factoryName && (
+              <p className="text-xs text-muted-foreground">供應工廠：{order.factoryName}</p>
+            )}
+            {order.description && (
+              <p className="text-xs text-muted-foreground line-clamp-2">{order.description}</p>
+            )}
+            <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-muted-foreground">
+              {order.expectedShipmentDate && <span>預計出貨：{order.expectedShipmentDate}</span>}
+              {order.finalPaymentDueDate && <span>尾款日：{order.finalPaymentDueDate}</span>}
+              <span>建立：{new Date(order.createdAt).toLocaleDateString("zh-TW")}</span>
+            </div>
+            <Link href={`/chat/${order.conversationId}`} className="text-xs text-blue-600 hover:underline">
+              查看對話 →
+            </Link>
           </div>
-        </div>
+        ))}
+        <p className="text-xs text-muted-foreground text-center pt-2">
+          如果你選擇以工廠身分承接訂單，該訂單會顯示在對應工廠後台的「訂單管理」中。
+        </p>
       </CardContent>
     </Card>
   );

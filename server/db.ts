@@ -3416,6 +3416,76 @@ export async function listFactoryCollaborationOrders(factoryId: number) {
     .orderBy(desc(collaborationOrders.createdAt));
 }
 
+// Phase 3D: 查詢某工廠「下訂訂單」（以該工廠身分接受的對外合作確認單）
+export async function listFactoryPlacedCollaborationOrders(factoryId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select({
+    id: collaborationOrders.id,
+    conversationId: collaborationOrders.conversationId,
+    productId: collaborationOrders.productId,
+    projectName: collaborationOrders.projectName,
+    description: collaborationOrders.description,
+    depositDueDate: collaborationOrders.depositDueDate,
+    productionStartDate: collaborationOrders.productionStartDate,
+    expectedCompletionDate: collaborationOrders.expectedCompletionDate,
+    expectedShipmentDate: collaborationOrders.expectedShipmentDate,
+    finalPaymentDueDate: collaborationOrders.finalPaymentDueDate,
+    note: collaborationOrders.note,
+    status: collaborationOrders.status,
+    acceptedAt: collaborationOrders.acceptedAt,
+    rejectedAt: collaborationOrders.rejectedAt,
+    completedAt: collaborationOrders.completedAt,
+    cancelledAt: collaborationOrders.cancelledAt,
+    cancelRequestedAt: collaborationOrders.cancelRequestedAt,
+    cancelRequestReason: collaborationOrders.cancelRequestReason,
+    cancelRequestedFromStatus: collaborationOrders.cancelRequestedFromStatus,
+    createdAt: collaborationOrders.createdAt,
+    buyerUserId: collaborationOrders.buyerUserId,
+    buyerName: users.name,
+    productName: products.name,
+    sellerFactoryName: factories.name,
+  }).from(collaborationOrders)
+    .leftJoin(users, eq(collaborationOrders.buyerUserId, users.id))
+    .leftJoin(products, eq(collaborationOrders.productId, products.id))
+    .leftJoin(factories, eq(collaborationOrders.factoryId, factories.id))
+    .where(eq(collaborationOrders.acceptedAsFactoryId, factoryId))
+    .orderBy(desc(collaborationOrders.createdAt));
+}
+
+// Phase 3E: 查詢使用者「個人訂單」（以個人身分接受的訂單，acceptedAsType='user' 或 NULL）
+export async function listUserPersonalCollaborationOrders(userId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select({
+    id: collaborationOrders.id,
+    conversationId: collaborationOrders.conversationId,
+    projectName: collaborationOrders.projectName,
+    description: collaborationOrders.description,
+    note: collaborationOrders.note,
+    status: collaborationOrders.status,
+    depositDueDate: collaborationOrders.depositDueDate,
+    expectedShipmentDate: collaborationOrders.expectedShipmentDate,
+    finalPaymentDueDate: collaborationOrders.finalPaymentDueDate,
+    createdAt: collaborationOrders.createdAt,
+    acceptedAt: collaborationOrders.acceptedAt,
+    completedAt: collaborationOrders.completedAt,
+    factoryId: collaborationOrders.factoryId,
+    factoryName: factories.name,
+  }).from(collaborationOrders)
+    .leftJoin(factories, eq(collaborationOrders.factoryId, factories.id))
+    .where(
+      and(
+        eq(collaborationOrders.buyerUserId, userId),
+        or(
+          eq(collaborationOrders.acceptedAsType, "user"),
+          isNull(collaborationOrders.acceptedAsType)
+        )
+      )
+    )
+    .orderBy(desc(collaborationOrders.createdAt));
+}
+
 export async function getCollaborationOrdersForConversation(conversationId: number) {
   const db = await getDb();
   if (!db) return [];

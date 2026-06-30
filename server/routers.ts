@@ -1691,6 +1691,23 @@ export const appRouter = router({
       return db.listFactoryCollaborationOrders(input.factoryId);
     }),
 
+    // Phase 3D: 工廠「下訂訂單」（以工廠身分接受的對外合作確認單）
+    listPlacedByFactory: protectedProcedure.input(z.object({
+      factoryId: z.number(),
+    })).query(async ({ ctx, input }) => {
+      const factory = await db.getFactoryById(input.factoryId);
+      if (!factory) throw new TRPCError({ code: "NOT_FOUND", message: "找不到工廠" });
+      const isOwner = factory.ownerId === ctx.user.id;
+      const isCoMgr = !isOwner && await db.isActiveCoManager(factory.id, ctx.user.id);
+      if (!isOwner && !isCoMgr) throw new TRPCError({ code: "FORBIDDEN", message: "無權限" });
+      return db.listFactoryPlacedCollaborationOrders(input.factoryId);
+    }),
+
+    // Phase 3E: 使用者「個人訂單」（acceptedAsType='user' 或 NULL）
+    listPersonal: protectedProcedure.query(async ({ ctx }) => {
+      return db.listUserPersonalCollaborationOrders(ctx.user.id);
+    }),
+
     getForConversation: protectedProcedure.input(z.object({
       conversationId: z.number(),
     })).query(async ({ ctx, input }) => {

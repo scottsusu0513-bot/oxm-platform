@@ -1781,7 +1781,7 @@ const STATUS_BADGE_CLASS: Record<string, string> = {
   cancel_requested: "bg-red-100 text-red-700",
 };
 
-function CollaborationOrdersTab({ factoryId }: { factoryId: number }) {
+function ReceivedOrdersPanel({ factoryId }: { factoryId: number }) {
   const utils = trpc.useUtils();
   const { data: orders = [], isLoading } = trpc.collaborationOrder.listForFactory.useQuery({ factoryId });
   const [cancelTarget, setCancelTarget] = useState<number | null>(null);
@@ -1814,8 +1814,8 @@ function CollaborationOrdersTab({ factoryId }: { factoryId: number }) {
       <div className="flex flex-col items-center justify-center py-20 text-center text-muted-foreground gap-3">
         <ClipboardList className="w-12 h-12 opacity-30" />
         <div>
-          <p className="text-lg font-medium text-foreground">尚無訂單紀錄</p>
-          <p className="text-sm mt-1">透過對話中的「建立合作確認單」功能與需求方確認合作內容。</p>
+          <p className="text-lg font-medium text-foreground">尚無承接訂單</p>
+          <p className="text-sm mt-1">當其他使用者向你的工廠確認合作後，訂單會顯示在這裡。</p>
         </div>
       </div>
     );
@@ -1838,9 +1838,9 @@ function CollaborationOrdersTab({ factoryId }: { factoryId: number }) {
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             <ClipboardList className="w-4 h-4 text-orange-500" />
-            訂單管理
+            承接訂單
           </CardTitle>
-          <CardDescription>管理所有合作確認單的進度與狀態</CardDescription>
+          <CardDescription>管理其他使用者向此工廠建立的合作確認單</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           {orders.map(order => {
@@ -1955,5 +1955,80 @@ function CollaborationOrdersTab({ factoryId }: { factoryId: number }) {
         </DialogContent>
       </Dialog>
     </>
+  );
+}
+
+function PlacedOrdersPanel({ factoryId }: { factoryId: number }) {
+  const { data: orders = [], isLoading } = trpc.collaborationOrder.listPlacedByFactory.useQuery({ factoryId });
+
+  if (isLoading) {
+    return <div className="py-12 text-center text-muted-foreground text-sm">載入中…</div>;
+  }
+
+  if (orders.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 text-center text-muted-foreground gap-3">
+        <ClipboardList className="w-12 h-12 opacity-30" />
+        <div>
+          <p className="text-lg font-medium text-foreground">尚無下訂訂單</p>
+          <p className="text-sm mt-1">當你以此工廠身分接受其他工廠的合作確認單後，訂單會顯示在這裡。</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <ClipboardList className="w-4 h-4 text-orange-500" />
+          下訂訂單
+        </CardTitle>
+        <CardDescription>以此工廠身分承接的對外合作訂單</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {orders.map(order => (
+          <div key={order.id} className="rounded-lg border p-4 space-y-3">
+            <div className="flex flex-wrap items-start gap-2 justify-between">
+              <div>
+                <p className="font-medium">{order.projectName}</p>
+                {order.sellerFactoryName && (
+                  <p className="text-xs text-muted-foreground mt-0.5">供應工廠：{order.sellerFactoryName}</p>
+                )}
+              </div>
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium shrink-0 ${STATUS_BADGE_CLASS[order.status] ?? STATUS_BADGE_CLASS.pending}`}>
+                {ORDER_STATUS_LABEL[order.status] ?? order.status}
+              </span>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1 text-xs text-muted-foreground">
+              {order.depositDueDate && <span>首款日：{order.depositDueDate}</span>}
+              {order.expectedShipmentDate && <span>預計出貨：{order.expectedShipmentDate}</span>}
+              <span>建立：{new Date(order.createdAt).toLocaleDateString("zh-TW")}</span>
+            </div>
+            <Link href={`/chat/${order.conversationId}`} className="text-xs text-blue-600 hover:underline">
+              查看對話 →
+            </Link>
+          </div>
+        ))}
+      </CardContent>
+    </Card>
+  );
+}
+
+function CollaborationOrdersTab({ factoryId }: { factoryId: number }) {
+  const [subTab, setSubTab] = useState<"received" | "placed">("received");
+  return (
+    <Tabs value={subTab} onValueChange={v => setSubTab(v as "received" | "placed")}>
+      <TabsList className="mb-4">
+        <TabsTrigger value="received">承接訂單</TabsTrigger>
+        <TabsTrigger value="placed">下訂訂單</TabsTrigger>
+      </TabsList>
+      <TabsContent value="received">
+        <ReceivedOrdersPanel factoryId={factoryId} />
+      </TabsContent>
+      <TabsContent value="placed">
+        <PlacedOrdersPanel factoryId={factoryId} />
+      </TabsContent>
+    </Tabs>
   );
 }
