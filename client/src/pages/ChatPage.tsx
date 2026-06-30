@@ -516,6 +516,9 @@ function CollaborationOrderCard({
 }) {
   const [cancelOpen, setCancelOpen] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
+  const [identityOpen, setIdentityOpen] = useState(false);
+  const [selectedIdentityType, setSelectedIdentityType] = useState<"user" | "factory">("user");
+  const [selectedFactoryId, setSelectedFactoryId] = useState<number | null>(null);
 
   const orderId: number = data?.orderId;
   const { data: orders, refetch } = trpc.collaborationOrder.getForConversation.useQuery(
@@ -524,9 +527,16 @@ function CollaborationOrderCard({
   );
   const order = orders?.find(o => o.id === orderId);
 
+  const { data: myFactoriesData, isLoading: factoriesLoading } = trpc.factory.myApprovedFactories.useQuery(
+    undefined,
+    { enabled: currentUserId === buyerId && !isFactorySide }
+  );
+  const myFactories = myFactoriesData ?? [];
+
   const respondMut = trpc.collaborationOrder.respond.useMutation({
     onSuccess: (_, vars) => {
       toast.success(vars.action === "accepted" ? "已同意合作確認單" : "已拒絕合作確認單");
+      setIdentityOpen(false);
       refetch();
       onActed();
     },
@@ -566,6 +576,24 @@ function CollaborationOrderCard({
     return d;
   }
 
+  function handleAcceptClick() {
+    if (myFactories.length === 0) {
+      respondMut.mutate({ orderId, action: "accepted", acceptedAsType: "user" });
+    } else {
+      setSelectedIdentityType("user");
+      setSelectedFactoryId(null);
+      setIdentityOpen(true);
+    }
+  }
+
+  function handleConfirmIdentity() {
+    if (selectedIdentityType === "factory" && selectedFactoryId != null) {
+      respondMut.mutate({ orderId, action: "accepted", acceptedAsType: "factory", acceptedAsFactoryId: selectedFactoryId });
+    } else {
+      respondMut.mutate({ orderId, action: "accepted", acceptedAsType: "user" });
+    }
+  }
+
   return (
     <>
       <div className="rounded-xl border border-orange-200 bg-orange-50 p-4 text-sm w-72 sm:w-96 space-y-3">
@@ -595,8 +623,8 @@ function CollaborationOrderCard({
         {status === "pending" && isBuyer && !isFactorySide && (
           <div className="flex gap-2 pt-1">
             <Button size="sm" className="flex-1 bg-orange-500 hover:bg-orange-600 text-white"
-              disabled={respondMut.isPending}
-              onClick={() => respondMut.mutate({ orderId, action: "accepted" })}>
+              disabled={respondMut.isPending || factoriesLoading}
+              onClick={handleAcceptClick}>
               <CheckCircle className="w-3.5 h-3.5 mr-1" />同意合作內容
             </Button>
             <Button size="sm" variant="outline" className="flex-1"
@@ -666,6 +694,72 @@ function CollaborationOrderCard({
               onClick={() => requestCancelMut.mutate({ orderId, reason: cancelReason.trim() })}
             >
               送出取消申請
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 選擇接受訂單身分 Dialog */}
+      <Dialog open={identityOpen} onOpenChange={open => { if (!respondMut.isPending) setIdentityOpen(open); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>選擇接受訂單的身分</DialogTitle>
+            <DialogDescription>
+              你目前同時擁有或管理工廠，請選擇要以個人身分，還是以工廠身分接受這筆訂單。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 py-2">
+            <button
+              type="button"
+              className={`w-full text-left rounded-lg border p-3 transition-colors ${
+                selectedIdentityType === "user"
+                  ? "border-orange-500 bg-orange-50"
+                  : "border-border hover:border-orange-300"
+              }`}
+              onClick={() => { setSelectedIdentityType("user"); setSelectedFactoryId(null); }}
+            >
+              <div className="flex items-center gap-2 font-medium text-sm">
+                <User className="w-4 h-4 text-orange-500" />
+                以個人身分接受
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">
+                此訂單只會顯示在你的「個人訂單」中，其他工廠相關人員不會看到。
+              </p>
+            </button>
+            {myFactories.map(f => (
+              <button
+                key={f.factoryId}
+                type="button"
+                className={`w-full text-left rounded-lg border p-3 transition-colors ${
+                  selectedIdentityType === "factory" && selectedFactoryId === f.factoryId
+                    ? "border-orange-500 bg-orange-50"
+                    : "border-border hover:border-orange-300"
+                }`}
+                onClick={() => { setSelectedIdentityType("factory"); setSelectedFactoryId(f.factoryId); }}
+              >
+                <div className="flex items-center gap-2 font-medium text-sm">
+                  <Factory className="w-4 h-4 text-orange-500" />
+                  以「{f.factoryName}」身分接受
+                  <span className="text-xs text-muted-foreground font-normal">
+                    （{f.role === "owner" ? "擁有者" : "共同管理者"}）
+                  </span>
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  此訂單會顯示在「{f.factoryName}」後台的「訂單管理」中，該工廠的擁有者與共同管理者都可以看到。
+                </p>
+              </button>
+            ))}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" disabled={respondMut.isPending} onClick={() => setIdentityOpen(false)}>
+              取消
+            </Button>
+            <Button
+              className="bg-orange-500 hover:bg-orange-600 text-white"
+              disabled={respondMut.isPending || (selectedIdentityType === "factory" && selectedFactoryId == null)}
+              onClick={handleConfirmIdentity}
+            >
+              {respondMut.isPending ? "處理中…" : "確認接受"}
             </Button>
           </DialogFooter>
         </DialogContent>
