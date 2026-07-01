@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { Link } from "wouter";
 import { StatusTimeline } from "@/components/StatusTimeline";
+import { OrderTimelineBar } from "@/components/OrderTimelineBar";
 import { initPushNotifications } from "@/lib/pushNotifications";
 import { usePullToRefresh } from "@/hooks/usePullToRefresh";
 import { NativePullToRefreshLayout } from "@/components/NativePullToRefreshLayout";
@@ -903,35 +904,53 @@ function PersonalOrdersTab() {
         <CardDescription>以個人身分建立或承接的合作確認單</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        {orders.map(order => (
-          <div key={order.id} className="rounded-lg border p-4 space-y-2">
-            <div className="flex flex-wrap items-start gap-2 justify-between">
-              <p className="font-medium">{order.projectName}</p>
-              <span className={`text-xs px-2 py-0.5 rounded-full font-medium shrink-0 ${PERSONAL_ORDER_STATUS_CLASS[order.status] ?? PERSONAL_ORDER_STATUS_CLASS.pending}`}>
-                {PERSONAL_ORDER_STATUS_LABEL[order.status] ?? order.status}
-              </span>
+        {orders.map(order => {
+          const backTo = encodeURIComponent("/member");
+          return (
+            <div key={order.id} className="rounded-lg border p-3 space-y-2">
+              {/* Header */}
+              <div className="flex items-start gap-2">
+                <div className="shrink-0" style={{ minWidth: "28%" }}>
+                  <p className="font-medium text-sm leading-tight">{order.projectName}</p>
+                  {order.factoryName && (
+                    <p className="text-xs text-muted-foreground mt-0.5">供應：{order.factoryName}</p>
+                  )}
+                  {!order.factoryName && (
+                    <p className="text-xs text-muted-foreground mt-0.5">手動輸入</p>
+                  )}
+                </div>
+                <div className="flex-1 hidden sm:grid sm:grid-cols-3 gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+                  {order.depositDueDate && <span>首款：{order.depositDueDate.slice(5).replace("-", "/")}</span>}
+                  {order.expectedShipmentDate && <span>出貨：{order.expectedShipmentDate.slice(5).replace("-", "/")}</span>}
+                  {order.finalPaymentDueDate && <span>尾款：{order.finalPaymentDueDate.slice(5).replace("-", "/")}</span>}
+                  <span>建立：{new Date(order.createdAt).toLocaleDateString("zh-TW", { month: "2-digit", day: "2-digit" })}</span>
+                </div>
+                <span className={`text-xs px-2 py-0.5 rounded-full font-medium shrink-0 ${PERSONAL_ORDER_STATUS_CLASS[order.status] ?? PERSONAL_ORDER_STATUS_CLASS.pending}`}>
+                  {PERSONAL_ORDER_STATUS_LABEL[order.status] ?? order.status}
+                </span>
+              </div>
+              {/* Mobile metadata */}
+              <div className="grid grid-cols-2 sm:hidden gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+                {order.expectedShipmentDate && <span>出貨：{order.expectedShipmentDate.slice(5).replace("-", "/")}</span>}
+                {order.finalPaymentDueDate && <span>尾款：{order.finalPaymentDueDate.slice(5).replace("-", "/")}</span>}
+                <span className="col-span-2">建立：{new Date(order.createdAt).toLocaleDateString("zh-TW")}</span>
+              </div>
+
+              {/* Timeline bar */}
+              <OrderTimelineBar order={order} compact />
+
+              {/* Links */}
+              <div className="flex gap-3">
+                <Link href={`/orders/${order.id}?backTo=${backTo}`} className="text-xs text-orange-600 hover:underline font-medium">
+                  查看訂單 →
+                </Link>
+                <Link href={`/chat/${order.conversationId}`} className="text-xs text-blue-600 hover:underline">
+                  查看對話 →
+                </Link>
+              </div>
             </div>
-            {order.factoryName && (
-              <p className="text-xs text-muted-foreground">供應工廠：{order.factoryName}</p>
-            )}
-            {order.description && (
-              <p className="text-xs text-muted-foreground line-clamp-2">{order.description}</p>
-            )}
-            <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-muted-foreground">
-              {order.expectedShipmentDate && <span>預計出貨：{order.expectedShipmentDate}</span>}
-              {order.finalPaymentDueDate && <span>尾款日：{order.finalPaymentDueDate}</span>}
-              <span>建立：{new Date(order.createdAt).toLocaleDateString("zh-TW")}</span>
-            </div>
-            <div className="flex gap-3">
-              <Link href={`/orders/${order.id}`} className="text-xs text-orange-600 hover:underline font-medium">
-                查看訂單 →
-              </Link>
-              <Link href={`/chat/${order.conversationId}`} className="text-xs text-blue-600 hover:underline">
-                查看對話 →
-              </Link>
-            </div>
-          </div>
-        ))}
+          );
+        })}
         <p className="text-xs text-muted-foreground text-center pt-2">
           如果你選擇以工廠身分承接訂單，該訂單會顯示在對應工廠後台的「訂單管理」中。
         </p>

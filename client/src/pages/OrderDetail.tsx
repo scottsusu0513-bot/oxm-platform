@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useRoute, useLocation, Link } from "wouter";
+import { useRoute, useLocation, Link, useSearch } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
@@ -13,6 +13,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from "@/components/ui/dialog";
 import { ArrowLeft, ClipboardList, MessageCircle, CalendarClock, CheckCircle2, XCircle } from "lucide-react";
+import { OrderTimelineBar } from "@/components/OrderTimelineBar";
 
 // ── 訂單狀態標籤 ──────────────────────────────────────────────────────────────
 const ORDER_STATUS_LABEL: Record<string, string> = {
@@ -56,137 +57,6 @@ const DATE_FIELD_LABELS: Record<typeof DATE_FIELD_KEYS[number], string> = {
 
 type DateFormState = Record<typeof DATE_FIELD_KEYS[number], string>;
 
-// ── Timeline 緊急程度 ─────────────────────────────────────────────────────────
-type Urgency = "normal" | "warning" | "danger" | "overdue";
-
-function getTimelineNodeUrgency(dateStr: string | null | undefined): Urgency {
-  if (!dateStr) return "normal";
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const target = new Date(dateStr + "T00:00:00");
-  const diff = Math.floor((target.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-  if (diff < 0) return "overdue";
-  if (diff <= 2) return "danger";
-  if (diff <= 7) return "warning";
-  return "normal";
-}
-
-const URGENCY_DOT: Record<Urgency, string> = {
-  normal: "bg-blue-500",
-  warning: "bg-amber-400",
-  danger: "bg-orange-500",
-  overdue: "bg-red-500",
-};
-
-const URGENCY_LINE: Record<Urgency, string> = {
-  normal: "bg-blue-200",
-  warning: "bg-amber-200",
-  danger: "bg-orange-200",
-  overdue: "bg-red-200",
-};
-
-const URGENCY_TEXT: Record<Urgency, string> = {
-  normal: "text-foreground",
-  warning: "text-amber-700",
-  danger: "text-orange-700",
-  overdue: "text-red-600",
-};
-
-const URGENCY_LABEL: Record<Urgency, string> = {
-  normal: "",
-  warning: "即將到期",
-  danger: "緊急",
-  overdue: "已逾期",
-};
-
-// ── Timeline 節點型別 ─────────────────────────────────────────────────────────
-type TimelineNode = {
-  label: string;
-  date: string;
-  urgency: Urgency;
-  isPast: boolean;
-};
-
-function buildTimeline(order: {
-  createdAt: Date | string;
-  acceptedAt?: Date | string | null;
-  depositDueDate?: string | null;
-  productionStartDate?: string | null;
-  expectedCompletionDate?: string | null;
-  expectedShipmentDate?: string | null;
-  finalPaymentDueDate?: string | null;
-  completedAt?: Date | string | null;
-}): TimelineNode[] {
-  const nodes: TimelineNode[] = [];
-
-  function addPastNode(label: string, ts: Date | string | null | undefined) {
-    if (!ts) return;
-    const d = new Date(ts);
-    nodes.push({ label, date: d.toLocaleDateString("zh-TW"), urgency: "normal", isPast: true });
-  }
-
-  function addFutureNode(label: string, dateStr: string | null | undefined) {
-    if (!dateStr) return;
-    const urgency = getTimelineNodeUrgency(dateStr);
-    const [y, m, d] = dateStr.split("-");
-    nodes.push({ label, date: `${y}/${m}/${d}`, urgency, isPast: false });
-  }
-
-  addPastNode("訂單建立", order.createdAt);
-  addPastNode("訂單成立", order.acceptedAt);
-  addFutureNode("首款付款日", order.depositDueDate);
-  addFutureNode("製作開始日", order.productionStartDate);
-  addFutureNode("預計完工日", order.expectedCompletionDate);
-  addFutureNode("預計出貨日", order.expectedShipmentDate);
-  addFutureNode("尾款結款日", order.finalPaymentDueDate);
-  addPastNode("訂單完成", order.completedAt);
-
-  return nodes;
-}
-
-// ── Timeline 元件 ─────────────────────────────────────────────────────────────
-function OrderTimeline({ order }: { order: Parameters<typeof buildTimeline>[0] }) {
-  const nodes = buildTimeline(order);
-  if (nodes.length === 0) return null;
-
-  return (
-    <div className="relative pl-6">
-      {nodes.map((node, i) => {
-        const isLast = i === nodes.length - 1;
-        const dotClass = node.isPast ? "bg-gray-400" : URGENCY_DOT[node.urgency];
-        const lineClass = node.isPast ? "bg-gray-200" : URGENCY_LINE[node.urgency];
-        const textClass = node.isPast ? "text-muted-foreground" : URGENCY_TEXT[node.urgency];
-        const badge = !node.isPast && URGENCY_LABEL[node.urgency];
-
-        return (
-          <div key={i} className="relative">
-            {!isLast && (
-              <div className={`absolute left-[-1.1rem] top-4 w-0.5 h-full ${lineClass}`} />
-            )}
-            <div className={`absolute left-[-1.4rem] top-1.5 w-3 h-3 rounded-full ${dotClass} ring-2 ring-white`} />
-            <div className="pb-6">
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className={`text-sm font-medium ${textClass}`}>{node.label}</span>
-                {badge && (
-                  <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${
-                    node.urgency === "overdue" ? "bg-red-100 text-red-700" :
-                    node.urgency === "danger"  ? "bg-orange-100 text-orange-700" :
-                                                  "bg-amber-100 text-amber-700"
-                  }`}>
-                    {badge}
-                  </span>
-                )}
-              </div>
-              <p className={`text-xs mt-0.5 ${node.isPast ? "text-muted-foreground" : textClass}`}>
-                {node.date}
-              </p>
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
 
 // ── 修改歷史節點（accepted change requests）────────────────────────────────────
 type ChangeHistoryItem = {
@@ -346,11 +216,22 @@ function PendingChangeCard({
   );
 }
 
+// ── backTo 安全解析 ───────────────────────────────────────────────────────────
+function parseSafeBackTo(search: string): string | null {
+  const raw = new URLSearchParams(search).get("backTo");
+  if (!raw) return null;
+  if (!raw.startsWith("/")) return null;
+  if (raw.startsWith("//")) return null;
+  if (raw.includes("://")) return null;
+  return raw;
+}
+
 // ── 頁面主體 ─────────────────────────────────────────────────────────────────
 export default function OrderDetail() {
   const { user, loading: authLoading } = useAuth();
   const [, navigate] = useLocation();
   const [, params] = useRoute("/orders/:orderId");
+  const search = useSearch();
   const orderId = params?.orderId ? parseInt(params.orderId, 10) : null;
   const utils = trpc.useUtils();
 
@@ -395,12 +276,23 @@ export default function OrderDetail() {
     return null;
   }
 
+  const backTo = parseSafeBackTo(search);
+  function handleBack() {
+    if (backTo) {
+      navigate(backTo);
+    } else if (typeof window !== "undefined" && window.history.length > 1) {
+      navigate(-1 as any);
+    } else {
+      navigate("/member");
+    }
+  }
+
   if (error || !order) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center gap-4 text-muted-foreground">
         <ClipboardList className="w-12 h-12 opacity-30" />
         <p className="text-lg font-medium text-foreground">找不到訂單</p>
-        <Button variant="outline" onClick={() => navigate(-1 as any)}>返回</Button>
+        <Button variant="outline" onClick={handleBack}>返回</Button>
       </div>
     );
   }
@@ -439,7 +331,7 @@ export default function OrderDetail() {
     <div className="min-h-screen bg-background">
       {/* 頁首 */}
       <div className="sticky top-0 z-10 bg-background border-b px-4 py-3 flex items-center gap-3">
-        <button onClick={() => navigate(-1 as any)} className="text-muted-foreground hover:text-foreground">
+        <button onClick={handleBack} className="text-muted-foreground hover:text-foreground">
           <ArrowLeft className="w-5 h-5" />
         </button>
         <div className="flex-1 min-w-0">
@@ -527,10 +419,10 @@ export default function OrderDetail() {
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-base">日期節點</CardTitle>
-            <CardDescription>距離今天 0–2 天為緊急，3–7 天為提醒，已超過顯示逾期</CardDescription>
+            <CardDescription>1 天內緊急 · 3 天內接近 · 超過今天已逾期</CardDescription>
           </CardHeader>
-          <CardContent>
-            <OrderTimeline order={order} />
+          <CardContent className="pt-2">
+            <OrderTimelineBar order={order} compact={false} />
             <ChangeHistoryTimeline history={acceptedChangeHistory} />
           </CardContent>
         </Card>
