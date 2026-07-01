@@ -193,6 +193,19 @@ export const collaborationOrderChangeRequests = mysqlTable("collaborationOrderCh
 });
 export type CollaborationOrderChangeRequest = typeof collaborationOrderChangeRequests.$inferSelect;
 
+// ===== 訂單日期逾期通知紀錄（防重複寄信）=====
+export const collaborationOrderOverdueNotifications = mysqlTable("collaborationOrderOverdueNotifications", {
+  id: int("id").autoincrement().primaryKey(),
+  orderId: int("orderId").notNull().references(() => collaborationOrders.id, { onDelete: "cascade" }),
+  dateField: varchar("dateField", { length: 50 }).notNull(),
+  dueDate: varchar("dueDate", { length: 10 }).notNull(),
+  notifiedAt: timestamp("notifiedAt").defaultNow().notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  uniqueOrderField: uniqueIndex("orderId_dateField_unique").on(t.orderId, t.dateField),
+}));
+export type CollaborationOrderOverdueNotification = typeof collaborationOrderOverdueNotifications.$inferSelect;
+
 // ===== 廣告置頂表 =====
 export const advertisements = mysqlTable("advertisements", {
   id: int("id").autoincrement().primaryKey(),

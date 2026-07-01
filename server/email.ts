@@ -849,6 +849,58 @@ export async function sendPlatformAnnouncementEmail(params: {
   });
 }
 
+// ===== Phase 4C: 訂單日期節點逾期通知 =====
+export async function sendOrderOverdueEmail(params: {
+  to: string;
+  recipientName: string | null | undefined;
+  projectName: string;
+  factoryName: string;
+  dateLabel: string;
+  dueDate: string;
+  orderId: number;
+  side: string;
+}) {
+  if (!isEmailEnabled()) {
+    console.log('[Email] 未設定 RESEND_API_KEY，跳過訂單逾期通知');
+    return;
+  }
+  try {
+    const resend = getResend();
+    if (!resend) return;
+    const appUrl = process.env.VITE_APP_URL ?? 'http://localhost:3000';
+    const greeting = params.recipientName ? `親愛的 <strong>${params.recipientName}</strong> 您好，` : '您好，';
+    await resend.emails.send({
+      from: FROM_EMAIL,
+      to: params.to,
+      subject: `【OXM 訂單提醒】訂單日期已逾期：${params.projectName}`,
+      html: `
+        <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #dc2626;">訂單日期節點已逾期</h2>
+          <p>${greeting}</p>
+          <p>您在 OXM 平台的合作訂單有一個日期節點已逾期，請盡快確認進度。</p>
+          <table style="border-collapse:collapse; width:100%; margin: 16px 0;">
+            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold; width:40%;">訂單名稱</td><td style="padding:8px;">${params.projectName}</td></tr>
+            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">供應工廠</td><td style="padding:8px;">${params.factoryName}</td></tr>
+            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">逾期節點</td><td style="padding:8px; color:#dc2626; font-weight:bold;">${params.dateLabel}</td></tr>
+            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">原定日期</td><td style="padding:8px; color:#dc2626;">${params.dueDate}</td></tr>
+            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">您的角色</td><td style="padding:8px;">${params.side}</td></tr>
+          </table>
+          <p>請雙方盡快進入 OXM 訂單詳情確認進度，若有日期調整需求，供應工廠可透過訂單詳情提出日期修改申請。</p>
+          <a href="${appUrl}/orders/${params.orderId}"
+            style="background: #f97316; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none; display: inline-block; margin-top: 8px;">
+            前往查看訂單
+          </a>
+          <p style="color: #999; font-size: 12px; margin-top: 24px;">此信件由 OXM 平台自動發送，請勿直接回覆。</p>
+        </div>
+      `,
+    });
+    console.log(`[Email] 已寄送訂單逾期通知 orderId=${params.orderId} field=${params.dateLabel} to=${params.to}`);
+  } catch (error) {
+    console.error('[Email] sendOrderOverdueEmail 失敗:', error);
+    throw error; // re-throw so caller can track failures
+  }
+}
+
 // ===== 首次聯繫通知（任一方向首次私訊接觸時寄出）=====
 export async function sendFirstContactEmail(params: {
   toEmail: string;

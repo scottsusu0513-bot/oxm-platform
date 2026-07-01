@@ -19,6 +19,7 @@ import { desc, eq, and, sql, isNull } from "drizzle-orm";
 import { getDb } from "./db";
 import { sendPushToUser, sendPushToRecipients } from "./push";
 import { createPlatformNotifications } from "./notifications";
+import { runCollaborationOrderOverdueEmailCheck } from "./orderOverdueCheck";
 
 function requireVerifiedEmail(user: { primaryEmailVerifiedAt: Date | null }): void {
   if (!user.primaryEmailVerifiedAt) {
@@ -2647,6 +2648,13 @@ export const appRouter = router({
         body: input.body ?? "你的手機推播通知已設定成功",
       });
       return { targetUserId, ...result };
+    }),
+
+    // Phase 4C：手動觸發訂單日期逾期 Email 檢查
+    runOrderOverdueEmailCheck: adminProcedure.mutation(async () => {
+      const result = await runCollaborationOrderOverdueEmailCheck();
+      console.log(`[admin] runOrderOverdueEmailCheck:`, result);
+      return result;
     }),
 
     // ===== 商案討論區後台管理 =====

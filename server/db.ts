@@ -14,7 +14,7 @@ import {
   factoryCoManagerInvitations, factoryCoManagers,
   inquiryBatches, inquiryBatchItems,
   messageCampaigns, messageRecipients, messageReplies,
-  oauthStates, appLoginTickets, collaborationOrders, collaborationOrderChangeRequests,
+  oauthStates, appLoginTickets, collaborationOrders, collaborationOrderChangeRequests, collaborationOrderOverdueNotifications,
   userAuthAccounts, emailVerificationTokens,
   pushNotificationTokens,
   factoryRevisions,
@@ -3454,6 +3454,109 @@ export async function respondCollaborationOrderChangeRequest(
     }).where(eq(collaborationOrderChangeRequests.id, requestId));
   }
   return { orderId: req.orderId };
+}
+
+// ===== Phase 4C: 訂單日期逾期 Email 通知 =====
+
+const OVERDUE_DATE_FIELDS = [
+  "depositDueDate",
+  "productionStartDate",
+  "expectedCompletionDate",
+  "expectedShipmentDate",
+  "finalPaymentDueDate",
+] as const;
+type OverdueDateField = typeof OVERDUE_DATE_FIELDS[number];
+
+export async function listOverdueCollaborationOrderDateNodes() {
+  const db = await getDb();
+  if (!db) return [];
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const todayStr = today.toISOString().slice(0, 10); // "YYYY-MM-DD"
+
+  const orders = await db.select({
+    id: collaborationOrders.id,
+    projectName: collaborationOrders.projectName,
+    factoryId: collaborationOrders.factoryId,
+    factoryName: factories.name,
+    buyerUserId: collaborationOrders.buyerUserId,
+    acceptedAsType: collaborationOrders.acceptedAsType,
+    acceptedAsFactoryId: collaborationOrders.acceptedAsFactoryId,
+    conversationId: collaborationOrders.conversationId,
+    depositDueDate: collaborationOrders.depositDueDate,
+    productionStartDate: collaborationOrders.productionStartDate,
+    expectedCompletionDate: collaborationOrders.expectedCompletionDate,
+    expectedShipmentDate: collaborationOrders.expectedShipmentDate,
+    finalPaymentDueDate: collaborationOrders.finalPaymentDueDate,
+  }).from(collaborationOrders)
+    .leftJoin(factories, eq(collaborationOrders.factoryId, factories.id))
+    .where(inArray(collaborationOrders.status, ["accepted", "in_progress", "shipped"]));
+
+  const notifiedRows = await db.select({
+    orderId: collaborationOrderOverdueNotifications.orderId,
+    dateField: collaborationOrderOverdueNotifications.dateField,
+  }).from(collaborationOrderOverdueNotifications);
+
+  const notifiedSet = new Set(notifiedRows.map(n => `${n.orderId}:${n.dateField}`));
+
+  const nodes: Array<typeof orders[0] & { dateField: OverdueDateField; dueDate: string }> = [];
+  for (const order of orders) {
+    for (const field of OVERDUE_DATE_FIELDS) {
+      const dueDate = order[field];
+      if (!dueDate) continue;
+      if (dueDate >= todayStr) continue;
+      if (notifiedSet.has(`${order.id}:${field}`)) continue;
+      nodes.push({ ...order, dateField: field, dueDate });
+    }
+  }
+  return nodes;
+}
+
+export async function createCollaborationOrderOverdueNotification(
+  orderId: number,
+  dateField: string,
+  dueDate: string,
+): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.insert(collaborationOrderOverdueNotifications).values({
+    orderId,
+    dateField,
+    dueDate,
+  }).onDuplicateKeyUpdate({ set: { notifiedAt: sql`notifiedAt` } }); // no-op on duplicate
+}
+
+export async function getFactoryEmailRecipients(
+  factoryId: number,
+): Promise<Array<{ email: string | null; name: string | null }>> {
+  const db = await getDb();
+  if (!db) return [];
+
+  const ownerRows = await db.select({
+    email: users.email,
+    primaryEmail: users.primaryEmail,
+    name: users.name,
+  }).from(factories)
+    .innerJoin(users, eq(factories.ownerId, users.id))
+    .where(eq(factories.id, factoryId))
+    .limit(1);
+
+  const cmRows = await db.select({
+    email: users.email,
+    primaryEmail: users.primaryEmail,
+    name: users.name,
+  }).from(factoryCoManagers)
+    .innerJoin(users, eq(factoryCoManagers.userId, users.id))
+    .where(and(
+      eq(factoryCoManagers.factoryId, factoryId),
+      isNull(factoryCoManagers.removedAt),
+    ));
+
+  return [
+    ...ownerRows.map(r => ({ email: r.primaryEmail ?? r.email, name: r.name })),
+    ...cmRows.map(r => ({ email: r.primaryEmail ?? r.email, name: r.name })),
+  ];
 }
 
 export async function respondCollaborationOrder(
