@@ -6,7 +6,7 @@ import {
   type Urgency,
 } from "@/lib/orderTimeline";
 
-// ── Urgency dot / text styles ─────────────────────────────────────────────────
+// ── Urgency styles ────────────────────────────────────────────────────────────
 const DOT_CLASS: Record<Urgency, string> = {
   normal:  "bg-blue-400",
   warning: "bg-amber-400",
@@ -21,25 +21,103 @@ const TEXT_CLASS: Record<Urgency, string> = {
   overdue: "text-red-600",
 };
 
-const BADGE_LABEL: Record<Urgency, string> = {
-  normal:  "",
-  warning: "接近",
-  danger:  "緊急",
-  overdue: "已逾期",
-};
-
-const BADGE_CLASS: Record<Urgency, string> = {
-  normal:  "",
-  warning: "bg-amber-100 text-amber-700",
-  danger:  "bg-orange-100 text-orange-700",
-  overdue: "bg-red-100 text-red-700",
-};
-
-// OXM brand progress fill: orange gradient, left-capped rounded
 const FILL_STYLE = {
   background: "linear-gradient(to right, #fb923c, #ea580c)",
 };
 
+// ── NodeGroup: same-date nodes merged into one text block ─────────────────────
+type NodeGroup = {
+  date: string;
+  dateShort: string;
+  dateText: string;
+  labels: string[];
+  urgency: Urgency;
+  visualPercent: number;
+  placement: "top" | "bottom";
+};
+
+const URGENCY_ORDER: Record<Urgency, number> = {
+  normal: 0, warning: 1, danger: 2, overdue: 3,
+};
+
+function groupNodes(nodes: TimelineNode[]): NodeGroup[] {
+  const map = new Map<string, NodeGroup>();
+  for (const node of nodes) {
+    const existing = map.get(node.date);
+    if (existing) {
+      existing.labels.push(node.label);
+      if (URGENCY_ORDER[node.urgency] > URGENCY_ORDER[existing.urgency]) {
+        existing.urgency = node.urgency;
+      }
+    } else {
+      map.set(node.date, {
+        date: node.date,
+        dateShort: node.dateShort,
+        dateText: node.dateText,
+        labels: [node.label],
+        urgency: node.urgency,
+        visualPercent: node.visualPercent,
+        placement: "bottom",
+      });
+    }
+  }
+  return Array.from(map.values()).sort((a, b) => a.visualPercent - b.visualPercent);
+}
+
+// If two adjacent groups are within `threshold` visual-%, flip the second to
+// the opposite side of the first.
+function assignPlacements(groups: NodeGroup[], threshold: number): NodeGroup[] {
+  const result = groups.map(g => ({ ...g, placement: "bottom" as "top" | "bottom" }));
+  for (let i = 1; i < result.length; i++) {
+    if (result[i].visualPercent - result[i - 1].visualPercent < threshold) {
+      result[i].placement = result[i - 1].placement === "bottom" ? "top" : "bottom";
+    }
+  }
+  return result;
+}
+
+// ── Layout ────────────────────────────────────────────────────────────────────
+// Compact (72px): bar centred at 28px.
+//   Above-bar zone (0–23px): fits 1-label "top" text cleanly; 2-label with
+//   minor edge-clipping within card's space-y-2 gap (acceptable).
+// Full (92px): bar centred at 39px, larger text.
+type Layout = {
+  containerH: number;
+  barTop: number;
+  barH: number;
+  dotTop: number;
+  dotH: number;
+  dotCls: string;
+  lineH: number;
+  fontCls: string;
+  threshold: number;
+};
+
+const COMPACT: Layout = {
+  containerH: 72,
+  barTop: 26,
+  barH: 4,
+  dotTop: 23,   // centre = 23+5 = 28 = barTop+barH/2 ✓
+  dotH: 10,
+  dotCls: "w-2.5 h-2.5",
+  lineH: 9,
+  fontCls: "text-[9px]",
+  threshold: 14,
+};
+
+const FULL: Layout = {
+  containerH: 92,
+  barTop: 36,
+  barH: 6,
+  dotTop: 32,   // centre = 32+7 = 39 = barTop+barH/2 ✓
+  dotH: 14,
+  dotCls: "w-3.5 h-3.5",
+  lineH: 11,
+  fontCls: "text-[10px]",
+  threshold: 12,
+};
+
+// ── Component ─────────────────────────────────────────────────────────────────
 type Props = {
   order: OrderDateFields;
   compact?: boolean;
@@ -47,56 +125,41 @@ type Props = {
 
 export function OrderTimelineBar({ order, compact = false }: Props) {
   const nodes = buildOrderTimelineNodes(order);
-
   if (nodes.length === 0) {
     return <p className="text-xs text-muted-foreground py-1">尚無日期節點</p>;
   }
 
-  // rawProgress: 0–100 in date space
   const rawProgress = getTimelineProgressPercent(nodes);
-  // Map to visual space so fill tip aligns with node positions (same formula)
   const progressVisualPct = rawProgress === 0 ? 0 : 4 + rawProgress * 0.92;
 
-  return compact
-    ? <CompactBar nodes={nodes} progressVisualPct={progressVisualPct} />
-    : <FullBar nodes={nodes} progressVisualPct={progressVisualPct} />;
-}
+  const layout = compact ? COMPACT : FULL;
+  const groups = assignPlacements(groupNodes(nodes), layout.threshold);
 
-// ── Compact (list cards) ──────────────────────────────────────────────────────
-// Container 56px:
-//   gray track + fill  top=12px  h=4px
-//   dots               centered on track (top=10px for 8px dot)
-//   label              top=22px
-//   date MM/DD         top=32px
-function CompactBar({
-  nodes,
-  progressVisualPct,
-}: {
-  nodes: TimelineNode[];
-  progressVisualPct: number;
-}) {
   return (
-    <div className="relative w-full select-none" style={{ height: "56px" }}>
-      {/* Gray track */}
+    <div className="relative w-full select-none" style={{ height: `${layout.containerH}px` }}>
+      {/* Gray base track */}
       <div
         className="absolute left-0 right-0 rounded-full bg-gray-200"
-        style={{ top: "12px", height: "4px" }}
+        style={{ top: `${layout.barTop}px`, height: `${layout.barH}px` }}
       />
       {/* OXM orange progress fill */}
       {progressVisualPct > 0 && (
         <div
           className="absolute left-0 rounded-full"
-          style={{ top: "12px", height: "4px", width: `${progressVisualPct}%`, ...FILL_STYLE }}
+          style={{
+            top: `${layout.barTop}px`,
+            height: `${layout.barH}px`,
+            width: `${progressVisualPct}%`,
+            ...FILL_STYLE,
+          }}
         />
       )}
-      {nodes.map(node => (
-        <NodePin
-          key={node.key}
-          node={node}
-          compact
-          dotTop={10}
-          labelTop={22}
-          dateTop={32}
+      {groups.map(group => (
+        <GroupPin
+          key={group.date}
+          group={group}
+          layout={layout}
+          compact={compact}
           progressVisualPct={progressVisualPct}
         />
       ))}
@@ -104,112 +167,72 @@ function CompactBar({
   );
 }
 
-// ── Full (detail page) ────────────────────────────────────────────────────────
-// Container 76px:
-//   gray track + fill  top=16px  h=6px
-//   dots               centered on track (top=13px for 12px dot)
-//   label (+badge)     top=30px
-//   date YYYY/MM/DD    top=46px
-function FullBar({
-  nodes,
-  progressVisualPct,
-}: {
-  nodes: TimelineNode[];
-  progressVisualPct: number;
-}) {
-  return (
-    <div className="relative w-full select-none" style={{ height: "76px" }}>
-      {/* Gray track */}
-      <div
-        className="absolute left-0 right-0 rounded-full bg-gray-200"
-        style={{ top: "16px", height: "6px" }}
-      />
-      {/* OXM orange progress fill */}
-      {progressVisualPct > 0 && (
-        <div
-          className="absolute left-0 rounded-full"
-          style={{ top: "16px", height: "6px", width: `${progressVisualPct}%`, ...FILL_STYLE }}
-        />
-      )}
-      {nodes.map(node => (
-        <NodePin
-          key={node.key}
-          node={node}
-          compact={false}
-          dotTop={13}
-          labelTop={30}
-          dateTop={46}
-          progressVisualPct={progressVisualPct}
-        />
-      ))}
-    </div>
-  );
-}
-
-// ── NodePin ───────────────────────────────────────────────────────────────────
-// isPassed = today has reached or passed this node's date (urgency === "overdue")
-// Passed nodes: white ring (sits on the orange fill), slightly muted
-// Upcoming nodes: colored ring
-function NodePin({
-  node,
+// ── GroupPin ──────────────────────────────────────────────────────────────────
+// Text layout:
+//   "top"    — labels stack upward from bar, date is bottom-most (closest to bar)
+//   "bottom" — labels first then date, stacked downward from dot bottom
+//
+// Date: text-slate-400 (de-emphasised)
+// Labels: urgency colour + font-medium
+function GroupPin({
+  group,
+  layout,
   compact,
-  dotTop,
-  labelTop,
-  dateTop,
   progressVisualPct,
 }: {
-  node: TimelineNode;
+  group: NodeGroup;
+  layout: Layout;
   compact: boolean;
-  dotTop: number;
-  labelTop: number;
-  dateTop: number;
   progressVisualPct: number;
 }) {
-  const left = `${node.visualPercent}%`;
-  // A node is "reached" if today's fill has passed it
-  const isPassed = node.visualPercent <= progressVisualPct;
+  const left = `${group.visualPercent}%`;
+  const isPassed = group.visualPercent <= progressVisualPct;
+  const ringCls = isPassed ? "ring-2 ring-white" : "ring-2 ring-white/60";
+  const textCls = TEXT_CLASS[group.urgency];
+  const dateStr = compact ? group.dateShort : group.dateText;
+  const { dotTop, dotH, lineH, fontCls, dotCls } = layout;
 
-  const dotSize = compact ? "w-2.5 h-2.5" : "w-3.5 h-3.5";
-  const dotColor = DOT_CLASS[node.urgency];
-  // Passed nodes sit on the orange fill → white ring for contrast
-  // Upcoming nodes → transparent ring (subtle)
-  const ringClass = isPassed
-    ? "ring-2 ring-white"
-    : "ring-2 ring-white/60";
+  type TextLine = { text: string; y: number; isDate: boolean };
+  const lines: TextLine[] = [];
 
-  const textClass = TEXT_CLASS[node.urgency];
-  const dateStr = compact ? node.dateShort : node.dateText;
+  if (group.placement === "top") {
+    // Block ends just above the dot; date is closest to bar, labels above.
+    const dateY = dotTop - 3 - lineH;
+    for (let i = 0; i < group.labels.length; i++) {
+      lines.push({
+        text: group.labels[i],
+        y: dateY - (group.labels.length - i) * lineH,
+        isDate: false,
+      });
+    }
+    lines.push({ text: dateStr, y: dateY, isDate: true });
+  } else {
+    // Block starts just below the dot; labels first, date last.
+    const blockStart = dotTop + dotH + 2;
+    for (let i = 0; i < group.labels.length; i++) {
+      lines.push({ text: group.labels[i], y: blockStart + i * lineH, isDate: false });
+    }
+    lines.push({ text: dateStr, y: blockStart + group.labels.length * lineH, isDate: true });
+  }
 
   return (
     <>
-      {/* Dot */}
+      {/* One dot per group (same-date nodes share visualPercent) */}
       <div
-        className={`absolute ${dotSize} rounded-full ${dotColor} ${ringClass}`}
+        className={`absolute ${dotCls} rounded-full ${DOT_CLASS[group.urgency]} ${ringCls}`}
         style={{ left, top: `${dotTop}px`, transform: "translateX(-50%)" }}
       />
-      {/* Label (+ badge for full mode) */}
-      <div
-        className="absolute flex items-center gap-0.5"
-        style={{ left, top: `${labelTop}px`, transform: "translateX(-50%)" }}
-      >
+      {lines.map((line, i) => (
         <span
-          className={`${compact ? "text-[9px]" : "text-[10px]"} font-medium whitespace-nowrap leading-none ${textClass}`}
+          key={i}
+          className={`absolute ${fontCls} whitespace-nowrap leading-none ${
+            line.isDate ? "text-slate-400" : `${textCls} font-medium`
+          }`}
+          style={{ left, top: `${line.y}px`, transform: "translateX(-50%)" }}
         >
-          {node.label}
+          {line.text}
         </span>
-        {!compact && BADGE_LABEL[node.urgency] && (
-          <span className={`text-[8px] px-0.5 rounded font-medium leading-none ${BADGE_CLASS[node.urgency]}`}>
-            {BADGE_LABEL[node.urgency]}
-          </span>
-        )}
-      </div>
-      {/* Date */}
-      <span
-        className={`absolute ${compact ? "text-[9px]" : "text-[10px]"} whitespace-nowrap leading-none ${textClass}`}
-        style={{ left, top: `${dateTop}px`, transform: "translateX(-50%)" }}
-      >
-        {dateStr}
-      </span>
+      ))}
     </>
   );
 }
