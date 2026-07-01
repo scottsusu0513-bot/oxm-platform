@@ -11,6 +11,7 @@ import { apiLimiter, loginLimiter, uploadLimiter, messageLimiter, submitReviewLi
 import { COOKIE_NAME } from "@shared/const";
 import { INDUSTRY_SLUGS, PHASE1_SUB_INDUSTRY_PAGES } from "../../shared/constants";
 import { getDb, getApprovedFactoriesForSitemap, ensureConsultantsSeeded } from "../db";
+import { runCollaborationOrderOverdueEmailCheck } from "../orderOverdueCheck";
 
 async function startServer() {
   console.log("[boot] startServer called");
@@ -85,6 +86,29 @@ async function startServer() {
     res.setHeader("Set-Cookie", `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT${secure}`);
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
     res.json({ success: true });
+  });
+
+  // ── Phase 4D: 訂單逾期 Email 排程觸發入口 ─────────────────────────────
+  // 驗證方式：POST + header x-cron-secret: <ORDER_OVERDUE_CRON_SECRET>
+  // 未設定 secret 時回 503；secret 不符時回 401；不接受 GET
+  app.post("/api/cron/order-overdue-email-check", async (req, res) => {
+    const secret = process.env.ORDER_OVERDUE_CRON_SECRET;
+    if (!secret) {
+      return res.status(503).json({ error: "Cron endpoint not configured (ORDER_OVERDUE_CRON_SECRET not set)" });
+    }
+    const provided = req.headers["x-cron-secret"];
+    if (!provided || provided !== secret) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+    try {
+      const result = await runCollaborationOrderOverdueEmailCheck();
+      console.log("[cron] order-overdue-email-check completed:", JSON.stringify(result));
+      return res.status(200).json(result);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error("[cron] order-overdue-email-check error:", msg);
+      return res.status(500).json({ error: "Internal error" });
+    }
   });
 
   // ── robots.txt ─────────────────────────────────────────────────────────
