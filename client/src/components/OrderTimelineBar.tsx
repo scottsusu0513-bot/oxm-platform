@@ -1,11 +1,12 @@
 import {
   buildOrderTimelineNodes,
-  getTimelineBarGradient,
+  getTimelineProgressPercent,
   type OrderDateFields,
   type TimelineNode,
   type Urgency,
 } from "@/lib/orderTimeline";
 
+// ── Urgency dot / text styles ─────────────────────────────────────────────────
 const DOT_CLASS: Record<Urgency, string> = {
   normal:  "bg-blue-400",
   warning: "bg-amber-400",
@@ -13,15 +14,8 @@ const DOT_CLASS: Record<Urgency, string> = {
   overdue: "bg-red-500",
 };
 
-const RING_CLASS: Record<Urgency, string> = {
-  normal:  "ring-blue-200",
-  warning: "ring-amber-200",
-  danger:  "ring-orange-300",
-  overdue: "ring-red-300",
-};
-
 const TEXT_CLASS: Record<Urgency, string> = {
-  normal:  "text-blue-600",
+  normal:  "text-slate-500",
   warning: "text-amber-600",
   danger:  "text-orange-600",
   overdue: "text-red-600",
@@ -41,6 +35,11 @@ const BADGE_CLASS: Record<Urgency, string> = {
   overdue: "bg-red-100 text-red-700",
 };
 
+// OXM brand progress fill: orange gradient, left-capped rounded
+const FILL_STYLE = {
+  background: "linear-gradient(to right, #fb923c, #ea580c)",
+};
+
 type Props = {
   order: OrderDateFields;
   compact?: boolean;
@@ -53,24 +52,43 @@ export function OrderTimelineBar({ order, compact = false }: Props) {
     return <p className="text-xs text-muted-foreground py-1">尚無日期節點</p>;
   }
 
-  const gradient = getTimelineBarGradient(nodes);
+  // rawProgress: 0–100 in date space
+  const rawProgress = getTimelineProgressPercent(nodes);
+  // Map to visual space so fill tip aligns with node positions (same formula)
+  const progressVisualPct = rawProgress === 0 ? 0 : 4 + rawProgress * 0.92;
+
   return compact
-    ? <CompactBar nodes={nodes} gradient={gradient} />
-    : <FullBar nodes={nodes} gradient={gradient} />;
+    ? <CompactBar nodes={nodes} progressVisualPct={progressVisualPct} />
+    : <FullBar nodes={nodes} progressVisualPct={progressVisualPct} />;
 }
 
-// ── Compact (list card) ───────────────────────────────────────────────────────
-// Layout (top-down within 60px container):
-//  [bar + dot]  top=12px, 4px bar, dot centered at 14px
-//  [label]      top=22px
-//  [date MM/DD] top=32px
-function CompactBar({ nodes, gradient }: { nodes: TimelineNode[]; gradient: string }) {
+// ── Compact (list cards) ──────────────────────────────────────────────────────
+// Container 56px:
+//   gray track + fill  top=12px  h=4px
+//   dots               centered on track (top=10px for 8px dot)
+//   label              top=22px
+//   date MM/DD         top=32px
+function CompactBar({
+  nodes,
+  progressVisualPct,
+}: {
+  nodes: TimelineNode[];
+  progressVisualPct: number;
+}) {
   return (
-    <div className="relative w-full" style={{ height: "56px" }}>
+    <div className="relative w-full select-none" style={{ height: "56px" }}>
+      {/* Gray track */}
       <div
-        className="absolute left-0 right-0 rounded-full"
-        style={{ top: "12px", height: "4px", background: gradient }}
+        className="absolute left-0 right-0 rounded-full bg-gray-200"
+        style={{ top: "12px", height: "4px" }}
       />
+      {/* OXM orange progress fill */}
+      {progressVisualPct > 0 && (
+        <div
+          className="absolute left-0 rounded-full"
+          style={{ top: "12px", height: "4px", width: `${progressVisualPct}%`, ...FILL_STYLE }}
+        />
+      )}
       {nodes.map(node => (
         <NodePin
           key={node.key}
@@ -79,6 +97,7 @@ function CompactBar({ nodes, gradient }: { nodes: TimelineNode[]; gradient: stri
           dotTop={10}
           labelTop={22}
           dateTop={32}
+          progressVisualPct={progressVisualPct}
         />
       ))}
     </div>
@@ -86,17 +105,32 @@ function CompactBar({ nodes, gradient }: { nodes: TimelineNode[]; gradient: stri
 }
 
 // ── Full (detail page) ────────────────────────────────────────────────────────
-// Layout (top-down within 72px container):
-//  [bar + dot]        top=16px, 6px bar, dot centered at 19px
-//  [label + badge]    top=30px
-//  [full date]        top=44px
-function FullBar({ nodes, gradient }: { nodes: TimelineNode[]; gradient: string }) {
+// Container 76px:
+//   gray track + fill  top=16px  h=6px
+//   dots               centered on track (top=13px for 12px dot)
+//   label (+badge)     top=30px
+//   date YYYY/MM/DD    top=46px
+function FullBar({
+  nodes,
+  progressVisualPct,
+}: {
+  nodes: TimelineNode[];
+  progressVisualPct: number;
+}) {
   return (
-    <div className="relative w-full" style={{ height: "72px" }}>
+    <div className="relative w-full select-none" style={{ height: "76px" }}>
+      {/* Gray track */}
       <div
-        className="absolute left-0 right-0 rounded-full"
-        style={{ top: "16px", height: "6px", background: gradient }}
+        className="absolute left-0 right-0 rounded-full bg-gray-200"
+        style={{ top: "16px", height: "6px" }}
       />
+      {/* OXM orange progress fill */}
+      {progressVisualPct > 0 && (
+        <div
+          className="absolute left-0 rounded-full"
+          style={{ top: "16px", height: "6px", width: `${progressVisualPct}%`, ...FILL_STYLE }}
+        />
+      )}
       {nodes.map(node => (
         <NodePin
           key={node.key}
@@ -104,36 +138,53 @@ function FullBar({ nodes, gradient }: { nodes: TimelineNode[]; gradient: string 
           compact={false}
           dotTop={13}
           labelTop={30}
-          dateTop={44}
+          dateTop={46}
+          progressVisualPct={progressVisualPct}
         />
       ))}
     </div>
   );
 }
 
+// ── NodePin ───────────────────────────────────────────────────────────────────
+// isPassed = today has reached or passed this node's date (urgency === "overdue")
+// Passed nodes: white ring (sits on the orange fill), slightly muted
+// Upcoming nodes: colored ring
 function NodePin({
   node,
   compact,
   dotTop,
   labelTop,
   dateTop,
+  progressVisualPct,
 }: {
   node: TimelineNode;
   compact: boolean;
   dotTop: number;
   labelTop: number;
   dateTop: number;
+  progressVisualPct: number;
 }) {
   const left = `${node.visualPercent}%`;
-  const textClass = node.urgency !== "normal" ? TEXT_CLASS[node.urgency] : "text-muted-foreground";
-  const dotSize = compact ? "w-2 h-2" : "w-3 h-3";
+  // A node is "reached" if today's fill has passed it
+  const isPassed = node.visualPercent <= progressVisualPct;
+
+  const dotSize = compact ? "w-2.5 h-2.5" : "w-3.5 h-3.5";
+  const dotColor = DOT_CLASS[node.urgency];
+  // Passed nodes sit on the orange fill → white ring for contrast
+  // Upcoming nodes → transparent ring (subtle)
+  const ringClass = isPassed
+    ? "ring-2 ring-white"
+    : "ring-2 ring-white/60";
+
+  const textClass = TEXT_CLASS[node.urgency];
   const dateStr = compact ? node.dateShort : node.dateText;
 
   return (
     <>
       {/* Dot */}
       <div
-        className={`absolute ${dotSize} rounded-full ${DOT_CLASS[node.urgency]} ring-1 ${RING_CLASS[node.urgency]}`}
+        className={`absolute ${dotSize} rounded-full ${dotColor} ${ringClass}`}
         style={{ left, top: `${dotTop}px`, transform: "translateX(-50%)" }}
       />
       {/* Label (+ badge for full mode) */}

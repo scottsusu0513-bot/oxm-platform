@@ -73,10 +73,31 @@ export function buildOrderTimelineNodes(order: OrderDateFields): TimelineNode[] 
   });
 }
 
-export function getTimelineBarGradient(nodes: TimelineNode[]): string {
-  const urgencies = nodes.map(n => n.urgency);
-  if (urgencies.includes("overdue")) return "linear-gradient(to right, #bfdbfe, #fecaca)";
-  if (urgencies.includes("danger"))  return "linear-gradient(to right, #bfdbfe, #fed7aa)";
-  if (urgencies.includes("warning")) return "linear-gradient(to right, #bfdbfe, #fde68a)";
-  return "linear-gradient(to right, #bfdbfe, #93c5fd)";
+/**
+ * Returns how far "today" has advanced through the node range (0–100).
+ * Uses the same date-space-to-visual-space mapping as node positions:
+ *   visualPercent = 4 + progressPercent * 0.92
+ * so the fill tip aligns with "today's" position on the visual bar.
+ *
+ * Returns 0 if today <= minDate, 100 if today >= maxDate.
+ */
+export function getTimelineProgressPercent(nodes: TimelineNode[]): number {
+  if (nodes.length === 0) return 0;
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const todayTime = today.getTime();
+
+  if (nodes.length === 1) {
+    const t = new Date(nodes[0].date + "T00:00:00").getTime();
+    return todayTime >= t ? 100 : 0;
+  }
+
+  const times = nodes.map(n => new Date(n.date + "T00:00:00").getTime());
+  const minDate = Math.min(...times);
+  const maxDate = Math.max(...times);
+
+  if (todayTime <= minDate) return 0;
+  if (todayTime >= maxDate) return 100;
+  return ((todayTime - minDate) / (maxDate - minDate)) * 100;
 }
