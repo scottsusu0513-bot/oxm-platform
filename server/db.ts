@@ -14,7 +14,7 @@ import {
   factoryCoManagerInvitations, factoryCoManagers,
   inquiryBatches, inquiryBatchItems,
   messageCampaigns, messageRecipients, messageReplies,
-  oauthStates, appLoginTickets, collaborationOrders, collaborationOrderChangeRequests, collaborationOrderOverdueNotifications,
+  oauthStates, appLoginTickets, collaborationOrders, collaborationOrderChangeRequests, collaborationOrderOverdueNotifications, collaborationOrderRepeatRequests,
   userAuthAccounts, emailVerificationTokens,
   pushNotificationTokens,
   factoryRevisions,
@@ -3337,6 +3337,10 @@ export async function getCollaborationOrderDetail(id: number) {
     acceptedAsType: collaborationOrders.acceptedAsType,
     acceptedAsFactoryId: collaborationOrders.acceptedAsFactoryId,
     acceptedByUserId: collaborationOrders.acceptedByUserId,
+    earlyCompletedAt: collaborationOrders.earlyCompletedAt,
+    earlyCompletedByUserId: collaborationOrders.earlyCompletedByUserId,
+    earlyShippedAt: collaborationOrders.earlyShippedAt,
+    earlyShippedByUserId: collaborationOrders.earlyShippedByUserId,
     createdAt: collaborationOrders.createdAt,
     updatedAt: collaborationOrders.updatedAt,
   }).from(collaborationOrders)
@@ -3641,6 +3645,24 @@ export async function updateCollaborationOrderStatus(
   await db.update(collaborationOrders).set({ status, ...extra }).where(eq(collaborationOrders.id, id));
 }
 
+export async function earlyCompleteOrder(orderId: number, userId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  await db.update(collaborationOrders).set({
+    earlyCompletedAt: new Date(),
+    earlyCompletedByUserId: userId,
+  }).where(eq(collaborationOrders.id, orderId));
+}
+
+export async function earlyShipOrder(orderId: number, userId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  await db.update(collaborationOrders).set({
+    earlyShippedAt: new Date(),
+    earlyShippedByUserId: userId,
+  }).where(eq(collaborationOrders.id, orderId));
+}
+
 export async function markCollaborationOrderComplete(
   orderId: number,
   completedByUserId: number,
@@ -3681,6 +3703,8 @@ export async function listFactoryCollaborationOrders(factoryId: number) {
     cancelRequestedAt: collaborationOrders.cancelRequestedAt,
     cancelRequestReason: collaborationOrders.cancelRequestReason,
     cancelRequestedFromStatus: collaborationOrders.cancelRequestedFromStatus,
+    earlyCompletedAt: collaborationOrders.earlyCompletedAt,
+    earlyShippedAt: collaborationOrders.earlyShippedAt,
     createdAt: collaborationOrders.createdAt,
     buyerUserId: collaborationOrders.buyerUserId,
     buyerName: users.name,
@@ -3717,6 +3741,8 @@ export async function listFactoryPlacedCollaborationOrders(factoryId: number) {
     cancelRequestedAt: collaborationOrders.cancelRequestedAt,
     cancelRequestReason: collaborationOrders.cancelRequestReason,
     cancelRequestedFromStatus: collaborationOrders.cancelRequestedFromStatus,
+    earlyCompletedAt: collaborationOrders.earlyCompletedAt,
+    earlyShippedAt: collaborationOrders.earlyShippedAt,
     createdAt: collaborationOrders.createdAt,
     buyerUserId: collaborationOrders.buyerUserId,
     buyerName: users.name,
@@ -3748,6 +3774,8 @@ export async function listUserPersonalCollaborationOrders(userId: number) {
     acceptedAt: collaborationOrders.acceptedAt,
     completedAt: collaborationOrders.completedAt,
     completionNote: collaborationOrders.completionNote,
+    earlyCompletedAt: collaborationOrders.earlyCompletedAt,
+    earlyShippedAt: collaborationOrders.earlyShippedAt,
     factoryId: collaborationOrders.factoryId,
     factoryName: factories.name,
   }).from(collaborationOrders)
@@ -3794,6 +3822,41 @@ export async function createVerifiedOrderReview(data: {
     reviewType: "verified_order",
   });
   await recalcFactoryRating(data.factoryId);
+}
+
+// ===== 重複下訂申請 =====
+
+export async function createRepeatOrderRequest(data: {
+  originalOrderId: number;
+  conversationId: number;
+  requestedByUserId: number;
+  requestedAsFactoryId?: number | null;
+}): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  const result = await db.insert(collaborationOrderRepeatRequests).values({
+    originalOrderId: data.originalOrderId,
+    conversationId: data.conversationId,
+    requestedByUserId: data.requestedByUserId,
+    requestedAsFactoryId: data.requestedAsFactoryId ?? null,
+  });
+  return (result as any)[0].insertId as number;
+}
+
+export async function getRepeatOrderRequest(id: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select().from(collaborationOrderRepeatRequests)
+    .where(eq(collaborationOrderRepeatRequests.id, id)).limit(1);
+  return rows[0] ?? null;
+}
+
+export async function respondRepeatOrderRequest(requestId: number, action: "accepted" | "rejected"): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  await db.update(collaborationOrderRepeatRequests)
+    .set({ status: action })
+    .where(eq(collaborationOrderRepeatRequests.id, requestId));
 }
 
 // ===== Push Notification Tokens =====

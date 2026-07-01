@@ -869,6 +869,15 @@ const PERSONAL_ORDER_STATUS_CLASS: Record<string, string> = {
 function PersonalOrdersTab() {
   const { data: orders = [], isLoading } = trpc.collaborationOrder.listPersonal.useQuery();
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
+  const [repeatSentIds, setRepeatSentIds] = useState<Set<number>>(new Set());
+
+  const requestRepeatMut = trpc.collaborationOrder.requestRepeat.useMutation({
+    onSuccess: (_, vars) => {
+      toast.success("重複下訂申請已送出，等待工廠回覆");
+      setRepeatSentIds(prev => new Set(prev).add(vars.orderId));
+    },
+    onError: e => toast.error(e.message),
+  });
 
   if (isLoading) {
     return (
@@ -942,7 +951,18 @@ function PersonalOrdersTab() {
                   >
                     展開 ▾
                   </button>
-                  <div className="ml-auto">
+                  <div className="ml-auto flex items-center gap-2">
+                    {repeatSentIds.has(order.id) ? (
+                      <span className="text-xs text-green-600">已送出申請</span>
+                    ) : (
+                      <button
+                        className="text-xs text-orange-600 hover:underline"
+                        disabled={requestRepeatMut.isPending}
+                        onClick={() => requestRepeatMut.mutate({ orderId: order.id })}
+                      >
+                        重複下訂 ↩
+                      </button>
+                    )}
                     <Link href={`/orders/${order.id}?backTo=${backTo}`} className="text-xs text-orange-600 hover:underline font-medium">
                       查看訂單 →
                     </Link>
@@ -1002,6 +1022,19 @@ function PersonalOrdersTab() {
                   </button>
                 )}
                 <div className={`flex gap-3 ${isCompleted ? "ml-auto" : ""}`}>
+                  {isCompleted && (
+                    repeatSentIds.has(order.id) ? (
+                      <span className="text-xs text-green-600">已送出申請</span>
+                    ) : (
+                      <button
+                        className="text-xs text-orange-600 hover:underline"
+                        disabled={requestRepeatMut.isPending}
+                        onClick={() => requestRepeatMut.mutate({ orderId: order.id })}
+                      >
+                        重複下訂 ↩
+                      </button>
+                    )
+                  )}
                   <Link href={`/orders/${order.id}?backTo=${backTo}`} className="text-xs text-orange-600 hover:underline font-medium">
                     查看訂單 →
                   </Link>

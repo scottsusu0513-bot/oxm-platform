@@ -1788,10 +1788,30 @@ function ReceivedOrdersPanel({ factoryId }: { factoryId: number }) {
   const [cancelTarget, setCancelTarget] = useState<number | null>(null);
   const [cancelReason, setCancelReason] = useState("");
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
+  const [completeDialogTarget, setCompleteDialogTarget] = useState<number | null>(null);
+  const [completionNote, setCompletionNote] = useState("");
 
-  const updateMut = trpc.collaborationOrder.updateStatus.useMutation({
+  const earlyCompleteMut = trpc.collaborationOrder.earlyComplete.useMutation({
     onSuccess: () => {
-      toast.success("狀態已更新");
+      toast.success("已記錄提早完工");
+      utils.collaborationOrder.listForFactory.invalidate({ factoryId });
+    },
+    onError: e => toast.error(e.message),
+  });
+
+  const earlyShipMut = trpc.collaborationOrder.earlyShip.useMutation({
+    onSuccess: () => {
+      toast.success("已記錄提早出貨");
+      utils.collaborationOrder.listForFactory.invalidate({ factoryId });
+    },
+    onError: e => toast.error(e.message),
+  });
+
+  const markCompletedMut = trpc.collaborationOrder.markCompleted.useMutation({
+    onSuccess: () => {
+      toast.success("訂單已完成");
+      setCompleteDialogTarget(null);
+      setCompletionNote("");
       utils.collaborationOrder.listForFactory.invalidate({ factoryId });
     },
     onError: e => toast.error(e.message),
@@ -1823,14 +1843,6 @@ function ReceivedOrdersPanel({ factoryId }: { factoryId: number }) {
     );
   }
 
-  function nextStatuses(status: string): { value: string; label: string }[] {
-    const map: Record<string, string[]> = {
-      accepted: ["in_progress"],
-      in_progress: ["shipped"],
-    };
-    return (map[status] ?? []).map(s => ({ value: s, label: ORDER_STATUS_LABEL[s] }));
-  }
-
   const cancelTargetOrder = orders.find(o => o.id === cancelTarget);
   const sortedOrders = [...orders].sort((a, b) => {
     const aC = a.status === "completed";
@@ -1853,9 +1865,16 @@ function ReceivedOrdersPanel({ factoryId }: { factoryId: number }) {
           {sortedOrders.map(order => {
             const isCompleted = order.status === "completed";
             const isExpanded = expandedIds.has(order.id);
-            const nexts = nextStatuses(order.status);
             const canCancel = ["pending", "accepted", "in_progress", "shipped"].includes(order.status);
             const backTo = encodeURIComponent("/dashboard?tab=orders");
+            const earlyCompletedAt = (order as any).earlyCompletedAt as Date | null;
+            const earlyShippedAt = (order as any).earlyShippedAt as Date | null;
+            const canEarlyComplete = ["accepted", "in_progress"].includes(order.status) && !earlyCompletedAt;
+            const canEarlyShip = ["accepted", "in_progress"].includes(order.status) && !earlyShippedAt;
+            const today = new Date(); today.setHours(0, 0, 0, 0);
+            const dueDate = order.finalPaymentDueDate ? new Date(order.finalPaymentDueDate + "T00:00:00") : null;
+            const canCompleteNow = ["accepted", "in_progress", "shipped"].includes(order.status) &&
+              (!!earlyShippedAt || (!!dueDate && dueDate <= today));
 
             if (isCompleted && !isExpanded) {
               return (
@@ -1951,17 +1970,38 @@ function ReceivedOrdersPanel({ factoryId }: { factoryId: number }) {
                     </button>
                   ) : (
                     <>
-                      {nexts.map(n => (
+                      {canEarlyComplete && (
                         <Button
-                          key={n.value}
                           size="sm"
-                          className="bg-orange-500 hover:bg-orange-600 text-white"
-                          disabled={updateMut.isPending}
-                          onClick={() => updateMut.mutate({ orderId: order.id, status: n.value as any })}
+                          variant="outline"
+                          className="text-blue-700 border-blue-300 hover:bg-blue-50"
+                          disabled={earlyCompleteMut.isPending}
+                          onClick={() => earlyCompleteMut.mutate({ orderId: order.id })}
                         >
-                          {n.label}
+                          提早完成商品
                         </Button>
-                      ))}
+                      )}
+                      {canEarlyShip && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="text-purple-700 border-purple-300 hover:bg-purple-50"
+                          disabled={earlyShipMut.isPending}
+                          onClick={() => earlyShipMut.mutate({ orderId: order.id })}
+                        >
+                          提早出貨
+                        </Button>
+                      )}
+                      {canCompleteNow && (
+                        <Button
+                          size="sm"
+                          className="bg-green-600 hover:bg-green-700 text-white"
+                          disabled={markCompletedMut.isPending}
+                          onClick={() => setCompleteDialogTarget(order.id)}
+                        >
+                          完成訂單
+                        </Button>
+                      )}
                       {canCancel && (
                         <Button
                           size="sm"
@@ -1988,6 +2028,42 @@ function ReceivedOrdersPanel({ factoryId }: { factoryId: number }) {
           })}
         </CardContent>
       </Card>
+
+      {/* 完成訂單 Dialog */}
+      <Dialog open={completeDialogTarget !== null} onOpenChange={open => { if (!open && !markCompletedMut.isPending) { setCompleteDialogTarget(null); setCompletionNote(""); } }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>確認完成此訂單？</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-1">
+            <div>
+              <Label className="text-sm">完成備註（選填）</Label>
+              <Textarea
+                className="mt-1"
+                placeholder="可填寫完成備註，例如：已驗收完畢…"
+                value={completionNote}
+                onChange={e => setCompletionNote(e.target.value)}
+                rows={3}
+                maxLength={2000}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" disabled={markCompletedMut.isPending} onClick={() => { setCompleteDialogTarget(null); setCompletionNote(""); }}>取消</Button>
+            <Button
+              className="bg-green-600 hover:bg-green-700 text-white"
+              disabled={markCompletedMut.isPending}
+              onClick={() => {
+                if (completeDialogTarget !== null) {
+                  markCompletedMut.mutate({ orderId: completeDialogTarget, completionNote: completionNote || undefined });
+                }
+              }}
+            >
+              {markCompletedMut.isPending ? "完成中…" : "確認完成"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* 申請取消 Dialog */}
       <Dialog open={cancelTarget !== null} onOpenChange={open => { if (!open) { setCancelTarget(null); setCancelReason(""); } }}>
@@ -2037,6 +2113,15 @@ function ReceivedOrdersPanel({ factoryId }: { factoryId: number }) {
 function PlacedOrdersPanel({ factoryId }: { factoryId: number }) {
   const { data: orders = [], isLoading } = trpc.collaborationOrder.listPlacedByFactory.useQuery({ factoryId });
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
+  const [repeatSentIds, setRepeatSentIds] = useState<Set<number>>(new Set());
+
+  const requestRepeatMut = trpc.collaborationOrder.requestRepeat.useMutation({
+    onSuccess: (_, vars) => {
+      toast.success("重複下訂申請已送出，等待工廠回覆");
+      setRepeatSentIds(prev => new Set(prev).add(vars.orderId));
+    },
+    onError: e => toast.error(e.message),
+  });
 
   if (isLoading) {
     return <div className="py-12 text-center text-muted-foreground text-sm">載入中…</div>;
@@ -2101,7 +2186,18 @@ function PlacedOrdersPanel({ factoryId }: { factoryId: number }) {
                   >
                     展開 ▾
                   </button>
-                  <div className="ml-auto">
+                  <div className="ml-auto flex items-center gap-2">
+                    {repeatSentIds.has(order.id) ? (
+                      <span className="text-xs text-green-600">已送出申請</span>
+                    ) : (
+                      <button
+                        className="text-xs text-orange-600 hover:underline"
+                        disabled={requestRepeatMut.isPending}
+                        onClick={() => requestRepeatMut.mutate({ orderId: order.id, asFactoryId: factoryId })}
+                      >
+                        重複下訂 ↩
+                      </button>
+                    )}
                     <Link href={`/orders/${order.id}?backTo=${backTo}`} className="text-xs text-orange-600 hover:underline font-medium">
                       查看訂單 →
                     </Link>
@@ -2161,6 +2257,19 @@ function PlacedOrdersPanel({ factoryId }: { factoryId: number }) {
                   </button>
                 )}
                 <div className={`flex gap-3 ${isCompleted ? "ml-auto" : ""}`}>
+                  {isCompleted && (
+                    repeatSentIds.has(order.id) ? (
+                      <span className="text-xs text-green-600">已送出申請</span>
+                    ) : (
+                      <button
+                        className="text-xs text-orange-600 hover:underline"
+                        disabled={requestRepeatMut.isPending}
+                        onClick={() => requestRepeatMut.mutate({ orderId: order.id, asFactoryId: factoryId })}
+                      >
+                        重複下訂 ↩
+                      </button>
+                    )
+                  )}
                   <Link href={`/orders/${order.id}?backTo=${backTo}`} className="text-xs text-orange-600 hover:underline font-medium">
                     查看訂單 →
                   </Link>

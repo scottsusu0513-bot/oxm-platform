@@ -431,6 +431,168 @@ function CollaborationOrderDialog({
   );
 }
 
+// ── 重複下訂申請卡片 ────────────────────────────────────────────────────
+function RepeatOrderRequestCard({
+  data,
+  conversationId,
+  isFactorySide,
+  onActed,
+}: {
+  data: Record<string, any>;
+  conversationId: number;
+  isFactorySide: boolean;
+  onActed: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [projectName, setProjectName] = useState(data.projectName ?? "");
+  const [description, setDescription] = useState(data.description ?? "");
+  const [depositDueDate, setDepositDueDate] = useState("");
+  const [productionStartDate, setProductionStartDate] = useState("");
+  const [expectedCompletionDate, setExpectedCompletionDate] = useState("");
+  const [expectedShipmentDate, setExpectedShipmentDate] = useState("");
+  const [finalPaymentDueDate, setFinalPaymentDueDate] = useState("");
+  const [note, setNote] = useState("");
+
+  const requestId: number = data?.requestId;
+
+  const respondMut = trpc.collaborationOrder.respondRepeatRequest.useMutation({
+    onSuccess: (_, vars) => {
+      if (vars.action === "reject") {
+        toast.success("已拒絕重複下訂申請");
+      } else {
+        toast.success("已同意並建立新合作確認單");
+      }
+      setOpen(false);
+      onActed();
+    },
+    onError: e => toast.error(e.message),
+  });
+
+  const subType: string = data?.subType;
+  const isRejected = subType === "repeat_order_request" && data?.resolved === "rejected";
+  const isAccepted = subType === "repeat_order_accepted";
+
+  if (isAccepted) {
+    return (
+      <div className="rounded-xl border border-green-200 bg-green-50 p-4 text-sm w-72 sm:w-96 space-y-2">
+        <div className="flex items-center gap-2 font-semibold text-green-700">
+          <CheckCircle className="w-4 h-4" />
+          重複下訂已同意
+        </div>
+        <p className="text-xs text-muted-foreground">供應工廠已建立新合作確認單：{data.projectName}</p>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <div className="rounded-xl border border-orange-200 bg-orange-50 p-4 text-sm w-72 sm:w-96 space-y-3">
+        <div className="flex items-center gap-2 font-semibold text-orange-700">
+          <ClipboardList className="w-4 h-4" />
+          重複下訂申請
+        </div>
+        <div className="space-y-1 text-foreground">
+          <p><span className="text-muted-foreground text-xs">合作項目：</span>{data.projectName}</p>
+          {data.description && (
+            <p className="text-xs text-muted-foreground whitespace-pre-wrap line-clamp-2">{data.description}</p>
+          )}
+        </div>
+
+        {isFactorySide && !isRejected ? (
+          <div className="flex gap-2 pt-1">
+            <Button size="sm" className="flex-1 bg-orange-500 hover:bg-orange-600 text-white"
+              disabled={respondMut.isPending}
+              onClick={() => setOpen(true)}>
+              <CheckCircle className="w-3.5 h-3.5 mr-1" />同意並建立訂單
+            </Button>
+            <Button size="sm" variant="outline" className="flex-1"
+              disabled={respondMut.isPending}
+              onClick={() => respondMut.mutate({ requestId, action: "reject" })}>
+              <XCircle className="w-3.5 h-3.5 mr-1" />拒絕
+            </Button>
+          </div>
+        ) : isRejected ? (
+          <p className="text-xs text-gray-500 text-center">已拒絕此重複下訂申請</p>
+        ) : (
+          <p className="text-xs text-muted-foreground text-center">等待供應工廠回覆</p>
+        )}
+      </div>
+
+      {/* Accept dialog: fill in new order details */}
+      <Dialog open={open} onOpenChange={v => { if (!respondMut.isPending) setOpen(v); }}>
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <ClipboardList className="w-5 h-5 text-orange-500" />
+              建立新合作確認單
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground">
+              填寫新訂單資訊後送出，需求方已同意重複下訂，新訂單將直接成立。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-1.5">
+              <Label>合作項目名稱 <span className="text-destructive">*</span></Label>
+              <Input value={projectName} onChange={e => setProjectName(e.target.value)} maxLength={200} />
+            </div>
+            <div className="space-y-1.5">
+              <Label>合作內容描述 <span className="text-destructive">*</span></Label>
+              <Textarea value={description} onChange={e => setDescription(e.target.value)} rows={3} />
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs">首款付款日期</Label>
+                <Input type="date" value={depositDueDate} onChange={e => setDepositDueDate(e.target.value)} />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">製作開始日期</Label>
+                <Input type="date" value={productionStartDate} onChange={e => setProductionStartDate(e.target.value)} />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">預計完成日期</Label>
+                <Input type="date" value={expectedCompletionDate} onChange={e => setExpectedCompletionDate(e.target.value)} />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">預計出貨日期</Label>
+                <Input type="date" value={expectedShipmentDate} onChange={e => setExpectedShipmentDate(e.target.value)} />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">尾款結款日期</Label>
+                <Input type="date" value={finalPaymentDueDate} onChange={e => setFinalPaymentDueDate(e.target.value)} />
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label>備註（選填）</Label>
+              <Textarea value={note} onChange={e => setNote(e.target.value)} rows={2} />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" disabled={respondMut.isPending} onClick={() => setOpen(false)}>取消</Button>
+            <Button
+              className="bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white border-0"
+              disabled={respondMut.isPending || !projectName.trim() || !description.trim()}
+              onClick={() => respondMut.mutate({
+                requestId,
+                action: "accept",
+                projectName: projectName.trim(),
+                description: description.trim(),
+                depositDueDate: depositDueDate || null,
+                productionStartDate: productionStartDate || null,
+                expectedCompletionDate: expectedCompletionDate || null,
+                expectedShipmentDate: expectedShipmentDate || null,
+                finalPaymentDueDate: finalPaymentDueDate || null,
+                note: note.trim() || null,
+              })}
+            >
+              {respondMut.isPending ? "建立中…" : "確認建立新訂單"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
 // ── 取消合作申請卡片 ────────────────────────────────────────────────────
 function CancelRequestCard({
   data,
@@ -1172,6 +1334,13 @@ export default function ChatPage() {
                               data={attachmentData}
                               conversationId={conversationId!}
                               currentUserId={user?.id}
+                              onActed={invalidateMessages}
+                            />
+                          ) : attachmentData?.subType === "repeat_order_request" || attachmentData?.subType === "repeat_order_accepted" ? (
+                            <RepeatOrderRequestCard
+                              data={attachmentData}
+                              conversationId={conversationId!}
+                              isFactorySide={isFactorySide}
                               onActed={invalidateMessages}
                             />
                           ) : attachmentData ? (

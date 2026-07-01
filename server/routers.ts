@@ -1745,6 +1745,16 @@ export const appRouter = router({
       const canComplete =
         isSellerMember && ["accepted", "in_progress", "shipped"].includes(order.status);
 
+      const canEarlyComplete =
+        isSellerMember &&
+        ["accepted", "in_progress"].includes(order.status) &&
+        !order.earlyCompletedAt;
+
+      const canEarlyShip =
+        isSellerMember &&
+        ["accepted", "in_progress"].includes(order.status) &&
+        !order.earlyShippedAt;
+
       // Resolve completedByName if available
       let completedByName: string | null = null;
       if (order.completedByUserId) {
@@ -1767,6 +1777,8 @@ export const appRouter = router({
         ...order,
         completedByName,
         canComplete,
+        canEarlyComplete,
+        canEarlyShip,
         canRequestDateChange,
         canRespondDateChange,
         pendingChangeRequest,
@@ -1880,18 +1892,192 @@ export const appRouter = router({
       const isOwner = factory.ownerId === ctx.user.id;
       const isCoMgr = !isOwner && await db.isActiveCoManager(factory.id, ctx.user.id);
       if (!isOwner && !isCoMgr) throw new TRPCError({ code: "FORBIDDEN", message: "只有供應工廠方可完成訂單" });
-      if (!order.finalPaymentDueDate) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "尚未設定尾款日期，無法完成訂單" });
-      }
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const dueDate = new Date(order.finalPaymentDueDate + "T00:00:00");
-      if (dueDate > today) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "尾款日期尚未到，暫時無法完成訂單" });
+      const hasEarlyShipped = !!order.earlyShippedAt;
+      if (!hasEarlyShipped) {
+        if (!order.finalPaymentDueDate) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "尚未設定尾款日期，無法完成訂單" });
+        }
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const dueDate = new Date(order.finalPaymentDueDate + "T00:00:00");
+        if (dueDate > today) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "尾款日期尚未到，暫時無法完成訂單" });
+        }
       }
       const note = input.completionNote?.trim() || null;
       await db.markCollaborationOrderComplete(order.id, ctx.user.id, note);
       return { success: true };
+    }),
+
+    earlyComplete: protectedProcedure.input(z.object({
+      orderId: z.number(),
+    })).mutation(async ({ ctx, input }) => {
+      requireVerifiedEmail(ctx.user);
+      const order = await db.getCollaborationOrderById(input.orderId);
+      if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "找不到合作確認單" });
+      if (!["accepted", "in_progress"].includes(order.status)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "此訂單狀態無法提早完工" });
+      }
+      if (order.earlyCompletedAt) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "已記錄提早完工" });
+      }
+      const factory = await db.getFactoryById(order.factoryId);
+      if (!factory) throw new TRPCError({ code: "NOT_FOUND", message: "找不到工廠" });
+      const isOwner = factory.ownerId === ctx.user.id;
+      const isCoMgr = !isOwner && await db.isActiveCoManager(factory.id, ctx.user.id);
+      if (!isOwner && !isCoMgr) throw new TRPCError({ code: "FORBIDDEN", message: "只有供應工廠方可操作" });
+      await db.earlyCompleteOrder(order.id, ctx.user.id);
+      return { success: true };
+    }),
+
+    earlyShip: protectedProcedure.input(z.object({
+      orderId: z.number(),
+    })).mutation(async ({ ctx, input }) => {
+      requireVerifiedEmail(ctx.user);
+      const order = await db.getCollaborationOrderById(input.orderId);
+      if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "找不到合作確認單" });
+      if (!["accepted", "in_progress"].includes(order.status)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "此訂單狀態無法提早出貨" });
+      }
+      if (order.earlyShippedAt) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "已記錄提早出貨" });
+      }
+      const factory = await db.getFactoryById(order.factoryId);
+      if (!factory) throw new TRPCError({ code: "NOT_FOUND", message: "找不到工廠" });
+      const isOwner = factory.ownerId === ctx.user.id;
+      const isCoMgr = !isOwner && await db.isActiveCoManager(factory.id, ctx.user.id);
+      if (!isOwner && !isCoMgr) throw new TRPCError({ code: "FORBIDDEN", message: "只有供應工廠方可操作" });
+      await db.earlyShipOrder(order.id, ctx.user.id);
+      return { success: true };
+    }),
+
+    requestRepeat: protectedProcedure.input(z.object({
+      orderId: z.number(),
+      asFactoryId: z.number().optional(),
+    })).mutation(async ({ ctx, input }) => {
+      requireVerifiedEmail(ctx.user);
+      const order = await db.getCollaborationOrderById(input.orderId);
+      if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "找不到合作確認單" });
+      if (order.status !== "completed") throw new TRPCError({ code: "BAD_REQUEST", message: "只有已完成的訂單可重複下訂" });
+
+      if (input.asFactoryId) {
+        const factory = await db.getFactoryById(input.asFactoryId);
+        if (!factory) throw new TRPCError({ code: "NOT_FOUND", message: "找不到工廠" });
+        const isOwner = factory.ownerId === ctx.user.id;
+        const isCoMgr = !isOwner && await db.isActiveCoManager(factory.id, ctx.user.id);
+        if (!isOwner && !isCoMgr) throw new TRPCError({ code: "FORBIDDEN", message: "無此工廠權限" });
+        if (order.acceptedAsFactoryId !== input.asFactoryId) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "工廠身分不符" });
+        }
+      } else {
+        if (order.buyerUserId !== ctx.user.id) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "只有原需求方可重複下訂" });
+        }
+      }
+
+      const requestId = await db.createRepeatOrderRequest({
+        originalOrderId: order.id,
+        conversationId: order.conversationId,
+        requestedByUserId: ctx.user.id,
+        requestedAsFactoryId: input.asFactoryId ?? null,
+      });
+
+      await db.saveMessage(
+        order.conversationId,
+        ctx.user.id,
+        input.asFactoryId ? "factory" : "user",
+        "重複下訂申請",
+        "collaboration_order",
+        {
+          subType: "repeat_order_request",
+          requestId,
+          orderId: order.id,
+          projectName: order.projectName,
+          description: order.description,
+          requestedByUserId: ctx.user.id,
+          requestedAsFactoryId: input.asFactoryId ?? null,
+        }
+      );
+
+      return { success: true, requestId };
+    }),
+
+    respondRepeatRequest: protectedProcedure.input(z.object({
+      requestId: z.number(),
+      action: z.enum(["accept", "reject"]),
+      projectName: z.string().min(1).max(200).optional(),
+      description: z.string().min(1).optional(),
+      depositDueDate: z.string().nullable().optional(),
+      productionStartDate: z.string().nullable().optional(),
+      expectedCompletionDate: z.string().nullable().optional(),
+      expectedShipmentDate: z.string().nullable().optional(),
+      finalPaymentDueDate: z.string().nullable().optional(),
+      note: z.string().nullable().optional(),
+    })).mutation(async ({ ctx, input }) => {
+      requireVerifiedEmail(ctx.user);
+      const request = await db.getRepeatOrderRequest(input.requestId);
+      if (!request) throw new TRPCError({ code: "NOT_FOUND", message: "找不到重複下訂申請" });
+      if (request.status !== "pending") throw new TRPCError({ code: "BAD_REQUEST", message: "此申請已處理" });
+
+      const originalOrder = await db.getCollaborationOrderById(request.originalOrderId);
+      if (!originalOrder) throw new TRPCError({ code: "NOT_FOUND", message: "找不到原始訂單" });
+
+      const factory = await db.getFactoryById(originalOrder.factoryId);
+      if (!factory) throw new TRPCError({ code: "NOT_FOUND", message: "找不到工廠" });
+      const isOwner = factory.ownerId === ctx.user.id;
+      const isCoMgr = !isOwner && await db.isActiveCoManager(factory.id, ctx.user.id);
+      if (!isOwner && !isCoMgr) throw new TRPCError({ code: "FORBIDDEN", message: "只有供應工廠方可回覆" });
+
+      if (input.action === "reject") {
+        await db.respondRepeatOrderRequest(input.requestId, "rejected");
+        return { success: true };
+      }
+
+      // Accept: create new order with status=accepted
+      if (!input.projectName || !input.description) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "請填寫合作項目名稱與描述" });
+      }
+
+      const newOrderId = await db.createCollaborationOrder({
+        conversationId: originalOrder.conversationId,
+        factoryId: originalOrder.factoryId,
+        buyerUserId: request.requestedByUserId,
+        createdByUserId: ctx.user.id,
+        productId: null,
+        projectName: input.projectName.trim(),
+        description: input.description.trim(),
+        depositDueDate: input.depositDueDate ?? null,
+        productionStartDate: input.productionStartDate ?? null,
+        expectedCompletionDate: input.expectedCompletionDate ?? null,
+        expectedShipmentDate: input.expectedShipmentDate ?? null,
+        finalPaymentDueDate: input.finalPaymentDueDate ?? null,
+        note: input.note?.trim() ?? null,
+      });
+
+      // Set accepted directly
+      await db.respondCollaborationOrder(newOrderId, "accepted", {
+        acceptedAsType: request.requestedAsFactoryId ? "factory" : "user",
+        acceptedAsFactoryId: request.requestedAsFactoryId ?? null,
+        acceptedByUserId: request.requestedByUserId,
+      });
+
+      await db.respondRepeatOrderRequest(input.requestId, "accepted");
+
+      await db.saveMessage(
+        originalOrder.conversationId,
+        ctx.user.id,
+        "factory",
+        "已同意重複下訂，新合作確認單已建立",
+        "collaboration_order",
+        {
+          subType: "repeat_order_accepted",
+          requestId: input.requestId,
+          newOrderId,
+          projectName: input.projectName.trim(),
+        }
+      );
+
+      return { success: true, newOrderId };
     }),
 
     getForConversation: protectedProcedure.input(z.object({

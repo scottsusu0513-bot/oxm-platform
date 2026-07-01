@@ -173,11 +173,29 @@ export const collaborationOrders = mysqlTable("collaborationOrders", {
   acceptedAsType: mysqlEnum("acceptedAsType", ["user", "factory"]),
   acceptedAsFactoryId: int("acceptedAsFactoryId"),
   acceptedByUserId: int("acceptedByUserId"),
+  // 提早推進
+  earlyCompletedAt: timestamp("earlyCompletedAt"),
+  earlyCompletedByUserId: int("earlyCompletedByUserId"),
+  earlyShippedAt: timestamp("earlyShippedAt"),
+  earlyShippedByUserId: int("earlyShippedByUserId"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
 
 export type CollaborationOrder = typeof collaborationOrders.$inferSelect;
+
+// ===== 重複下訂申請表 =====
+export const collaborationOrderRepeatRequests = mysqlTable("collaborationOrderRepeatRequests", {
+  id: int("id").autoincrement().primaryKey(),
+  originalOrderId: int("originalOrderId").notNull().references(() => collaborationOrders.id, { onDelete: "cascade" }),
+  conversationId: int("conversationId").notNull().references(() => conversations.id, { onDelete: "cascade" }),
+  requestedByUserId: int("requestedByUserId").notNull().references(() => users.id, { onDelete: "cascade" }),
+  requestedAsFactoryId: int("requestedAsFactoryId"),
+  status: mysqlEnum("status", ["pending", "accepted", "rejected"]).default("pending").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+export type CollaborationOrderRepeatRequest = typeof collaborationOrderRepeatRequests.$inferSelect;
 
 // ===== 訂單日期修改申請 =====
 export const collaborationOrderChangeRequests = mysqlTable("collaborationOrderChangeRequests", {

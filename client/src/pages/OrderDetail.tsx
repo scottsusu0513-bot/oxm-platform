@@ -343,6 +343,7 @@ export default function OrderDetail() {
 
   const canCompleteNow = (() => {
     if (!order.canComplete) return false;
+    if ((order as any).earlyShippedAt) return true;
     if (!order.finalPaymentDueDate) return false;
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -513,7 +514,7 @@ export default function OrderDetail() {
               size="sm"
               className={`flex-1 ${canCompleteNow ? "border-green-500 text-green-700 hover:bg-green-50" : ""}`}
               disabled={!canCompleteNow}
-              title={!canCompleteNow ? (order.finalPaymentDueDate ? `尾款日（${order.finalPaymentDueDate}）到期後可完成訂單` : "請先設定尾款日期") : undefined}
+              title={!canCompleteNow ? (order.finalPaymentDueDate ? `尾款日（${order.finalPaymentDueDate}）到期後可完成訂單，或使用「提早出貨」功能解鎖` : "請先設定尾款日期，或使用「提早出貨」功能解鎖") : undefined}
               onClick={() => setCompleteDialogOpen(true)}
             >
               <CheckCircle2 className="w-4 h-4 mr-1.5" />
