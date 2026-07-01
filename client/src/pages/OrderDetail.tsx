@@ -235,6 +235,10 @@ export default function OrderDetail() {
   const orderId = params?.orderId ? parseInt(params.orderId, 10) : null;
   const utils = trpc.useUtils();
 
+  // 完成訂單 state
+  const [completeDialogOpen, setCompleteDialogOpen] = useState(false);
+  const [completionNote, setCompletionNote] = useState("");
+
   // Phase 4B 日期修改表單 state
   const [changeOpen, setChangeOpen] = useState(false);
   const [changeReason, setChangeReason] = useState("");
@@ -264,6 +268,16 @@ export default function OrderDetail() {
   const respondDateChangeMut = trpc.collaborationOrder.respondDateChange.useMutation({
     onSuccess: (_, vars) => {
       toast.success(vars.action === "accepted" ? "已同意日期修改，訂單日期已更新" : "已拒絕日期修改");
+      utils.collaborationOrder.getById.invalidate({ orderId: orderId! });
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const markCompletedMut = trpc.collaborationOrder.markCompleted.useMutation({
+    onSuccess: () => {
+      toast.success("訂單已完成");
+      setCompleteDialogOpen(false);
+      setCompletionNote("");
       utils.collaborationOrder.getById.invalidate({ orderId: orderId! });
     },
     onError: (e) => toast.error(e.message),
@@ -326,6 +340,15 @@ export default function OrderDetail() {
 
   const pendingChangeRequest = order.pendingChangeRequest;
   const acceptedChangeHistory = order.acceptedChangeHistory ?? [];
+
+  const canCompleteNow = (() => {
+    if (!order.canComplete) return false;
+    if (!order.finalPaymentDueDate) return false;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const due = new Date(order.finalPaymentDueDate + "T00:00:00");
+    return due <= today;
+  })();
 
   return (
     <div className="min-h-screen bg-background">
@@ -427,6 +450,42 @@ export default function OrderDetail() {
           </CardContent>
         </Card>
 
+        {/* 完成訂單資訊（status=completed 時顯示） */}
+        {order.status === "completed" && (
+          <Card className="border-green-200 bg-green-50/50">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base flex items-center gap-2 text-green-800">
+                <CheckCircle2 className="w-4 h-4" />
+                訂單完成資訊
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 text-sm">
+              <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+                {order.completedAt && (
+                  <div>
+                    <p className="text-xs text-muted-foreground">完成時間</p>
+                    <p className="font-medium">{new Date(order.completedAt).toLocaleDateString("zh-TW")}</p>
+                  </div>
+                )}
+                {order.completedByName && (
+                  <div>
+                    <p className="text-xs text-muted-foreground">由</p>
+                    <p className="font-medium">{order.completedByName}</p>
+                  </div>
+                )}
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground mb-1">完成備註</p>
+                {order.completionNote ? (
+                  <p className="whitespace-pre-wrap text-sm bg-white border rounded px-2 py-1.5">{order.completionNote}</p>
+                ) : (
+                  <p className="text-muted-foreground text-sm">未填寫完成備註</p>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {/* 操作按鈕 */}
         <div className="flex gap-3">
           <Link href={`/chat/${order.conversationId}`} className="flex-1">
@@ -436,7 +495,7 @@ export default function OrderDetail() {
             </Button>
           </Link>
           {/* Phase 4B：工廠方修改日期按鈕（無待確認申請時顯示） */}
-          {order.canRequestDateChange && !pendingChangeRequest && (
+          {order.canRequestDateChange && !pendingChangeRequest && order.status !== "completed" && (
             <Button
               variant="outline"
               size="sm"
@@ -447,12 +506,69 @@ export default function OrderDetail() {
               修改訂單日期
             </Button>
           )}
+          {/* 完成訂單按鈕 */}
+          {order.canComplete && (
+            <Button
+              variant="outline"
+              size="sm"
+              className={`flex-1 ${canCompleteNow ? "border-green-500 text-green-700 hover:bg-green-50" : ""}`}
+              disabled={!canCompleteNow}
+              title={!canCompleteNow ? (order.finalPaymentDueDate ? `尾款日（${order.finalPaymentDueDate}）到期後可完成訂單` : "請先設定尾款日期") : undefined}
+              onClick={() => setCompleteDialogOpen(true)}
+            >
+              <CheckCircle2 className="w-4 h-4 mr-1.5" />
+              完成訂單
+            </Button>
+          )}
         </div>
 
         <p className="text-xs text-center text-muted-foreground pb-4">
           此合作確認單僅作為雙方於 OXM 平台內確認合作內容之紀錄，實際付款、合約、交付與售後責任由雙方自行協議。
         </p>
       </div>
+
+      {/* 完成訂單 Dialog */}
+      <Dialog
+        open={completeDialogOpen}
+        onOpenChange={(open) => { if (!markCompletedMut.isPending) setCompleteDialogOpen(open); }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>確認完成此訂單？</DialogTitle>
+            <DialogDescription>
+              完成後，訂單狀態無法復原，已完成訂單將移至列表底部。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="space-y-1">
+              <Label className="text-sm">完成備註（選填）</Label>
+              <Textarea
+                placeholder="可填寫尾款匯款資訊、面交時間、付款金額或其他雙方約定，方便日後查詢。"
+                value={completionNote}
+                onChange={(e) => setCompletionNote(e.target.value)}
+                rows={4}
+                maxLength={2000}
+              />
+            </div>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              onClick={() => setCompleteDialogOpen(false)}
+              disabled={markCompletedMut.isPending}
+            >
+              取消
+            </Button>
+            <Button
+              className="bg-green-600 hover:bg-green-700 text-white"
+              disabled={markCompletedMut.isPending}
+              onClick={() => markCompletedMut.mutate({ orderId: orderId!, completionNote: completionNote || undefined })}
+            >
+              {markCompletedMut.isPending ? "完成中…" : "確認完成"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Phase 4B：日期修改 Dialog */}
       <Dialog

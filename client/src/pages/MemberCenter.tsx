@@ -868,6 +868,7 @@ const PERSONAL_ORDER_STATUS_CLASS: Record<string, string> = {
 
 function PersonalOrdersTab() {
   const { data: orders = [], isLoading } = trpc.collaborationOrder.listPersonal.useQuery();
+  const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
 
   if (isLoading) {
     return (
@@ -897,6 +898,13 @@ function PersonalOrdersTab() {
     );
   }
 
+  const sortedOrders = [...orders].sort((a, b) => {
+    const aC = a.status === "completed";
+    const bC = b.status === "completed";
+    if (aC === bC) return 0;
+    return aC ? 1 : -1;
+  });
+
   return (
     <Card>
       <CardHeader>
@@ -904,18 +912,55 @@ function PersonalOrdersTab() {
         <CardDescription>以個人身分建立或承接的合作確認單</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        {orders.map(order => {
+        {sortedOrders.map(order => {
+          const isCompleted = order.status === "completed";
+          const isExpanded = expandedIds.has(order.id);
           const backTo = encodeURIComponent("/member");
+
+          if (isCompleted && !isExpanded) {
+            return (
+              <div key={order.id} className="rounded-lg border border-gray-200 bg-gray-50 p-3 opacity-80">
+                <div className="flex items-center gap-2">
+                  <div className="flex-1 min-w-0">
+                    <p className="font-medium text-sm text-gray-600 truncate">{order.projectName}</p>
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-0.5 text-xs text-gray-400">
+                      {order.factoryName && <span>供應：{order.factoryName}</span>}
+                      {order.completedAt && (
+                        <span>完成：{new Date(order.completedAt).toLocaleDateString("zh-TW", { month: "2-digit", day: "2-digit" })}</span>
+                      )}
+                    </div>
+                    {order.completionNote && (
+                      <p className="text-xs text-gray-400 mt-0.5 truncate">{order.completionNote}</p>
+                    )}
+                  </div>
+                  <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-orange-100 text-orange-800 shrink-0">已完成</span>
+                </div>
+                <div className="flex items-center gap-2 mt-2">
+                  <button
+                    className="text-xs text-gray-500 hover:text-gray-700 underline"
+                    onClick={() => setExpandedIds(prev => new Set(prev).add(order.id))}
+                  >
+                    展開 ▾
+                  </button>
+                  <div className="ml-auto">
+                    <Link href={`/orders/${order.id}?backTo=${backTo}`} className="text-xs text-orange-600 hover:underline font-medium">
+                      查看訂單 →
+                    </Link>
+                  </div>
+                </div>
+              </div>
+            );
+          }
+
           return (
-            <div key={order.id} className="rounded-lg border p-3 space-y-2">
+            <div key={order.id} className={`rounded-lg border p-3 space-y-2 ${isCompleted ? "border-gray-200 bg-gray-50 opacity-80" : ""}`}>
               {/* Header */}
               <div className="flex items-start gap-2">
                 <div className="shrink-0" style={{ minWidth: "28%" }}>
-                  <p className="font-medium text-sm leading-tight">{order.projectName}</p>
-                  {order.factoryName && (
+                  <p className={`font-medium text-sm leading-tight ${isCompleted ? "text-gray-600" : ""}`}>{order.projectName}</p>
+                  {order.factoryName ? (
                     <p className="text-xs text-muted-foreground mt-0.5">供應：{order.factoryName}</p>
-                  )}
-                  {!order.factoryName && (
+                  ) : (
                     <p className="text-xs text-muted-foreground mt-0.5">手動輸入</p>
                   )}
                 </div>
@@ -939,14 +984,31 @@ function PersonalOrdersTab() {
               {/* Timeline bar */}
               <OrderTimelineBar order={order} compact />
 
+              {/* Completion note for expanded completed cards */}
+              {isCompleted && order.completionNote && (
+                <p className="text-xs text-gray-500 bg-white border rounded px-2 py-1.5">
+                  完成備註：{order.completionNote}
+                </p>
+              )}
+
               {/* Links */}
-              <div className="flex gap-3">
-                <Link href={`/orders/${order.id}?backTo=${backTo}`} className="text-xs text-orange-600 hover:underline font-medium">
-                  查看訂單 →
-                </Link>
-                <Link href={`/chat/${order.conversationId}`} className="text-xs text-blue-600 hover:underline">
-                  查看對話 →
-                </Link>
+              <div className="flex items-center gap-2">
+                {isCompleted && (
+                  <button
+                    className="text-xs text-gray-500 hover:text-gray-700 underline"
+                    onClick={() => setExpandedIds(prev => { const s = new Set(prev); s.delete(order.id); return s; })}
+                  >
+                    收合 ▴
+                  </button>
+                )}
+                <div className={`flex gap-3 ${isCompleted ? "ml-auto" : ""}`}>
+                  <Link href={`/orders/${order.id}?backTo=${backTo}`} className="text-xs text-orange-600 hover:underline font-medium">
+                    查看訂單 →
+                  </Link>
+                  <Link href={`/chat/${order.conversationId}`} className="text-xs text-blue-600 hover:underline">
+                    查看對話 →
+                  </Link>
+                </div>
               </div>
             </div>
           );

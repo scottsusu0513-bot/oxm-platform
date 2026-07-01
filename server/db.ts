@@ -3328,6 +3328,8 @@ export async function getCollaborationOrderDetail(id: number) {
     acceptedAt: collaborationOrders.acceptedAt,
     rejectedAt: collaborationOrders.rejectedAt,
     completedAt: collaborationOrders.completedAt,
+    completedByUserId: collaborationOrders.completedByUserId,
+    completionNote: collaborationOrders.completionNote,
     cancelledAt: collaborationOrders.cancelledAt,
     cancelRequestedAt: collaborationOrders.cancelRequestedAt,
     cancelRequestReason: collaborationOrders.cancelRequestReason,
@@ -3639,6 +3641,21 @@ export async function updateCollaborationOrderStatus(
   await db.update(collaborationOrders).set({ status, ...extra }).where(eq(collaborationOrders.id, id));
 }
 
+export async function markCollaborationOrderComplete(
+  orderId: number,
+  completedByUserId: number,
+  completionNote: string | null
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  await db.update(collaborationOrders).set({
+    status: "completed",
+    completedAt: new Date(),
+    completedByUserId,
+    completionNote,
+  }).where(eq(collaborationOrders.id, orderId));
+}
+
 export async function listFactoryCollaborationOrders(factoryId: number) {
   const db = await getDb();
   if (!db) return [];
@@ -3658,6 +3675,7 @@ export async function listFactoryCollaborationOrders(factoryId: number) {
     acceptedAt: collaborationOrders.acceptedAt,
     rejectedAt: collaborationOrders.rejectedAt,
     completedAt: collaborationOrders.completedAt,
+    completionNote: collaborationOrders.completionNote,
     cancelledAt: collaborationOrders.cancelledAt,
     cancelRequestedByUserId: collaborationOrders.cancelRequestedByUserId,
     cancelRequestedAt: collaborationOrders.cancelRequestedAt,
@@ -3694,6 +3712,7 @@ export async function listFactoryPlacedCollaborationOrders(factoryId: number) {
     acceptedAt: collaborationOrders.acceptedAt,
     rejectedAt: collaborationOrders.rejectedAt,
     completedAt: collaborationOrders.completedAt,
+    completionNote: collaborationOrders.completionNote,
     cancelledAt: collaborationOrders.cancelledAt,
     cancelRequestedAt: collaborationOrders.cancelRequestedAt,
     cancelRequestReason: collaborationOrders.cancelRequestReason,
@@ -3728,6 +3747,7 @@ export async function listUserPersonalCollaborationOrders(userId: number) {
     createdAt: collaborationOrders.createdAt,
     acceptedAt: collaborationOrders.acceptedAt,
     completedAt: collaborationOrders.completedAt,
+    completionNote: collaborationOrders.completionNote,
     factoryId: collaborationOrders.factoryId,
     factoryName: factories.name,
   }).from(collaborationOrders)

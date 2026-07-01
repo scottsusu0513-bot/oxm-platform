@@ -1742,6 +1742,22 @@ export const appRouter = router({
       const canRespondDateChange =
         order.acceptedAsType === "factory" ? isPlacedFactoryMember : isBuyer;
 
+      const canComplete =
+        isSellerMember && ["accepted", "in_progress", "shipped"].includes(order.status);
+
+      // Resolve completedByName if available
+      let completedByName: string | null = null;
+      if (order.completedByUserId) {
+        const db_ = await getDb();
+        if (db_) {
+          const [cbUser] = await db_.select({ name: users.name })
+            .from(users)
+            .where(eq(users.id, order.completedByUserId))
+            .limit(1);
+          completedByName = cbUser?.name ?? null;
+        }
+      }
+
       const [pendingChangeRequest, acceptedChangeHistory] = await Promise.all([
         db.getPendingCollaborationOrderChangeRequest(input.orderId),
         db.listAcceptedCollaborationOrderChangeRequests(input.orderId),
@@ -1749,6 +1765,8 @@ export const appRouter = router({
 
       return {
         ...order,
+        completedByName,
+        canComplete,
         canRequestDateChange,
         canRespondDateChange,
         pendingChangeRequest,
@@ -1843,6 +1861,36 @@ export const appRouter = router({
         if (e?.message === "NOT_PENDING") throw new TRPCError({ code: "BAD_REQUEST", message: "此申請已非待確認狀態" });
         throw e;
       }
+      return { success: true };
+    }),
+
+    markCompleted: protectedProcedure.input(z.object({
+      orderId: z.number(),
+      completionNote: z.string().max(2000).optional(),
+    })).mutation(async ({ ctx, input }) => {
+      requireVerifiedEmail(ctx.user);
+      const order = await db.getCollaborationOrderById(input.orderId);
+      if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "找不到合作確認單" });
+      if (order.status === "completed") throw new TRPCError({ code: "BAD_REQUEST", message: "訂單已完成" });
+      if (!["accepted", "in_progress", "shipped"].includes(order.status)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "此訂單狀態無法完成" });
+      }
+      const factory = await db.getFactoryById(order.factoryId);
+      if (!factory) throw new TRPCError({ code: "NOT_FOUND", message: "找不到工廠" });
+      const isOwner = factory.ownerId === ctx.user.id;
+      const isCoMgr = !isOwner && await db.isActiveCoManager(factory.id, ctx.user.id);
+      if (!isOwner && !isCoMgr) throw new TRPCError({ code: "FORBIDDEN", message: "只有供應工廠方可完成訂單" });
+      if (!order.finalPaymentDueDate) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "尚未設定尾款日期，無法完成訂單" });
+      }
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const dueDate = new Date(order.finalPaymentDueDate + "T00:00:00");
+      if (dueDate > today) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "尾款日期尚未到，暫時無法完成訂單" });
+      }
+      const note = input.completionNote?.trim() || null;
+      await db.markCollaborationOrderComplete(order.id, ctx.user.id, note);
       return { success: true };
     }),
 

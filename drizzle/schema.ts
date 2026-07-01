@@ -162,6 +162,8 @@ export const collaborationOrders = mysqlTable("collaborationOrders", {
   acceptedAt: timestamp("acceptedAt"),
   rejectedAt: timestamp("rejectedAt"),
   completedAt: timestamp("completedAt"),
+  completedByUserId: int("completedByUserId"),
+  completionNote: text("completionNote"),
   cancelledAt: timestamp("cancelledAt"),
   cancelRequestedByUserId: int("cancelRequestedByUserId"),
   cancelRequestedAt: timestamp("cancelRequestedAt"),

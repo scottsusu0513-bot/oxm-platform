@@ -1787,6 +1787,7 @@ function ReceivedOrdersPanel({ factoryId }: { factoryId: number }) {
   const { data: orders = [], isLoading } = trpc.collaborationOrder.listForFactory.useQuery({ factoryId });
   const [cancelTarget, setCancelTarget] = useState<number | null>(null);
   const [cancelReason, setCancelReason] = useState("");
+  const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
 
   const updateMut = trpc.collaborationOrder.updateStatus.useMutation({
     onSuccess: () => {
@@ -1826,12 +1827,17 @@ function ReceivedOrdersPanel({ factoryId }: { factoryId: number }) {
     const map: Record<string, string[]> = {
       accepted: ["in_progress"],
       in_progress: ["shipped"],
-      shipped: ["completed"],
     };
     return (map[status] ?? []).map(s => ({ value: s, label: ORDER_STATUS_LABEL[s] }));
   }
 
   const cancelTargetOrder = orders.find(o => o.id === cancelTarget);
+  const sortedOrders = [...orders].sort((a, b) => {
+    const aC = a.status === "completed";
+    const bC = b.status === "completed";
+    if (aC === bC) return 0;
+    return aC ? 1 : -1;
+  });
 
   return (
     <>
@@ -1844,16 +1850,54 @@ function ReceivedOrdersPanel({ factoryId }: { factoryId: number }) {
           <CardDescription>管理其他使用者向此工廠建立的合作確認單</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          {orders.map(order => {
+          {sortedOrders.map(order => {
+            const isCompleted = order.status === "completed";
+            const isExpanded = expandedIds.has(order.id);
             const nexts = nextStatuses(order.status);
             const canCancel = ["pending", "accepted", "in_progress", "shipped"].includes(order.status);
             const backTo = encodeURIComponent("/dashboard?tab=orders");
+
+            if (isCompleted && !isExpanded) {
+              return (
+                <div key={order.id} className="rounded-lg border border-gray-200 bg-gray-50 p-3 opacity-80">
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium text-sm text-gray-600 truncate">{order.projectName}</p>
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-0.5 text-xs text-gray-400">
+                        <span>需求方：{order.buyerName ?? "—"}</span>
+                        {order.completedAt && (
+                          <span>完成：{new Date(order.completedAt).toLocaleDateString("zh-TW", { month: "2-digit", day: "2-digit" })}</span>
+                        )}
+                      </div>
+                      {order.completionNote && (
+                        <p className="text-xs text-gray-400 mt-0.5 truncate">{order.completionNote}</p>
+                      )}
+                    </div>
+                    <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-orange-100 text-orange-800 shrink-0">已完成</span>
+                  </div>
+                  <div className="flex items-center gap-2 mt-2">
+                    <button
+                      className="text-xs text-gray-500 hover:text-gray-700 underline"
+                      onClick={() => setExpandedIds(prev => new Set(prev).add(order.id))}
+                    >
+                      展開 ▾
+                    </button>
+                    <div className="ml-auto flex gap-3">
+                      <Link href={`/orders/${order.id}?backTo=${backTo}`} className="text-xs text-orange-600 hover:underline font-medium">
+                        查看訂單 →
+                      </Link>
+                    </div>
+                  </div>
+                </div>
+              );
+            }
+
             return (
-              <div key={order.id} className="rounded-lg border p-3 space-y-2">
+              <div key={order.id} className={`rounded-lg border p-3 space-y-2 ${isCompleted ? "border-gray-200 bg-gray-50 opacity-80" : ""}`}>
                 {/* Header: name | metadata | badge */}
                 <div className="flex items-start gap-2">
                   <div className="shrink-0" style={{ minWidth: "28%" }}>
-                    <p className="font-medium text-sm leading-tight">{order.projectName}</p>
+                    <p className={`font-medium text-sm leading-tight ${isCompleted ? "text-gray-600" : ""}`}>{order.projectName}</p>
                     <p className="text-xs text-muted-foreground mt-0.5">
                       {order.productName ? `商品：${order.productName}` : "手動輸入"}
                     </p>
@@ -1889,28 +1933,46 @@ function ReceivedOrdersPanel({ factoryId }: { factoryId: number }) {
                 {/* Timeline bar */}
                 <OrderTimelineBar order={order} compact />
 
+                {/* Completion note for expanded completed cards */}
+                {isCompleted && order.completionNote && (
+                  <p className="text-xs text-gray-500 bg-white border rounded px-2 py-1.5">
+                    完成備註：{order.completionNote}
+                  </p>
+                )}
+
                 {/* Actions */}
                 <div className="flex flex-wrap items-center gap-2 pt-0.5">
-                  {nexts.map(n => (
-                    <Button
-                      key={n.value}
-                      size="sm"
-                      className="bg-orange-500 hover:bg-orange-600 text-white"
-                      disabled={updateMut.isPending}
-                      onClick={() => updateMut.mutate({ orderId: order.id, status: n.value as any })}
+                  {isCompleted ? (
+                    <button
+                      className="text-xs text-gray-500 hover:text-gray-700 underline"
+                      onClick={() => setExpandedIds(prev => { const s = new Set(prev); s.delete(order.id); return s; })}
                     >
-                      {n.label}
-                    </Button>
-                  ))}
-                  {canCancel && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="text-destructive border-destructive hover:bg-destructive/5"
-                      onClick={() => setCancelTarget(order.id)}
-                    >
-                      申請取消
-                    </Button>
+                      收合 ▴
+                    </button>
+                  ) : (
+                    <>
+                      {nexts.map(n => (
+                        <Button
+                          key={n.value}
+                          size="sm"
+                          className="bg-orange-500 hover:bg-orange-600 text-white"
+                          disabled={updateMut.isPending}
+                          onClick={() => updateMut.mutate({ orderId: order.id, status: n.value as any })}
+                        >
+                          {n.label}
+                        </Button>
+                      ))}
+                      {canCancel && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="text-destructive border-destructive hover:bg-destructive/5"
+                          onClick={() => setCancelTarget(order.id)}
+                        >
+                          申請取消
+                        </Button>
+                      )}
+                    </>
                   )}
                   <div className="ml-auto flex gap-3">
                     <Link href={`/orders/${order.id}?backTo=${backTo}`} className="text-xs text-orange-600 hover:underline font-medium">
@@ -1974,6 +2036,7 @@ function ReceivedOrdersPanel({ factoryId }: { factoryId: number }) {
 
 function PlacedOrdersPanel({ factoryId }: { factoryId: number }) {
   const { data: orders = [], isLoading } = trpc.collaborationOrder.listPlacedByFactory.useQuery({ factoryId });
+  const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
 
   if (isLoading) {
     return <div className="py-12 text-center text-muted-foreground text-sm">載入中…</div>;
@@ -1991,6 +2054,13 @@ function PlacedOrdersPanel({ factoryId }: { factoryId: number }) {
     );
   }
 
+  const sortedOrders = [...orders].sort((a, b) => {
+    const aC = a.status === "completed";
+    const bC = b.status === "completed";
+    if (aC === bC) return 0;
+    return aC ? 1 : -1;
+  });
+
   return (
     <Card>
       <CardHeader>
@@ -2001,14 +2071,52 @@ function PlacedOrdersPanel({ factoryId }: { factoryId: number }) {
         <CardDescription>以此工廠身分承接的對外合作訂單</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        {orders.map(order => {
+        {sortedOrders.map(order => {
+          const isCompleted = order.status === "completed";
+          const isExpanded = expandedIds.has(order.id);
           const backTo = encodeURIComponent("/dashboard?tab=orders");
+
+          if (isCompleted && !isExpanded) {
+            return (
+              <div key={order.id} className="rounded-lg border border-gray-200 bg-gray-50 p-3 opacity-80">
+                <div className="flex items-center gap-2">
+                  <div className="flex-1 min-w-0">
+                    <p className="font-medium text-sm text-gray-600 truncate">{order.projectName}</p>
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-0.5 text-xs text-gray-400">
+                      {order.sellerFactoryName && <span>供應：{order.sellerFactoryName}</span>}
+                      {order.completedAt && (
+                        <span>完成：{new Date(order.completedAt).toLocaleDateString("zh-TW", { month: "2-digit", day: "2-digit" })}</span>
+                      )}
+                    </div>
+                    {order.completionNote && (
+                      <p className="text-xs text-gray-400 mt-0.5 truncate">{order.completionNote}</p>
+                    )}
+                  </div>
+                  <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-orange-100 text-orange-800 shrink-0">已完成</span>
+                </div>
+                <div className="flex items-center gap-2 mt-2">
+                  <button
+                    className="text-xs text-gray-500 hover:text-gray-700 underline"
+                    onClick={() => setExpandedIds(prev => new Set(prev).add(order.id))}
+                  >
+                    展開 ▾
+                  </button>
+                  <div className="ml-auto">
+                    <Link href={`/orders/${order.id}?backTo=${backTo}`} className="text-xs text-orange-600 hover:underline font-medium">
+                      查看訂單 →
+                    </Link>
+                  </div>
+                </div>
+              </div>
+            );
+          }
+
           return (
-            <div key={order.id} className="rounded-lg border p-3 space-y-2">
+            <div key={order.id} className={`rounded-lg border p-3 space-y-2 ${isCompleted ? "border-gray-200 bg-gray-50 opacity-80" : ""}`}>
               {/* Header */}
               <div className="flex items-start gap-2">
                 <div className="shrink-0" style={{ minWidth: "28%" }}>
-                  <p className="font-medium text-sm leading-tight">{order.projectName}</p>
+                  <p className={`font-medium text-sm leading-tight ${isCompleted ? "text-gray-600" : ""}`}>{order.projectName}</p>
                   {order.sellerFactoryName && (
                     <p className="text-xs text-muted-foreground mt-0.5">供應：{order.sellerFactoryName}</p>
                   )}
@@ -2035,14 +2143,31 @@ function PlacedOrdersPanel({ factoryId }: { factoryId: number }) {
               {/* Timeline bar */}
               <OrderTimelineBar order={order} compact />
 
+              {/* Completion note for expanded completed cards */}
+              {isCompleted && order.completionNote && (
+                <p className="text-xs text-gray-500 bg-white border rounded px-2 py-1.5">
+                  完成備註：{order.completionNote}
+                </p>
+              )}
+
               {/* Links */}
-              <div className="flex gap-3">
-                <Link href={`/orders/${order.id}?backTo=${backTo}`} className="text-xs text-orange-600 hover:underline font-medium">
-                  查看訂單 →
-                </Link>
-                <Link href={`/chat/${order.conversationId}`} className="text-xs text-blue-600 hover:underline">
-                  查看對話 →
-                </Link>
+              <div className="flex items-center gap-2">
+                {isCompleted && (
+                  <button
+                    className="text-xs text-gray-500 hover:text-gray-700 underline"
+                    onClick={() => setExpandedIds(prev => { const s = new Set(prev); s.delete(order.id); return s; })}
+                  >
+                    收合 ▴
+                  </button>
+                )}
+                <div className={`flex gap-3 ${isCompleted ? "ml-auto" : ""}`}>
+                  <Link href={`/orders/${order.id}?backTo=${backTo}`} className="text-xs text-orange-600 hover:underline font-medium">
+                    查看訂單 →
+                  </Link>
+                  <Link href={`/chat/${order.conversationId}`} className="text-xs text-blue-600 hover:underline">
+                    查看對話 →
+                  </Link>
+                </div>
               </div>
             </div>
           );
