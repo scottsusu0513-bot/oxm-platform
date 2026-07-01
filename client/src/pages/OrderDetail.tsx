@@ -1,12 +1,20 @@
+import { useState } from "react";
 import { useRoute, useLocation, Link } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
+import { toast } from "sonner";
 import { AppLoading } from "@/components/AppLoading";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { ArrowLeft, ClipboardList, MessageCircle } from "lucide-react";
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
+} from "@/components/ui/dialog";
+import { ArrowLeft, ClipboardList, MessageCircle, CalendarClock, CheckCircle2, XCircle } from "lucide-react";
 
-// ── 訂單狀態 ─────────────────────────────────────────────────────────────────
+// ── 訂單狀態標籤 ──────────────────────────────────────────────────────────────
 const ORDER_STATUS_LABEL: Record<string, string> = {
   pending: "待需求方同意",
   accepted: "已成立",
@@ -28,6 +36,25 @@ const STATUS_BADGE_CLASS: Record<string, string> = {
   cancelled: "bg-gray-100 text-gray-600",
   cancel_requested: "bg-red-100 text-red-700",
 };
+
+// ── 日期欄位定義 ──────────────────────────────────────────────────────────────
+const DATE_FIELD_KEYS = [
+  "depositDueDate",
+  "productionStartDate",
+  "expectedCompletionDate",
+  "expectedShipmentDate",
+  "finalPaymentDueDate",
+] as const;
+
+const DATE_FIELD_LABELS: Record<typeof DATE_FIELD_KEYS[number], string> = {
+  depositDueDate: "首款付款日",
+  productionStartDate: "製作開始日",
+  expectedCompletionDate: "預計完工日",
+  expectedShipmentDate: "預計出貨日",
+  finalPaymentDueDate: "尾款結款日",
+};
+
+type DateFormState = Record<typeof DATE_FIELD_KEYS[number], string>;
 
 // ── Timeline 緊急程度 ─────────────────────────────────────────────────────────
 type Urgency = "normal" | "warning" | "danger" | "overdue";
@@ -72,12 +99,12 @@ const URGENCY_LABEL: Record<Urgency, string> = {
   overdue: "已逾期",
 };
 
-// ── Timeline 節點 ─────────────────────────────────────────────────────────────
+// ── Timeline 節點型別 ─────────────────────────────────────────────────────────
 type TimelineNode = {
   label: string;
-  date: string;          // YYYY-MM-DD 或 timestamp 轉成的日期字串
+  date: string;
   urgency: Urgency;
-  isPast: boolean;       // timestamp 類型的歷史節點（建立、成立、完成）
+  isPast: boolean;
 };
 
 function buildTimeline(order: {
@@ -95,24 +122,14 @@ function buildTimeline(order: {
   function addPastNode(label: string, ts: Date | string | null | undefined) {
     if (!ts) return;
     const d = new Date(ts);
-    nodes.push({
-      label,
-      date: d.toLocaleDateString("zh-TW"),
-      urgency: "normal",
-      isPast: true,
-    });
+    nodes.push({ label, date: d.toLocaleDateString("zh-TW"), urgency: "normal", isPast: true });
   }
 
   function addFutureNode(label: string, dateStr: string | null | undefined) {
     if (!dateStr) return;
     const urgency = getTimelineNodeUrgency(dateStr);
     const [y, m, d] = dateStr.split("-");
-    nodes.push({
-      label,
-      date: `${y}/${m}/${d}`,
-      urgency,
-      isPast: false,
-    });
+    nodes.push({ label, date: `${y}/${m}/${d}`, urgency, isPast: false });
   }
 
   addPastNode("訂單建立", order.createdAt);
@@ -143,13 +160,10 @@ function OrderTimeline({ order }: { order: Parameters<typeof buildTimeline>[0] }
 
         return (
           <div key={i} className="relative">
-            {/* 垂直連接線 */}
             {!isLast && (
               <div className={`absolute left-[-1.1rem] top-4 w-0.5 h-full ${lineClass}`} />
             )}
-            {/* 圓點 */}
             <div className={`absolute left-[-1.4rem] top-1.5 w-3 h-3 rounded-full ${dotClass} ring-2 ring-white`} />
-            {/* 節點內容 */}
             <div className="pb-6">
               <div className="flex items-center gap-2 flex-wrap">
                 <span className={`text-sm font-medium ${textClass}`}>{node.label}</span>
@@ -174,17 +188,205 @@ function OrderTimeline({ order }: { order: Parameters<typeof buildTimeline>[0] }
   );
 }
 
+// ── 修改歷史節點（accepted change requests）────────────────────────────────────
+type ChangeHistoryItem = {
+  id: number;
+  requesterName?: string | null;
+  reason?: string | null;
+  oldValuesJson: Record<string, string | null>;
+  newValuesJson: Record<string, string | null>;
+  acceptedAt?: Date | string | null;
+  createdAt: Date | string;
+};
+
+function ChangeHistoryTimeline({ history }: { history: ChangeHistoryItem[] }) {
+  if (history.length === 0) return null;
+  return (
+    <div className="border-t mt-2 pt-4">
+      <p className="text-xs font-medium text-muted-foreground mb-3 pl-6">── 修改歷史</p>
+      <div className="relative pl-6">
+        {history.map((change, i) => {
+          const isLast = i === history.length - 1;
+          const dateStr = change.acceptedAt
+            ? new Date(change.acceptedAt).toLocaleDateString("zh-TW")
+            : new Date(change.createdAt).toLocaleDateString("zh-TW");
+          const changedFields = DATE_FIELD_KEYS.filter(
+            k => change.oldValuesJson[k] !== change.newValuesJson[k]
+          );
+          return (
+            <div key={change.id} className="relative">
+              {!isLast && (
+                <div className="absolute left-[-1.1rem] top-4 w-0.5 h-full bg-blue-200" />
+              )}
+              <div className="absolute left-[-1.4rem] top-1.5 w-3 h-3 rounded-full bg-blue-400 ring-2 ring-white" />
+              <div className="pb-5">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium text-blue-700">更改訂單日期</span>
+                </div>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {dateStr}{change.requesterName ? ` · 由 ${change.requesterName} 提出` : ""}
+                </p>
+                {changedFields.length > 0 && (
+                  <div className="mt-1.5 space-y-0.5">
+                    {changedFields.map(k => (
+                      <p key={k} className="text-xs text-muted-foreground">
+                        {DATE_FIELD_LABELS[k]}：
+                        <span className="line-through mr-1">{change.oldValuesJson[k] ?? "—"}</span>
+                        <span className="text-blue-700 font-medium">{change.newValuesJson[k] ?? "—"}</span>
+                      </p>
+                    ))}
+                  </div>
+                )}
+                {change.reason && (
+                  <p className="text-xs text-muted-foreground mt-1">原因：{change.reason}</p>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── 日期修改申請比較表（buyer 確認用）────────────────────────────────────────
+type PendingChangeRequest = {
+  id: number;
+  requesterName?: string | null;
+  reason?: string | null;
+  status: string;
+  oldValuesJson: Record<string, string | null>;
+  newValuesJson: Record<string, string | null>;
+  createdAt: Date | string;
+};
+
+function PendingChangeCard({
+  request,
+  onAccept,
+  onReject,
+  isPending,
+}: {
+  request: PendingChangeRequest;
+  onAccept: () => void;
+  onReject: () => void;
+  isPending: boolean;
+}) {
+  const changedFields = DATE_FIELD_KEYS.filter(
+    k => request.oldValuesJson[k] !== request.newValuesJson[k]
+  );
+
+  return (
+    <Card className="border-amber-300 bg-amber-50">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base flex items-center gap-2 text-amber-800">
+          <CalendarClock className="w-4 h-4" />
+          待確認：日期修改申請
+        </CardTitle>
+        <CardDescription className="text-amber-700">
+          供應工廠提出日期修改，請確認是否同意
+          {request.requesterName && `（由 ${request.requesterName} 提出）`}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-xs text-muted-foreground">
+              <th className="text-left font-normal pb-1">日期項目</th>
+              <th className="text-left font-normal pb-1 pl-3">目前</th>
+              <th className="text-left font-normal pb-1 pl-3">提議修改為</th>
+            </tr>
+          </thead>
+          <tbody>
+            {changedFields.map(k => (
+              <tr key={k} className="border-t border-amber-200">
+                <td className="py-1.5 text-xs text-muted-foreground">{DATE_FIELD_LABELS[k]}</td>
+                <td className="py-1.5 pl-3 text-xs line-through text-muted-foreground">
+                  {request.oldValuesJson[k] ?? "未設定"}
+                </td>
+                <td className="py-1.5 pl-3 text-xs font-semibold text-amber-800">
+                  {request.newValuesJson[k] ?? "移除"}
+                </td>
+              </tr>
+            ))}
+            {changedFields.length === 0 && (
+              <tr>
+                <td colSpan={3} className="text-xs text-muted-foreground py-2">（無日期變更）</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+        {request.reason && (
+          <p className="text-xs text-amber-800 border-t border-amber-200 pt-2">
+            修改原因：{request.reason}
+          </p>
+        )}
+        <div className="flex gap-2 pt-1">
+          <Button
+            size="sm"
+            className="flex-1 bg-green-600 hover:bg-green-700 text-white"
+            disabled={isPending}
+            onClick={onAccept}
+          >
+            <CheckCircle2 className="w-3.5 h-3.5 mr-1" />
+            同意修改
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="flex-1 border-red-300 text-red-600 hover:bg-red-50"
+            disabled={isPending}
+            onClick={onReject}
+          >
+            <XCircle className="w-3.5 h-3.5 mr-1" />
+            拒絕修改
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 // ── 頁面主體 ─────────────────────────────────────────────────────────────────
 export default function OrderDetail() {
   const { user, loading: authLoading } = useAuth();
   const [, navigate] = useLocation();
   const [, params] = useRoute("/orders/:orderId");
   const orderId = params?.orderId ? parseInt(params.orderId, 10) : null;
+  const utils = trpc.useUtils();
+
+  // Phase 4B 日期修改表單 state
+  const [changeOpen, setChangeOpen] = useState(false);
+  const [changeReason, setChangeReason] = useState("");
+  const [formDates, setFormDates] = useState<DateFormState>({
+    depositDueDate: "",
+    productionStartDate: "",
+    expectedCompletionDate: "",
+    expectedShipmentDate: "",
+    finalPaymentDueDate: "",
+  });
 
   const { data: order, isLoading, error } = trpc.collaborationOrder.getById.useQuery(
     { orderId: orderId! },
     { enabled: !!orderId && !!user }
   );
+
+  const requestDateChangeMut = trpc.collaborationOrder.requestDateChange.useMutation({
+    onSuccess: () => {
+      toast.success("日期修改申請已送出，等待對方確認");
+      setChangeOpen(false);
+      setChangeReason("");
+      utils.collaborationOrder.getById.invalidate({ orderId: orderId! });
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const respondDateChangeMut = trpc.collaborationOrder.respondDateChange.useMutation({
+    onSuccess: (_, vars) => {
+      toast.success(vars.action === "accepted" ? "已同意日期修改，訂單日期已更新" : "已拒絕日期修改");
+      utils.collaborationOrder.getById.invalidate({ orderId: orderId! });
+    },
+    onError: (e) => toast.error(e.message),
+  });
 
   if (authLoading || isLoading) return <AppLoading />;
 
@@ -203,6 +405,36 @@ export default function OrderDetail() {
     );
   }
 
+  function handleOpenChangeDialog() {
+    setFormDates({
+      depositDueDate: order!.depositDueDate ?? "",
+      productionStartDate: order!.productionStartDate ?? "",
+      expectedCompletionDate: order!.expectedCompletionDate ?? "",
+      expectedShipmentDate: order!.expectedShipmentDate ?? "",
+      finalPaymentDueDate: order!.finalPaymentDueDate ?? "",
+    });
+    setChangeReason("");
+    setChangeOpen(true);
+  }
+
+  function handleSubmitDateChange() {
+    const dates = {
+      ...(formDates.depositDueDate ? { depositDueDate: formDates.depositDueDate } : {}),
+      ...(formDates.productionStartDate ? { productionStartDate: formDates.productionStartDate } : {}),
+      ...(formDates.expectedCompletionDate ? { expectedCompletionDate: formDates.expectedCompletionDate } : {}),
+      ...(formDates.expectedShipmentDate ? { expectedShipmentDate: formDates.expectedShipmentDate } : {}),
+      ...(formDates.finalPaymentDueDate ? { finalPaymentDueDate: formDates.finalPaymentDueDate } : {}),
+    };
+    requestDateChangeMut.mutate({
+      orderId: orderId!,
+      reason: changeReason || undefined,
+      dates,
+    });
+  }
+
+  const pendingChangeRequest = order.pendingChangeRequest;
+  const acceptedChangeHistory = order.acceptedChangeHistory ?? [];
+
   return (
     <div className="min-h-screen bg-background">
       {/* 頁首 */}
@@ -219,6 +451,24 @@ export default function OrderDetail() {
       </div>
 
       <div className="max-w-2xl mx-auto px-4 py-6 space-y-5">
+
+        {/* Phase 4B：待確認的日期修改申請（需求方看到） */}
+        {order.canRespondDateChange && pendingChangeRequest && (
+          <PendingChangeCard
+            request={pendingChangeRequest}
+            isPending={respondDateChangeMut.isPending}
+            onAccept={() => respondDateChangeMut.mutate({ requestId: pendingChangeRequest.id, action: "accepted" })}
+            onReject={() => respondDateChangeMut.mutate({ requestId: pendingChangeRequest.id, action: "rejected" })}
+          />
+        )}
+
+        {/* 工廠方已有待確認申請時顯示提示 */}
+        {order.canRequestDateChange && pendingChangeRequest && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 flex items-center gap-2">
+            <CalendarClock className="w-4 h-4 shrink-0" />
+            日期修改申請已送出，等待對方確認中
+          </div>
+        )}
 
         {/* 基本資料 */}
         <Card>
@@ -281,6 +531,7 @@ export default function OrderDetail() {
           </CardHeader>
           <CardContent>
             <OrderTimeline order={order} />
+            <ChangeHistoryTimeline history={acceptedChangeHistory} />
           </CardContent>
         </Card>
 
@@ -292,13 +543,83 @@ export default function OrderDetail() {
               查看對話
             </Button>
           </Link>
-          {/* TODO Phase 4B: 日期修改按鈕 */}
+          {/* Phase 4B：工廠方修改日期按鈕（無待確認申請時顯示） */}
+          {order.canRequestDateChange && !pendingChangeRequest && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="flex-1"
+              onClick={handleOpenChangeDialog}
+            >
+              <CalendarClock className="w-4 h-4 mr-1.5" />
+              修改訂單日期
+            </Button>
+          )}
         </div>
 
         <p className="text-xs text-center text-muted-foreground pb-4">
           此合作確認單僅作為雙方於 OXM 平台內確認合作內容之紀錄，實際付款、合約、交付與售後責任由雙方自行協議。
         </p>
       </div>
+
+      {/* Phase 4B：日期修改 Dialog */}
+      <Dialog
+        open={changeOpen}
+        onOpenChange={(open) => { if (!requestDateChangeMut.isPending) setChangeOpen(open); }}
+      >
+        <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>修改訂單日期</DialogTitle>
+            <DialogDescription>
+              修改後需對方確認才會生效。留空表示保留現有日期，不變更。
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            {DATE_FIELD_KEYS.map((key) => (
+              <div key={key} className="space-y-1">
+                <Label className="text-sm">{DATE_FIELD_LABELS[key]}</Label>
+                <p className="text-xs text-muted-foreground">
+                  目前：{order[key] ?? "未設定"}
+                </p>
+                <Input
+                  type="date"
+                  value={formDates[key]}
+                  onChange={(e) => setFormDates((prev) => ({ ...prev, [key]: e.target.value }))}
+                />
+              </div>
+            ))}
+
+            <div className="space-y-1">
+              <Label className="text-sm">修改原因（選填）</Label>
+              <Textarea
+                placeholder="說明修改原因，有助於對方理解並同意"
+                value={changeReason}
+                onChange={(e) => setChangeReason(e.target.value)}
+                rows={3}
+                maxLength={500}
+              />
+            </div>
+          </div>
+
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              onClick={() => setChangeOpen(false)}
+              disabled={requestDateChangeMut.isPending}
+            >
+              取消
+            </Button>
+            <Button
+              className="bg-orange-500 hover:bg-orange-600 text-white"
+              disabled={requestDateChangeMut.isPending}
+              onClick={handleSubmitDateChange}
+            >
+              {requestDateChangeMut.isPending ? "送出中…" : "送出申請"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

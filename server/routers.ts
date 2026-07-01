@@ -1708,7 +1708,7 @@ export const appRouter = router({
       return db.listUserPersonalCollaborationOrders(ctx.user.id);
     }),
 
-    // Phase 4A: 單筆訂單詳情查詢（buyer / factoryId owner+co-mgr / acceptedAsFactoryId owner+co-mgr / createdBy）
+    // Phase 4A/4B: 單筆訂單詳情（含權限旗標 + 日期修改申請資料）
     getById: protectedProcedure.input(z.object({
       orderId: z.number(),
     })).query(async ({ ctx, input }) => {
@@ -1719,12 +1719,11 @@ export const appRouter = router({
       const isBuyer = order.buyerUserId === uid;
       const isCreator = order.createdByUserId === uid;
 
-      // 承接工廠（factoryId）權限
       const sellerFactory = await db.getFactoryById(order.factoryId);
       const isSellerOwner = sellerFactory?.ownerId === uid;
       const isSellerCoMgr = !isSellerOwner && !!sellerFactory && await db.isActiveCoManager(sellerFactory.id, uid);
+      const isSellerMember = isSellerOwner || isSellerCoMgr;
 
-      // 下訂工廠（acceptedAsFactoryId）權限
       let isPlacedFactoryMember = false;
       if (order.acceptedAsFactoryId) {
         const placedFactory = await db.getFactoryById(order.acceptedAsFactoryId);
@@ -1733,11 +1732,117 @@ export const appRouter = router({
         isPlacedFactoryMember = isPlacedOwner || isPlacedCoMgr;
       }
 
-      if (!isBuyer && !isCreator && !isSellerOwner && !isSellerCoMgr && !isPlacedFactoryMember) {
+      if (!isBuyer && !isCreator && !isSellerMember && !isPlacedFactoryMember) {
         throw new TRPCError({ code: "FORBIDDEN", message: "無權限查看此訂單" });
       }
 
-      return order;
+      // Phase 4B 權限旗標
+      const canRequestDateChange = isSellerMember;
+      const canRespondDateChange =
+        order.acceptedAsType === "factory" ? isPlacedFactoryMember : isBuyer;
+
+      const [pendingChangeRequest, acceptedChangeHistory] = await Promise.all([
+        db.getPendingCollaborationOrderChangeRequest(input.orderId),
+        db.listAcceptedCollaborationOrderChangeRequests(input.orderId),
+      ]);
+
+      return {
+        ...order,
+        canRequestDateChange,
+        canRespondDateChange,
+        pendingChangeRequest,
+        acceptedChangeHistory,
+      };
+    }),
+
+    // Phase 4B: 工廠方提出日期修改申請
+    requestDateChange: protectedProcedure.input(z.object({
+      orderId: z.number(),
+      reason: z.string().max(500).optional(),
+      dates: z.object({
+        depositDueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        productionStartDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        expectedCompletionDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        expectedShipmentDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        finalPaymentDueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+      }),
+    })).mutation(async ({ ctx, input }) => {
+      const order = await db.getCollaborationOrderById(input.orderId);
+      if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "找不到訂單" });
+      if (!["accepted", "in_progress", "shipped"].includes(order.status)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "此訂單狀態不允許修改日期" });
+      }
+      const sellerFactory = await db.getFactoryById(order.factoryId);
+      const isOwner = sellerFactory?.ownerId === ctx.user.id;
+      const isCoMgr = !isOwner && !!sellerFactory && await db.isActiveCoManager(order.factoryId, ctx.user.id);
+      if (!isOwner && !isCoMgr) throw new TRPCError({ code: "FORBIDDEN", message: "只有供應工廠方可提出日期修改申請" });
+
+      const oldValues: Record<string, string | null> = {
+        depositDueDate: order.depositDueDate ?? null,
+        productionStartDate: order.productionStartDate ?? null,
+        expectedCompletionDate: order.expectedCompletionDate ?? null,
+        expectedShipmentDate: order.expectedShipmentDate ?? null,
+        finalPaymentDueDate: order.finalPaymentDueDate ?? null,
+      };
+      const d = input.dates;
+      const newValues: Record<string, string | null> = {
+        depositDueDate: d.depositDueDate ?? oldValues.depositDueDate,
+        productionStartDate: d.productionStartDate ?? oldValues.productionStartDate,
+        expectedCompletionDate: d.expectedCompletionDate ?? oldValues.expectedCompletionDate,
+        expectedShipmentDate: d.expectedShipmentDate ?? oldValues.expectedShipmentDate,
+        finalPaymentDueDate: d.finalPaymentDueDate ?? oldValues.finalPaymentDueDate,
+      };
+      const hasChange = Object.keys(oldValues).some(k => oldValues[k] !== newValues[k]);
+      if (!hasChange) throw new TRPCError({ code: "BAD_REQUEST", message: "沒有任何日期發生變更" });
+
+      try {
+        await db.createCollaborationOrderChangeRequest({
+          orderId: input.orderId,
+          requestedByUserId: ctx.user.id,
+          reason: input.reason,
+          oldValues,
+          newValues,
+        });
+      } catch (e: any) {
+        if (e?.message === "PENDING_EXISTS") {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "目前已有待確認的日期修改申請，請等對方回應後再提出" });
+        }
+        throw e;
+      }
+      return { success: true };
+    }),
+
+    // Phase 4B: 需求方確認或拒絕日期修改申請
+    respondDateChange: protectedProcedure.input(z.object({
+      requestId: z.number(),
+      action: z.enum(["accepted", "rejected"]),
+    })).mutation(async ({ ctx, input }) => {
+      const changeReq = await db.getCollaborationOrderChangeRequestById(input.requestId);
+      if (!changeReq) throw new TRPCError({ code: "NOT_FOUND", message: "找不到日期修改申請" });
+      if (changeReq.status !== "pending") throw new TRPCError({ code: "BAD_REQUEST", message: "此申請已非待確認狀態" });
+
+      const order = await db.getCollaborationOrderById(changeReq.orderId);
+      if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "找不到訂單" });
+
+      const uid = ctx.user.id;
+      let canRespond = false;
+      if (order.acceptedAsType === "factory" && order.acceptedAsFactoryId) {
+        const placedFactory = await db.getFactoryById(order.acceptedAsFactoryId);
+        const isOwner = placedFactory?.ownerId === uid;
+        const isCoMgr = !isOwner && !!placedFactory && await db.isActiveCoManager(order.acceptedAsFactoryId, uid);
+        canRespond = isOwner || isCoMgr;
+      } else {
+        canRespond = order.buyerUserId === uid;
+      }
+      if (!canRespond) throw new TRPCError({ code: "FORBIDDEN", message: "只有需求方可確認日期修改" });
+
+      try {
+        await db.respondCollaborationOrderChangeRequest(input.requestId, input.action);
+      } catch (e: any) {
+        if (e?.message === "NOT_PENDING") throw new TRPCError({ code: "BAD_REQUEST", message: "此申請已非待確認狀態" });
+        throw e;
+      }
+      return { success: true };
     }),
 
     getForConversation: protectedProcedure.input(z.object({

@@ -14,7 +14,7 @@ import {
   factoryCoManagerInvitations, factoryCoManagers,
   inquiryBatches, inquiryBatchItems,
   messageCampaigns, messageRecipients, messageReplies,
-  oauthStates, appLoginTickets, collaborationOrders,
+  oauthStates, appLoginTickets, collaborationOrders, collaborationOrderChangeRequests,
   userAuthAccounts, emailVerificationTokens,
   pushNotificationTokens,
   factoryRevisions,
@@ -3343,6 +3343,117 @@ export async function getCollaborationOrderDetail(id: number) {
     .where(eq(collaborationOrders.id, id))
     .limit(1);
   return rows[0] ?? null;
+}
+
+// ===== Phase 4B: 訂單日期修改申請 =====
+
+export async function createCollaborationOrderChangeRequest(data: {
+  orderId: number;
+  requestedByUserId: number;
+  reason?: string | null;
+  oldValues: Record<string, string | null>;
+  newValues: Record<string, string | null>;
+}): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  const existing = await db.select({ id: collaborationOrderChangeRequests.id })
+    .from(collaborationOrderChangeRequests)
+    .where(and(
+      eq(collaborationOrderChangeRequests.orderId, data.orderId),
+      eq(collaborationOrderChangeRequests.status, "pending")
+    )).limit(1);
+  if (existing.length > 0) throw new Error("PENDING_EXISTS");
+  await db.insert(collaborationOrderChangeRequests).values({
+    orderId: data.orderId,
+    requestedByUserId: data.requestedByUserId,
+    reason: data.reason ?? null,
+    oldValuesJson: data.oldValues,
+    newValuesJson: data.newValues,
+  });
+}
+
+export async function getCollaborationOrderChangeRequestById(id: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select().from(collaborationOrderChangeRequests)
+    .where(eq(collaborationOrderChangeRequests.id, id)).limit(1);
+  return rows[0] ?? null;
+}
+
+export async function getPendingCollaborationOrderChangeRequest(orderId: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select({
+    id: collaborationOrderChangeRequests.id,
+    orderId: collaborationOrderChangeRequests.orderId,
+    requestedByUserId: collaborationOrderChangeRequests.requestedByUserId,
+    requesterName: users.name,
+    status: collaborationOrderChangeRequests.status,
+    reason: collaborationOrderChangeRequests.reason,
+    oldValuesJson: collaborationOrderChangeRequests.oldValuesJson,
+    newValuesJson: collaborationOrderChangeRequests.newValuesJson,
+    createdAt: collaborationOrderChangeRequests.createdAt,
+  }).from(collaborationOrderChangeRequests)
+    .leftJoin(users, eq(collaborationOrderChangeRequests.requestedByUserId, users.id))
+    .where(and(
+      eq(collaborationOrderChangeRequests.orderId, orderId),
+      eq(collaborationOrderChangeRequests.status, "pending")
+    )).limit(1);
+  return rows[0] ?? null;
+}
+
+export async function listAcceptedCollaborationOrderChangeRequests(orderId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select({
+    id: collaborationOrderChangeRequests.id,
+    requestedByUserId: collaborationOrderChangeRequests.requestedByUserId,
+    requesterName: users.name,
+    reason: collaborationOrderChangeRequests.reason,
+    oldValuesJson: collaborationOrderChangeRequests.oldValuesJson,
+    newValuesJson: collaborationOrderChangeRequests.newValuesJson,
+    acceptedAt: collaborationOrderChangeRequests.acceptedAt,
+    createdAt: collaborationOrderChangeRequests.createdAt,
+  }).from(collaborationOrderChangeRequests)
+    .leftJoin(users, eq(collaborationOrderChangeRequests.requestedByUserId, users.id))
+    .where(and(
+      eq(collaborationOrderChangeRequests.orderId, orderId),
+      eq(collaborationOrderChangeRequests.status, "accepted")
+    )).orderBy(asc(collaborationOrderChangeRequests.acceptedAt));
+}
+
+export async function respondCollaborationOrderChangeRequest(
+  requestId: number,
+  action: "accepted" | "rejected"
+): Promise<{ orderId: number }> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  const now = new Date();
+  const rows = await db.select().from(collaborationOrderChangeRequests)
+    .where(eq(collaborationOrderChangeRequests.id, requestId)).limit(1);
+  const req = rows[0];
+  if (!req) throw new Error("NOT_FOUND");
+  if (req.status !== "pending") throw new Error("NOT_PENDING");
+  if (action === "accepted") {
+    const newValues = req.newValuesJson as Record<string, string | null>;
+    await db.update(collaborationOrderChangeRequests).set({
+      status: "accepted",
+      acceptedAt: now,
+    }).where(eq(collaborationOrderChangeRequests.id, requestId));
+    await db.update(collaborationOrders).set({
+      depositDueDate: newValues.depositDueDate ?? null,
+      productionStartDate: newValues.productionStartDate ?? null,
+      expectedCompletionDate: newValues.expectedCompletionDate ?? null,
+      expectedShipmentDate: newValues.expectedShipmentDate ?? null,
+      finalPaymentDueDate: newValues.finalPaymentDueDate ?? null,
+    }).where(eq(collaborationOrders.id, req.orderId));
+  } else {
+    await db.update(collaborationOrderChangeRequests).set({
+      status: "rejected",
+      rejectedAt: now,
+    }).where(eq(collaborationOrderChangeRequests.id, requestId));
+  }
+  return { orderId: req.orderId };
 }
 
 export async function respondCollaborationOrder(

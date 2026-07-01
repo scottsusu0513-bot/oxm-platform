@@ -177,6 +177,22 @@ export const collaborationOrders = mysqlTable("collaborationOrders", {
 
 export type CollaborationOrder = typeof collaborationOrders.$inferSelect;
 
+// ===== 訂單日期修改申請 =====
+export const collaborationOrderChangeRequests = mysqlTable("collaborationOrderChangeRequests", {
+  id: int("id").autoincrement().primaryKey(),
+  orderId: int("orderId").notNull().references(() => collaborationOrders.id, { onDelete: "cascade" }),
+  requestedByUserId: int("requestedByUserId").notNull().references(() => users.id, { onDelete: "cascade" }),
+  status: mysqlEnum("status", ["pending", "accepted", "rejected"]).default("pending").notNull(),
+  reason: text("reason"),
+  oldValuesJson: json("oldValuesJson").$type<Record<string, string | null>>().notNull(),
+  newValuesJson: json("newValuesJson").$type<Record<string, string | null>>().notNull(),
+  acceptedAt: timestamp("acceptedAt"),
+  rejectedAt: timestamp("rejectedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+export type CollaborationOrderChangeRequest = typeof collaborationOrderChangeRequests.$inferSelect;
+
 // ===== 廣告置頂表 =====
 export const advertisements = mysqlTable("advertisements", {
   id: int("id").autoincrement().primaryKey(),
