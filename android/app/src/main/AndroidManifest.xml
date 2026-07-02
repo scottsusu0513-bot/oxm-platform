@@ -40,9 +40,15 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths"></meta-data>
         </provider>
+        <!-- FCM 預設通知 channel：讓背景推播走 oxm_default_v2，確保聲音與震動 -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="oxm_default_v2" />
     </application>
 
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Android 13+ (API 33+) 需要明確宣告此權限才能請求通知權限 -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 </manifest>

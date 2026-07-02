@@ -19,6 +19,7 @@ import { desc, eq, and, sql, isNull } from "drizzle-orm";
 import { getDb } from "./db";
 import { sendPushToUser, sendPushToRecipients } from "./push";
 import { createPlatformNotifications } from "./notifications";
+import { notifyUser, notifyFactoryMembers } from "./notifyHelper";
 import { runCollaborationOrderOverdueEmailCheck } from "./orderOverdueCheck";
 
 function requireVerifiedEmail(user: { primaryEmailVerifiedAt: Date | null }): void {
@@ -771,6 +772,13 @@ export const appRouter = router({
         actionUrl: `/chat/${conv.id}`,
         dedupeKey: `co_manager_invitation:${invitationId}`,
       }]).catch(() => {});
+      // Push 通知被邀請人
+      sendPushToRecipients({
+        userIds: [invitee.id],
+        title: "OXM 次管理者邀請",
+        body: `「${factory.name}」邀請你成為次管理者`,
+        data: { type: "co_manager_invitation", targetPath: `/chat/${conv.id}` },
+      }).catch((err) => { console.error("[Push] co_manager_invitation failed:", err instanceof Error ? err.message : String(err)); });
 
       return { success: true, conversationId: conv.id };
     }),
@@ -813,6 +821,15 @@ export const appRouter = router({
               actionUrl: "/dashboard",
               dedupeKey: `co_manager_respond:${input.invitationId}:${input.action}`,
             }]);
+            // Push 通知工廠主管理者
+            await sendPushToRecipients({
+              userIds: [inv.inviterUserId],
+              title: input.action === "accept" ? "OXM 次管理者邀請已接受" : "OXM 次管理者邀請已婉拒",
+              body: input.action === "accept"
+                ? `${inviteeName} 已加入「${factoryName}」成為次管理者`
+                : `${inviteeName} 婉拒了次管理者邀請`,
+              data: { type: "co_manager_respond", targetPath: "/dashboard" },
+            });
           } catch (e) {
             console.warn("[respondToInvitation] notification failed", e);
           }
@@ -828,6 +845,26 @@ export const appRouter = router({
       if (!factory) throw new Error("您尚未擁有工廠");
       if (input.userId === ctx.user.id) throw new Error("無法移除自己");
       await db.removeCoManager(factory.id, input.userId);
+      // 通知被移除的次管理者
+      notifyUser(
+        input.userId,
+        {
+          actorUserId: ctx.user.id,
+          actorFactoryId: factory.id,
+          actorFactoryName: factory.name,
+          actorName: ctx.user.name ?? ctx.user.email ?? "工廠主管理者",
+          eventType: "co_manager_removed",
+          eventGroup: "co_manager",
+          message: `您已被移出「${factory.name}」的次管理者名單`,
+          actionUrl: "/member",
+          dedupeKey: `co_manager_removed:${factory.id}:${input.userId}:${Date.now()}`,
+        },
+        {
+          title: "OXM 次管理者資格異動",
+          body: `您已被移出「${factory.name}」的次管理者名單`,
+          data: { type: "co_manager_removed", targetPath: "/member" },
+        }
+      );
       return { success: true };
     }),
 
@@ -1239,7 +1276,7 @@ export const appRouter = router({
               conversationId: String(input.conversationId),
               targetPath: `/chat/${input.conversationId}`,
             },
-          }).catch(() => {});
+          }).catch((err) => { console.error("[Push] chat_message (factory→user) failed:", err instanceof Error ? err.message : String(err)); });
         }
         createPlatformNotifications([{
           recipientUserId: conv.userId,
@@ -1540,6 +1577,27 @@ export const appRouter = router({
         finalPaymentDueDate: input.finalPaymentDueDate ?? null,
         note: input.note ?? null,
       });
+      // 通知買家：工廠傳來合作確認單
+      notifyUser(
+        conv.userId,
+        {
+          actorUserId: ctx.user.id,
+          actorFactoryId: factory.id,
+          actorFactoryName: factory.name,
+          actorName: factory.name,
+          eventType: "collab_order_created",
+          eventGroup: "collab_order",
+          message: `「${factory.name}」傳來一份合作確認單「${input.projectName}」，請確認`,
+          actionUrl: `/chat/${input.conversationId}`,
+          titleSnapshot: input.projectName,
+          dedupeKey: `collab_order_created:${orderId}`,
+        },
+        {
+          title: "OXM 新合作確認單",
+          body: `「${factory.name}」傳來合作確認單「${input.projectName}」，請確認`,
+          data: { type: "collab_order", targetPath: `/chat/${input.conversationId}` },
+        }
+      );
       return { orderId };
     }),
 
@@ -1587,6 +1645,30 @@ export const appRouter = router({
         const [conv] = await db_.select({ userId: conversations.userId }).from(conversations).where(eq(conversations.id, order.conversationId)).limit(1);
         if (conv) await db.saveMessage(order.conversationId, conv.userId, "user", sysMsg, "text");
       }
+      // 通知工廠方：買家回應結果
+      notifyFactoryMembers(
+        order.factoryId,
+        {
+          actorUserId: ctx.user.id,
+          actorName: ctx.user.name ?? ctx.user.email ?? "需求方",
+          eventType: input.action === "accepted" ? "collab_order_accepted" : "collab_order_rejected",
+          eventGroup: "collab_order",
+          message: input.action === "accepted"
+            ? `${ctx.user.name ?? "需求方"} 已接受合作確認單「${order.projectName}」`
+            : `${ctx.user.name ?? "需求方"} 拒絕了合作確認單「${order.projectName}」`,
+          actionUrl: `/orders/${order.id}`,
+          titleSnapshot: order.projectName,
+          dedupeKey: `collab_order_respond:${order.id}:${input.action}`,
+        },
+        {
+          title: input.action === "accepted" ? "合作確認單已接受" : "合作確認單已拒絕",
+          body: input.action === "accepted"
+            ? `${ctx.user.name ?? "需求方"} 接受了「${order.projectName}」`
+            : `${ctx.user.name ?? "需求方"} 拒絕了「${order.projectName}」`,
+          data: { type: "collab_order", targetPath: `/orders/${order.id}` },
+        },
+        { excludeUserId: ctx.user.id }
+      );
       return { success: true };
     }),
 
@@ -1615,6 +1697,32 @@ export const appRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: `無法從「${order.status}」改為「${input.status}」` });
       }
       await db.updateCollaborationOrderStatus(order.id, input.status);
+      // 通知買家：訂單進度更新
+      const statusLabels: Record<string, string> = {
+        in_progress: "已開始製作",
+        shipped: "已出貨",
+        completed: "已完成",
+      };
+      notifyUser(
+        order.buyerUserId,
+        {
+          actorUserId: ctx.user.id,
+          actorFactoryId: factory.id,
+          actorFactoryName: factory.name,
+          actorName: factory.name,
+          eventType: `collab_order_status_${input.status}`,
+          eventGroup: "collab_order",
+          message: `「${order.projectName}」${statusLabels[input.status] ?? input.status}`,
+          actionUrl: `/orders/${order.id}`,
+          titleSnapshot: order.projectName,
+          dedupeKey: `collab_order_status:${order.id}:${input.status}`,
+        },
+        {
+          title: "OXM 訂單進度更新",
+          body: `「${order.projectName}」${statusLabels[input.status] ?? input.status}`,
+          data: { type: "collab_order", targetPath: `/orders/${order.id}` },
+        }
+      );
       return { success: true };
     }),
 
@@ -1651,6 +1759,52 @@ export const appRouter = router({
           requestedByRole: isFactorySide ? "factory" : "buyer",
         });
       }
+      // 通知另一方：有人申請取消
+      const cancelRequesterName = ctx.user.name ?? (isFactorySide ? factory.name : "需求方");
+      if (isFactorySide) {
+        // 工廠申請取消 → 通知買家
+        notifyUser(
+          order.buyerUserId,
+          {
+            actorUserId: ctx.user.id,
+            actorFactoryId: factory.id,
+            actorFactoryName: factory.name,
+            actorName: factory.name,
+            eventType: "collab_order_cancel_request",
+            eventGroup: "collab_order",
+            message: `「${factory.name}」申請取消合作確認單「${order.projectName}」`,
+            actionUrl: `/orders/${order.id}`,
+            titleSnapshot: order.projectName,
+            dedupeKey: `collab_cancel_req:${order.id}:${Date.now()}`,
+          },
+          {
+            title: "OXM 取消申請",
+            body: `「${factory.name}」申請取消「${order.projectName}」`,
+            data: { type: "collab_order", targetPath: `/orders/${order.id}` },
+          }
+        );
+      } else {
+        // 買家申請取消 → 通知工廠
+        notifyFactoryMembers(
+          factory.id,
+          {
+            actorUserId: ctx.user.id,
+            actorName: cancelRequesterName,
+            eventType: "collab_order_cancel_request",
+            eventGroup: "collab_order",
+            message: `${cancelRequesterName} 申請取消合作確認單「${order.projectName}」`,
+            actionUrl: `/orders/${order.id}`,
+            titleSnapshot: order.projectName,
+            dedupeKey: `collab_cancel_req:${order.id}:${Date.now()}`,
+          },
+          {
+            title: "OXM 取消申請",
+            body: `${cancelRequesterName} 申請取消「${order.projectName}」`,
+            data: { type: "collab_order", targetPath: `/orders/${order.id}` },
+          },
+          { excludeUserId: ctx.user.id }
+        );
+      }
       return { success: true };
     }),
 
@@ -1677,6 +1831,29 @@ export const appRouter = router({
       if (db_) {
         const [conv] = await db_.select({ userId: conversations.userId }).from(conversations).where(eq(conversations.id, order.conversationId)).limit(1);
         if (conv) await db.saveMessage(order.conversationId, conv.userId, "user", sysMsg, "text");
+      }
+      // 通知取消申請方：對方的回應
+      if (order.cancelRequestedByUserId) {
+        const responderName = ctx.user.name ?? (isBuyer ? "需求方" : factory.name);
+        const cancelLabel = input.action === "accept" ? "同意取消" : "拒絕取消";
+        notifyUser(
+          order.cancelRequestedByUserId,
+          {
+            actorUserId: ctx.user.id,
+            actorName: responderName,
+            eventType: `collab_order_cancel_${input.action}ed`,
+            eventGroup: "collab_order",
+            message: `對方${cancelLabel}了「${order.projectName}」的取消申請`,
+            actionUrl: `/orders/${order.id}`,
+            titleSnapshot: order.projectName,
+            dedupeKey: `collab_cancel_respond:${order.id}:${input.action}`,
+          },
+          {
+            title: `OXM 取消申請${input.action === "accept" ? "已同意" : "已拒絕"}`,
+            body: `對方${cancelLabel}了「${order.projectName}」`,
+            data: { type: "collab_order", targetPath: `/orders/${order.id}` },
+          }
+        );
       }
       return { success: true };
     }),
@@ -1840,6 +2017,51 @@ export const appRouter = router({
         }
         throw e;
       }
+      // 通知需求方：工廠申請修改日期
+      if (order.acceptedAsType === "factory" && order.acceptedAsFactoryId) {
+        notifyFactoryMembers(
+          order.acceptedAsFactoryId,
+          {
+            actorUserId: ctx.user.id,
+            actorFactoryId: sellerFactory?.id ?? null,
+            actorFactoryName: sellerFactory?.name ?? null,
+            actorName: sellerFactory?.name ?? ctx.user.name ?? "工廠",
+            eventType: "collab_order_date_change_request",
+            eventGroup: "collab_order",
+            message: `「${order.projectName}」有日期修改申請，請確認`,
+            actionUrl: `/orders/${order.id}`,
+            titleSnapshot: order.projectName,
+            dedupeKey: `collab_date_req:${order.id}:${Date.now()}`,
+          },
+          {
+            title: "OXM 日期修改申請",
+            body: `「${order.projectName}」有日期修改申請，請確認`,
+            data: { type: "collab_order", targetPath: `/orders/${order.id}` },
+          },
+          { excludeUserId: ctx.user.id }
+        );
+      } else {
+        notifyUser(
+          order.buyerUserId,
+          {
+            actorUserId: ctx.user.id,
+            actorFactoryId: sellerFactory?.id ?? null,
+            actorFactoryName: sellerFactory?.name ?? null,
+            actorName: sellerFactory?.name ?? ctx.user.name ?? "工廠",
+            eventType: "collab_order_date_change_request",
+            eventGroup: "collab_order",
+            message: `「${order.projectName}」有日期修改申請，請確認`,
+            actionUrl: `/orders/${order.id}`,
+            titleSnapshot: order.projectName,
+            dedupeKey: `collab_date_req:${order.id}:${Date.now()}`,
+          },
+          {
+            title: "OXM 日期修改申請",
+            body: `「${order.projectName}」有日期修改申請，請確認`,
+            data: { type: "collab_order", targetPath: `/orders/${order.id}` },
+          }
+        );
+      }
       return { success: true };
     }),
 
@@ -1873,6 +2095,29 @@ export const appRouter = router({
         if (e?.message === "NOT_PENDING") throw new TRPCError({ code: "BAD_REQUEST", message: "此申請已非待確認狀態" });
         throw e;
       }
+      // 通知原始日期修改申請者（而非整個工廠），告知需求方的回應
+      notifyUser(
+        changeReq.requestedByUserId,
+        {
+          actorUserId: ctx.user.id,
+          actorName: ctx.user.name ?? "需求方",
+          eventType: `collab_order_date_change_${input.action}`,
+          eventGroup: "collab_order",
+          message: input.action === "accepted"
+            ? `${ctx.user.name ?? "需求方"} 同意了「${order.projectName}」的日期修改申請`
+            : `${ctx.user.name ?? "需求方"} 拒絕了「${order.projectName}」的日期修改申請`,
+          actionUrl: `/orders/${order.id}`,
+          titleSnapshot: order.projectName,
+          dedupeKey: `collab_date_respond:${input.requestId}:${input.action}`,
+        },
+        {
+          title: `OXM 日期修改${input.action === "accepted" ? "已通過" : "被拒絕"}`,
+          body: input.action === "accepted"
+            ? `「${order.projectName}」日期修改已通過`
+            : `「${order.projectName}」日期修改被拒絕`,
+          data: { type: "collab_order", targetPath: `/orders/${order.id}` },
+        }
+      );
       return { success: true };
     }),
 
@@ -1906,6 +2151,27 @@ export const appRouter = router({
       }
       const note = input.completionNote?.trim() || null;
       await db.markCollaborationOrderComplete(order.id, ctx.user.id, note);
+      // 通知買家：訂單已完成
+      notifyUser(
+        order.buyerUserId,
+        {
+          actorUserId: ctx.user.id,
+          actorFactoryId: factory.id,
+          actorFactoryName: factory.name,
+          actorName: factory.name,
+          eventType: "collab_order_completed",
+          eventGroup: "collab_order",
+          message: `「${order.projectName}」已完成，感謝此次合作`,
+          actionUrl: `/orders/${order.id}`,
+          titleSnapshot: order.projectName,
+          dedupeKey: `collab_order_completed:${order.id}`,
+        },
+        {
+          title: "OXM 訂單已完成",
+          body: `「${order.projectName}」已完成，感謝此次合作`,
+          data: { type: "collab_order", targetPath: `/orders/${order.id}` },
+        }
+      );
       return { success: true };
     }),
 
@@ -1927,6 +2193,27 @@ export const appRouter = router({
       const isCoMgr = !isOwner && await db.isActiveCoManager(factory.id, ctx.user.id);
       if (!isOwner && !isCoMgr) throw new TRPCError({ code: "FORBIDDEN", message: "只有供應工廠方可操作" });
       await db.earlyCompleteOrder(order.id, ctx.user.id);
+      // 通知買家：提早完工
+      notifyUser(
+        order.buyerUserId,
+        {
+          actorUserId: ctx.user.id,
+          actorFactoryId: factory.id,
+          actorFactoryName: factory.name,
+          actorName: factory.name,
+          eventType: "collab_order_early_complete",
+          eventGroup: "collab_order",
+          message: `「${order.projectName}」已提早完工`,
+          actionUrl: `/orders/${order.id}`,
+          titleSnapshot: order.projectName,
+          dedupeKey: `collab_early_complete:${order.id}`,
+        },
+        {
+          title: "OXM 提早完工",
+          body: `「${order.projectName}」已提早完工`,
+          data: { type: "collab_order", targetPath: `/orders/${order.id}` },
+        }
+      );
       return { success: true };
     }),
 
@@ -1948,6 +2235,27 @@ export const appRouter = router({
       const isCoMgr = !isOwner && await db.isActiveCoManager(factory.id, ctx.user.id);
       if (!isOwner && !isCoMgr) throw new TRPCError({ code: "FORBIDDEN", message: "只有供應工廠方可操作" });
       await db.earlyShipOrder(order.id, ctx.user.id);
+      // 通知買家：提早出貨
+      notifyUser(
+        order.buyerUserId,
+        {
+          actorUserId: ctx.user.id,
+          actorFactoryId: factory.id,
+          actorFactoryName: factory.name,
+          actorName: factory.name,
+          eventType: "collab_order_early_ship",
+          eventGroup: "collab_order",
+          message: `「${order.projectName}」已提早出貨`,
+          actionUrl: `/orders/${order.id}`,
+          titleSnapshot: order.projectName,
+          dedupeKey: `collab_early_ship:${order.id}`,
+        },
+        {
+          title: "OXM 提早出貨",
+          body: `「${order.projectName}」已提早出貨`,
+          data: { type: "collab_order", targetPath: `/orders/${order.id}` },
+        }
+      );
       return { success: true };
     }),
 
@@ -1999,6 +2307,27 @@ export const appRouter = router({
         }
       );
 
+      // 通知供應工廠：有重複下訂申請
+      notifyFactoryMembers(
+        order.factoryId,
+        {
+          actorUserId: ctx.user.id,
+          actorName: ctx.user.name ?? "需求方",
+          eventType: "collab_order_repeat_request",
+          eventGroup: "collab_order",
+          message: `${ctx.user.name ?? "需求方"} 申請重複下訂「${order.projectName}」`,
+          actionUrl: `/orders/${order.id}`,
+          titleSnapshot: order.projectName,
+          dedupeKey: `collab_repeat_req:${requestId}`,
+        },
+        {
+          title: "OXM 重複下訂申請",
+          body: `${ctx.user.name ?? "需求方"} 申請重複下訂「${order.projectName}」`,
+          data: { type: "collab_order", targetPath: `/orders/${order.id}` },
+        },
+        { excludeUserId: ctx.user.id }
+      );
+
       return { success: true, requestId };
     }),
 
@@ -2030,6 +2359,27 @@ export const appRouter = router({
 
       if (input.action === "reject") {
         await db.respondRepeatOrderRequest(input.requestId, "rejected");
+        // 通知申請方：被拒絕
+        notifyUser(
+          request.requestedByUserId,
+          {
+            actorUserId: ctx.user.id,
+            actorFactoryId: factory.id,
+            actorFactoryName: factory.name,
+            actorName: factory.name,
+            eventType: "collab_order_repeat_rejected",
+            eventGroup: "collab_order",
+            message: `「${factory.name}」拒絕了重複下訂「${originalOrder.projectName}」的申請`,
+            actionUrl: `/orders/${originalOrder.id}`,
+            titleSnapshot: originalOrder.projectName,
+            dedupeKey: `collab_repeat_rejected:${input.requestId}`,
+          },
+          {
+            title: "OXM 重複下訂遭拒",
+            body: `「${factory.name}」拒絕了重複下訂「${originalOrder.projectName}」`,
+            data: { type: "collab_order", targetPath: `/orders/${originalOrder.id}` },
+          }
+        );
         return { success: true };
       }
 
@@ -2074,6 +2424,28 @@ export const appRouter = router({
           requestId: input.requestId,
           newOrderId,
           projectName: input.projectName.trim(),
+        }
+      );
+
+      // 通知申請方：重複下訂已接受，新訂單已建立
+      notifyUser(
+        request.requestedByUserId,
+        {
+          actorUserId: ctx.user.id,
+          actorFactoryId: factory.id,
+          actorFactoryName: factory.name,
+          actorName: factory.name,
+          eventType: "collab_order_repeat_accepted",
+          eventGroup: "collab_order",
+          message: `「${factory.name}」接受了重複下訂，新合作確認單已建立`,
+          actionUrl: `/orders/${newOrderId}`,
+          titleSnapshot: input.projectName.trim(),
+          dedupeKey: `collab_repeat_accepted:${input.requestId}`,
+        },
+        {
+          title: "OXM 重複下訂已接受",
+          body: `「${factory.name}」接受了重複下訂，新合作確認單已建立`,
+          data: { type: "collab_order", targetPath: `/orders/${newOrderId}` },
         }
       );
 
@@ -2212,7 +2584,7 @@ export const appRouter = router({
               factoryId: String(factory.id),
               targetPath: `/factory/${factory.id}`,
             },
-          }).catch(() => {});
+          }).catch((err) => { console.error("[Push] review_reply failed:", err instanceof Error ? err.message : String(err)); });
         }
         // 站內通知
         createPlatformNotifications([{
@@ -2359,7 +2731,7 @@ export const appRouter = router({
       title: "OXM 工廠審核通過",
       body: `「${factory.name}」已通過審核，現已正式上架`,
       data: { type: "factory_approved", targetPath: "/dashboard" },
-    }).catch(() => {});
+    }).catch((err) => { console.error("[Push] factory_approved failed:", err instanceof Error ? err.message : String(err)); });
     createPlatformNotifications([{
       recipientUserId: factory.ownerId,
       eventType: "factory_approved",
@@ -2388,7 +2760,7 @@ export const appRouter = router({
           title: "OXM 工廠審核結果",
           body: `「${rejectedFactory.name}」審核未通過，請修改後重新送審`,
           data: { type: "factory_rejected", targetPath: "/dashboard" },
-        }).catch(() => {});
+        }).catch((err) => { console.error("[Push] factory_rejected failed:", err instanceof Error ? err.message : String(err)); });
         createPlatformNotifications([{
           recipientUserId: rejectedFactory.ownerId,
           eventType: "factory_rejected",
@@ -2458,7 +2830,19 @@ export const appRouter = router({
             title: "OXM 資料修改申請通過",
             body: `「${result.factoryName}」的基本資料修改申請已通過`,
             data: { type: "revision_approved", targetPath: "/dashboard" },
-          }).catch(() => {});
+          }).catch((err) => { console.error("[Push] revision_approved failed:", err instanceof Error ? err.message : String(err)); });
+        }
+        // 站內通知
+        if (pushIds.length > 0) {
+          createPlatformNotifications(pushIds.map(uid => ({
+            recipientUserId: uid,
+            eventType: "revision_approved",
+            eventGroup: "factory",
+            message: `「${result.factoryName}」的基本資料修改申請已通過`,
+            actionUrl: "/dashboard",
+            titleSnapshot: result.factoryName,
+            dedupeKey: `revision_approved:${input.revisionId}:u${uid}`,
+          }))).catch(() => {});
         }
       }).catch(() => {});
       return { success: true };
@@ -2498,7 +2882,19 @@ export const appRouter = router({
             title: "OXM 資料修改申請結果",
             body: `「${result.factoryName}」的基本資料修改申請未通過，請確認原因後重新申請`,
             data: { type: "revision_rejected", targetPath: "/dashboard" },
-          }).catch(() => {});
+          }).catch((err) => { console.error("[Push] revision_rejected failed:", err instanceof Error ? err.message : String(err)); });
+        }
+        // 站內通知
+        if (pushIds.length > 0) {
+          createPlatformNotifications(pushIds.map(uid => ({
+            recipientUserId: uid,
+            eventType: "revision_rejected",
+            eventGroup: "factory",
+            message: `「${result.factoryName}」的基本資料修改申請未通過，請確認原因後重新申請`,
+            actionUrl: "/dashboard",
+            titleSnapshot: result.factoryName,
+            dedupeKey: `revision_rejected:${input.revisionId}:u${uid}`,
+          }))).catch(() => {});
         }
       }).catch(() => {});
       return { success: true };
@@ -4534,7 +4930,7 @@ export const appRouter = router({
           throw e;
         }
 
-        // Notify bid author of new offer (station-only, no Email/Push per Phase 3B spec)
+        // Notify bid author of new offer (station + push)
         if (bid.authorUserId) {
           await db.createCommunityNotificationsBatch([{
             recipientUserId: bid.authorUserId,
@@ -4548,6 +4944,13 @@ export const appRouter = router({
             message: `您的需求「${bid.title}」收到新投標`,
             dedupeKey: `bid:${input.bidId}:new-offer:factory:${input.bidderFactoryId}`,
           }]);
+          sendPushToRecipients({
+            userIds: [bid.authorUserId],
+            excludeUserId: ctx.user.id,
+            title: "OXM 需求收到新投標",
+            body: `「${bid.title}」收到來自「${selectedFactory.factoryName}」的投標`,
+            data: { type: "bid_new_offer", targetPath: "/notifications" },
+          }).catch((err) => { console.error("[Push] bid_new_offer failed:", err instanceof Error ? err.message : String(err)); });
         }
 
         return { offerId };
@@ -4917,6 +5320,23 @@ export const appRouter = router({
             appliedAt: new Date().toLocaleString("zh-TW", { timeZone: "Asia/Taipei" }),
           });
           console.log(`[Email] New-case email sent to ${consultantUser.email} for app #${id}`);
+          // 通知中心 + Push 通知顧問
+          notifyUser(
+            notifyConsultant.userId!,
+            {
+              eventType: "upgrade_new_case",
+              eventGroup: "upgrade",
+              message: `新案件「${input.companyName}」已分派給您，請儘速查收`,
+              actionUrl: "/upgrade-consultant/cases",
+              titleSnapshot: input.companyName,
+              dedupeKey: `upgrade_new_case:${id}`,
+            },
+            {
+              title: "OXM 新企業升級案件",
+              body: `新案件「${input.companyName}」已分派給您`,
+              data: { type: "upgrade_new_case", targetPath: "/upgrade-consultant/cases" },
+            }
+          );
         }).catch((err) => {
           console.warn(`[Email] New-case notification FAILED for app #${id} consultant #${notifyConsultant.id}:`, err);
         });
@@ -5021,6 +5441,16 @@ export const appRouter = router({
         } else {
           await db.updateUpgradeApplicationStatus(app.id, "evaluating");
         }
+        if (app.factoryId) {
+          notifyFactoryMembers(app.factoryId, {
+            eventType: "upgrade_acknowledged",
+            eventGroup: "upgrade",
+            message: `「${app.companyName}」的企業升級申請已進入評估中`,
+            actionUrl: "/upgrade-center",
+            titleSnapshot: app.companyName,
+            dedupeKey: `upgrade_ack:${app.id}`,
+          });
+        }
         return { success: true };
       }
 
@@ -5030,6 +5460,21 @@ export const appRouter = router({
       if (!belongsToMe) throw new TRPCError({ code: "FORBIDDEN", message: "此案件不屬於您的地區" });
       const result = await db.acknowledgeUpgradeApplication(app.id, app.assignedConsultantId!, ctx.user.id);
       if (!result.ok) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "查收失敗，請重試" });
+      // 通知工廠：申請已進入評估中
+      if (app.factoryId) {
+        notifyFactoryMembers(app.factoryId, {
+          eventType: "upgrade_acknowledged",
+          eventGroup: "upgrade",
+          message: `「${app.companyName}」的企業升級申請已進入評估中`,
+          actionUrl: "/upgrade-center",
+          titleSnapshot: app.companyName,
+          dedupeKey: `upgrade_ack:${app.id}`,
+        }, {
+          title: "OXM 企業升級申請更新",
+          body: `「${app.companyName}」的申請已進入評估中`,
+          data: { type: "upgrade", targetPath: "/upgrade-center" },
+        });
+      }
       return { success: true };
     }),
 
@@ -5086,6 +5531,30 @@ export const appRouter = router({
         await db.clearApprovalAndFeeData(input.applicationId);
       }
       await db.updateUpgradeApplicationStatus(input.applicationId, input.nextStatus);
+      // 通知工廠：案件狀態更新
+      if (app.factoryId) {
+        const upgradeStatusLabels: Record<string, string> = {
+          ineligible: "不符申請資格",
+          accepted: "通過評估，準備送件",
+          submitted: "已送件政府審核",
+          rejected: "政府審核未通過",
+          transforming: "已通過，進入企業轉型期",
+          completed: "案件已結案",
+        };
+        const statusLabel = upgradeStatusLabels[input.nextStatus] ?? input.nextStatus;
+        notifyFactoryMembers(app.factoryId, {
+          eventType: `upgrade_status_${input.nextStatus}`,
+          eventGroup: "upgrade",
+          message: `「${app.companyName}」企業升級申請狀態更新：${statusLabel}`,
+          actionUrl: "/upgrade-center",
+          titleSnapshot: app.companyName,
+          dedupeKey: `upgrade_status:${app.id}:${input.nextStatus}`,
+        }, {
+          title: "OXM 企業升級申請更新",
+          body: `申請狀態更新：${statusLabel}`,
+          data: { type: "upgrade", targetPath: "/upgrade-center" },
+        });
+      }
       return { success: true };
     }),
 

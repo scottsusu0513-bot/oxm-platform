@@ -9,7 +9,7 @@ import { HelmetProvider } from "react-helmet-async";
 import { toast } from "sonner";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { setBadgeCount, clearBadge } from "@/lib/appBadge";
-import { consumePendingNavigatePath } from "@/lib/pushNotifications";
+import { consumePendingNavigatePath, initPushNotifications } from "@/lib/pushNotifications";
 import { AppLoading } from "@/components/AppLoading";
 import { AppBottomNav } from "@/components/AppBottomNav";
 
@@ -219,6 +219,44 @@ function AppDeepLinkHandler() {
   return null;
 }
 
+// Module-level guard so only one silent init attempt happens across the entire session
+let globalPushInitAttempted = false;
+
+// Silently initialises push notifications once the user is logged in on a native app.
+// MemberCenter handles the "enable push" UX; this component handles the token refresh
+// so users don't need to visit MemberCenter after a reinstall / token rotation.
+function PushAutoInitializer() {
+  const { user } = useAuth();
+  const [isNative, setIsNative] = useState(false);
+  const registerPushToken = trpc.notification.registerPushToken.useMutation();
+
+  useEffect(() => {
+    import("@capacitor/core")
+      .then(({ Capacitor }) => setIsNative(Capacitor.isNativePlatform()))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (!user) {
+      globalPushInitAttempted = false; // reset on logout so next login re-inits
+      return;
+    }
+    if (!isNative) return;
+    if (globalPushInitAttempted) return;
+
+    const settings = (user.notificationSettings as Record<string, boolean> | null) ?? {};
+    if (!(settings.pushEnabled ?? false)) return;
+
+    globalPushInitAttempted = true;
+    initPushNotifications(async (input) => {
+      await registerPushToken.mutateAsync(input);
+    }).catch((e) => console.warn("[Push] global auto-init failed:", e));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, isNative]);
+
+  return null;
+}
+
 // Handles push notification tap navigation (background, cold-start, foreground)
 function PushNavigationHandler() {
   const [, navigate] = useLocation();
@@ -338,6 +376,7 @@ function App() {
             <PageViewTracker />
             <AppBadgeSyncer />
             <AppDeepLinkHandler />
+            <PushAutoInitializer />
             <PushNavigationHandler />
             <Router />
             <AppBottomNav />

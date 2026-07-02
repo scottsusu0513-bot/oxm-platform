@@ -64,8 +64,12 @@ export async function sendPushToUser(
       },
     },
     android: {
+      priority: "high" as const,
       notification: {
+        channelId: "oxm_default_v2",
         sound: "default",
+        defaultVibrateTimings: true,
+        defaultSound: true,
       },
     },
   };
