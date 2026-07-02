@@ -19,7 +19,7 @@ import { desc, eq, and, sql, isNull } from "drizzle-orm";
 import { getDb } from "./db";
 import { sendPushToUser, sendPushToRecipients } from "./push";
 import { createPlatformNotifications } from "./notifications";
-import { notifyUser, notifyFactoryMembers } from "./notifyHelper";
+import { notifyUser, notifyFactoryMembers, notifyAdmins } from "./notifyHelper";
 import { runCollaborationOrderOverdueEmailCheck } from "./orderOverdueCheck";
 
 function requireVerifiedEmail(user: { primaryEmailVerifiedAt: Date | null }): void {
@@ -5342,6 +5342,23 @@ export const appRouter = router({
         });
       } else if (status === "new") {
         console.warn(`[Email] Skipping consultant email for app #${id}: consultant=${assignedConsultant ? `id=${assignedConsultant.id} userId=${assignedConsultant.userId} isActive=${assignedConsultant.isActive}` : "null"}`);
+      } else if (status === "unassigned") {
+        // 無顧問地區：通知中心 + Push 通知所有管理員
+        notifyAdmins(
+          {
+            eventType: "upgrade_unassigned",
+            eventGroup: "upgrade",
+            message: `新企業升級申請「${input.companyName}」無顧問覆蓋地區（${input.location}），請儘速手動分派`,
+            actionUrl: "/admin/upgrade-applications",
+            titleSnapshot: input.companyName,
+            dedupeKey: `upgrade_unassigned:${id}`,
+          },
+          {
+            title: "OXM 無顧問地區升級申請",
+            body: `「${input.companyName}」（${input.location}）無顧問，請手動分派`,
+            data: { type: "upgrade_unassigned", targetPath: "/admin/upgrade-applications" },
+          }
+        );
       }
       return { success: true, id };
     }),

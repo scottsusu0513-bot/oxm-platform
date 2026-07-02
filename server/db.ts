@@ -4999,6 +4999,25 @@ export async function getActiveCoManagerUserIds(factoryId: number): Promise<numb
   return rows.map(r => r.userId);
 }
 
+export async function getAdminUserIds(): Promise<number[]> {
+  const db = await getDb();
+  if (!db) return [];
+  // Mirror isAdminUser() logic: match on ENV whitelist (openId / email), not cached users.role
+  const conditions: ReturnType<typeof eq>[] = [];
+  if (ENV.ownerOpenId) conditions.push(eq(users.openId, ENV.ownerOpenId));
+  if (ENV.adminWhitelistOpenIds.length > 0) {
+    for (const oid of ENV.adminWhitelistOpenIds) conditions.push(eq(users.openId, oid));
+  }
+  if (ENV.adminWhitelistEmails.length > 0) {
+    for (const em of ENV.adminWhitelistEmails) conditions.push(eq(users.email, em));
+  }
+  if (conditions.length === 0) return [];
+  const rows = await db.select({ id: users.id })
+    .from(users)
+    .where(and(isNull(users.deletedAt), or(...conditions)));
+  return rows.map(r => r.id);
+}
+
 // ===== Community Notifications =====
 
 export interface CreateCommunityNotificationInput {

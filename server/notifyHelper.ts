@@ -37,6 +37,31 @@ async function _notifyUser(
   }
 }
 
+/** Fire-and-forget: write platform notifications + optional push to all admin users. */
+export function notifyAdmins(notif: NotifBase & { dedupeKey: string }, push?: PushOpts): void {
+  void _notifyAdmins(notif, push);
+}
+
+async function _notifyAdmins(notif: NotifBase & { dedupeKey: string }, push?: PushOpts): Promise<void> {
+  try {
+    const adminIds = await db.getAdminUserIds();
+    if (adminIds.length === 0) return;
+    await createPlatformNotifications(
+      adminIds.map(uid => ({ ...notif, recipientUserId: uid, dedupeKey: `${notif.dedupeKey}:u${uid}` }))
+    ).catch(e => console.error(`[Notify] admins (${notif.eventType}):`, e instanceof Error ? e.message : e));
+    if (push) {
+      await sendPushToRecipients({
+        userIds: adminIds,
+        title: push.title,
+        body: push.body,
+        data: push.data ?? { targetPath: notif.actionUrl ?? "/notifications" },
+      }).catch(e => console.error(`[Push] admins (${notif.eventType}):`, e instanceof Error ? e.message : e));
+    }
+  } catch (e) {
+    console.error(`[Notify] notifyAdmins (${notif.eventType}):`, e instanceof Error ? e.message : e);
+  }
+}
+
 /** Fire-and-forget: write platform notifications + optional push to factory owner + all active co-managers. */
 export function notifyFactoryMembers(
   factoryId: number,
