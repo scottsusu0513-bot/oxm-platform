@@ -342,7 +342,7 @@ export default function Navbar() {
                   <DropdownMenuItem asChild>
                     <Link href="/dashboard" className="flex items-center gap-2 cursor-pointer">
                       <LayoutDashboard className="w-4 h-4" />
-                      工廠工作室
+                      工廠管理
                       {showFactoryBadge && (
                         <span className="ml-auto h-2 w-2 rounded-full bg-orange-500 shrink-0" />
                       )}
