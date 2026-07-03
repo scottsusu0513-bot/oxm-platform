@@ -3058,7 +3058,7 @@ export const appRouter = router({
       title: z.string().min(1).max(200),
       content: z.string().min(1),
       targetType: z.enum(['all_users', 'all_factory_managers', 'single']),
-      receiverId: z.number().int().optional(),
+      receiverIds: z.array(z.number().int()).optional(),
     })).mutation(async ({ ctx, input }) => {
       const campaignId = await db.createMessageCampaign({
         title: input.title,
@@ -3071,8 +3071,8 @@ export const appRouter = router({
         receiverIds = await db.getAllActiveUserIds();
       } else if (input.targetType === 'all_factory_managers') {
         receiverIds = await db.getFactoryManagerIds();
-      } else if (input.targetType === 'single' && input.receiverId != null) {
-        receiverIds = [input.receiverId];
+      } else if (input.targetType === 'single') {
+        receiverIds = input.receiverIds ?? [];
       }
       await db.createMessageRecipients(campaignId, receiverIds);
 

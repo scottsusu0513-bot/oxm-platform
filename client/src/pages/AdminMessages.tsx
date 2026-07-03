@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Send, Users, Search, Loader2, MessageSquare, ChevronRight, CheckCircle2, Clock, Trash2 } from "lucide-react";
+import { ArrowLeft, Send, Users, Search, Loader2, MessageSquare, ChevronRight, CheckCircle2, Clock, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { AlertCircle } from "lucide-react";
@@ -59,8 +59,7 @@ function AdminMessagesContent({ setLocation }: { setLocation: (p: string) => voi
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
   const [targetType, setTargetType] = useState<"all_users" | "all_factory_managers" | "single">("all_users");
-  const [receiverId, setReceiverId] = useState<number | null>(null);
-  const [receiverName, setReceiverName] = useState("");
+  const [selectedUsers, setSelectedUsers] = useState<{ id: number; name: string }[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [page, setPage] = useState(1);
   const [retractTarget, setRetractTarget] = useState<{ id: number; title: string } | null>(null);
@@ -80,7 +79,7 @@ function AdminMessagesContent({ setLocation }: { setLocation: (p: string) => voi
     onSuccess: (data) => {
       toast.success(`站內信已發送，共 ${data.recipientCount} 位收件人`);
       setTitle(""); setContent(""); setTargetType("all_users");
-      setReceiverId(null); setReceiverName(""); setSearchQuery("");
+      setSelectedUsers([]); setSearchQuery("");
       utils.admin.getMessageCampaigns.invalidate();
     },
     onError: (err) => toast.error(err.message),
@@ -98,8 +97,13 @@ function AdminMessagesContent({ setLocation }: { setLocation: (p: string) => voi
   const handleSend = () => {
     if (!title.trim()) { toast.error("請填寫標題"); return; }
     if (!content.trim()) { toast.error("請填寫內容"); return; }
-    if (targetType === "single" && !receiverId) { toast.error("請選擇收件人"); return; }
-    createMut.mutate({ title: title.trim(), content: content.trim(), targetType, receiverId: receiverId ?? undefined });
+    if (targetType === "single" && selectedUsers.length === 0) { toast.error("請至少選擇一位收件人"); return; }
+    createMut.mutate({
+      title: title.trim(),
+      content: content.trim(),
+      targetType,
+      receiverIds: targetType === "single" ? selectedUsers.map(u => u.id) : undefined,
+    });
   };
 
   const unreadStatsQuery = trpc.admin.getAdminMessageCampaignUnreadStats.useQuery(undefined, {
@@ -143,7 +147,7 @@ function AdminMessagesContent({ setLocation }: { setLocation: (p: string) => voi
               </div>
               <div>
                 <label className="text-sm font-medium mb-1 block">發送對象</label>
-                <Select value={targetType} onValueChange={(v: any) => { setTargetType(v); setReceiverId(null); setReceiverName(""); setSearchQuery(""); }}>
+                <Select value={targetType} onValueChange={(v: any) => { setTargetType(v); setSelectedUsers([]); setSearchQuery(""); }}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all_users">全部用戶</SelectItem>
@@ -159,33 +163,58 @@ function AdminMessagesContent({ setLocation }: { setLocation: (p: string) => voi
               </div>
               {targetType === "single" && (
                 <div>
-                  <label className="text-sm font-medium mb-1 block">搜尋收件人</label>
-                  {receiverId ? (
-                    <div className="flex items-center gap-2">
-                      <Badge variant="secondary" className="text-sm px-3 py-1">{receiverName}</Badge>
-                      <Button variant="ghost" size="sm" onClick={() => { setReceiverId(null); setReceiverName(""); }}>取消</Button>
-                    </div>
-                  ) : (
-                    <div className="relative">
-                      <div className="relative">
-                        <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                        <Input placeholder="輸入姓名或 Email（至少 2 字）" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="pl-8" />
-                      </div>
-                      {searchQuery.trim().length >= 2 && (
-                        <div className="absolute z-10 w-full mt-1 bg-white border rounded-md shadow-lg max-h-48 overflow-y-auto">
-                          {searchQuery_.isLoading && <div className="p-3 text-sm text-muted-foreground flex items-center gap-2"><Loader2 className="h-3 w-3 animate-spin" />搜尋中...</div>}
-                          {!searchQuery_.isLoading && (searchQuery_.data ?? []).length === 0 && <div className="p-3 text-sm text-muted-foreground">找不到用戶</div>}
-                          {(searchQuery_.data ?? []).map((u: any) => (
-                            <button key={u.id} className="w-full text-left px-3 py-2 text-sm hover:bg-muted/50 flex flex-col"
-                              onClick={() => { setReceiverId(u.id); setReceiverName(`${u.name ?? "未命名"} (${u.email})`); setSearchQuery(""); }}>
-                              <span className="font-medium">{u.name ?? "未命名"}</span>
-                              <span className="text-muted-foreground text-xs">{u.email}</span>
-                            </button>
-                          ))}
-                        </div>
-                      )}
+                  <label className="text-sm font-medium mb-1 block">
+                    搜尋收件人
+                    {selectedUsers.length > 0 && (
+                      <span className="ml-1.5 text-xs font-normal text-muted-foreground">已選 {selectedUsers.length} 位</span>
+                    )}
+                  </label>
+                  {/* 已選使用者 chips */}
+                  {selectedUsers.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mb-2">
+                      {selectedUsers.map(u => (
+                        <Badge key={u.id} variant="secondary" className="text-xs px-2 py-1 flex items-center gap-1 max-w-[200px]">
+                          <span className="truncate">{u.name}</span>
+                          <button
+                            type="button"
+                            onClick={() => setSelectedUsers(prev => prev.filter(x => x.id !== u.id))}
+                            className="shrink-0 rounded-full hover:bg-muted-foreground/20 p-0.5 ml-0.5"
+                            aria-label="移除"
+                          >
+                            <X className="h-2.5 w-2.5" />
+                          </button>
+                        </Badge>
+                      ))}
                     </div>
                   )}
+                  {/* 搜尋框（常駐顯示，可繼續新增） */}
+                  <div className="relative">
+                    <div className="relative">
+                      <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                      <Input placeholder="輸入姓名或 Email（至少 2 字）繼續新增" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="pl-8" />
+                    </div>
+                    {searchQuery.trim().length >= 2 && (
+                      <div className="absolute z-10 w-full mt-1 bg-white border rounded-md shadow-lg max-h-48 overflow-y-auto">
+                        {searchQuery_.isLoading && <div className="p-3 text-sm text-muted-foreground flex items-center gap-2"><Loader2 className="h-3 w-3 animate-spin" />搜尋中...</div>}
+                        {!searchQuery_.isLoading && (searchQuery_.data ?? []).length === 0 && <div className="p-3 text-sm text-muted-foreground">找不到用戶</div>}
+                        {(searchQuery_.data ?? []).map((u: any) => {
+                          const alreadySelected = selectedUsers.some(s => s.id === u.id);
+                          return (
+                            <button key={u.id}
+                              className={`w-full text-left px-3 py-2 text-sm flex flex-col ${alreadySelected ? "opacity-40 cursor-not-allowed" : "hover:bg-muted/50"}`}
+                              onClick={() => {
+                                if (alreadySelected) return;
+                                setSelectedUsers(prev => [...prev, { id: u.id, name: `${u.name ?? "未命名"} (${u.email})` }]);
+                                setSearchQuery("");
+                              }}>
+                              <span className="font-medium">{u.name ?? "未命名"}{alreadySelected ? " ✓" : ""}</span>
+                              <span className="text-muted-foreground text-xs">{u.email}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
               <Button className="w-full gap-2" onClick={handleSend} disabled={createMut.isPending}>
