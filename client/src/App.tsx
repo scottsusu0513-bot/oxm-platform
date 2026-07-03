@@ -12,6 +12,7 @@ import { setBadgeCount, clearBadge } from "@/lib/appBadge";
 import { consumePendingNavigatePath, initPushNotifications } from "@/lib/pushNotifications";
 import { AppLoading } from "@/components/AppLoading";
 import { AppBottomNav } from "@/components/AppBottomNav";
+import NetworkStatusOverlay from "@/components/NetworkStatusOverlay";
 
 // ── 公開頁面 ──────────────────────────────────────────────────────────────
 const Home                  = lazy(() => import("./pages/Home"));
@@ -380,6 +381,7 @@ function App() {
             <AppDeepLinkHandler />
             <PushAutoInitializer />
             <PushNavigationHandler />
+            <NetworkStatusOverlay />
             <Router />
             <AppBottomNav />
           </TooltipProvider>
