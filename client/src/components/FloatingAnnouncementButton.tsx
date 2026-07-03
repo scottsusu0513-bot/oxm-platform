@@ -162,19 +162,35 @@ export default function FloatingAnnouncementButton() {
 
       {/* 平台公告（有公告才顯示） */}
       {items.length > 0 && (
-        <button
-          onClick={handleAnnouncementClick}
-          aria-label="平台公告"
-          className={`${btnBase} bg-gradient-to-r from-orange-500 to-purple-500`}
-        >
-          {hasNew && (
-            <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-orange-500 rounded-full border-2 border-white" />
-          )}
-          <Megaphone className="w-4 h-4 shrink-0" />
-          <span className="hidden sm:inline text-sm">
-            {hasNew ? "有新公告" : "平台公告"}
-          </span>
-        </button>
+        hasNew ? (
+          <div className="relative">
+            {/* Breathing glow halo */}
+            <span className="absolute inset-0 rounded-full announce-glow pointer-events-none" />
+            {/* Expanding ring waves (staggered) */}
+            <span className="absolute inset-0 rounded-full announce-ripple-a pointer-events-none" />
+            <span className="absolute inset-0 rounded-full announce-ripple-b pointer-events-none" />
+            <button
+              onClick={handleAnnouncementClick}
+              aria-label="平台公告"
+              className={`${btnBase} bg-gradient-to-r from-orange-500 to-purple-500 shadow-[0_0_18px_rgba(249,115,22,0.65),0_0_36px_rgba(168,85,247,0.4)]`}
+            >
+              <span className="absolute -top-2.5 -right-1.5 z-10 bg-red-500 text-white text-[10px] font-black px-1.5 py-0.5 rounded-full leading-none shadow-sm pointer-events-none select-none">
+                NEW
+              </span>
+              <Megaphone className="w-4 h-4 shrink-0" />
+              <span className="hidden sm:inline text-sm">有新公告</span>
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={handleAnnouncementClick}
+            aria-label="平台公告"
+            className={`${btnBase} bg-gradient-to-r from-orange-500 to-purple-500`}
+          >
+            <Megaphone className="w-4 h-4 shrink-0" />
+            <span className="hidden sm:inline text-sm">平台公告</span>
+          </button>
+        )
       )}
     </div>,
     document.body,
