@@ -2636,7 +2636,7 @@ export async function getActiveUsersForAnnouncement(): Promise<{ id: number; ema
   const db = await getDb();
   if (!db) return [];
   return db
-    .select({ id: users.id, email: users.email, name: users.name, notificationSettings: users.notificationSettings })
+    .select({ id: users.id, email: sql<string | null>`COALESCE(${users.primaryEmail}, ${users.email})`, name: users.name, notificationSettings: users.notificationSettings })
     .from(users)
     .where(isNull(users.deletedAt));
 }
@@ -2706,7 +2706,7 @@ export async function getRecipientsWithEmails(campaignId: number): Promise<{ use
   const db = await getDb();
   if (!db) return [];
   return db
-    .select({ userId: users.id, email: users.email, name: users.name, notificationSettings: users.notificationSettings })
+    .select({ userId: users.id, email: sql<string | null>`COALESCE(${users.primaryEmail}, ${users.email})`, name: users.name, notificationSettings: users.notificationSettings })
     .from(messageRecipients)
     .innerJoin(users, eq(messageRecipients.receiverId, users.id))
     .where(and(eq(messageRecipients.campaignId, campaignId), isNull(users.deletedAt)));
@@ -2754,9 +2754,9 @@ export async function searchUsersForMessage(query: string, limit = 10) {
   if (!db) return [];
   const pattern = `%${query}%`;
   return db
-    .select({ id: users.id, name: users.name, email: users.email })
+    .select({ id: users.id, name: users.name, email: sql<string | null>`COALESCE(${users.primaryEmail}, ${users.email})` })
     .from(users)
-    .where(and(isNull(users.deletedAt), or(like(users.name, pattern), like(users.email, pattern))))
+    .where(and(isNull(users.deletedAt), or(like(users.name, pattern), like(users.email, pattern), like(users.primaryEmail, pattern))))
     .limit(limit);
 }
 
