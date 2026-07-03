@@ -3139,7 +3139,7 @@ export const appRouter = router({
           const withEmail = recipients.filter(r => {
             if (!r.email) return false;
             const s = (r.notificationSettings as Record<string, boolean> | null) ?? {};
-            return s.announcement === true;
+            return s['announcement'] !== false;
           });
           const skipped = recipients.length - withEmail.length;
           console.log(`[adminMessage] email queue start campaignId=${campaignId} total=${recipients.length} withEmail=${withEmail.length} skipped=${skipped}`);
