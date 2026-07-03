@@ -244,12 +244,14 @@ function PushAutoInitializer() {
     if (!isNative) return;
     if (globalPushInitAttempted) return;
 
-    const settings = (user.notificationSettings as Record<string, boolean> | null) ?? {};
-    if (!(settings.pushEnabled ?? false)) return;
-
+    // Always init on native login — token registration is independent of pushEnabled preference.
+    // pushEnabled only controls whether the backend sends notifications, not whether we register.
     globalPushInitAttempted = true;
     initPushNotifications(async (input) => {
       await registerPushToken.mutateAsync(input);
+    }).then((result) => {
+      if (result === "denied") console.log("[Push] auto-init: permission denied by user");
+      else if (result !== "success" && result !== "not_native") console.warn("[Push] auto-init result:", result);
     }).catch((e) => console.warn("[Push] global auto-init failed:", e));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, isNative]);

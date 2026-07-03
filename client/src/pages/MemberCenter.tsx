@@ -42,13 +42,13 @@ const DEFAULT_NOTIFICATIONS: Record<string, boolean> = {
   reportUpdate: true,
   ticketUpdate: true,
   announcement: false,
-  // Push 設定（新增，本階段只存 DB，下階段才接推播）
-  pushEnabled: false,
+  // Push 設定
+  pushEnabled: true,
   pushNewMessage: true,
   pushReviewReply: true,
   pushReportUpdate: true,
   pushTicketUpdate: true,
-  pushAnnouncement: false,
+  pushAnnouncement: true,
 };
 
 const NOTIFICATION_ROWS = [
@@ -519,11 +519,10 @@ function NotificationsTab({ user }: { user: any }) {
   const pendingPushInitRef = useRef(false);
   const silentInitAttemptedRef = useRef(false); // 確保同一生命週期只自動 init 一次
 
-  // 若 pushEnabled 已是 true（前次儲存），isNativeApp 確認後靜默執行一次 init
-  // 解決：設定頁重開時 dirtySettings 為空、不觸發 initPushNotifications 的問題
+  // 通知設定頁載入後，若是 native app，靜默執行一次 init 確保 token 有效
+  // token 註冊不受 pushEnabled 控制；pushEnabled 只控制後端是否發送通知
   useEffect(() => {
     if (!isNativeApp) return;                         // 1. 只在 native 執行，Web 直接返回
-    if (!(settings.pushEnabled ?? false)) return;
     if (silentInitAttemptedRef.current) return;       // 2. 同一生命週期只跑一次
     silentInitAttemptedRef.current = true;
     initPushNotifications(async (input) => {
@@ -600,6 +599,9 @@ function NotificationsTab({ user }: { user: any }) {
               )}
               {isNativeApp && !pushMasterOn && (
                 <p className="text-xs text-muted-foreground pt-0.5">開啟後，下方手機通知分類才會生效</p>
+              )}
+              {isNativeApp && pushMasterOn && (
+                <p className="text-xs text-muted-foreground pt-0.5">若未收到通知，請至「手機設定 → 應用程式 → OXM → 通知」確認已允許</p>
               )}
             </div>
           </div>

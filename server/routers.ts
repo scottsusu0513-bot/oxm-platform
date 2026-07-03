@@ -1265,6 +1265,8 @@ export const appRouter = router({
       // ── 工廠回覆：push + 站內通知（buyerForNotif 已在首次判斷時預取，不重複查詢）
       if (senderRole === "factory" && buyerForNotif) {
         const settings = (buyerForNotif.notificationSettings as Record<string, boolean> | null) ?? {};
+        const pushNewMsg = settings.pushNewMessage;
+        console.log(`[Push:chat] factory→user convId=${input.conversationId} recipientId=${conv.userId} pushNewMessage=${pushNewMsg ?? "unset(default:send)"} pushEnabled=${settings.pushEnabled ?? "unset"}`);
         if (settings.pushNewMessage !== false) {
           sendPushToRecipients({
             userIds: [conv.userId],
@@ -1325,6 +1327,7 @@ export const appRouter = router({
               const s = (notificationSettings as Record<string, boolean> | null) ?? {};
               if (s.pushNewMessage !== false) pushIds.push(userId);
             }
+            console.log(`[Push:chat] user→factory convId=${input.conversationId} pushIds=[${pushIds.join(",")}] excludeSenderId=${ctx.user.id} ownerPushNewMessage=${ownerSettings.pushNewMessage ?? "unset(default:send)"}`);
             return sendPushToRecipients({
               userIds: pushIds,
               excludeUserId: ctx.user.id,

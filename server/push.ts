@@ -48,9 +48,12 @@ export async function sendPushToUser(
 
   const rows = await db.getEnabledPushTokensByUserId(userId);
   if (rows.length === 0) {
+    console.log(`[Push] userId=${userId} skipped: no enabled tokens`);
     return { status: "skipped", reason: "no_tokens" };
   }
 
+  const platforms = rows.map(r => r.platform).join(",");
+  console.log(`[Push] userId=${userId} tokenCount=${rows.length} platforms=[${platforms}]`);
   const tokenList = rows.map(r => r.token);
   const message = {
     tokens: tokenList,
@@ -75,6 +78,7 @@ export async function sendPushToUser(
   };
 
   const response = await getMessaging().sendEachForMulticast(message);
+  console.log(`[Push] userId=${userId} FCM result: success=${response.successCount} fail=${response.failureCount}`);
 
   // Handle invalid / unregistered tokens
   response.responses.forEach((r, i) => {
