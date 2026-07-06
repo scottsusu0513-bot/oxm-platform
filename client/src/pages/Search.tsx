@@ -15,7 +15,7 @@ import { INDUSTRIES, INDUSTRY_OPTIONS, TAIWAN_REGIONS } from "@shared/constants"
 import { trpc } from "@/lib/trpc";
 import { useLocation, Link } from "wouter";
 import { useState, useMemo, useEffect, useRef } from "react";
-import { Search as SearchIcon, Star, MapPin, Factory, ChevronLeft, ChevronRight, Megaphone, Heart, X, Wrench, ChevronDown, Clock, ShoppingCart, Plus, Minus, Send } from "lucide-react";
+import { Search as SearchIcon, Star, MapPin, Factory, ChevronLeft, ChevronRight, Megaphone, Heart, X, Wrench, ChevronDown, Clock, ShoppingCart, Plus, Minus, Send, Loader2 } from "lucide-react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { performLogin } from "@/const";
 import { toast } from "sonner";
@@ -369,6 +369,15 @@ export default function Search() {
   const [page, setPage] = useState(() => Math.max(1, parseInt(params.get("page") ?? "1", 10) || 1));
   const [sortBy, setSortBy] = useState(() => params.get("sortBy") ?? "rating");
 
+  const [isMobile, setIsMobile] = useState(() => window.matchMedia("(max-width: 768px)").matches);
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 768px)");
+    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, []);
+  const pageSize = isMobile ? 12 : 20;
+
   const { cart, add: cartAdd, remove: cartRemove, clear: cartClear, has: cartHas } = useInquiryCart();
   const [inquiryTitle, setInquiryTitle] = useState("");
   const [inquiryMessage, setInquiryMessage] = useState("");
@@ -472,8 +481,8 @@ export default function Search() {
     businessType: businessType && businessType !== "all" ? businessType : undefined,
     sortBy: sortBy as "rating" | "reviews" | "response" | "newest" | undefined,
     page,
-    pageSize: window.matchMedia("(max-width: 768px)").matches ? 12 : 20,
-  }), [mfgMode, industry, subIndustry, region, committedKeyword, businessType, sortBy, page]);
+    pageSize,
+  }), [mfgMode, industry, subIndustry, region, committedKeyword, businessType, sortBy, page, pageSize]);
 
   const appliedFilters = useMemo(() => {
     const filters: Array<{ key: string; label: string; value: string }> = [];
@@ -500,20 +509,36 @@ export default function Search() {
     navigate(qs ? `/search?${qs}` : "/search", { replace: true });
   };
 
-  const { data, isLoading } = trpc.factory.search.useQuery(searchInput);
+  const { data, isLoading, isFetching } = trpc.factory.search.useQuery(searchInput);
   const ads = data?.ads ?? [];
 
-  const filteredItems = useMemo(() => {
-    if (!data?.items) return [];
-    if (businessType === "all") return data.items;
-    return data.items.filter(f => (f as any).businessType === businessType);
-  }, [data?.items, businessType]);
+  // filterFingerprint detects when search conditions change (excluding page) to reset mobile accumulated list
+  const filterFingerprint = useMemo(() =>
+    JSON.stringify({ mfgMode, industry, subIndustry, region, committedKeyword, businessType, sortBy }),
+    [mfgMode, industry, subIndustry, region, committedKeyword, businessType, sortBy]
+  );
+  const [displayedItems, setDisplayedItems] = useState<any[]>([]);
+  const prevFingerprintRef = useRef(filterFingerprint);
+  useEffect(() => {
+    if (!data?.items) return;
+    const filterChanged = prevFingerprintRef.current !== filterFingerprint;
+    prevFingerprintRef.current = filterFingerprint;
+    if (isMobile && page > 1 && !filterChanged) {
+      setDisplayedItems(prev => [...prev, ...data.items]);
+    } else {
+      setDisplayedItems(data.items);
+    }
+  }, [data]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const sortedItems = filteredItems;
+  const sortedItems = useMemo(() => {
+    const items = isMobile ? displayedItems : (data?.items ?? []);
+    if (businessType === "all") return items;
+    return items.filter(f => (f as any).businessType === businessType);
+  }, [isMobile, displayedItems, data?.items, businessType]);
 
   const factoryIdsInResult = useMemo(
-    () => data?.items.map(f => f.id) ?? [],
-    [data?.items]
+    () => sortedItems.map((f: any) => f.id),
+    [sortedItems]
   );
 
   const { data: batchFavData } = trpc.favorite.batchIsLiked.useQuery(
@@ -549,7 +574,7 @@ export default function Search() {
     navigate("/search", { replace: true });
   };
 
-  const totalPages = Math.ceil((data?.total ?? 0) / 20);
+  const totalPages = Math.ceil((data?.total ?? 0) / pageSize);
 
   const seoIndustry = industry.length > 0 ? industry[0] : null;
   const pageTitle = seoIndustry
@@ -976,19 +1001,38 @@ export default function Search() {
               </div>
             )}
 
-            {/* 分頁 */}
-            {totalPages > 1 && (
-              <div className="flex justify-center gap-2 mt-8">
-                <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => onPageChange(page - 1)}>
-                  <ChevronLeft className="w-4 h-4" />
-                </Button>
-                <span className="flex items-center px-3 text-sm text-muted-foreground">
-                  第 {page} / {totalPages} 頁
-                </span>
-                <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => onPageChange(page + 1)}>
-                  <ChevronRight className="w-4 h-4" />
-                </Button>
-              </div>
+            {/* 手機：載入更多；桌機：分頁按鈕 */}
+            {isMobile ? (
+              !isLoading && page < totalPages && (
+                <div className="flex justify-center mt-8">
+                  <Button
+                    variant="outline"
+                    className="px-8 h-11 text-sm"
+                    onClick={() => onPageChange(page + 1)}
+                    disabled={isFetching}
+                  >
+                    {isFetching ? (
+                      <><Loader2 className="w-4 h-4 mr-2 animate-spin" />載入中…</>
+                    ) : (
+                      `載入更多（還有 ${(data?.total ?? 0) - displayedItems.length} 間）`
+                    )}
+                  </Button>
+                </div>
+              )
+            ) : (
+              totalPages > 1 && (
+                <div className="flex justify-center gap-2 mt-8">
+                  <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => onPageChange(page - 1)}>
+                    <ChevronLeft className="w-4 h-4" />
+                  </Button>
+                  <span className="flex items-center px-3 text-sm text-muted-foreground">
+                    第 {page} / {totalPages} 頁
+                  </span>
+                  <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => onPageChange(page + 1)}>
+                    <ChevronRight className="w-4 h-4" />
+                  </Button>
+                </div>
+              )
             )}
           </div>
         </div>
