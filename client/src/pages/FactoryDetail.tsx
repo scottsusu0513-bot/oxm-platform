@@ -382,10 +382,7 @@ export default function FactoryDetail() {
       <Navbar />
 
       {/* ── Cover image ── */}
-      <div
-        className="relative w-full overflow-hidden"
-        style={{ height: "clamp(100px, 18vw, 260px)" }}
-      >
+      <div className="relative w-full overflow-hidden h-40 sm:h-48 md:h-56">
         {(factory as any).coverImageUrl ? (
           <img
             src={(factory as any).coverImageUrl}
@@ -394,8 +391,10 @@ export default function FactoryDetail() {
             loading="eager"
           />
         ) : (
-          <div className="w-full h-full bg-gradient-to-br from-orange-400 to-orange-600" />
+          <div className="w-full h-full bg-gradient-to-br from-orange-400 via-rose-500 to-violet-600" />
         )}
+        {/* subtle bottom fade so logo blends in */}
+        <div className="absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-black/20 to-transparent pointer-events-none" />
         <button
           onClick={handleBackToSearch}
           className="absolute top-3 left-3 z-10 bg-black/30 hover:bg-black/50 text-white rounded-lg px-3 py-1.5 text-sm flex items-center gap-1.5 transition-colors backdrop-blur-sm"
@@ -406,7 +405,8 @@ export default function FactoryDetail() {
 
       <div className="container">
         {/* ── Header: logo | name+description | actions ── */}
-        <div className="flex flex-col sm:flex-row sm:items-start gap-3 mb-4">
+        {/* relative z-10 so this layer paints above the cover div (positioned element) */}
+        <div className="relative z-10 flex flex-col sm:flex-row sm:items-start gap-3 mb-4">
           {/* Left: Logo — overlaps cover */}
           <div
             className={`w-20 h-20 md:w-24 md:h-24 rounded-2xl border-4 border-white shadow-lg bg-white overflow-hidden shrink-0 -mt-10 md:-mt-12 ${(factory as any).avatarUrl ? "cursor-pointer hover:opacity-90 transition-opacity" : ""}`}
@@ -441,7 +441,7 @@ export default function FactoryDetail() {
           </div>
 
           {/* Right: action buttons */}
-          <div className="flex gap-2 shrink-0 flex-wrap sm:flex-col sm:items-stretch md:flex-row md:items-center">
+          <div className="flex gap-2 shrink-0 flex-wrap">
             <Button onClick={() => handleChat()}>
               <MessageCircle className="w-4 h-4 mr-1.5" />聯繫工廠
             </Button>
