@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useLocation, Link } from "wouter";
 import { allPosts } from "@/lib/blog";
 import { usePullToRefresh } from "@/hooks/usePullToRefresh";
@@ -164,6 +164,22 @@ function HeroImageCarousel() {
     setCurrent(idx);
   };
 
+  // Touch swipe — track start X on touchstart, resolve on touchend
+  const touchStartX = useRef<number | null>(null);
+  const handleTouchStart = (e: React.TouchEvent) => {
+    touchStartX.current = e.touches[0].clientX;
+    setPaused(true);
+  };
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    if (touchStartX.current === null || total < 2) { touchStartX.current = null; setPaused(false); return; }
+    const delta = e.changedTouches[0].clientX - touchStartX.current;
+    touchStartX.current = null;
+    setPaused(false);
+    if (Math.abs(delta) < 40) return;
+    if (delta < 0) goTo((current + 1) % total, "right");
+    else goTo((current - 1 + total) % total, "left");
+  };
+
   // Loading: render skeleton with same outer dimensions to prevent layout shift
   if (resolved === null) {
     return (
@@ -185,6 +201,8 @@ function HeroImageCarousel() {
         className="relative h-[200px] md:h-[300px] lg:h-[340px] w-full overflow-hidden rounded-2xl md:rounded-3xl border border-border/40 shadow-lg bg-gradient-to-br from-white to-orange-50/40"
         onMouseEnter={() => setPaused(true)}
         onMouseLeave={() => setPaused(false)}
+        onTouchStart={handleTouchStart}
+        onTouchEnd={handleTouchEnd}
       >
         {/* Blurred fill layer — softens object-contain letterbox on all viewports */}
         <img
