@@ -382,7 +382,7 @@ export default function FactoryDetail() {
       <Navbar />
 
       {/* ── Cover image ── */}
-      <div className="relative w-full overflow-hidden h-40 sm:h-48 md:h-56">
+      <div className="relative w-full overflow-hidden aspect-[16/5]">
         {(factory as any).coverImageUrl ? (
           <img
             src={(factory as any).coverImageUrl}
