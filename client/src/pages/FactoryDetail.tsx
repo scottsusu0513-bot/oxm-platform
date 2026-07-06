@@ -381,26 +381,28 @@ export default function FactoryDetail() {
       </Helmet>
       <Navbar />
 
-      {/* ── Cover image ── */}
-      <div className="relative w-full overflow-hidden aspect-[16/5]">
-        {(factory as any).coverImageUrl ? (
-          <img
-            src={(factory as any).coverImageUrl}
-            alt=""
-            className="w-full h-full object-cover"
-            loading="eager"
-          />
-        ) : (
-          <div className="w-full h-full bg-gradient-to-br from-orange-400 via-rose-500 to-violet-600" />
-        )}
-        {/* subtle bottom fade so logo blends in */}
-        <div className="absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-black/20 to-transparent pointer-events-none" />
-        <button
-          onClick={handleBackToSearch}
-          className="absolute top-3 left-3 z-10 bg-black/30 hover:bg-black/50 text-white rounded-lg px-3 py-1.5 text-sm flex items-center gap-1.5 transition-colors backdrop-blur-sm"
-        >
-          <ArrowLeft className="w-4 h-4" />返回
-        </button>
+      {/* ── Cover image — full-width on mobile, max-w-7xl centered on desktop ── */}
+      <div className="w-full lg:max-w-7xl lg:mx-auto">
+        <div className="relative overflow-hidden aspect-[16/5] lg:rounded-b-xl">
+          {(factory as any).coverImageUrl ? (
+            <img
+              src={(factory as any).coverImageUrl}
+              alt=""
+              className="w-full h-full object-cover"
+              loading="eager"
+            />
+          ) : (
+            <div className="w-full h-full bg-gradient-to-br from-orange-400 via-rose-500 to-violet-600" />
+          )}
+          {/* subtle bottom fade so logo blends in */}
+          <div className="absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-black/20 to-transparent pointer-events-none" />
+          <button
+            onClick={handleBackToSearch}
+            className="absolute top-3 left-3 z-10 bg-black/30 hover:bg-black/50 text-white rounded-lg px-3 py-1.5 text-sm flex items-center gap-1.5 transition-colors backdrop-blur-sm"
+          >
+            <ArrowLeft className="w-4 h-4" />返回
+          </button>
+        </div>
       </div>
 
       <div className="container">
