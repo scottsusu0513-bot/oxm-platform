@@ -65,6 +65,153 @@ function StatusBadge({ status }: { status: string }) {
   return null;
 }
 
+const COVER_RATIO = 16 / 5;
+
+function clampCoverPos(x: number, y: number, cw: number, dw: number, dh: number) {
+  return {
+    x: Math.min(0, Math.max(cw - dw, x)),
+    y: Math.min(0, Math.max(cw / COVER_RATIO - dh, y)),
+  };
+}
+
+function CoverImageCropper({
+  imageSrc,
+  onApply,
+  onCancel,
+  onReselect,
+}: {
+  imageSrc: string;
+  onApply: (base64: string) => void;
+  onCancel: () => void;
+  onReselect: () => void;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const imgRef = useRef<HTMLImageElement>(null);
+  const [pos, setPos] = useState({ x: 0, y: 0 });
+  const [dispSize, setDispSize] = useState({ w: 0, h: 0 });
+  const [natSize, setNatSize] = useState({ w: 0, h: 0 });
+  const dispSizeRef = useRef({ w: 0, h: 0 });
+  const dragging = useRef(false);
+  const dragOrigin = useRef({ mx: 0, my: 0, ix: 0, iy: 0 });
+
+  useEffect(() => {
+    const img = imgRef.current;
+    const con = containerRef.current;
+    if (!img || !con) return;
+    const init = () => {
+      const cw = con.clientWidth;
+      const nw = img.naturalWidth, nh = img.naturalHeight;
+      if (!nw || !nh) return;
+      setNatSize({ w: nw, h: nh });
+      const scale = Math.max(cw / nw, (cw / COVER_RATIO) / nh);
+      const ds = { w: nw * scale, h: nh * scale };
+      dispSizeRef.current = ds;
+      setDispSize(ds);
+      const ch = cw / COVER_RATIO;
+      setPos(clampCoverPos(-(ds.w - cw) / 2, -(ds.h - ch) / 2, cw, ds.w, ds.h));
+    };
+    if (img.complete && img.naturalWidth) { init(); return; }
+    img.addEventListener("load", init);
+    return () => img.removeEventListener("load", init);
+  }, [imageSrc]);
+
+  useEffect(() => { dispSizeRef.current = dispSize; }, [dispSize]);
+
+  useEffect(() => {
+    const onMove = (e: MouseEvent | TouchEvent) => {
+      if (!dragging.current) return;
+      const cx = "touches" in e ? e.touches[0].clientX : e.clientX;
+      const cy = "touches" in e ? e.touches[0].clientY : e.clientY;
+      const con = containerRef.current;
+      if (!con) return;
+      const cw = con.clientWidth;
+      const ds = dispSizeRef.current;
+      setPos(clampCoverPos(
+        dragOrigin.current.ix + (cx - dragOrigin.current.mx),
+        dragOrigin.current.iy + (cy - dragOrigin.current.my),
+        cw, ds.w, ds.h
+      ));
+    };
+    const onUp = () => { dragging.current = false; };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    window.addEventListener("touchmove", onMove, { passive: false });
+    window.addEventListener("touchend", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("touchmove", onMove);
+      window.removeEventListener("touchend", onUp);
+    };
+  }, []);
+
+  const startDrag = (clientX: number, clientY: number) => {
+    dragging.current = true;
+    dragOrigin.current = { mx: clientX, my: clientY, ix: pos.x, iy: pos.y };
+  };
+
+  const handleApply = () => {
+    const con = containerRef.current, img = imgRef.current;
+    if (!con || !img || !natSize.w) return;
+    const cw = con.clientWidth, ch = cw / COVER_RATIO;
+    const scale = natSize.w / dispSize.w;
+    const srcX = Math.max(0, -pos.x * scale);
+    const srcY = Math.max(0, -pos.y * scale);
+    const srcW = Math.min(cw * scale, natSize.w - srcX);
+    const srcH = Math.min(ch * scale, natSize.h - srcY);
+    const cv = document.createElement("canvas");
+    cv.width = 1600; cv.height = 500;
+    cv.getContext("2d")!.drawImage(img, srcX, srcY, srcW, srcH, 0, 0, 1600, 500);
+    onApply(cv.toDataURL("image/jpeg", 0.88));
+  };
+
+  return (
+    <div className="fixed inset-0 z-[100] bg-black/80 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl">
+        <div className="px-5 py-4 border-b flex items-center justify-between">
+          <h3 className="font-semibold text-base">調整封面顯示範圍</h3>
+          <button type="button" onClick={onCancel}><X className="w-5 h-5 text-muted-foreground" /></button>
+        </div>
+        <div className="p-5 space-y-4">
+          <p className="text-xs text-muted-foreground">拖曳圖片調整顯示位置，框內為最終裁切範圍（16:5）</p>
+          <div
+            ref={containerRef}
+            className="relative w-full rounded-lg overflow-hidden bg-black select-none"
+            style={{ aspectRatio: "16/5", cursor: "grab" }}
+            onMouseDown={e => { e.preventDefault(); startDrag(e.clientX, e.clientY); }}
+            onTouchStart={e => { startDrag(e.touches[0].clientX, e.touches[0].clientY); }}
+          >
+            <img
+              ref={imgRef}
+              src={imageSrc}
+              alt=""
+              style={{
+                position: "absolute",
+                left: pos.x,
+                top: pos.y,
+                width: dispSize.w || "auto",
+                height: dispSize.h || "auto",
+                maxWidth: "none",
+                pointerEvents: "none",
+                userSelect: "none",
+              }}
+              draggable={false}
+            />
+            <div className="absolute inset-0 border-2 border-white/60 rounded-lg pointer-events-none" />
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="ghost" size="sm" onClick={onReselect}>重新選圖</Button>
+            <Button type="button" variant="outline" size="sm" onClick={onCancel}>取消</Button>
+            <Button type="button" size="sm" onClick={handleApply}>
+              <CheckCircle className="w-4 h-4 mr-1" />套用封面
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function FactoryDashboard() {
   const { user, isAuthenticated, loading } = useAuth();
   const [, navigate] = useLocation();
@@ -352,6 +499,12 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
   const [avatarUploading, setAvatarUploading] = useState(false);
   const avatarInputRef = useRef<HTMLInputElement>(null);
 
+  const [coverPreview, setCoverPreview] = useState<string | null>((factory as any).coverImageUrl ?? null);
+  const [coverCropperOpen, setCoverCropperOpen] = useState(false);
+  const [coverOriginalSrc, setCoverOriginalSrc] = useState("");
+  const [coverUploading, setCoverUploading] = useState(false);
+  const coverInputRef = useRef<HTMLInputElement>(null);
+
   // Snapshot of saved form values for dirty detection.
   // avatarUrl is included here. For draft/rejected, it is updated in handleAvatarChange immediately
   // after upload succeeds (savedToDb: true), so the button does not stay dirty after a save.
@@ -413,6 +566,7 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
     onError: (err) => toast.error(err.message),
   });
   const uploadAvatarMut = trpc.factory.uploadAvatar.useMutation();
+  const uploadCoverImageMut = trpc.factory.uploadCoverImage.useMutation();
   const submitForReviewMut = trpc.factory.submitForReview.useMutation({
     onSuccess: () => { toast.success("已送出審核！請等待管理員審核"); utils.factory.getMine.invalidate(); },
     onError: (err) => toast.error(err.message),
@@ -475,6 +629,34 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
       setAvatarUrl(factory.avatarUrl ?? null);
     } finally {
       setAvatarUploading(false);
+    }
+  };
+
+  const handleCoverFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = "";
+    const reader = new FileReader();
+    reader.onload = ev => {
+      setCoverOriginalSrc(ev.target?.result as string);
+      setCoverCropperOpen(true);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleCoverApply = async (base64: string) => {
+    setCoverCropperOpen(false);
+    setCoverPreview(base64);
+    setCoverUploading(true);
+    try {
+      const result = await uploadCoverImageMut.mutateAsync({ base64, factoryId: factory.id });
+      setCoverPreview(result.url);
+      toast.success("封面圖已更新");
+    } catch (err: unknown) {
+      toast.error((err as any)?.message ?? "封面上傳失敗");
+      setCoverPreview((factory as any).coverImageUrl ?? null);
+    } finally {
+      setCoverUploading(false);
     }
   };
 
@@ -685,6 +867,63 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
               <input ref={avatarInputRef} type="file" accept="image/*" className="hidden" onChange={handleAvatarChange} />
             </div>
           </div>
+        )}
+
+        {/* ── 封面背景圖 ── */}
+        <div className="py-6 space-y-3 border-t">
+          <div>
+            <Label>工廠封面背景圖</Label>
+            <p className="text-xs text-muted-foreground mt-0.5">顯示於工廠主頁最上方。建議尺寸：1600 × 500 px 以上橫式圖片。</p>
+          </div>
+          {coverPreview && (
+            <div className="w-full rounded-lg overflow-hidden border bg-muted relative" style={{ aspectRatio: "16/5" }}>
+              <img src={coverPreview} alt="封面預覽" className="w-full h-full object-cover" />
+              {coverUploading && (
+                <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
+                  <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                </div>
+              )}
+            </div>
+          )}
+          <div className="flex gap-2 flex-wrap items-center">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={coverUploading}
+              onClick={() => coverInputRef.current?.click()}
+            >
+              <ImagePlus className="w-4 h-4 mr-1" />
+              {coverPreview ? "更換封面圖" : "上傳封面圖"}
+            </Button>
+            {coverPreview && !coverUploading && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => setCoverPreview(null)}
+              >
+                <X className="w-4 h-4 mr-1" />移除
+              </Button>
+            )}
+          </div>
+          <input
+            ref={coverInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={handleCoverFileSelect}
+          />
+        </div>
+
+        {/* Cover cropper modal */}
+        {coverCropperOpen && (
+          <CoverImageCropper
+            imageSrc={coverOriginalSrc}
+            onApply={handleCoverApply}
+            onCancel={() => setCoverCropperOpen(false)}
+            onReselect={() => { setCoverCropperOpen(false); coverInputRef.current?.click(); }}
+          />
         )}
 
         {/* ── 基本資訊 ── */}

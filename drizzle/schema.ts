@@ -49,6 +49,7 @@ export const factories = mysqlTable("factories", {
   reviewCount: int("reviewCount").default(0),
   status: mysqlEnum("status", ["draft", "pending", "approved", "rejected"]).default("draft").notNull(),
   avatarUrl: text("avatarUrl"), // 工廠大頭貼
+  coverImageUrl: text("coverImageUrl"), // 工廠封面背景圖 (16:5)
   businessType: mysqlEnum("businessType", ["factory", "studio"]).default("factory").notNull(), // 代工廠或工作室
   operationStatus: mysqlEnum("operationStatus", ["normal", "busy", "full"]).default("normal").notNull(),
   certified: boolean("certified").default(false).notNull(),

@@ -649,6 +649,26 @@ export const appRouter = router({
       }
     }),
 
+    uploadCoverImage: protectedProcedure.input(z.object({
+      base64: z.string().max(20 * 1024 * 1024),
+      factoryId: z.number(),
+    })).mutation(async ({ ctx, input }) => {
+      const factory = await db.getFactoryById(input.factoryId);
+      if (!factory) throw new TRPCError({ code: 'NOT_FOUND', message: '找不到工廠' });
+      const isOwner = factory.ownerId === ctx.user.id;
+      const isCoMgr = !isOwner && await db.isActiveCoManager(factory.id, ctx.user.id);
+      const isAdmin = ctx.user.role === 'admin';
+      if (!isOwner && !isCoMgr && !isAdmin) throw new TRPCError({ code: 'FORBIDDEN', message: '無權限上傳此工廠封面' });
+      const base64Data = input.base64.includes(",") ? input.base64.split(",")[1] : input.base64;
+      const buffer = Buffer.from(base64Data, "base64");
+      const validation = await validateImageUpload(buffer);
+      if (!validation.valid) throw new Error(validation.error ?? "圖片格式不正確");
+      const key = `factory-covers/${factory.id}/${nanoid()}.jpg`;
+      const { url } = await storagePut(key, buffer, "image/jpeg");
+      await db.updateFactory(factory.id, isAdmin ? -1 : factory.ownerId, { coverImageUrl: url });
+      return { url };
+    }),
+
     submitForReview: protectedProcedure.mutation(async ({ ctx }) => {
       requireVerifiedEmail(ctx.user);
       const factory = await db.getFactoryByOwnerId(ctx.user.id);
