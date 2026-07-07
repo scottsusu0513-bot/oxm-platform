@@ -405,7 +405,7 @@ export default function FactoryDetail() {
         </div>
       </div>
 
-      <div className="container">
+      <div className="w-full lg:max-w-7xl lg:mx-auto px-4 sm:px-6 lg:px-0">
         {/* ── Header: logo | name+description | actions ── */}
         {/* relative z-10 so this layer paints above the cover div (positioned element) */}
         <div className="relative z-10 flex flex-col sm:flex-row sm:items-start gap-3 mb-4">
@@ -463,30 +463,31 @@ export default function FactoryDetail() {
         </div>
 
         {/* ── Body: TOC + sections ── */}
-        <div className="flex gap-8 items-start mt-6">
+        <div className="flex items-start mt-6">
 
-          {/* TOC sidebar — desktop only */}
-          <div className="hidden lg:block w-40 shrink-0 sticky top-20">
-            <p className="text-xs font-semibold text-muted-foreground mb-2 px-3 uppercase tracking-wide">目錄</p>
-            <nav className="space-y-0.5">
-              {tocItems.map(item => (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => {
-                    const el = document.getElementById(item.id);
-                    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-                  }}
-                  className={`w-full text-left text-sm px-3 py-2 rounded-lg transition-colors ${
-                    activeSection === item.id
-                      ? "bg-orange-50 text-orange-700 font-medium"
-                      : "text-muted-foreground hover:text-foreground hover:bg-muted"
-                  }`}
-                >
-                  {item.label}
-                </button>
-              ))}
-            </nav>
+          {/* TOC sidebar — 2xl+ only; zero-width flex item, nav extends left into gutter */}
+          <div className="hidden 2xl:block w-0 overflow-visible shrink-0">
+            <div className="w-28 sticky top-20 -ml-32">
+              <nav className="space-y-0.5">
+                {tocItems.map(item => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => {
+                      const el = document.getElementById(item.id);
+                      if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+                    }}
+                    className={`w-full text-left text-sm px-3 py-2 rounded-lg transition-colors ${
+                      activeSection === item.id
+                        ? "bg-orange-50 text-orange-700 font-medium"
+                        : "text-muted-foreground hover:text-foreground hover:bg-muted"
+                    }`}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </nav>
+            </div>
           </div>
 
           {/* Main sections */}
