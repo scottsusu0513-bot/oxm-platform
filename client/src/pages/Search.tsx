@@ -176,42 +176,73 @@ function FactoryCard({ factory, getFavState, handleFavToggle, cartHas, cartAdd, 
   const ratio = useImageAspectRatio(avatarUrl);
   const isWide = avatarUrl && ratio !== null && ratio >= 2.2;
 
+  const cartButton = (
+    <div className="px-4 pt-2 pb-2 shrink-0" onClick={e => e.preventDefault()}>
+      <Button
+        size="sm"
+        variant={cartHas(factory.id) ? "default" : "outline"}
+        className="w-full text-sm h-9"
+        onClick={e => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (cartHas(factory.id)) {
+            cartRemove(factory.id);
+          } else {
+            cartAdd({ id: factory.id, name: factory.name });
+            setCartOpen(true);
+            toast.success(`已加入一鍵詢價：${factory.name}`);
+          }
+        }}
+      >
+        {cartHas(factory.id) ? (
+          <><Minus className="w-3.5 h-3.5 mr-1" />已加入詢價</>
+        ) : (
+          <><Plus className="w-3.5 h-3.5 mr-1" />加入一鍵詢價</>
+        )}
+      </Button>
+    </div>
+  );
+
   return (
     <div className="h-full">
       <Link href={`/factory/${factory.id}`} className="block h-full">
-        <Card className="hover:shadow-md transition-shadow cursor-pointer h-full overflow-hidden">
+        <Card className="hover:shadow-md transition-shadow cursor-pointer h-full overflow-hidden flex flex-col">
           {isWide ? (
-            <div className="flex flex-col h-full">
+            <>
               <div className="relative h-28 shrink-0 bg-orange-50/40 flex items-center justify-center p-3 overflow-hidden">
                 <img src={avatarUrl!} alt={factory.name} className="w-full h-full object-contain" loading="lazy" />
                 <div className="absolute top-2 right-2" onClick={(e) => e.preventDefault()}>
                   <FavButton factoryId={factory.id} initialIsFav={getFavState(factory.id)} onToggle={handleFavToggle} />
                 </div>
               </div>
-              <CardContent className="p-4 flex flex-col min-w-0 flex-1">
-                <FactoryCardContent factory={factory} cartHas={cartHas} cartAdd={cartAdd} cartRemove={cartRemove} setCartOpen={setCartOpen} isMobile={isMobile} />
-              </CardContent>
-            </div>
+              <div className="flex-1 min-h-0 p-4 flex flex-col overflow-hidden">
+                <FactoryCardContent factory={factory} isMobile={isMobile} />
+              </div>
+              {cartButton}
+            </>
           ) : (
-            <div className="flex flex-col md:flex-row h-full">
-              <div className="relative h-36 md:h-auto md:w-40 shrink-0 bg-orange-50/40 flex items-center justify-center p-4 overflow-hidden">
-                {avatarUrl ? (
-                  <img src={avatarUrl} alt={factory.name} className="w-full h-full object-contain" loading="lazy" />
-                ) : (
-                  <div className="w-full h-full flex items-center justify-center">
-                    {factory.businessType === "studio"
-                      ? <Wrench className="w-14 h-14 text-purple-200" />
-                      : <Factory className="w-14 h-14 text-orange-200" />}
+            <>
+              <div className="flex flex-1 min-h-0 flex-col md:flex-row">
+                <div className="relative h-32 md:h-auto md:w-[145px] shrink-0 bg-orange-50/40 flex items-center justify-center p-3">
+                  {avatarUrl ? (
+                    <img src={avatarUrl} alt={factory.name} className="max-h-full max-w-full object-contain" loading="lazy" />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center">
+                      {factory.businessType === "studio"
+                        ? <Wrench className="w-12 h-12 text-purple-200" />
+                        : <Factory className="w-12 h-12 text-orange-200" />}
+                    </div>
+                  )}
+                  <div className="absolute top-2 right-2" onClick={(e) => e.preventDefault()}>
+                    <FavButton factoryId={factory.id} initialIsFav={getFavState(factory.id)} onToggle={handleFavToggle} />
                   </div>
-                )}
-                <div className="absolute top-2 right-2" onClick={(e) => e.preventDefault()}>
-                  <FavButton factoryId={factory.id} initialIsFav={getFavState(factory.id)} onToggle={handleFavToggle} />
+                </div>
+                <div className="flex-1 min-w-0 min-h-0 p-4 flex flex-col overflow-hidden">
+                  <FactoryCardContent factory={factory} isMobile={isMobile} />
                 </div>
               </div>
-              <div className="flex-1 p-4 flex flex-col min-w-0">
-                <FactoryCardContent factory={factory} cartHas={cartHas} cartAdd={cartAdd} cartRemove={cartRemove} setCartOpen={setCartOpen} isMobile={isMobile} />
-              </div>
-            </div>
+              {cartButton}
+            </>
           )}
         </Card>
       </Link>
@@ -219,7 +250,7 @@ function FactoryCard({ factory, getFavState, handleFavToggle, cartHas, cartAdd, 
   );
 }
 
-function FactoryCardContent({ factory, cartHas, cartAdd, cartRemove, setCartOpen, isMobile }: Omit<FactoryCardProps, "getFavState" | "handleFavToggle">) {
+function FactoryCardContent({ factory, isMobile }: { factory: any; isMobile: boolean }) {
   const phoneClickable = isMobile || isNativeApp();
   const displayContact =
     (factory.contactPersonName as string | null)?.trim() ||
@@ -238,7 +269,7 @@ function FactoryCardContent({ factory, cartHas, cartAdd, cartRemove, setCartOpen
   return (
     <>
       {/* 標題區 */}
-      <div className="flex items-start justify-between mb-2">
+      <div className="flex items-start justify-between">
         <div className="flex-1 min-w-0 mr-2">
           <div className="flex items-center gap-1.5 flex-wrap">
             <h3 className="font-semibold text-lg leading-tight">{factory.name}</h3>
@@ -271,13 +302,13 @@ function FactoryCardContent({ factory, cartHas, cartAdd, cartRemove, setCartOpen
         </div>
       </div>
 
-      {/* 自我介紹區 - 固定高度 */}
-      <p className="text-sm text-muted-foreground line-clamp-2 min-h-[3rem] mb-3">
+      {/* 自我介紹區 - 固定 3 行 */}
+      <p className="text-sm text-muted-foreground line-clamp-3 overflow-hidden min-h-[4.5rem] mt-2">
         {(factory.description as string | null) ?? ""}
       </p>
 
-      {/* 基本資料區 - 固定 5 列 */}
-      <div className="pt-2 border-t border-border/50 grid grid-cols-1 sm:grid-cols-2 gap-x-3 gap-y-1.5 text-xs text-muted-foreground">
+      {/* 基本資料區 - 固定排列 */}
+      <div className="mt-3 pt-3 border-t border-border/50 grid grid-cols-1 sm:grid-cols-2 gap-x-3 gap-y-1.5 text-xs text-muted-foreground">
         {/* 列1：位置 | 成立年份 */}
         <span className="flex items-center gap-1 min-w-0">
           <MapPin className="w-3 h-3 shrink-0" />
@@ -301,44 +332,19 @@ function FactoryCardContent({ factory, cartHas, cartAdd, cartRemove, setCartOpen
           }
         </span>
 
-        {/* 列4：服務類型 | 上班時間 */}
+        {/* 列4：服務類型 | 官方網站 */}
         <span className="min-w-0">服務類型：{serviceType}</span>
-        <span className="min-w-0 whitespace-normal break-words">上班時間：{hoursStr}</span>
-
-        {/* 列5：官方網站 | 資本額 */}
         <span className="min-w-0">
           官方網站：{factory.website
             ? <a href={factory.website as string} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline" onClick={e => e.stopPropagation()}>連結</a>
             : "無"
           }
         </span>
-        <span className="min-w-0 truncate">資本額：{factory.capitalLevel || "無"}</span>
-      </div>
 
-      {/* 一鍵詢價按鈕 - 貼底 */}
-      <div className="mt-auto pt-4" onClick={e => e.preventDefault()}>
-        <Button
-          size="sm"
-          variant={cartHas(factory.id) ? "default" : "outline"}
-          className="w-full text-sm h-9"
-          onClick={e => {
-            e.preventDefault();
-            e.stopPropagation();
-            if (cartHas(factory.id)) {
-              cartRemove(factory.id);
-            } else {
-              cartAdd({ id: factory.id, name: factory.name });
-              setCartOpen(true);
-              toast.success(`已加入一鍵詢價：${factory.name}`);
-            }
-          }}
-        >
-          {cartHas(factory.id) ? (
-            <><Minus className="w-3.5 h-3.5 mr-1" />已加入詢價</>
-          ) : (
-            <><Plus className="w-3.5 h-3.5 mr-1" />加入一鍵詢價</>
-          )}
-        </Button>
+        {/* 列5：營業時間（整行） */}
+        <span className="sm:col-span-2 min-w-0 whitespace-normal break-words">
+          營業時間：{hoursStr}
+        </span>
       </div>
     </>
   );
