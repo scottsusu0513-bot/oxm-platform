@@ -292,7 +292,7 @@ export default function Navbar() {
                   title="我的訊息"
                 >
                   <MessageCircle className="w-4 h-4" />
-                  {userUnread > 0 && (
+                  {(userUnread + factoryUnread) > 0 && (
                     <span className="pointer-events-none absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-orange-500 ring-2 ring-background" />
                   )}
                 </Button>
@@ -428,7 +428,7 @@ export default function Navbar() {
               <Link href="/messages">
                 <Button variant="ghost" size="sm" className="relative h-8 w-8 p-0">
                   <MessageCircle className="w-4 h-4" />
-                  {userUnread > 0 && (
+                  {(userUnread + factoryUnread) > 0 && (
                     <span className="pointer-events-none absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-orange-500 ring-2 ring-background" />
                   )}
                 </Button>

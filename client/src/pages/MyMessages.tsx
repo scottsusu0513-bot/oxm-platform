@@ -1,4 +1,4 @@
-﻿import Navbar from "@/components/Navbar";
+import Navbar from "@/components/Navbar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -7,8 +7,11 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
 import { Link, useLocation } from "wouter";
 import { performLogin } from "@/const";
-import { useState, useCallback } from "react";
-import { MessageCircle, ArrowLeft, Trash2, Inbox, ShoppingCart, ChevronDown, ChevronRight, Pencil, Check, X } from "lucide-react";
+import { useState, useCallback, useEffect } from "react";
+import {
+  MessageCircle, ArrowLeft, Trash2, Inbox, ShoppingCart,
+  ChevronDown, ChevronRight, Pencil, Check, X, Factory,
+} from "lucide-react";
 import { toast } from "sonner";
 import { usePullToRefresh } from "@/hooks/usePullToRefresh";
 import { NativePullToRefreshLayout } from "@/components/NativePullToRefreshLayout";
@@ -64,7 +67,7 @@ function UserConversationList({ conversations }: { conversations: any[] }) {
         return (
           <div key={conv.id} className="flex items-center gap-2">
             <div className="flex-1 cursor-pointer" onClick={() => navigate(`/chat/${conv.id}`, { state: { from: "/messages" } })}>
-              <div className={`flex items-center justify-between p-4 rounded-lg border hover:bg-muted/30 transition-colors min-h-[72px] ${conv.hasInquiry ? "bg-orange-50/60 border-orange-200" : ""}`}>
+              <div className="flex items-center justify-between p-4 rounded-lg border hover:bg-muted/30 transition-colors min-h-[72px]">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
                     <p className="font-medium">{conv.factoryName}</p>
@@ -76,9 +79,6 @@ function UserConversationList({ conversations }: { conversations: any[] }) {
                       : "（尚無訊息）"
                     }
                   </p>
-                  {conv.hasInquiry && (
-                    <p className="text-xs text-orange-500 mt-1">此對話同時包含一鍵詢價內容</p>
-                  )}
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
                   <span className="text-xs text-muted-foreground">
@@ -234,30 +234,217 @@ function InquiryBatchList({ batches }: { batches: any[] }) {
   );
 }
 
+// ── 工廠訊息列表 ──────────────────────────────────────────────────────────
+function FactoryConversationList({ factoryId }: { factoryId: number }) {
+  const utils = trpc.useUtils();
+  const [, navigate] = useLocation();
+  const { data: convs, isLoading } = trpc.chat.factoryConversations.useQuery(
+    { factoryId },
+    { enabled: !!factoryId, refetchInterval: 30000 },
+  );
+  const deleteMut = trpc.chat.deleteConversation.useMutation({
+    onSuccess: () => {
+      toast.success("對話已刪除");
+      utils.chat.factoryConversations.invalidate({ factoryId });
+      utils.chat.unreadCount.invalidate();
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  if (isLoading) return <div className="p-8 text-center text-muted-foreground text-sm">載入中…</div>;
+
+  if (!convs || convs.length === 0) {
+    return (
+      <Card>
+        <CardContent className="p-12 text-center text-muted-foreground">
+          <MessageCircle className="w-12 h-12 mx-auto mb-4 opacity-30" />
+          <p>尚無工廠訊息</p>
+          <p className="text-sm mt-1">客戶從工廠頁面發起詢問後，訊息將顯示於此</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      {convs.map((conv: any) => (
+        <div key={conv.id} className="flex items-center gap-2">
+          <div
+            className="flex-1 cursor-pointer"
+            onClick={() => navigate(`/chat/${conv.id}`, { state: { from: "/messages?tab=factory" } })}
+          >
+            <div className="flex items-center justify-between p-4 rounded-lg border hover:bg-muted/30 transition-colors min-h-[72px]">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <p className="font-medium">{conv.userName}</p>
+                  {conv.productName && <Badge variant="outline" className="text-xs">{conv.productName}</Badge>}
+                </div>
+                {conv.lastMessage ? (
+                  <p className="text-sm text-muted-foreground line-clamp-1 mt-0.5">
+                    {conv.lastSenderRole === "factory" ? "你：" : ""}{conv.lastMessage}
+                  </p>
+                ) : (
+                  <p className="text-sm text-muted-foreground mt-0.5">（尚無訊息）</p>
+                )}
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <span className="text-xs text-muted-foreground">
+                  {new Date(conv.lastMessageAt).toLocaleDateString("zh-TW")}
+                </span>
+                {conv.unreadCount > 0 && (
+                  <span className="h-2.5 w-2.5 rounded-full bg-orange-500 shrink-0" />
+                )}
+              </div>
+            </div>
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-muted-foreground hover:text-destructive shrink-0"
+            onClick={() => {
+              if (confirm("確定要刪除此對話嗎？所有訊息將會消失。")) {
+                deleteMut.mutate({ conversationId: conv.id });
+              }
+            }}
+          >
+            <Trash2 className="w-4 h-4" />
+          </Button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ── 主元件 ────────────────────────────────────────────────────────────────
 export default function MyMessages() {
   const { user, isAuthenticated, loading } = useAuth();
   const [, navigate] = useLocation();
-  const [tab, setTab] = useState<"general" | "inquiry">("general");
   const utils = trpc.useUtils();
 
+  // ── URL-based tab state (lazy init from search params) ──
+  const [mainTab, setMainTab] = useState<"personal" | "factory">(() => {
+    const p = new URLSearchParams(window.location.search);
+    return p.get("tab") === "factory" ? "factory" : "personal";
+  });
+  const [personalType, setPersonalType] = useState<"normal" | "quote">(() => {
+    const p = new URLSearchParams(window.location.search);
+    return p.get("type") === "quote" ? "quote" : "normal";
+  });
+  // Skip auto-default logic if the user arrived with an explicit tab param
+  const [hasInteracted, setHasInteracted] = useState(() => {
+    return !!new URLSearchParams(window.location.search).get("tab");
+  });
+
+  // ── Queries ──────────────────────────────────────────────────────────────
   const { data: userConvs } = trpc.chat.myConversations.useQuery(undefined, {
     enabled: isAuthenticated,
     refetchInterval: 30000,
   });
 
   const { data: batches } = trpc.inquiryBatch.listMine.useQuery(undefined, {
-    enabled: isAuthenticated && tab === "inquiry",
+    enabled: isAuthenticated && mainTab === "personal" && personalType === "quote",
     refetchInterval: 30000,
   });
 
+  const { data: unreadData } = trpc.chat.unreadCount.useQuery(undefined, {
+    enabled: isAuthenticated,
+    refetchInterval: 30000,
+  });
+
+  const { data: ownedFactory, isLoading: ownedLoading } = trpc.factory.getMine.useQuery(undefined, {
+    enabled: isAuthenticated,
+  });
+
+  const { data: coManagedList, isLoading: coManagedLoading } = trpc.factory.getCoManagedFactories.useQuery(undefined, {
+    enabled: isAuthenticated,
+  });
+
+  const primaryFactoryId = ownedFactory?.id ?? coManagedList?.[0]?.factoryId ?? null;
+  const hasFactory = !!ownedFactory || (coManagedList?.length ?? 0) > 0;
+
+  // ── Unread counts from conversation data ─────────────────────────────────
+  const myConvsList = userConvs ?? [];
+  const normalUnread = myConvsList.filter(c => !c.hasInquiry).reduce((s: number, c: any) => s + (c.unreadCount ?? 0), 0);
+  const quoteUnread = myConvsList.filter(c => c.hasInquiry).reduce((s: number, c: any) => s + (c.unreadCount ?? 0), 0);
+  const personalGroupUnread = normalUnread + quoteUnread;
+  const factoryUnreadCount = unreadData?.factoryCount ?? 0;
+
+  // ── Auto default tab (runs once when all data is loaded) ─────────────────
+  const dataLoaded = userConvs !== undefined && ownedFactory !== undefined && coManagedList !== undefined;
+
+  useEffect(() => {
+    if (!dataLoaded || hasInteracted) return;
+
+    let newTab: "personal" | "factory" = "personal";
+    let newType: "normal" | "quote" = "normal";
+
+    const anyFactory = !!ownedFactory || (coManagedList?.length ?? 0) > 0;
+
+    if (personalGroupUnread > 0 && factoryUnreadCount === 0) {
+      newTab = "personal";
+      if (quoteUnread > 0 && normalUnread === 0) newType = "quote";
+    } else if (factoryUnreadCount > 0 && personalGroupUnread === 0 && anyFactory) {
+      newTab = "factory";
+    } else if (factoryUnreadCount > 0 && personalGroupUnread > 0 && anyFactory) {
+      newTab = "factory";
+    } else {
+      newTab = anyFactory ? "factory" : "personal";
+    }
+
+    setMainTab(newTab);
+    setPersonalType(newType);
+    const params = new URLSearchParams();
+    params.set("tab", newTab);
+    if (newTab === "personal") params.set("type", newType);
+    window.history.replaceState({}, "", `?${params.toString()}`);
+  }, [dataLoaded]);
+
+  // ── Guard: if URL said factory but user has none, fall back ──────────────
+  useEffect(() => {
+    if (ownedLoading || coManagedLoading) return;
+    if (mainTab === "factory" && !hasFactory) {
+      setMainTab("personal");
+      setHasInteracted(false);
+      window.history.replaceState({}, "", "?tab=personal&type=normal");
+    }
+  }, [ownedLoading, coManagedLoading, mainTab, hasFactory]);
+
+  // ── Tab handlers ─────────────────────────────────────────────────────────
+  const handleMainTabChange = (newTab: "personal" | "factory") => {
+    if (newTab === "factory" && !hasFactory) {
+      toast("您尚未建立工廠", { description: "工廠訊息功能僅限工廠管理者使用" });
+      return;
+    }
+    setMainTab(newTab);
+    setHasInteracted(true);
+    const params = new URLSearchParams();
+    params.set("tab", newTab);
+    if (newTab === "personal") params.set("type", personalType);
+    window.history.replaceState({}, "", `?${params.toString()}`);
+  };
+
+  const handlePersonalTypeChange = (type: "normal" | "quote") => {
+    setPersonalType(type);
+    setHasInteracted(true);
+    const params = new URLSearchParams();
+    params.set("tab", "personal");
+    params.set("type", type);
+    window.history.replaceState({}, "", `?${params.toString()}`);
+  };
+
+  // ── Pull-to-refresh ───────────────────────────────────────────────────────
   const handleRefresh = useCallback(async () => {
-    await Promise.all([
+    const tasks: Promise<unknown>[] = [
       utils.chat.myConversations.invalidate(),
       utils.inquiryBatch.listMine.invalidate(),
       utils.chat.unreadCount.invalidate(),
-    ]);
-  }, [utils]);
+    ];
+    if (primaryFactoryId) {
+      tasks.push(utils.chat.factoryConversations.invalidate({ factoryId: primaryFactoryId }));
+    }
+    await Promise.all(tasks);
+  }, [utils, primaryFactoryId]);
+
   const { contentRef, indicatorRef, iconRef, phase } = usePullToRefresh({ onRefresh: handleRefresh });
 
   if (!isAuthenticated && !loading) {
@@ -273,6 +460,8 @@ export default function MyMessages() {
       </div>
     );
   }
+
+  const normalConvs = myConvsList.filter((c: any) => !c.hasInquiry);
 
   return (
     <NativePullToRefreshLayout contentRef={contentRef} indicatorRef={indicatorRef} iconRef={iconRef} phase={phase} className="min-h-screen bg-background">
@@ -290,30 +479,80 @@ export default function MyMessages() {
           我的訊息
         </h1>
 
-        {/* Tabs */}
+        {/* ── 主分頁 ── */}
         <div className="flex border-b mb-6">
           <button
-            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${tab === "general" ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
-            onClick={() => setTab("general")}
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors flex items-center gap-1.5 ${mainTab === "personal" ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+            onClick={() => handleMainTabChange("personal")}
           >
+            <MessageCircle className="w-3.5 h-3.5" />
             一般訊息
-            {(userConvs?.reduce((s: number, c: any) => s + (c.unreadCount ?? 0), 0) ?? 0) > 0 && (
-              <span className="ml-1.5 inline-block h-2 w-2 rounded-full bg-orange-500 shrink-0" />
+            {personalGroupUnread > 0 && (
+              <span className="inline-block h-2 w-2 rounded-full bg-orange-500 shrink-0" />
             )}
           </button>
           <button
-            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors flex items-center gap-1.5 ${tab === "inquiry" ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
-            onClick={() => setTab("inquiry")}
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors flex items-center gap-1.5 ${mainTab === "factory" ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+            onClick={() => handleMainTabChange("factory")}
           >
-            <ShoppingCart className="w-3.5 h-3.5" />
-            一鍵詢價
+            <Factory className="w-3.5 h-3.5" />
+            工廠訊息
+            {factoryUnreadCount > 0 && (
+              <span className="inline-block h-2 w-2 rounded-full bg-orange-500 shrink-0" />
+            )}
           </button>
         </div>
 
-        {tab === "general" && <UserConversationList conversations={userConvs ?? []} />}
-        {tab === "inquiry" && <InquiryBatchList batches={batches ?? []} />}
+        {/* ── 一般訊息區塊 ── */}
+        {mainTab === "personal" && (
+          <>
+            {/* 一般訊息 / 一鍵詢價 子切換 */}
+            <div className="flex gap-2 mb-4">
+              <button
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full border transition-colors ${personalType === "normal" ? "bg-primary text-primary-foreground border-primary" : "border-border text-muted-foreground hover:text-foreground"}`}
+                onClick={() => handlePersonalTypeChange("normal")}
+              >
+                一般訊息
+                {normalUnread > 0 && (
+                  <span className="inline-flex items-center justify-center h-4 min-w-4 px-1 rounded-full bg-orange-500 text-white text-[10px] leading-none">
+                    {normalUnread > 99 ? "99+" : normalUnread}
+                  </span>
+                )}
+              </button>
+              <button
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full border transition-colors ${personalType === "quote" ? "bg-primary text-primary-foreground border-primary" : "border-border text-muted-foreground hover:text-foreground"}`}
+                onClick={() => handlePersonalTypeChange("quote")}
+              >
+                <ShoppingCart className="w-3 h-3" />
+                一鍵詢價
+                {quoteUnread > 0 && (
+                  <span className="inline-flex items-center justify-center h-4 min-w-4 px-1 rounded-full bg-orange-500 text-white text-[10px] leading-none">
+                    {quoteUnread > 99 ? "99+" : quoteUnread}
+                  </span>
+                )}
+              </button>
+            </div>
+
+            {personalType === "normal" && <UserConversationList conversations={normalConvs} />}
+            {personalType === "quote" && <InquiryBatchList batches={batches ?? []} />}
+          </>
+        )}
+
+        {/* ── 工廠訊息區塊 ── */}
+        {mainTab === "factory" && (
+          primaryFactoryId
+            ? <FactoryConversationList factoryId={primaryFactoryId} />
+            : (
+              <Card>
+                <CardContent className="p-12 text-center text-muted-foreground">
+                  <Factory className="w-12 h-12 mx-auto mb-4 opacity-30" />
+                  <p>您尚未建立工廠</p>
+                  <p className="text-sm mt-1">建立工廠後，來自客戶的詢問訊息將顯示於此</p>
+                </CardContent>
+              </Card>
+            )
+        )}
       </div>
     </NativePullToRefreshLayout>
   );
 }
-

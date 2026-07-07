@@ -1065,6 +1065,7 @@ export default function ChatPage() {
     onSettled: () => {
       utils.chat.unreadCount.invalidate();
       utils.chat.myConversations.invalidate();
+      utils.chat.factoryConversations.invalidate();
       utils.notification.getAppBadgeCount.invalidate();
       utils.inquiryBatch.listMine.invalidate();
     },

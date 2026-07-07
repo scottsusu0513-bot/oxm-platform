@@ -406,7 +406,7 @@ export default function FactoryDashboard() {
             </TabsTrigger>
             <TabsTrigger value="messages" className="gap-1.5 text-xs sm:text-sm">
               <MessageCircle className="w-3.5 h-3.5 shrink-0" />
-              客戶詢問
+              工廠訊息
               {convs && convs.some(c => c.unreadCount > 0) && (
                 <span className="ml-0.5 h-2 w-2 rounded-full bg-orange-500 shrink-0" />
               )}
@@ -1700,14 +1700,14 @@ function ConversationList({ conversations }: { conversations: any[] }) {
   if (conversations.length === 0) {
     return (
       <Card><CardContent className="p-12 text-center text-muted-foreground">
-        <MessageCircle className="w-12 h-12 mx-auto mb-4 opacity-30" /><p>尚無客戶詢問</p>
+        <MessageCircle className="w-12 h-12 mx-auto mb-4 opacity-30" /><p>尚無工廠訊息</p>
       </CardContent></Card>
     );
   }
 
   return (
     <Card className="w-full min-w-0 overflow-hidden">
-      <CardHeader><CardTitle>客戶詢問</CardTitle><CardDescription>查看並回覆客戶的詢問訊息</CardDescription></CardHeader>
+      <CardHeader><CardTitle>工廠訊息</CardTitle><CardDescription>查看並回覆客戶的詢問訊息</CardDescription></CardHeader>
       <CardContent>
         <div className="space-y-2">
           {conversations.map(conv => (

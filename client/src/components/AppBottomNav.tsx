@@ -15,6 +15,7 @@ export function AppBottomNav() {
     refetchInterval: 30000,
   });
   const userUnread = chatUnreadQuery.data?.userCount ?? 0;
+  const factoryUnread = chatUnreadQuery.data?.factoryCount ?? 0;
 
   // Factory ownership check (mirrors Navbar logic)
   const coManagedQuery = trpc.factory.getCoManagedFactories.useQuery(undefined, {
@@ -67,7 +68,7 @@ export function AppBottomNav() {
       Icon: MessageCircle,
       label: "訊息",
       isActive: location.startsWith("/messages") || location.startsWith("/chat/"),
-      badge: userUnread > 0,
+      badge: (userUnread + factoryUnread) > 0,
       onClick: () => navigate("/messages"),
     },
   ];
