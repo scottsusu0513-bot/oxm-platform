@@ -9,12 +9,98 @@ import { Link, useLocation } from "wouter";
 import { performLogin } from "@/const";
 import { useState, useCallback, useEffect } from "react";
 import {
-  MessageCircle, ArrowLeft, Trash2, Inbox, ShoppingCart,
+  MessageCircle, ArrowLeft, Trash2, ShoppingCart,
   ChevronDown, ChevronRight, Pencil, Check, X, Factory,
+  Mail, Megaphone, MailOpen,
 } from "lucide-react";
 import { toast } from "sonner";
 import { usePullToRefresh } from "@/hooks/usePullToRefresh";
 import { NativePullToRefreshLayout } from "@/components/NativePullToRefreshLayout";
+
+// ── 時間格式（收件匣風格）─────────────────────────────────────────────────
+function formatMsgTime(t: Date | string | null | undefined): string {
+  if (!t) return "";
+  const d = typeof t === "string" ? new Date(t) : t;
+  const now = new Date();
+  const diffMs = now.getTime() - d.getTime();
+  const diffDays = Math.floor(diffMs / 86400000);
+  if (diffDays === 0)
+    return d.toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit", hour12: false });
+  if (diffDays < 7)
+    return ["週日", "週一", "週二", "週三", "週四", "週五", "週六"][d.getDay()];
+  if (d.getFullYear() === now.getFullYear())
+    return `${d.getMonth() + 1}/${d.getDate()}`;
+  return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
+}
+
+// ── 未讀數 badge ──────────────────────────────────────────────────────────
+function UnreadBadge({ count }: { count: number }) {
+  if (count <= 0) return null;
+  return (
+    <span className="inline-flex items-center justify-center h-5 min-w-[1.25rem] px-1 rounded-full bg-orange-500 text-white text-[10px] font-semibold leading-none shrink-0">
+      {count > 99 ? "99+" : count}
+    </span>
+  );
+}
+
+// ── 收件匣卡片（共用視覺元件）────────────────────────────────────────────
+interface InboxCardContentProps {
+  icon: React.ReactNode;
+  isUnread?: boolean;
+  title: string;
+  titleSuffix?: React.ReactNode;
+  summary?: string | null;
+  emptySummary?: string;
+  timeStr?: string;
+  unreadCount?: number;
+}
+
+function InboxCardContent({
+  icon, isUnread = false, title, titleSuffix,
+  summary, emptySummary = "（尚無訊息）", timeStr, unreadCount = 0,
+}: InboxCardContentProps) {
+  const hasUnread = isUnread || unreadCount > 0;
+  return (
+    <div className={`flex items-stretch rounded-lg border overflow-hidden min-h-[68px] transition-colors ${
+      hasUnread
+        ? "bg-orange-50/60 border-orange-200/80 hover:bg-orange-50/90"
+        : "bg-card border-border hover:bg-muted/30"
+    }`}>
+      {/* Left accent bar */}
+      <div className={`w-1 shrink-0 ${hasUnread ? "bg-orange-400" : "bg-transparent"}`} />
+      {/* Icon */}
+      <div className="flex items-center justify-center px-3 shrink-0">
+        <div className={`flex items-center justify-center w-9 h-9 rounded-full shrink-0 ${
+          hasUnread ? "bg-orange-100 text-orange-500" : "bg-muted text-muted-foreground"
+        }`}>
+          {icon}
+        </div>
+      </div>
+      {/* Text */}
+      <div className="flex-1 min-w-0 py-3 pr-2">
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className={`text-sm leading-snug ${hasUnread ? "font-semibold text-foreground" : "font-medium text-foreground/90"}`}>
+                {title}
+              </span>
+              {titleSuffix}
+            </div>
+            {summary
+              ? <p className={`text-xs mt-0.5 line-clamp-2 leading-relaxed ${hasUnread ? "text-foreground/75" : "text-muted-foreground"}`}>{summary}</p>
+              : <p className="text-xs mt-0.5 text-muted-foreground/50 italic">{emptySummary}</p>
+            }
+          </div>
+          {/* Right: time + unread badge */}
+          <div className="flex flex-col items-end shrink-0 gap-1 pt-0.5">
+            {timeStr && <span className="text-[10px] text-muted-foreground whitespace-nowrap">{timeStr}</span>}
+            <UnreadBadge count={unreadCount} />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // ── 一般訊息列表 ──────────────────────────────────────────────────────────
 function UserConversationList({ conversations }: { conversations: any[] }) {
@@ -32,7 +118,7 @@ function UserConversationList({ conversations }: { conversations: any[] }) {
     return (
       <Card>
         <CardContent className="p-12 text-center text-muted-foreground">
-          <Inbox className="w-12 h-12 mx-auto mb-4 opacity-30" />
+          <MailOpen className="w-12 h-12 mx-auto mb-4 opacity-30" />
           <p>尚無對話紀錄</p>
           <p className="text-sm mt-1">瀏覽工廠產品後，點擊「詢問產品」即可開始對話</p>
         </CardContent>
@@ -46,62 +132,57 @@ function UserConversationList({ conversations }: { conversations: any[] }) {
         if (conv.isAdminMessage) {
           return (
             <Link key={conv.id} href={`/admin-message/${conv.adminCampaignId}`}>
-              <div className="flex items-center justify-between p-4 rounded-lg border border-orange-200 bg-orange-50/40 hover:bg-orange-50/70 transition-colors cursor-pointer min-h-[72px]">
-                <div className="flex-1 min-w-0">
-                  <p className="font-bold text-orange-500 text-sm">★ 平台管理員</p>
-                  <p className="font-medium truncate">{conv.title}</p>
-                  <p className="text-sm text-muted-foreground line-clamp-1 mt-0.5">{conv.lastMessage}</p>
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  <span className="text-xs text-muted-foreground">
-                    {new Date(conv.lastMessageAt).toLocaleDateString("zh-TW")}
+              <InboxCardContent
+                icon={<Megaphone className="w-4 h-4" />}
+                isUnread={conv.unreadCount > 0}
+                title="平台管理員"
+                titleSuffix={
+                  <span className="text-[10px] px-1.5 py-0.5 rounded border border-orange-200 bg-orange-50 text-orange-600 shrink-0">
+                    官方公告
                   </span>
-                  {conv.unreadCount > 0 && (
-                    <span className="w-2.5 h-2.5 rounded-full bg-orange-500 shrink-0" />
-                  )}
-                </div>
-              </div>
+                }
+                summary={conv.title ? `${conv.title}　${conv.lastMessage ?? ""}`.trim() : conv.lastMessage}
+                timeStr={formatMsgTime(conv.lastMessageAt)}
+                unreadCount={conv.unreadCount}
+              />
             </Link>
           );
         }
         return (
-          <div key={conv.id} className="flex items-center gap-2">
-            <div className="flex-1 cursor-pointer" onClick={() => navigate(`/chat/${conv.id}`, { state: { from: "/messages" } })}>
-              <div className="flex items-center justify-between p-4 rounded-lg border hover:bg-muted/30 transition-colors min-h-[72px]">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <p className="font-medium">{conv.factoryName}</p>
-                    {conv.productName && <Badge variant="outline" className="text-xs">{conv.productName}</Badge>}
-                  </div>
-                  <p className="text-sm text-muted-foreground line-clamp-2 mt-0.5">
-                    {conv.lastMessage
-                      ? `${conv.lastSenderRole === "user" ? "你：" : ""}${conv.lastMessage}`
-                      : "（尚無訊息）"
-                    }
-                  </p>
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  <span className="text-xs text-muted-foreground">
-                    {new Date(conv.lastMessageAt).toLocaleDateString("zh-TW")}
-                  </span>
-                  {conv.unreadCount > 0 && (
-                    <span className="h-2.5 w-2.5 rounded-full bg-orange-500 shrink-0" />
-                  )}
-                </div>
-              </div>
+          <div key={conv.id} className="flex items-stretch gap-1.5">
+            <div
+              className="flex-1 cursor-pointer"
+              onClick={() => navigate(`/chat/${conv.id}`, { state: { from: "/messages" } })}
+            >
+              <InboxCardContent
+                icon={<Mail className="w-4 h-4" />}
+                isUnread={conv.unreadCount > 0}
+                title={conv.factoryName}
+                titleSuffix={
+                  conv.productName
+                    ? <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 shrink-0">{conv.productName}</Badge>
+                    : undefined
+                }
+                summary={conv.lastMessage
+                  ? `${conv.lastSenderRole === "user" ? "你：" : ""}${conv.lastMessage}`
+                  : null
+                }
+                timeStr={formatMsgTime(conv.lastMessageAt)}
+                unreadCount={conv.unreadCount}
+              />
             </div>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="text-muted-foreground hover:text-destructive shrink-0"
+            <button
+              type="button"
+              className="flex items-center justify-center w-8 shrink-0 rounded-lg border border-transparent text-muted-foreground hover:text-destructive hover:bg-destructive/5 hover:border-destructive/20 transition-colors"
+              aria-label="刪除對話"
               onClick={() => {
                 if (confirm("確定要刪除此對話嗎？所有訊息將會消失。")) {
                   deleteMut.mutate({ conversationId: conv.id });
                 }
               }}
             >
-              <Trash2 className="w-4 h-4" />
-            </Button>
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
           </div>
         );
       })}
@@ -152,37 +233,58 @@ function BatchTitleEditor({ batchId, initialTitle, onUpdated }: { batchId: numbe
   );
 }
 
-// ── 批次詳情（展開） ──────────────────────────────────────────────────────
+// ── 批次詳情（展開）───────────────────────────────────────────────────────
 function BatchDetail({ batchId }: { batchId: number }) {
   const { data, isLoading } = trpc.inquiryBatch.getDetail.useQuery({ batchId }, { refetchInterval: 30000 });
   const [, navigate] = useLocation();
 
-  if (isLoading) return <p className="text-xs text-muted-foreground py-2 px-4">載入中…</p>;
-  if (!data || data.items.length === 0) return <p className="text-xs text-muted-foreground py-2 px-4">此批次無工廠</p>;
+  if (isLoading) return <p className="text-xs text-muted-foreground py-3 px-4">載入中…</p>;
+  if (!data || data.items.length === 0) return <p className="text-xs text-muted-foreground py-3 px-4">此批次無工廠</p>;
 
   return (
-    <div className="border-t divide-y">
+    <div className="border-t bg-muted/20 px-3 py-2 space-y-1.5">
       {data.items.map((item: any) => (
-        <div key={item.id} className={item.conversationId ? "cursor-pointer" : ""} onClick={() => { if (item.conversationId) navigate(`/chat/${item.conversationId}`, { state: { from: "/messages" } }); }}>
-          <div className="flex items-center justify-between px-4 py-3 hover:bg-muted/30">
+        <div
+          key={item.id}
+          className={`flex items-stretch rounded-md border overflow-hidden transition-colors ${
+            item.conversationId ? "cursor-pointer" : "opacity-60"
+          } ${
+            item.unreadCount > 0 ? "bg-orange-50/50 border-orange-100" : "bg-card border-border hover:bg-muted/40"
+          }`}
+          onClick={() => {
+            if (item.conversationId)
+              navigate(`/chat/${item.conversationId}`, { state: { from: "/messages" } });
+          }}
+        >
+          <div className={`w-1 shrink-0 ${item.unreadCount > 0 ? "bg-orange-300" : "bg-transparent"}`} />
+          <div className="flex items-center px-2.5 py-2.5 gap-2.5 flex-1 min-w-0">
+            <div className={`flex items-center justify-center w-7 h-7 rounded-full shrink-0 ${
+              item.unreadCount > 0 ? "bg-orange-100 text-orange-400" : "bg-muted text-muted-foreground/70"
+            }`}>
+              <Mail className="w-3.5 h-3.5" />
+            </div>
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium">{item.factoryName}</p>
+              <p className={`text-xs leading-snug ${item.unreadCount > 0 ? "font-semibold text-foreground" : "font-medium text-foreground/85"}`}>
+                {item.factoryName}
+              </p>
               {item.lastMessage && (
-                <p className="text-xs text-muted-foreground line-clamp-1 mt-0.5">{item.lastMessage}</p>
+                <p className="text-[11px] text-muted-foreground line-clamp-1 mt-0.5">{item.lastMessage}</p>
               )}
             </div>
-            <div className="flex items-center gap-2 shrink-0">
+            <div className="flex flex-col items-end shrink-0 gap-0.5">
               {item.lastMessageAt && (
-                <span className="text-xs text-muted-foreground">
-                  {new Date(item.lastMessageAt).toLocaleDateString("zh-TW")}
+                <span className="text-[10px] text-muted-foreground whitespace-nowrap">
+                  {formatMsgTime(item.lastMessageAt)}
                 </span>
               )}
-              {item.unreadCount > 0 && (
-                <span className="h-2.5 w-2.5 rounded-full bg-orange-500 shrink-0" />
-              )}
-              <ChevronRight className="w-3 h-3 text-muted-foreground" />
+              <UnreadBadge count={item.unreadCount ?? 0} />
             </div>
           </div>
+          {item.conversationId && (
+            <div className="flex items-center pr-2 shrink-0">
+              <ChevronRight className="w-3.5 h-3.5 text-muted-foreground" />
+            </div>
+          )}
         </div>
       ))}
     </div>
@@ -209,26 +311,40 @@ function InquiryBatchList({ batches }: { batches: any[] }) {
   return (
     <div className="space-y-2">
       {batches.map(batch => (
-        <Card key={batch.id} className="overflow-hidden">
+        <div key={batch.id} className="rounded-lg border overflow-hidden">
+          {/* Batch header */}
           <div
-            className="flex items-center justify-between p-4 cursor-pointer hover:bg-muted/20"
+            className="flex items-center gap-0 cursor-pointer hover:bg-muted/20 transition-colors"
             onClick={() => setExpandedId(expandedId === batch.id ? null : batch.id)}
           >
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 flex-wrap">
-                <p className="font-medium text-sm">{batch.title}</p>
-                <BatchTitleEditor batchId={batch.id} initialTitle={batch.title} onUpdated={() => utils.inquiryBatch.listMine.invalidate()} />
-                <Badge variant="outline" className="text-xs">{batch.itemCount} 間工廠</Badge>
+            {/* Accent bar placeholder (no per-batch unread count available) */}
+            <div className="w-1 shrink-0 self-stretch" />
+            <div className="flex items-center gap-3 px-3 py-3.5 flex-1 min-w-0">
+              <div className="flex items-center justify-center w-9 h-9 rounded-full bg-muted text-muted-foreground shrink-0">
+                <ShoppingCart className="w-4 h-4" />
               </div>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                建立於 {new Date(batch.createdAt).toLocaleDateString("zh-TW")}
-                {batch.latestMessageAt && ` · 最後訊息 ${new Date(batch.latestMessageAt).toLocaleDateString("zh-TW")}`}
-              </p>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <p className="font-medium text-sm text-foreground/90">{batch.title}</p>
+                  <BatchTitleEditor
+                    batchId={batch.id}
+                    initialTitle={batch.title}
+                    onUpdated={() => utils.inquiryBatch.listMine.invalidate()}
+                  />
+                  <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 shrink-0">
+                    {batch.itemCount} 間工廠
+                  </Badge>
+                </div>
+                <p className="text-[11px] text-muted-foreground mt-0.5">
+                  建立於 {formatMsgTime(batch.createdAt)}
+                  {batch.latestMessageAt && ` · 最後回覆 ${formatMsgTime(batch.latestMessageAt)}`}
+                </p>
+              </div>
             </div>
-            <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform shrink-0 ml-2 ${expandedId === batch.id ? "rotate-180" : ""}`} />
+            <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform shrink-0 mr-3 ${expandedId === batch.id ? "rotate-180" : ""}`} />
           </div>
           {expandedId === batch.id && <BatchDetail batchId={batch.id} />}
-        </Card>
+        </div>
       ))}
     </div>
   );
@@ -257,7 +373,7 @@ function FactoryConversationList({ factoryId }: { factoryId: number }) {
     return (
       <Card>
         <CardContent className="p-12 text-center text-muted-foreground">
-          <MessageCircle className="w-12 h-12 mx-auto mb-4 opacity-30" />
+          <MailOpen className="w-12 h-12 mx-auto mb-4 opacity-30" />
           <p>尚無工廠訊息</p>
           <p className="text-sm mt-1">客戶從工廠頁面發起詢問後，訊息將顯示於此</p>
         </CardContent>
@@ -268,47 +384,40 @@ function FactoryConversationList({ factoryId }: { factoryId: number }) {
   return (
     <div className="space-y-2">
       {convs.map((conv: any) => (
-        <div key={conv.id} className="flex items-center gap-2">
+        <div key={conv.id} className="flex items-stretch gap-1.5">
           <div
             className="flex-1 cursor-pointer"
             onClick={() => navigate(`/chat/${conv.id}`, { state: { from: "/messages?tab=factory" } })}
           >
-            <div className="flex items-center justify-between p-4 rounded-lg border hover:bg-muted/30 transition-colors min-h-[72px]">
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <p className="font-medium">{conv.userName}</p>
-                  {conv.productName && <Badge variant="outline" className="text-xs">{conv.productName}</Badge>}
-                </div>
-                {conv.lastMessage ? (
-                  <p className="text-sm text-muted-foreground line-clamp-1 mt-0.5">
-                    {conv.lastSenderRole === "factory" ? "你：" : ""}{conv.lastMessage}
-                  </p>
-                ) : (
-                  <p className="text-sm text-muted-foreground mt-0.5">（尚無訊息）</p>
-                )}
-              </div>
-              <div className="flex items-center gap-2 shrink-0">
-                <span className="text-xs text-muted-foreground">
-                  {new Date(conv.lastMessageAt).toLocaleDateString("zh-TW")}
-                </span>
-                {conv.unreadCount > 0 && (
-                  <span className="h-2.5 w-2.5 rounded-full bg-orange-500 shrink-0" />
-                )}
-              </div>
-            </div>
+            <InboxCardContent
+              icon={<Mail className="w-4 h-4" />}
+              isUnread={conv.unreadCount > 0}
+              title={conv.userName}
+              titleSuffix={
+                conv.productName
+                  ? <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 shrink-0">{conv.productName}</Badge>
+                  : undefined
+              }
+              summary={conv.lastMessage
+                ? `${conv.lastSenderRole === "factory" ? "你：" : ""}${conv.lastMessage}`
+                : null
+              }
+              timeStr={formatMsgTime(conv.lastMessageAt)}
+              unreadCount={conv.unreadCount}
+            />
           </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="text-muted-foreground hover:text-destructive shrink-0"
+          <button
+            type="button"
+            className="flex items-center justify-center w-8 shrink-0 rounded-lg border border-transparent text-muted-foreground hover:text-destructive hover:bg-destructive/5 hover:border-destructive/20 transition-colors"
+            aria-label="刪除對話"
             onClick={() => {
               if (confirm("確定要刪除此對話嗎？所有訊息將會消失。")) {
                 deleteMut.mutate({ conversationId: conv.id });
               }
             }}
           >
-            <Trash2 className="w-4 h-4" />
-          </Button>
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
         </div>
       ))}
     </div>
@@ -514,7 +623,7 @@ export default function MyMessages() {
               >
                 一般訊息
                 {normalUnread > 0 && (
-                  <span className="inline-flex items-center justify-center h-4 min-w-4 px-1 rounded-full bg-orange-500 text-white text-[10px] leading-none">
+                  <span className="inline-flex items-center justify-center h-4 min-w-[1rem] px-1 rounded-full bg-orange-500 text-white text-[10px] leading-none">
                     {normalUnread > 99 ? "99+" : normalUnread}
                   </span>
                 )}
@@ -526,7 +635,7 @@ export default function MyMessages() {
                 <ShoppingCart className="w-3 h-3" />
                 一鍵詢價
                 {quoteUnread > 0 && (
-                  <span className="inline-flex items-center justify-center h-4 min-w-4 px-1 rounded-full bg-orange-500 text-white text-[10px] leading-none">
+                  <span className="inline-flex items-center justify-center h-4 min-w-[1rem] px-1 rounded-full bg-orange-500 text-white text-[10px] leading-none">
                     {quoteUnread > 99 ? "99+" : quoteUnread}
                   </span>
                 )}
