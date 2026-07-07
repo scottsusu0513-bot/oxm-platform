@@ -305,7 +305,7 @@ function FactoryCardContent({ factory, isMobile }: { factory: any; isMobile: boo
       {/* 自我介紹區 - flex-1 吃掉剩餘空間，line-clamp-6 防止溢出 */}
       <div className="mt-2 flex-1 min-h-0">
         {(factory.description as string | null) ? (
-          <p className="text-sm leading-5 text-muted-foreground line-clamp-6">
+          <p className="text-sm leading-5 text-muted-foreground whitespace-pre-line line-clamp-6">
             {factory.description as string}
           </p>
         ) : null}
