@@ -269,7 +269,7 @@ function FactoryCardContent({ factory, isMobile }: { factory: any; isMobile: boo
   return (
     <>
       {/* 標題區 */}
-      <div className="flex items-start justify-between">
+      <div className="flex items-start justify-between shrink-0">
         <div className="flex-1 min-w-0 mr-2">
           <div className="flex items-center gap-1.5 flex-wrap">
             <h3 className="font-semibold text-lg leading-tight">{factory.name}</h3>
@@ -302,17 +302,17 @@ function FactoryCardContent({ factory, isMobile }: { factory: any; isMobile: boo
         </div>
       </div>
 
-      {/* 自我介紹區 - 固定 3 行，shrink-0 避免被 flex 壓縮 */}
-      <div className="mt-2 min-h-[3.75rem] shrink-0">
+      {/* 自我介紹區 - flex-1 吃掉剩餘空間，line-clamp-6 防止溢出 */}
+      <div className="mt-2 flex-1 min-h-0">
         {(factory.description as string | null) ? (
-          <p className="text-sm leading-5 text-muted-foreground line-clamp-3">
+          <p className="text-sm leading-5 text-muted-foreground line-clamp-6">
             {factory.description as string}
           </p>
         ) : null}
       </div>
 
-      {/* 基本資料區 - 固定排列 */}
-      <div className="mt-3 pt-3 border-t border-border/50 grid grid-cols-1 sm:grid-cols-2 gap-x-3 gap-y-1.5 text-xs text-muted-foreground">
+      {/* 基本資料區 - shrink-0 固定在底部 */}
+      <div className="shrink-0 mt-3 pt-3 border-t border-border/50 grid grid-cols-1 sm:grid-cols-2 gap-x-3 gap-y-1.5 text-xs text-muted-foreground">
         {/* 列1：位置 | 成立年份 */}
         <span className="flex items-center gap-1 min-w-0">
           <MapPin className="w-3 h-3 shrink-0" />
