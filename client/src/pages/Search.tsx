@@ -215,7 +215,7 @@ function FactoryCard({ factory, getFavState, handleFavToggle, cartHas, cartAdd, 
                   <FavButton factoryId={factory.id} initialIsFav={getFavState(factory.id)} onToggle={handleFavToggle} />
                 </div>
               </div>
-              <div className="flex-1 min-h-0 p-4 flex flex-col overflow-hidden">
+              <div className="flex-1 min-h-0 p-4 flex flex-col">
                 <FactoryCardContent factory={factory} isMobile={isMobile} />
               </div>
               {cartButton}
@@ -237,7 +237,7 @@ function FactoryCard({ factory, getFavState, handleFavToggle, cartHas, cartAdd, 
                     <FavButton factoryId={factory.id} initialIsFav={getFavState(factory.id)} onToggle={handleFavToggle} />
                   </div>
                 </div>
-                <div className="flex-1 min-w-0 min-h-0 p-4 flex flex-col overflow-hidden">
+                <div className="flex-1 min-w-0 min-h-0 p-4 flex flex-col">
                   <FactoryCardContent factory={factory} isMobile={isMobile} />
                 </div>
               </div>
@@ -302,10 +302,14 @@ function FactoryCardContent({ factory, isMobile }: { factory: any; isMobile: boo
         </div>
       </div>
 
-      {/* 自我介紹區 - 固定 3 行 */}
-      <p className="text-sm text-muted-foreground line-clamp-3 overflow-hidden min-h-[4.5rem] mt-2">
-        {(factory.description as string | null) ?? ""}
-      </p>
+      {/* 自我介紹區 - 固定 3 行，shrink-0 避免被 flex 壓縮 */}
+      <div className="mt-2 min-h-[3.75rem] shrink-0">
+        {(factory.description as string | null) ? (
+          <p className="text-sm leading-5 text-muted-foreground line-clamp-3">
+            {factory.description as string}
+          </p>
+        ) : null}
+      </div>
 
       {/* 基本資料區 - 固定排列 */}
       <div className="mt-3 pt-3 border-t border-border/50 grid grid-cols-1 sm:grid-cols-2 gap-x-3 gap-y-1.5 text-xs text-muted-foreground">
