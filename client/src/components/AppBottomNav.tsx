@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
-import { Home, Search, MessageCircle, User, Factory } from "lucide-react";
+import { Home, Search, Mail, User, Factory } from "lucide-react";
 
 export function AppBottomNav() {
   const [isNative, setIsNative] = useState(false);
@@ -65,7 +65,7 @@ export function AppBottomNav() {
     },
     {
       path: "/messages",
-      Icon: MessageCircle,
+      Icon: Mail,
       label: "訊息",
       isActive: location.startsWith("/messages") || location.startsWith("/chat/"),
       badge: (userUnread + factoryUnread) > 0,

@@ -2,7 +2,7 @@ import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
 import { Link, useLocation } from "wouter";
 import {
-  Factory, MessageCircle, User, LogOut, LayoutDashboard, Menu, X,
+  Factory, Mail, User, LogOut, LayoutDashboard, Menu, X,
   UserPlus, Search, Settings, Heart, UserCircle, ChevronDown,
   FileText, ScrollText, Bell, Briefcase, Lock,
   Rocket, Users, Package, BookOpen, MessageSquare,
@@ -291,7 +291,7 @@ export default function Navbar() {
                   className="relative h-8 w-8 p-0"
                   title="我的訊息"
                 >
-                  <MessageCircle className="w-4 h-4" />
+                  <Mail className="w-4 h-4" />
                   {(userUnread + factoryUnread) > 0 && (
                     <span className="pointer-events-none absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-orange-500 ring-2 ring-background" />
                   )}
@@ -427,7 +427,7 @@ export default function Navbar() {
             <>
               <Link href="/messages">
                 <Button variant="ghost" size="sm" className="relative h-8 w-8 p-0">
-                  <MessageCircle className="w-4 h-4" />
+                  <Mail className="w-4 h-4" />
                   {(userUnread + factoryUnread) > 0 && (
                     <span className="pointer-events-none absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-orange-500 ring-2 ring-background" />
                   )}

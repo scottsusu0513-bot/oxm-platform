@@ -1369,7 +1369,7 @@ export async function getConversationsByUserWithDetails(userId: number) {
   // 批次查工廠
   const factoryIds = Array.from(new Set(convs.map(c => c.factoryId)));
   const factoryList = await db
-    .select({ id: factories.id, name: factories.name })
+    .select({ id: factories.id, name: factories.name, avatarUrl: factories.avatarUrl, businessType: factories.businessType })
     .from(factories)
     .where(inArray(factories.id, factoryIds));
   const factoryMap = new Map(factoryList.map(f => [f.id, f]));
@@ -1432,6 +1432,8 @@ export async function getConversationsByUserWithDetails(userId: number) {
     return {
       ...conv,
       factoryName: factoryMap.get(conv.factoryId)?.name ?? '未知工廠',
+      factoryAvatarUrl: factoryMap.get(conv.factoryId)?.avatarUrl ?? null,
+      factoryBusinessType: factoryMap.get(conv.factoryId)?.businessType ?? 'factory',
       productName: conv.productId ? (productMap.get(conv.productId)?.name ?? null) : null,
       unreadCount: unreadMap.get(conv.id) ?? 0,
       lastMessage: lastMsg ? lastMsg.content.substring(0, 60) : null,
@@ -2497,7 +2499,7 @@ export async function getInquiryBatchDetail(batchId: number, userId: number) {
   const factoryIds = items.map(i => i.factoryId);
   const convIds = items.map(i => i.conversationId).filter((id): id is number => id != null);
 
-  const factoryList = await db.select({ id: factories.id, name: factories.name })
+  const factoryList = await db.select({ id: factories.id, name: factories.name, avatarUrl: factories.avatarUrl, businessType: factories.businessType })
     .from(factories).where(inArray(factories.id, factoryIds));
   const factoryMap = new Map(factoryList.map(f => [f.id, f]));
 
@@ -2539,6 +2541,8 @@ export async function getInquiryBatchDetail(batchId: number, userId: number) {
       id: item.id,
       factoryId: item.factoryId,
       factoryName: factoryMap.get(item.factoryId)?.name ?? '未知工廠',
+      factoryAvatarUrl: factoryMap.get(item.factoryId)?.avatarUrl ?? null,
+      factoryBusinessType: factoryMap.get(item.factoryId)?.businessType ?? 'factory',
       conversationId: item.conversationId,
       lastMessage: item.conversationId ? (lastMsgMap.get(item.conversationId) ?? null) : null,
       lastMessageAt: item.conversationId ? (lastMsgAtMap2.get(item.conversationId) ?? null) : null,

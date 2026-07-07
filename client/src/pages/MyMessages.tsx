@@ -10,8 +10,8 @@ import { performLogin } from "@/const";
 import { useState, useCallback, useEffect } from "react";
 import {
   MessageCircle, ArrowLeft, Trash2, ShoppingCart,
-  ChevronDown, ChevronRight, Pencil, Check, X, Factory,
-  Mail, Megaphone, MailOpen,
+  ChevronDown, ChevronRight, Pencil, Check, X, Factory as FactoryIcon,
+  Megaphone, MailOpen, Wrench, User as UserIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 import { usePullToRefresh } from "@/hooks/usePullToRefresh";
@@ -43,9 +43,58 @@ function UnreadBadge({ count }: { count: number }) {
   );
 }
 
+// ── 工廠 / 工作室頭像（含 fallback）──────────────────────────────────────
+function FactoryAvatar({
+  avatarUrl, businessType, isUnread,
+}: {
+  avatarUrl?: string | null;
+  businessType?: string | null;
+  isUnread?: boolean;
+}) {
+  if (avatarUrl) {
+    return (
+      <div className="w-9 h-9 rounded-full overflow-hidden shrink-0 bg-muted border border-border/60">
+        <img src={avatarUrl} alt="" className="w-full h-full object-cover" />
+      </div>
+    );
+  }
+  return (
+    <div className={`flex items-center justify-center w-9 h-9 rounded-full shrink-0 ${
+      isUnread ? "bg-orange-100" : "bg-muted"
+    }`}>
+      {businessType === "studio"
+        ? <Wrench className={`w-4 h-4 ${isUnread ? "text-purple-400" : "text-purple-300"}`} />
+        : <FactoryIcon className={`w-4 h-4 ${isUnread ? "text-orange-500" : "text-orange-300"}`} />
+      }
+    </div>
+  );
+}
+
+// ── 買家（一般用戶）頭像 ──────────────────────────────────────────────────
+function BuyerAvatar({ isUnread }: { isUnread?: boolean }) {
+  return (
+    <div className={`flex items-center justify-center w-9 h-9 rounded-full shrink-0 ${
+      isUnread ? "bg-orange-100 text-orange-500" : "bg-muted text-muted-foreground"
+    }`}>
+      <UserIcon className="w-4 h-4" />
+    </div>
+  );
+}
+
+// ── 管理員頭像 ─────────────────────────────────────────────────────────────
+function AdminAvatar({ isUnread }: { isUnread?: boolean }) {
+  return (
+    <div className={`flex items-center justify-center w-9 h-9 rounded-full shrink-0 ${
+      isUnread ? "bg-orange-100 text-orange-500" : "bg-muted text-muted-foreground"
+    }`}>
+      <Megaphone className="w-4 h-4" />
+    </div>
+  );
+}
+
 // ── 收件匣卡片（共用視覺元件）────────────────────────────────────────────
 interface InboxCardContentProps {
-  icon: React.ReactNode;
+  avatar: React.ReactNode;
   isUnread?: boolean;
   title: string;
   titleSuffix?: React.ReactNode;
@@ -56,7 +105,7 @@ interface InboxCardContentProps {
 }
 
 function InboxCardContent({
-  icon, isUnread = false, title, titleSuffix,
+  avatar, isUnread = false, title, titleSuffix,
   summary, emptySummary = "（尚無訊息）", timeStr, unreadCount = 0,
 }: InboxCardContentProps) {
   const hasUnread = isUnread || unreadCount > 0;
@@ -68,13 +117,9 @@ function InboxCardContent({
     }`}>
       {/* Left accent bar */}
       <div className={`w-1 shrink-0 ${hasUnread ? "bg-orange-400" : "bg-transparent"}`} />
-      {/* Icon */}
+      {/* Avatar */}
       <div className="flex items-center justify-center px-3 shrink-0">
-        <div className={`flex items-center justify-center w-9 h-9 rounded-full shrink-0 ${
-          hasUnread ? "bg-orange-100 text-orange-500" : "bg-muted text-muted-foreground"
-        }`}>
-          {icon}
-        </div>
+        {avatar}
       </div>
       {/* Text */}
       <div className="flex-1 min-w-0 py-3 pr-2">
@@ -133,7 +178,7 @@ function UserConversationList({ conversations }: { conversations: any[] }) {
           return (
             <Link key={conv.id} href={`/admin-message/${conv.adminCampaignId}`}>
               <InboxCardContent
-                icon={<Megaphone className="w-4 h-4" />}
+                avatar={<AdminAvatar isUnread={conv.unreadCount > 0} />}
                 isUnread={conv.unreadCount > 0}
                 title="平台管理員"
                 titleSuffix={
@@ -155,7 +200,13 @@ function UserConversationList({ conversations }: { conversations: any[] }) {
               onClick={() => navigate(`/chat/${conv.id}`, { state: { from: "/messages" } })}
             >
               <InboxCardContent
-                icon={<Mail className="w-4 h-4" />}
+                avatar={
+                  <FactoryAvatar
+                    avatarUrl={conv.factoryAvatarUrl}
+                    businessType={conv.factoryBusinessType}
+                    isUnread={conv.unreadCount > 0}
+                  />
+                }
                 isUnread={conv.unreadCount > 0}
                 title={conv.factoryName}
                 titleSuffix={
@@ -258,10 +309,12 @@ function BatchDetail({ batchId }: { batchId: number }) {
         >
           <div className={`w-1 shrink-0 ${item.unreadCount > 0 ? "bg-orange-300" : "bg-transparent"}`} />
           <div className="flex items-center px-2.5 py-2.5 gap-2.5 flex-1 min-w-0">
-            <div className={`flex items-center justify-center w-7 h-7 rounded-full shrink-0 ${
-              item.unreadCount > 0 ? "bg-orange-100 text-orange-400" : "bg-muted text-muted-foreground/70"
-            }`}>
-              <Mail className="w-3.5 h-3.5" />
+            <div className="shrink-0">
+              <FactoryAvatar
+                avatarUrl={item.factoryAvatarUrl}
+                businessType={item.factoryBusinessType}
+                isUnread={(item.unreadCount ?? 0) > 0}
+              />
             </div>
             <div className="flex-1 min-w-0">
               <p className={`text-xs leading-snug ${item.unreadCount > 0 ? "font-semibold text-foreground" : "font-medium text-foreground/85"}`}>
@@ -317,7 +370,6 @@ function InquiryBatchList({ batches }: { batches: any[] }) {
             className="flex items-center gap-0 cursor-pointer hover:bg-muted/20 transition-colors"
             onClick={() => setExpandedId(expandedId === batch.id ? null : batch.id)}
           >
-            {/* Accent bar placeholder (no per-batch unread count available) */}
             <div className="w-1 shrink-0 self-stretch" />
             <div className="flex items-center gap-3 px-3 py-3.5 flex-1 min-w-0">
               <div className="flex items-center justify-center w-9 h-9 rounded-full bg-muted text-muted-foreground shrink-0">
@@ -390,7 +442,7 @@ function FactoryConversationList({ factoryId }: { factoryId: number }) {
             onClick={() => navigate(`/chat/${conv.id}`, { state: { from: "/messages?tab=factory" } })}
           >
             <InboxCardContent
-              icon={<Mail className="w-4 h-4" />}
+              avatar={<BuyerAvatar isUnread={conv.unreadCount > 0} />}
               isUnread={conv.unreadCount > 0}
               title={conv.userName}
               titleSuffix={
@@ -439,7 +491,6 @@ export default function MyMessages() {
     const p = new URLSearchParams(window.location.search);
     return p.get("type") === "quote" ? "quote" : "normal";
   });
-  // Skip auto-default logic if the user arrived with an explicit tab param
   const [hasInteracted, setHasInteracted] = useState(() => {
     return !!new URLSearchParams(window.location.search).get("tab");
   });
@@ -478,7 +529,7 @@ export default function MyMessages() {
   const personalGroupUnread = normalUnread + quoteUnread;
   const factoryUnreadCount = unreadData?.factoryCount ?? 0;
 
-  // ── Auto default tab (runs once when all data is loaded) ─────────────────
+  // ── Auto default tab ──────────────────────────────────────────────────────
   const dataLoaded = userConvs !== undefined && ownedFactory !== undefined && coManagedList !== undefined;
 
   useEffect(() => {
@@ -486,7 +537,6 @@ export default function MyMessages() {
 
     let newTab: "personal" | "factory" = "personal";
     let newType: "normal" | "quote" = "normal";
-
     const anyFactory = !!ownedFactory || (coManagedList?.length ?? 0) > 0;
 
     if (personalGroupUnread > 0 && factoryUnreadCount === 0) {
@@ -508,7 +558,7 @@ export default function MyMessages() {
     window.history.replaceState({}, "", `?${params.toString()}`);
   }, [dataLoaded]);
 
-  // ── Guard: if URL said factory but user has none, fall back ──────────────
+  // ── Guard: URL factory tab but no factory ────────────────────────────────
   useEffect(() => {
     if (ownedLoading || coManagedLoading) return;
     if (mainTab === "factory" && !hasFactory) {
@@ -604,7 +654,7 @@ export default function MyMessages() {
             className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors flex items-center gap-1.5 ${mainTab === "factory" ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
             onClick={() => handleMainTabChange("factory")}
           >
-            <Factory className="w-3.5 h-3.5" />
+            <FactoryIcon className="w-3.5 h-3.5" />
             工廠訊息
             {factoryUnreadCount > 0 && (
               <span className="inline-block h-2 w-2 rounded-full bg-orange-500 shrink-0" />
@@ -615,7 +665,6 @@ export default function MyMessages() {
         {/* ── 一般訊息區塊 ── */}
         {mainTab === "personal" && (
           <>
-            {/* 一般訊息 / 一鍵詢價 子切換 */}
             <div className="flex gap-2 mb-4">
               <button
                 className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full border transition-colors ${personalType === "normal" ? "bg-primary text-primary-foreground border-primary" : "border-border text-muted-foreground hover:text-foreground"}`}
@@ -654,7 +703,7 @@ export default function MyMessages() {
             : (
               <Card>
                 <CardContent className="p-12 text-center text-muted-foreground">
-                  <Factory className="w-12 h-12 mx-auto mb-4 opacity-30" />
+                  <FactoryIcon className="w-12 h-12 mx-auto mb-4 opacity-30" />
                   <p>您尚未建立工廠</p>
                   <p className="text-sm mt-1">建立工廠後，來自客戶的詢問訊息將顯示於此</p>
                 </CardContent>
