@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ArrowLeft, Building2, MapPin, AlertCircle, Image, Package, User, ChevronDown, Pencil, Users } from "lucide-react";
+import { FloatingBackButton } from "@/components/FloatingBackButton";
 import { useState } from "react";
 import { toast } from "sonner";
 import { INDUSTRY_OPTIONS } from "@shared/constants";
@@ -100,16 +101,8 @@ export default function FactoryReviewDetail() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-orange-50 to-amber-50 px-4 pb-4 md:px-8 md:pb-8 admin-page-top">
       <div className="max-w-4xl mx-auto">
+      <FloatingBackButton fallbackHref="/admin" noNavbar />
         <div className="flex items-center gap-4 mb-8">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => window.location.href = "/admin"}
-            className="gap-2"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            返回
-          </Button>
           <h1 className="text-3xl font-bold text-gray-900">工廠審核詳情</h1>
         </div>
 

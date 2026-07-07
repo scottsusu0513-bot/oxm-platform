@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ArrowLeft, Flag, HeadphonesIcon, ChevronDown, ChevronUp, User, History } from "lucide-react";
+import { FloatingBackButton } from "@/components/FloatingBackButton";
 import { toast } from "sonner";
 import { StatusTimeline } from "@/components/StatusTimeline";
 
@@ -298,10 +299,8 @@ export default function AdminSupportCenter() {
     <div className="min-h-screen bg-gradient-to-br from-orange-50 to-amber-50 px-4 pb-4 md:px-8 md:pb-8 admin-page-top">
       <div className="max-w-5xl mx-auto">
         <div className="flex items-center justify-between mb-8">
+      <FloatingBackButton fallbackHref="/admin" noNavbar />
           <div className="flex items-center gap-4">
-            <Button variant="outline" size="sm" onClick={() => setLocation("/admin")} className="gap-2">
-              <ArrowLeft className="h-4 w-4" />返回
-            </Button>
             <h1 className="text-3xl font-bold text-gray-900">客服中心</h1>
           </div>
           <div className="flex gap-3 text-sm text-muted-foreground">

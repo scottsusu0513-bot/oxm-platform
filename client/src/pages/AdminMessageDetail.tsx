@@ -3,6 +3,7 @@ import { useLocation, useParams } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import Navbar from "@/components/Navbar";
+import { FloatingBackButton } from "@/components/FloatingBackButton";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent } from "@/components/ui/card";
@@ -74,10 +75,8 @@ export default function AdminMessageDetail() {
   return (
     <div className="min-h-screen bg-background flex flex-col">
       <Navbar />
+      <FloatingBackButton fallbackHref="/messages" label="返回訊息" />
       <div className="container py-6 max-w-2xl flex flex-col flex-1">
-        <Button variant="ghost" size="sm" className="mb-4 self-start" onClick={() => navigate("/messages")}>
-          <ArrowLeft className="w-4 h-4 mr-1" /> 返回訊息
-        </Button>
 
         {(campaignQuery.isLoading || loading) && (
           <div className="flex justify-center py-16">

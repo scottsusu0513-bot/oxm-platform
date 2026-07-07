@@ -17,6 +17,7 @@ import {
   ThumbsDown, ThumbsUp, Rocket, FlagTriangleRight, History,
 } from "lucide-react";
 import Navbar from "@/components/Navbar";
+import { FloatingBackButton } from "@/components/FloatingBackButton";
 
 // ── 狀態設定 ─────────────────────────────────────────────────────────────────
 
@@ -1061,10 +1062,7 @@ export default function ConsultantCases() {
       <Navbar />
       <div className="container py-8 max-w-3xl mx-auto space-y-6">
 
-        {/* 返回按鈕 */}
-        <Button variant="ghost" size="sm" onClick={() => window.history.back()}>
-          <ArrowLeft className="w-4 h-4 mr-1" /> 返回
-        </Button>
+        <FloatingBackButton fallbackHref="/" />
 
         {/* 頁面標題 */}
         <div className="flex items-center gap-2">

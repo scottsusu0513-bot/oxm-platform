@@ -9,7 +9,7 @@ import { Card, CardContent } from "@/components/ui/card";
 const BASE = "https://www.oxmmatch.com";
 const canonicalUrl = `${BASE}/blog`;
 const pageTitle = "找代工指南｜OEM ODM 新手教學｜OXM";
-const pageDesc = "第一次找台灣代工廠？從 OEM vs ODM 差異、MOQ 談判到詢價流程，OXM 幫你從零開始了解代工。";
+const pageDesc = "第一次找台灣工廠？從 OEM vs ODM 差異、MOQ 談判到詢價流程，OXM 幫你從零開始了解代工。";
 
 export default function BlogList() {
   return (
@@ -88,7 +88,7 @@ export default function BlogList() {
           <p className="text-sm text-muted-foreground mb-4">前往 OXM 搜尋適合的供應商，直接聯繫、即時報價。</p>
           <Link href="/search">
             <Button className="bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white border-0 gap-2">
-              <Search className="w-4 h-4" />搜尋代工廠
+              <Search className="w-4 h-4" />搜尋工廠
             </Button>
           </Link>
         </div>

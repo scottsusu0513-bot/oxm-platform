@@ -1,4 +1,5 @@
 import Navbar from "@/components/Navbar";
+import { FloatingBackButton } from "@/components/FloatingBackButton";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -29,10 +30,8 @@ export default function Announcements() {
   return (
     <div className="min-h-screen bg-background">
       <Navbar />
+      <FloatingBackButton fallbackHref="/" />
       <div className="container py-8 max-w-3xl">
-        <Button variant="outline" size="sm" className="mb-6 gap-2" onClick={() => navigate("/")}>
-          <ChevronLeft className="w-4 h-4" />返回首頁
-        </Button>
 
         <div className="flex items-center gap-3 mb-8">
           <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-orange-500 to-amber-400 flex items-center justify-center shadow">

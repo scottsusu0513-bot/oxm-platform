@@ -1,4 +1,5 @@
 import Navbar from "@/components/Navbar";
+import { FloatingBackButton } from "@/components/FloatingBackButton";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -303,9 +304,7 @@ export default function FactoryDashboard() {
     <NativePullToRefreshLayout contentRef={contentRef} indicatorRef={indicatorRef} iconRef={iconRef} phase={phase} className="min-h-screen bg-background">
       <Navbar />
       <div className="container py-6">
-        <Button variant="outline" onClick={() => navigate("/")} className="mb-4 flex items-center gap-2">
-          <ArrowLeft className="h-4 w-4" />返回首頁
-        </Button>
+        <FloatingBackButton fallbackHref="/" />
 
         <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-6">
           <div className="flex items-center gap-4">
@@ -327,7 +326,7 @@ export default function FactoryDashboard() {
                   </span>
                 ) : (
                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-orange-100 text-orange-700 text-sm font-medium">
-                    <Factory className="w-3 h-3" />代工廠
+                    <Factory className="w-3 h-3" />工廠
                   </span>
                 )}
                 {(factory as any).certified && (
@@ -941,7 +940,7 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
               ) : (
                 <div className="flex items-center gap-2 px-4 py-2 rounded-lg bg-orange-50 border border-orange-200 w-fit">
                   <Factory className="w-4 h-4 text-orange-600" />
-                  <span className="font-medium text-orange-700">代工廠</span>
+                  <span className="font-medium text-orange-700">工廠</span>
                 </div>
               )}
               <span className="text-xs text-muted-foreground">（申請後無法更改）</span>

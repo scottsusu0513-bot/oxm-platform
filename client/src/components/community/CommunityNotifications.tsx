@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import Navbar from "@/components/Navbar";
+import { FloatingBackButton } from "@/components/FloatingBackButton";
 import { Helmet } from "react-helmet-async";
 import { Loader2, AlertTriangle, Bell, CheckCheck, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -75,12 +76,8 @@ export default function CommunityNotifications() {
 
       <Navbar />
 
+      <FloatingBackButton fallbackHref="/" />
       <main className="container py-6 max-w-2xl">
-        {/* 返回鍵 */}
-        <Button variant="ghost" size="sm" className="mb-4 -ml-2" onClick={handleBack}>
-          <ArrowLeft className="w-4 h-4 mr-1" />
-          返回
-        </Button>
 
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">

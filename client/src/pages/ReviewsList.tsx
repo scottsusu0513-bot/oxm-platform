@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ArrowLeft, Star, Search } from "lucide-react";
+import { FloatingBackButton } from "@/components/FloatingBackButton";
 
 export default function ReviewsList() {
   // 所有 hooks 必須在組件頂部無條件調用
@@ -60,16 +61,8 @@ const reviewsQuery = trpc.admin.getReviews.useQuery({ page, pageSize: 20 }, { en
     <div className="min-h-screen bg-gradient-to-br from-orange-50 to-amber-50 px-4 pb-4 md:px-8 md:pb-8 admin-page-top">
       <div className="max-w-6xl mx-auto">
         <div className="flex items-center justify-between mb-8">
+      <FloatingBackButton fallbackHref="/admin" noNavbar />
           <div className="flex items-center gap-4">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setLocation("/admin")}
-              className="gap-2"
-            >
-              <ArrowLeft className="h-4 w-4" />
-              返回
-            </Button>
             <h1 className="text-3xl font-bold text-gray-900">所有評價</h1>
           </div>
           <div className="text-sm text-gray-600">

@@ -5,6 +5,7 @@ import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft } from "lucide-react";
+import { FloatingBackButton } from "@/components/FloatingBackButton";
 
 export default function AdminConversationDetail() {
   const [matched, params] = useRoute("/admin/conversations/:id");
@@ -32,11 +33,9 @@ export default function AdminConversationDetail() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-orange-50 to-amber-50 px-4 pb-4 md:px-8 md:pb-8 admin-page-top">
       <div className="max-w-3xl mx-auto">
+      <FloatingBackButton fallbackHref="/admin/conversations" noNavbar />
         <div className="flex items-center gap-4 mb-6">
-          <Button variant="outline" size="sm" onClick={() => setLocation("/admin/conversations")} className="gap-2">
-            <ArrowLeft className="h-4 w-4" />
-            返回
-          </Button>
+          <div />
           <div>
             <h1 className="text-2xl font-bold">對話內容</h1>
             {meta && (

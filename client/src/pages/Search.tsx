@@ -107,7 +107,7 @@ function BusinessTypeBadge({ businessType }: { businessType?: string }) {
   }
   return (
     <Badge className="bg-orange-100 text-orange-700 hover:bg-orange-100 border-0 text-xs">
-      <Factory className="w-3 h-3 mr-1" />代工廠
+      <Factory className="w-3 h-3 mr-1" />工廠
     </Badge>
   );
 }
@@ -519,7 +519,7 @@ export default function Search() {
     if (subIndustry.length > 0) filters.push({ key: "subIndustry", label: "子產業", value: subIndustry.join("、") });
     if (region.length > 0) filters.push({ key: "region", label: "地區", value: region.join("、") });
     if (committedKeyword) filters.push({ key: "keyword", label: "關鍵字", value: committedKeyword });
-    if (businessType && businessType !== "all") filters.push({ key: "businessType", label: "類型", value: businessType === "factory" ? "代工廠" : "工作室" });
+    if (businessType && businessType !== "all") filters.push({ key: "businessType", label: "類型", value: businessType === "factory" ? "工廠" : "工作室" });
     return filters;
   }, [mfgMode, industry, subIndustry, region, committedKeyword, businessType]);
 
@@ -620,11 +620,8 @@ export default function Search() {
       </Helmet>
       <Navbar />
       <div className={`container py-6 ${cart.length > 0 ? "pb-20 lg:pb-6" : ""}`}>
-        <Button variant="outline" onClick={() => navigate("/")} className="mb-4 flex items-center gap-2">
-          <ChevronLeft className="h-4 w-4" />返回首頁
-        </Button>
         <h1 className="sr-only">
-          {seoIndustry ? `${seoIndustry}代工廠` : "台灣代工廠搜尋"}
+          {seoIndustry ? `${seoIndustry}工廠` : "台灣工廠搜尋"}
         </h1>
 
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
@@ -639,7 +636,7 @@ export default function Search() {
                   <div className="flex flex-col gap-2">
                     {[
                       { l: "全部", v: "all" },
-                      { l: "代工廠", v: "factory" },
+                      { l: "工廠", v: "factory" },
                       { l: "工作室", v: "studio" },
                     ].map(t => (
                       <Button
@@ -797,7 +794,7 @@ export default function Search() {
                         <Textarea
                           value={inquiryMessage}
                           onChange={e => setInquiryMessage(e.target.value)}
-                          placeholder="您好，我正在尋找合適的代工廠，想詢問貴公司是否能承接以下需求，請協助提供報價、MOQ、交期與合作方式，謝謝。"
+                          placeholder="您好，我正在尋找合適的工廠，想詢問貴公司是否能承接以下需求，請協助提供報價、MOQ、交期與合作方式，謝謝。"
                           className="text-xs resize-none"
                           rows={4}
                           maxLength={2000}
@@ -827,7 +824,7 @@ export default function Search() {
               <CardContent className="p-3">
                 <div className="flex flex-wrap gap-2 items-end">
                   <div className="flex gap-1">
-                    {[{ l: "全部", v: "all" }, { l: "代工廠", v: "factory" }, { l: "工作室", v: "studio" }].map(t => (
+                    {[{ l: "全部", v: "all" }, { l: "工廠", v: "factory" }, { l: "工作室", v: "studio" }].map(t => (
                       <Button key={t.v} size="sm" variant={businessType === t.v ? "default" : "outline"}
                         className="h-8 text-xs px-2"
                         onClick={() => onBusinessTypeChange(t.v)}>
@@ -1120,7 +1117,7 @@ export default function Search() {
               <Textarea
                 value={inquiryMessage}
                 onChange={e => setInquiryMessage(e.target.value)}
-                placeholder="您好，我正在尋找合適的代工廠，想詢問貴公司是否能承接以下需求，請協助提供報價、MOQ、交期與合作方式，謝謝。"
+                placeholder="您好，我正在尋找合適的工廠，想詢問貴公司是否能承接以下需求，請協助提供報價、MOQ、交期與合作方式，謝謝。"
                 className="text-sm resize-none"
                 rows={5}
                 maxLength={2000}

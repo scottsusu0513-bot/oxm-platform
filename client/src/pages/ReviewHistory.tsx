@@ -3,6 +3,7 @@ import { trpc } from "@/lib/trpc";
 import { useLocation } from "wouter";
 import { useEffect } from "react";
 import Navbar from "@/components/Navbar";
+import { FloatingBackButton } from "@/components/FloatingBackButton";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -49,15 +50,8 @@ export default function ReviewHistory() {
   return (
     <div className="min-h-screen bg-background">
       <Navbar />
+      <FloatingBackButton fallbackHref="/factory-dashboard" label="返回工廠管理" />
       <div className="container py-6">
-        <Button
-          variant="outline"
-          onClick={() => navigate("/factory-dashboard")}
-          className="mb-4 flex items-center gap-2"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          返回工廠管理
-        </Button>
 
         <h1 className="text-2xl font-bold mb-6">審核歷史</h1>
 

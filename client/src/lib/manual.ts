@@ -127,7 +127,7 @@ export const MANUAL_ARTICLES: ManualArticle[] = [
       {
         id: 'step-1',
         title: '輸入需求並設定搜尋條件',
-        description: '在首頁選擇類型（工廠、工作室或全部），也可先設定代工模式、產業與地區等條件，輸入想找的產品、加工方式或產業關鍵字，再點擊「搜尋代工廠 & 工作室」。',
+        description: '在首頁選擇類型（工廠、工作室或全部），也可先設定代工模式、產業與地區等條件，輸入想找的產品、加工方式或產業關鍵字，再點擊「搜尋工廠 & 工作室」。',
         image: '/manual/find-factory/search-factory/step-01/4.png',
         imageAlt: 'OXM 首頁搜尋區，橘色框標示類型選擇（工廠／工作室／全部）、篩選條件欄位與搜尋按鈕，步驟編號 ①',
         imageCaption: '在首頁輸入關鍵字並設定搜尋條件',
@@ -199,10 +199,10 @@ export const MANUAL_ARTICLES: ManualArticle[] = [
       {
         id: 'step-2',
         title: '選擇申請類型',
-        description: '選擇「代工廠」或「工作室」。代工廠適合具備生產設備的製造工廠；工作室適合手工藝、設計師或個人接案者。',
+        description: '選擇「工廠」或「工作室」。工廠適合具備生產設備的製造工廠；工作室適合手工藝、設計師或個人接案者。',
         image: '/manual/list-factory/register-factory/step-02/11.png',
-        imageAlt: '申請刊登頁面，橘色框標示「代工廠」與「工作室」類型選擇卡，步驟編號 ②',
-        imageCaption: '選擇代工廠或工作室',
+        imageAlt: '申請刊登頁面，橘色框標示「工廠」與「工作室」類型選擇卡，步驟編號 ②',
+        imageCaption: '選擇工廠或工作室',
       },
       {
         id: 'step-3',
@@ -215,9 +215,9 @@ export const MANUAL_ARTICLES: ManualArticle[] = [
       {
         id: 'step-4',
         title: '填寫聯絡資料並送出申請',
-        description: '繼續填寫簡介、成立年份、負責人、聯絡方式與地址。確認無誤後，點底部橘色「建立代工廠」或「建立工作室」按鈕完成初步建立。',
+        description: '繼續填寫簡介、成立年份、負責人、聯絡方式與地址。確認無誤後，點底部橘色「建立工廠」或「建立工作室」按鈕完成初步建立。',
         image: '/manual/list-factory/register-factory/step-04/13.png',
-        imageAlt: '刊登表單下段，橘色框標示地址、聯絡方式等欄位及底部橘色「建立代工廠」按鈕，步驟編號 ④',
+        imageAlt: '刊登表單下段，橘色框標示地址、聯絡方式等欄位及底部橘色「建立工廠」按鈕，步驟編號 ④',
         imageCaption: '填寫聯絡資料後點建立',
       },
       {

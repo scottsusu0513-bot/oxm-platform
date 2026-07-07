@@ -130,12 +130,12 @@ export default function FloatingAnnouncementButton() {
       {/* 預約說明浮動入口（主按鈕） */}
       <button
         onClick={() => setShowVisitCard(v => !v)}
-        aria-label="預約說明"
+        aria-label="線上預約"
         aria-expanded={showVisitCard}
         className={`${btnBase} bg-gradient-to-r from-orange-500 to-amber-500`}
       >
         <CalendarCheck className="w-4 h-4 shrink-0" />
-        <span className="hidden sm:inline text-sm">預約說明</span>
+        <span className="hidden sm:inline text-sm">線上預約</span>
       </button>
 
       {/* 使用手冊（MANUAL_ENTRY_ENABLED 為 true 時才顯示） */}

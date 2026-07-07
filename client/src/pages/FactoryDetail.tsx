@@ -1,5 +1,6 @@
 import { Helmet } from "react-helmet-async";
 import Navbar from "@/components/Navbar";
+import { FloatingBackButton } from "@/components/FloatingBackButton";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -342,11 +343,11 @@ export default function FactoryDetail() {
   const factoryMfgModes: string[] = Array.isArray((factory as any).mfgModes) ? (factory as any).mfgModes : [];
   const subIndustryText = factorySubIndustryArr.slice(0, 2).join("、");
   const canonicalUrl = `https://www.oxmmatch.com/factory/${factory.id}`;
-  const metaTitle = `${factory.name}｜${subIndustryText || factoryIndustry}代工廠介紹｜OXM`;
+  const metaTitle = `${factory.name}｜${subIndustryText || factoryIndustry}工廠介紹｜OXM`;
   const metaDesc = [
     factory.name,
     factoryRegion ? `位於${factoryRegion}` : "",
-    factoryIndustry ? `${factoryIndustry}代工廠` : "",
+    factoryIndustry ? `${factoryIndustry}工廠` : "",
     subIndustryText ? `主營${subIndustryText}` : "",
     factoryMfgModes.length ? `提供 ${factoryMfgModes.join(" / ")} 服務` : "",
     factory.description ? factory.description.slice(0, 60) : "",
@@ -357,7 +358,7 @@ export default function FactoryDetail() {
     "@type": "LocalBusiness",
     name: factory.name,
     url: canonicalUrl,
-    description: factory.description || `${factoryIndustry}代工廠，位於${factoryRegion}`,
+    description: factory.description || `${factoryIndustry}工廠，位於${factoryRegion}`,
     areaServed: factoryRegion,
     knowsAbout: [...factoryIndustryArr, ...factorySubIndustryArr],
   });
@@ -380,6 +381,7 @@ export default function FactoryDetail() {
         <script type="application/ld+json">{jsonLd}</script>
       </Helmet>
       <Navbar />
+      <FloatingBackButton fallbackHref="/search" />
 
       {/* ── Cover image — full-width on mobile, max-w-7xl centered on desktop ── */}
       <div className="w-full lg:max-w-7xl lg:mx-auto">
@@ -396,12 +398,6 @@ export default function FactoryDetail() {
           )}
           {/* subtle bottom fade so logo blends in */}
           <div className="absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-black/20 to-transparent pointer-events-none" />
-          <button
-            onClick={handleBackToSearch}
-            className="absolute top-3 left-3 z-10 bg-black/30 hover:bg-black/50 text-white rounded-lg px-3 py-1.5 text-sm flex items-center gap-1.5 transition-colors backdrop-blur-sm"
-          >
-            <ArrowLeft className="w-4 h-4" />返回
-          </button>
         </div>
       </div>
 
@@ -510,7 +506,7 @@ export default function FactoryDetail() {
                   {/* Row 2 */}
                   <InfoRow
                     label1="商家類型"
-                    val1={(factory as any).businessType === "studio" ? "工作室" : "代工廠"}
+                    val1={(factory as any).businessType === "studio" ? "工作室" : "工廠"}
                     label2="接單狀態"
                     val2={(() => {
                       const st = (factory as any).operationStatus;

@@ -547,7 +547,7 @@ export default function Home() {
                 <div className="mb-2 md:mb-4">
                   <Input
                     className="w-full h-10 md:h-12 text-sm md:text-base"
-                    placeholder="輸入關鍵字搜尋代工廠或工作室..."
+                    placeholder="輸入關鍵字搜尋工廠或工作室..."
                     value={keyword}
                     onChange={(e) => setKeyword(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && handleSearch()}
@@ -559,7 +559,7 @@ export default function Home() {
                   onClick={handleSearch}
                 >
                   <Search className="w-4 h-4 md:w-5 md:h-5 mr-2" />
-                  搜尋代工廠 & 工作室
+                  搜尋工廠 & 工作室
                 </Button>
               </CardContent>
             </Card>
@@ -572,7 +572,7 @@ export default function Home() {
         <div className="container">
           <div className="text-center mb-4 md:mb-10">
             <h2 className="text-xl md:text-3xl font-bold mb-2">
-              <span className="text-orange-500">代工廠</span>
+              <span className="text-orange-500">工廠</span>
               <span className="text-muted-foreground mx-2">&</span>
               <span className="text-purple-500">工作室</span>
               ，一次找齊
@@ -588,7 +588,7 @@ export default function Home() {
                     <Factory className="w-5 h-5 md:w-8 md:h-8 text-white" />
                   </div>
                   <div>
-                    <h3 className="text-base md:text-xl font-bold text-orange-500">代工廠</h3>
+                    <h3 className="text-base md:text-xl font-bold text-orange-500">工廠</h3>
                     <p className="text-xs md:text-sm text-muted-foreground">ODM / OEM 製造</p>
                   </div>
                 </div>
@@ -670,7 +670,7 @@ export default function Home() {
         <div className="container">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 md:gap-8 text-center">
             {[
-              { icon: Factory, num: "500+", label: "代工廠" },
+              { icon: Factory, num: "500+", label: "工廠" },
               { icon: Sparkles, num: "300+", label: "設計工作室" },
               { icon: Star, num: "4.8", label: "平均評分" },
               { icon: CheckCircle, num: "10+", label: "產業類別" },

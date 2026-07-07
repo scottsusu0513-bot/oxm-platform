@@ -24,6 +24,7 @@ import { OrderTimelineBar } from "@/components/OrderTimelineBar";
 import { initPushNotifications } from "@/lib/pushNotifications";
 import { usePullToRefresh } from "@/hooks/usePullToRefresh";
 import { NativePullToRefreshLayout } from "@/components/NativePullToRefreshLayout";
+import { FloatingBackButton } from "@/components/FloatingBackButton";
 
 const STATUS_LABELS: Record<string, { label: string; color: string }> = {
   pending:    { label: "已寄出",  color: "bg-gray-100 text-gray-700" },
@@ -106,10 +107,9 @@ export default function MemberCenter() {
   return (
     <NativePullToRefreshLayout contentRef={contentRef} indicatorRef={indicatorRef} iconRef={iconRef} phase={phase} className="min-h-screen bg-gradient-to-br from-orange-50 to-amber-50 px-4 pb-4 md:px-8 md:pb-8 admin-page-top">
       <div className="max-w-4xl mx-auto">
+      <FloatingBackButton fallbackHref="/" noNavbar />
         <div className="flex items-center gap-4 mb-6">
-          <Button variant="outline" size="sm" onClick={() => window.history.back()} className="gap-2">
-            <ArrowLeft className="h-4 w-4" />返回
-          </Button>
+          <div />
           <div>
             <h1 className="text-2xl font-bold text-gray-900">會員中心</h1>
             <p className="text-sm text-muted-foreground">{user.name ?? user.email}</p>

@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { Helmet } from "react-helmet-async";
 import Navbar from "@/components/Navbar";
+import { FloatingBackButton } from "@/components/FloatingBackButton";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft } from "lucide-react";
 
@@ -65,10 +66,8 @@ export default function TermsPage() {
 
       <Navbar />
 
+      <FloatingBackButton fallbackHref="/" />
       <div className="container py-8">
-        <Button variant="ghost" size="sm" className="mb-6" onClick={() => window.history.back()}>
-          <ArrowLeft className="w-4 h-4 mr-1" />返回
-        </Button>
 
         <div className="max-w-[800px] mx-auto">
           <h1 className="text-3xl font-bold mb-2">服務條款</h1>

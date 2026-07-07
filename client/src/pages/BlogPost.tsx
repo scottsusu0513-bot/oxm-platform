@@ -1,5 +1,6 @@
 import { Helmet } from "react-helmet-async";
 import Navbar from "@/components/Navbar";
+import { FloatingBackButton } from "@/components/FloatingBackButton";
 import { useRoute, useLocation, Link } from "wouter";
 import { getPost } from "@/lib/blog";
 import ReactMarkdown from "react-markdown";
@@ -60,10 +61,8 @@ export default function BlogPost() {
 
       <Navbar />
 
+      <FloatingBackButton fallbackHref="/blog" label="找代工指南" />
       <div className="container py-8 max-w-3xl">
-        <Button variant="ghost" size="sm" className="mb-6 -ml-2" onClick={() => navigate("/blog")}>
-          <ChevronLeft className="w-4 h-4 mr-1" />找代工指南
-        </Button>
 
         <article>
           <p className="text-xs text-muted-foreground mb-2">{post.date}</p>

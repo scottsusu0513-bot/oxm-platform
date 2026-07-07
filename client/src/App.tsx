@@ -223,6 +223,11 @@ function AppDeepLinkHandler() {
 // Module-level guard so only one silent init attempt happens across the entire session
 let globalPushInitAttempted = false;
 
+// Resets on page refresh (JS memory cleared) — used by RouteTracker to detect fresh loads
+let _routeTrackerReady = false;
+const OXM_PREV_PATH = "oxm.previousPath";
+const OXM_CUR_PATH = "oxm.currentPath";
+
 // Silently initialises push notifications once the user is logged in on a native app.
 // MemberCenter handles the "enable push" UX; this component handles the token refresh
 // so users don't need to visit MemberCenter after a reinstall / token rotation.
@@ -353,6 +358,29 @@ function safeVisitorId(): string {
   }
 }
 
+// Tracks SPA pathname changes so FloatingBackButton can safely navigate back within the site.
+// Uses a module-level flag to distinguish fresh loads / refreshes (flag = false) from
+// in-session SPA navigation (flag = true). On fresh load we clear previousPath so the
+// back button falls through to fallbackHref instead of returning to a stale path.
+function RouteTracker() {
+  const [pathname] = useLocation();
+  useEffect(() => {
+    try {
+      if (!_routeTrackerReady) {
+        _routeTrackerReady = true;
+        sessionStorage.removeItem(OXM_PREV_PATH);
+        sessionStorage.setItem(OXM_CUR_PATH, pathname);
+        return;
+      }
+      const stored = sessionStorage.getItem(OXM_CUR_PATH) ?? "";
+      if (stored === pathname) return;
+      sessionStorage.setItem(OXM_PREV_PATH, stored);
+      sessionStorage.setItem(OXM_CUR_PATH, pathname);
+    } catch { /* sessionStorage unavailable */ }
+  }, [pathname]);
+  return null;
+}
+
 function PageViewTracker() {
   const record = trpc.analytics.record.useMutation();
   useEffect(() => {
@@ -381,6 +409,7 @@ function App() {
             <AppDeepLinkHandler />
             <PushAutoInitializer />
             <PushNavigationHandler />
+            <RouteTracker />
             <NetworkStatusOverlay />
             <Router />
             <AppBottomNav />

@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ArrowLeft, Building2, MapPin, Check, X, User } from "lucide-react";
+import { FloatingBackButton } from "@/components/FloatingBackButton";
 
 export default function PendingFactoriesList() {
   const { user, loading: authLoading } = useAuth();
@@ -35,16 +36,8 @@ export default function PendingFactoriesList() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-orange-50 to-amber-50 px-4 pb-4 md:px-8 md:pb-8 admin-page-top">
       <div className="max-w-6xl mx-auto">
+      <FloatingBackButton fallbackHref="/admin" noNavbar />
         <div className="flex items-center gap-4 mb-8">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setLocation("/admin")}
-            className="gap-2"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            返回
-          </Button>
           <h1 className="text-3xl font-bold text-gray-900">工廠審核管理</h1>
         </div>
 

@@ -1,5 +1,6 @@
 import { Helmet } from "react-helmet-async";
 import Navbar from "@/components/Navbar";
+import { FloatingBackButton } from "@/components/FloatingBackButton";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -92,7 +93,7 @@ export default function IndustryPage() {
           ...(factories.length > 0 && {
             "mainEntity": {
               "@type": "ItemList",
-              "name": `${displayName}代工廠列表`,
+              "name": `${displayName}工廠列表`,
               "numberOfItems": total,
               "itemListElement": factories.map((f, i) => ({
                 "@type": "ListItem",
@@ -108,9 +109,7 @@ export default function IndustryPage() {
       <Navbar />
 
       <div className="container py-6">
-        <Button variant="ghost" size="sm" className="mb-4" onClick={() => navigate("/search")}>
-          <ChevronLeft className="w-4 h-4 mr-1" />返回搜尋
-        </Button>
+        <FloatingBackButton fallbackHref="/search" label="返回搜尋" />
 
         {/* 頁首 */}
         <div className="mb-8">
@@ -123,9 +122,9 @@ export default function IndustryPage() {
               <span className="text-foreground font-medium">{subIndustryName}</span>
             </div>
           )}
-          <h1 className="text-3xl font-extrabold text-foreground mb-2">{displayName}代工廠</h1>
+          <h1 className="text-3xl font-extrabold text-foreground mb-2">{displayName}工廠</h1>
           <p className="text-muted-foreground">
-            台灣{displayName}代工廠列表，共 {total} 間，支援 OEM / ODM 服務
+            台灣{displayName}工廠列表，共 {total} 間，支援 OEM / ODM 服務
           </p>
           <div className="mt-4 flex flex-wrap gap-2">
             {Object.entries(INDUSTRY_SLUGS).map(([name, s]) => (
@@ -152,7 +151,7 @@ export default function IndustryPage() {
           <Card className="mb-8">
             <CardContent className="p-12 text-center text-muted-foreground">
               <Factory className="w-12 h-12 mx-auto mb-4 opacity-30" />
-              <p>目前尚無{industryName}代工廠資料</p>
+              <p>目前尚無{industryName}工廠資料</p>
             </CardContent>
           </Card>
         ) : (
@@ -205,7 +204,7 @@ export default function IndustryPage() {
           <div className="text-center mb-10">
             <Link href={`/search?industry=${encodeURIComponent(industryName)}`}>
               <Button variant="outline" className="gap-2">
-                <Search className="w-4 h-4" />查看全部 {total} 間{industryName}代工廠
+                <Search className="w-4 h-4" />查看全部 {total} 間{industryName}工廠
               </Button>
             </Link>
           </div>

@@ -9,6 +9,7 @@ import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { performLogin } from "@/const";
 import Navbar from "@/components/Navbar";
+import { FloatingBackButton } from "@/components/FloatingBackButton";
 import { Star, MapPin, ArrowLeft, Heart, Trash2, Factory, Wrench, Clock, X } from "lucide-react";
 import { toast } from "sonner";
 
@@ -78,7 +79,7 @@ function FactoryCard({ factory, onRemove, removeLabel, removeIcon }: {
             </Badge>
           ) : (
             <Badge className="bg-orange-100 text-orange-700 hover:bg-orange-100 border-0 text-xs">
-              <Factory className="w-3 h-3 mr-1" />代工廠
+              <Factory className="w-3 h-3 mr-1" />工廠
             </Badge>
           )}
           {(Array.isArray((factory as any).industry)
@@ -169,9 +170,7 @@ export default function MyFavorites() {
       <Navbar />
 
       <div className="container py-6">
-        <Button variant="ghost" size="sm" className="mb-4" onClick={() => navigate("/search")}>
-          <ArrowLeft className="w-4 h-4 mr-1" /> 返回搜尋
-        </Button>
+        <FloatingBackButton fallbackHref="/search" label="返回搜尋" />
 
         <Tabs defaultValue="favorites">
           <TabsList className="mb-4">

@@ -65,9 +65,9 @@ export default function FactoryRegister() {
   const [errors, setErrors] = useState<FormErrors>({});
 
   // 根據類型動態顯示文字
-  const typeLabel = businessType === "factory" ? "代工廠" : "工作室";
+  const typeLabel = businessType === "factory" ? "工廠" : "工作室";
   const namePlaceholder = businessType === "factory" ? "請輸入工廠名稱" : "請輸入工作室名稱";
-  const descPlaceholder = businessType === "factory" ? "介紹您的代工廠服務、專長與設備..." : "介紹您的工作室服務、風格與專長...";
+  const descPlaceholder = businessType === "factory" ? "介紹您的工廠服務、專長與設備..." : "介紹您的工作室服務、風格與專長...";
 
   const createFactoryMut = trpc.factory.create.useMutation();
   const uploadAvatarMut = trpc.factory.uploadAvatar.useMutation();
@@ -253,7 +253,7 @@ export default function FactoryRegister() {
                     }`}>
                       <Factory className={`w-5 h-5 ${businessType === "factory" ? "text-white" : "text-muted-foreground"}`} />
                     </div>
-                    <p className={`font-semibold ${businessType === "factory" ? "text-orange-600" : ""}`}>代工廠</p>
+                    <p className={`font-semibold ${businessType === "factory" ? "text-orange-600" : ""}`}>工廠</p>
                     <p className="text-xs text-muted-foreground mt-1">具備生產設備的製造工廠</p>
                   </button>
 

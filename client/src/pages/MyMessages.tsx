@@ -1,4 +1,5 @@
 import Navbar from "@/components/Navbar";
+import { FloatingBackButton } from "@/components/FloatingBackButton";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -625,13 +626,8 @@ export default function MyMessages() {
   return (
     <NativePullToRefreshLayout contentRef={contentRef} indicatorRef={indicatorRef} iconRef={iconRef} phase={phase} className="min-h-screen bg-background">
       <Navbar />
+      <FloatingBackButton fallbackHref="/" />
       <div className="container py-6 max-w-3xl">
-        <Button variant="ghost" size="sm" className="mb-4" onClick={() => {
-          const from = (window.history.state as Record<string, string> | null)?.from;
-          navigate(from ?? "/");
-        }}>
-          <ArrowLeft className="w-4 h-4 mr-1" /> 返回
-        </Button>
 
         <h1 className="text-2xl font-bold flex items-center gap-2 mb-4">
           <MessageCircle className="w-6 h-6" />

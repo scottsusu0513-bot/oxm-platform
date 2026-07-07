@@ -13,6 +13,7 @@ import { trpc } from "@/lib/trpc";
 import { useState } from "react";
 import { toast } from "sonner";
 import { ArrowLeft, Plus, Pencil, Trash2, Pin, Zap, Wrench, Newspaper, Megaphone } from "lucide-react";
+import { FloatingBackButton } from "@/components/FloatingBackButton";
 
 const TYPE_OPTIONS = [
   { value: "news",        label: "平台消息", icon: Newspaper },
@@ -82,10 +83,8 @@ function AdminAnnouncementsContent() {
     <div className="min-h-screen bg-gradient-to-br from-orange-50 to-amber-50 px-4 pb-4 md:px-8 md:pb-8 admin-page-top">
       <div className="max-w-4xl mx-auto">
         <div className="flex items-center justify-between mb-8">
+      <FloatingBackButton fallbackHref="/admin" noNavbar />
           <div className="flex items-center gap-3">
-            <Button variant="outline" size="sm" onClick={() => navigate("/admin")} className="gap-1">
-              <ArrowLeft className="w-4 h-4" />返回
-            </Button>
             <div className="flex items-center gap-2">
               <Megaphone className="w-6 h-6 text-orange-500" />
               <h1 className="text-2xl font-bold">平台公告管理</h1>

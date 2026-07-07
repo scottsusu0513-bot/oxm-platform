@@ -10,6 +10,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { ArrowLeft, Send, Users, Search, Loader2, MessageSquare, ChevronRight, CheckCircle2, Clock, Trash2, X } from "lucide-react";
+import { FloatingBackButton } from "@/components/FloatingBackButton";
 import { toast } from "sonner";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { AlertCircle } from "lucide-react";
@@ -123,10 +124,8 @@ function AdminMessagesContent({ setLocation }: { setLocation: (p: string) => voi
   return (
     <div className="min-h-screen bg-gradient-to-br from-orange-50 to-amber-50 px-4 pb-4 md:px-8 md:pb-8 admin-page-top">
       <div className="max-w-5xl mx-auto">
+      <FloatingBackButton fallbackHref="/admin" noNavbar />
         <div className="flex items-center gap-3 mb-6">
-          <Button variant="outline" size="sm" onClick={() => setLocation("/admin")} className="gap-1">
-            <ArrowLeft className="h-4 w-4" />返回
-          </Button>
           <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
             <Send className="h-6 w-6" />站內信管理
           </h1>

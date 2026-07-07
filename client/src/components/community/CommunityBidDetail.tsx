@@ -11,6 +11,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import Navbar from "@/components/Navbar";
+import { FloatingBackButton } from "@/components/FloatingBackButton";
 import { Helmet } from "react-helmet-async";
 import { toast } from "sonner";
 import CommunityBidForm from "./CommunityBidForm";
@@ -186,15 +187,8 @@ export default function CommunityBidDetail({ spaceCode, bidId }: Props) {
 
       <Navbar />
 
+      <FloatingBackButton fallbackHref={`/community/${spaceCode}/bids`} label="返回競標列表" />
       <main className="mx-auto max-w-3xl px-4 sm:px-6 py-6">
-        {/* Back navigation */}
-        <button
-          onClick={() => navigate(`/community/${spaceCode}/bids`)}
-          className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground mb-4 transition-colors"
-        >
-          <ArrowLeft className="w-4 h-4" />
-          返回競標列表
-        </button>
 
         <article className="space-y-6">
           {/* Title + status */}

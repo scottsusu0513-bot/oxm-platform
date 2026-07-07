@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from "react";
+import { FloatingBackButton } from "@/components/FloatingBackButton";
 import { useLocation } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { AppLoading } from "@/components/AppLoading";
@@ -251,17 +252,10 @@ export default function UserManual() {
 
   return (
     <div className="min-h-screen bg-background">
+      <FloatingBackButton noNavbar />
       {/* ── 頁首 ────────────────────────────────────────────────────── */}
       <div className="bg-gradient-to-br from-orange-500 to-purple-600 text-white">
         <div className="max-w-3xl mx-auto px-4 py-10 sm:py-14">
-          <button
-            onClick={() => window.history.back()}
-            className="flex items-center gap-1.5 text-white/80 hover:text-white transition-colors mb-5 text-sm"
-            aria-label="回上一頁"
-          >
-            <ArrowLeft className="w-4 h-4" />
-            回上一頁
-          </button>
           <div className="flex items-center gap-3 mb-3">
             <BookOpen className="w-7 h-7 shrink-0" aria-hidden="true" />
             <h1 className="text-2xl sm:text-3xl font-bold">使用手冊</h1>

@@ -15,6 +15,7 @@ import {
   AlertTriangle, Clock, Users, BarChart3,
 } from "lucide-react";
 import Navbar from "@/components/Navbar";
+import { FloatingBackButton } from "@/components/FloatingBackButton";
 
 // ── 狀態設定 ──────────────────────────────────────────────────────────────────
 
@@ -637,10 +638,7 @@ export default function AdminUpgradeApplications() {
       <div className="container py-8 max-w-3xl mx-auto space-y-6">
         <div>
           <div className="flex items-center gap-3 mb-1">
-            <Button variant="ghost" size="sm" onClick={() => navigate("/admin")}>
-              <ArrowLeft className="w-4 h-4 mr-1" />
-              後台
-            </Button>
+            <FloatingBackButton fallbackHref="/admin" label="後台" />
             <h1 className="text-xl font-bold">企業升級案件總覽</h1>
           </div>
           <p className="text-xs text-muted-foreground ml-1">查看北中南顧問案件分派與處理狀況</p>

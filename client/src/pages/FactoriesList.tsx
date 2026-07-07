@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ArrowLeft, Search, MapPin, Building2, Phone, Globe, Star, Shield, ShieldCheck, Clock, User, Users } from "lucide-react";
+import { FloatingBackButton } from "@/components/FloatingBackButton";
 import { toast } from "sonner";
 
 export default function FactoriesList() {
@@ -63,11 +64,8 @@ export default function FactoriesList() {
     <div className="min-h-screen bg-gradient-to-br from-orange-50 to-amber-50 px-4 pb-4 md:px-8 md:pb-8 admin-page-top">
       <div className="max-w-6xl mx-auto">
         <div className="flex items-center justify-between mb-8">
+      <FloatingBackButton fallbackHref="/admin" noNavbar />
           <div className="flex items-center gap-4">
-            <Button variant="outline" size="sm" onClick={() => setLocation("/admin")} className="gap-2">
-              <ArrowLeft className="h-4 w-4" />
-              返回
-            </Button>
             <h1 className="text-3xl font-bold text-gray-900">所有工廠</h1>
           </div>
           <div className="text-sm text-gray-600">共 {total} 家工廠</div>
