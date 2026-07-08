@@ -15,11 +15,12 @@ import { INDUSTRIES, INDUSTRY_OPTIONS, TAIWAN_REGIONS } from "@shared/constants"
 import { trpc } from "@/lib/trpc";
 import { useLocation, Link } from "wouter";
 import { useState, useMemo, useEffect, useRef } from "react";
-import { Search as SearchIcon, Star, MapPin, Factory, ChevronLeft, ChevronRight, Megaphone, Heart, X, Wrench, ChevronDown, ShoppingCart, Plus, Minus, Send, Loader2 } from "lucide-react";
+import { Search as SearchIcon, Star, MapPin, Factory, ChevronLeft, ChevronRight, Megaphone, Heart, X, Wrench, ChevronDown, ShoppingCart, Plus, Minus, Send, Loader2, Share2 } from "lucide-react";
 import { isNativeApp } from "@/lib/platform";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { performLogin } from "@/const";
 import { toast } from "sonner";
+import { shareContent } from "@/lib/share";
 
 // ── 一鍵詢價購物車 hook ───────────────────────────────────────────────────
 type CartItem = { id: number; name: string };
@@ -363,7 +364,9 @@ function buildParams(vals: {
   keyword: string;
   businessType: string;
   sortBy: string;
-  page: number;
+  // Optional: omit entirely (e.g. when building a shareable URL) to leave
+  // pagination out of the query string altogether.
+  page?: number;
 }) {
   const p = new URLSearchParams();
   if (vals.mfgMode) p.set("mfgMode", vals.mfgMode);
@@ -373,8 +376,30 @@ function buildParams(vals: {
   if (vals.keyword) p.set("keyword", vals.keyword);
   if (vals.businessType && vals.businessType !== "all") p.set("businessType", vals.businessType);
   if (vals.sortBy && vals.sortBy !== "rating") p.set("sortBy", vals.sortBy);
-  if (vals.page > 1) p.set("page", String(vals.page));
+  if (vals.page && vals.page > 1) p.set("page", String(vals.page));
   return p;
+}
+
+// ── 分享搜尋結果：組出人類看得懂的條件摘要（不含 sortBy／enum 值）──────────
+function buildSearchShareSummary(vals: {
+  keyword: string;
+  region: string[];
+  industry: string[];
+  subIndustry: string[];
+  businessType: string;
+  mfgMode: string;
+}): string {
+  const parts: string[] = [];
+  if (vals.keyword) parts.push(`搜尋「${vals.keyword}」`);
+  if (vals.region.length > 0) parts.push(vals.region.join("、"));
+  if (vals.industry.length > 0) parts.push(vals.industry.join("、"));
+  if (vals.subIndustry.length > 0) parts.push(vals.subIndustry.join("、"));
+  if (vals.businessType === "factory") parts.push("工廠");
+  else if (vals.businessType === "studio") parts.push("工作室");
+  if (vals.mfgMode) parts.push(vals.mfgMode);
+
+  if (parts.length === 0) return "台灣工廠搜尋結果｜OXM";
+  return `${parts.join("・")}｜OXM 工廠搜尋結果`;
 }
 
 export default function Search() {
@@ -605,6 +630,20 @@ export default function Search() {
     setMfgMode(""); setIndustry([]); setSubIndustry([]); setRegion([]);
     setKeyword(""); setCommittedKeyword(""); setBusinessType("all"); setPage(1);
     navigate("/search", { replace: true });
+  };
+
+  // 分享目前有效的搜尋條件（不含 page／捲動位置等暫時性 UI state）
+  const handleShareSearch = () => {
+    const qs = buildParams({
+      mfgMode, industry, subIndustry, region,
+      keyword: committedKeyword, businessType, sortBy,
+    }).toString();
+    const url = `${window.location.origin}/search${qs ? `?${qs}` : ""}`;
+    const shareTitle = "OXM 工廠搜尋結果";
+    const shareText = buildSearchShareSummary({
+      keyword: committedKeyword, region, industry, subIndustry, businessType, mfgMode,
+    });
+    void shareContent({ title: shareTitle, text: shareText, url }, { copySuccessMessage: "搜尋結果連結已複製" });
   };
 
   const totalPages = Math.ceil((data?.total ?? 0) / pageSize);
@@ -982,24 +1021,29 @@ export default function Search() {
             )}
 
             {/* 結果標頭 */}
-            <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
               <p className="text-sm text-muted-foreground">
                 {isLoading ? "搜尋中..." : `共找到 ${data?.total ?? 0} 筆結果`}
               </p>
-              {!isLoading && (data?.total ?? 0) > 0 && (
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-muted-foreground">排序：</span>
-                  <Select value={sortBy} onValueChange={onSortByChange}>
-                    <SelectTrigger className="w-[120px] h-8"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="rating">評分最高</SelectItem>
-                      <SelectItem value="reviews">評價最多</SelectItem>
-                      <SelectItem value="response">回覆最快</SelectItem>
-                      <SelectItem value="newest">最新建立</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
+              <div className="flex items-center gap-2 flex-wrap">
+                <Button type="button" variant="outline" size="sm" className="h-8 text-xs px-3" onClick={handleShareSearch}>
+                  <Share2 className="w-3.5 h-3.5 mr-1" />分享搜尋結果
+                </Button>
+                {!isLoading && (data?.total ?? 0) > 0 && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground">排序：</span>
+                    <Select value={sortBy} onValueChange={onSortByChange}>
+                      <SelectTrigger className="w-[120px] h-8"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="rating">評分最高</SelectItem>
+                        <SelectItem value="reviews">評價最多</SelectItem>
+                        <SelectItem value="response">回覆最快</SelectItem>
+                        <SelectItem value="newest">最新建立</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+              </div>
             </div>
 
             {isLoading ? (

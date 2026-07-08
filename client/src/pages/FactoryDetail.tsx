@@ -18,7 +18,7 @@ import {
   Star, MapPin, Phone, Globe, Calendar, Building2, DollarSign,
   MessageCircle, Package, Check, X, ArrowLeft, Send, Heart, Wrench, Factory as FactoryIcon, Flag, Clock, ChevronLeft, ChevronRight, Images, CheckCircle, Share2
 } from "lucide-react";
-import { isNativeApp } from "@/lib/platform";
+import { shareContent } from "@/lib/share";
 import { usePullToRefresh } from "@/hooks/usePullToRefresh";
 import { NativePullToRefreshLayout } from "@/components/NativePullToRefreshLayout";
 
@@ -248,38 +248,11 @@ export default function FactoryDetail() {
     toggleFav.mutate({ factoryId });
   };
 
-  const handleShare = async () => {
+  const handleShare = () => {
     const url = `${window.location.origin}/factory/${factoryId}`;
     const shareTitle = factory?.name ?? "OXM 工廠";
     const shareText = `在 OXM 認識 ${shareTitle}，台灣傳產工廠媒合平台`;
-
-    if (isNativeApp()) {
-      try {
-        const { Share } = await import("@capacitor/share");
-        await Share.share({ title: shareTitle, text: shareText, url });
-      } catch (err: unknown) {
-        const msg = String((err as any)?.message ?? "").toLowerCase();
-        if (msg.includes("cancel") || msg.includes("dismiss") || msg.includes("user")) return;
-        toast.error("分享失敗，請稍後再試");
-      }
-      return;
-    }
-
-    if (typeof navigator.share === "function") {
-      try {
-        await navigator.share({ title: shareTitle, text: shareText, url });
-        return;
-      } catch (err: unknown) {
-        if ((err as any)?.name === "AbortError") return;
-      }
-    }
-
-    try {
-      await navigator.clipboard.writeText(url);
-      toast.success("連結已複製到剪貼簿");
-    } catch {
-      toast.error("請手動複製網址分享");
-    }
+    void shareContent({ title: shareTitle, text: shareText, url });
   };
 
   const [activeSection, setActiveSection] = useState("section-basic");
