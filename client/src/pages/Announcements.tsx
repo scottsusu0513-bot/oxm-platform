@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
 import { useLocation } from "wouter";
 import { ChevronLeft, Megaphone, Wrench, Newspaper, Zap, Pin } from "lucide-react";
+import MarkdownContent from "@/components/MarkdownContent";
 
 const TYPE_CONFIG = {
   update:      { label: "版本更新", icon: Zap,       className: "bg-blue-100 text-blue-700 border-blue-200" },
@@ -75,7 +76,7 @@ export default function Announcements() {
                     </span>
                   </div>
                   <h2 className="font-semibold text-base mb-2">{item.title}</h2>
-                  <p className="text-sm text-muted-foreground whitespace-pre-wrap leading-relaxed">{item.content}</p>
+                  <MarkdownContent content={item.content} className="text-muted-foreground" />
                 </CardContent>
               </Card>
             ))}

@@ -10,10 +10,11 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { trpc } from "@/lib/trpc";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
-import { ArrowLeft, Plus, Pencil, Trash2, Pin, Zap, Wrench, Newspaper, Megaphone } from "lucide-react";
+import { ArrowLeft, Plus, Pencil, Trash2, Pin, Zap, Wrench, Newspaper, Megaphone, Bold, Italic, Heading2, List, ListOrdered, Link2, Eye, PencilLine } from "lucide-react";
 import { FloatingBackButton } from "@/components/FloatingBackButton";
+import MarkdownContent, { toMarkdownPreviewText } from "@/components/MarkdownContent";
 
 const TYPE_OPTIONS = [
   { value: "news",        label: "平台消息", icon: Newspaper },
@@ -30,6 +31,68 @@ const TYPE_CONFIG: Record<string, { label: string; className: string }> = {
 type FormState = { title: string; content: string; type: "update" | "maintenance" | "news"; isPinned: boolean };
 const DEFAULT_FORM: FormState = { title: "", content: "", type: "news", isPinned: false };
 
+// ── Markdown 工具列 helper：對 textarea 目前選取範圍插入語法 ──────────────
+function wrapSelection(
+  textarea: HTMLTextAreaElement,
+  value: string,
+  onChange: (next: string) => void,
+  prefix: string,
+  suffix: string,
+  placeholder: string,
+) {
+  const start = textarea.selectionStart ?? value.length;
+  const end = textarea.selectionEnd ?? value.length;
+  const selected = value.slice(start, end);
+  const inserted = selected || placeholder;
+  const next = value.slice(0, start) + prefix + inserted + suffix + value.slice(end);
+  onChange(next);
+  requestAnimationFrame(() => {
+    textarea.focus();
+    const selStart = start + prefix.length;
+    textarea.setSelectionRange(selStart, selStart + inserted.length);
+  });
+}
+
+// 對目前選取涵蓋的每一行開頭加上 prefix（標題／項目符號／編號清單皆是逐行語法）
+function prefixLines(
+  textarea: HTMLTextAreaElement,
+  value: string,
+  onChange: (next: string) => void,
+  linePrefix: string,
+  placeholder: string,
+) {
+  const start = textarea.selectionStart ?? 0;
+  const end = textarea.selectionEnd ?? 0;
+  const lineStart = value.lastIndexOf("\n", start - 1) + 1;
+  let lineEnd = value.indexOf("\n", end);
+  if (lineEnd === -1) lineEnd = value.length;
+  const block = value.slice(lineStart, lineEnd);
+  const content = block.trim() === "" ? placeholder : block;
+  const prefixed = content.split("\n").map(line => (line ? `${linePrefix}${line}` : line)).join("\n");
+  const next = value.slice(0, lineStart) + prefixed + value.slice(lineEnd);
+  onChange(next);
+  requestAnimationFrame(() => {
+    textarea.focus();
+    textarea.setSelectionRange(lineStart, lineStart + prefixed.length);
+  });
+}
+
+function insertLink(textarea: HTMLTextAreaElement, value: string, onChange: (next: string) => void) {
+  const start = textarea.selectionStart ?? value.length;
+  const end = textarea.selectionEnd ?? value.length;
+  const selected = value.slice(start, end);
+  const linkText = selected || "連結文字";
+  const inserted = `[${linkText}](https://)`;
+  const next = value.slice(0, start) + inserted + value.slice(end);
+  onChange(next);
+  requestAnimationFrame(() => {
+    textarea.focus();
+    // Select the "https://" placeholder so the admin can immediately type the real URL over it.
+    const urlStart = start + `[${linkText}](`.length;
+    textarea.setSelectionRange(urlStart, urlStart + "https://".length);
+  });
+}
+
 export default function AdminAnnouncements() {
   const { user, loading } = useAuth();
   if (loading) return <AppLoading />;
@@ -42,6 +105,18 @@ function AdminAnnouncementsContent() {
   const [form, setForm] = useState<FormState>(DEFAULT_FORM);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [showForm, setShowForm] = useState(false);
+  const [previewMode, setPreviewMode] = useState(false);
+  const contentRef = useRef<HTMLTextAreaElement>(null);
+
+  const setContent = (next: string) => setForm(p => ({ ...p, content: next }));
+  const toolbarActions: Array<{ icon: typeof Bold; label: string; onClick: () => void }> = [
+    { icon: Bold, label: "粗體", onClick: () => contentRef.current && wrapSelection(contentRef.current, form.content, setContent, "**", "**", "粗體文字") },
+    { icon: Italic, label: "斜體", onClick: () => contentRef.current && wrapSelection(contentRef.current, form.content, setContent, "*", "*", "斜體文字") },
+    { icon: Heading2, label: "標題", onClick: () => contentRef.current && prefixLines(contentRef.current, form.content, setContent, "## ", "標題文字") },
+    { icon: List, label: "項目符號", onClick: () => contentRef.current && prefixLines(contentRef.current, form.content, setContent, "- ", "項目內容") },
+    { icon: ListOrdered, label: "編號清單", onClick: () => contentRef.current && prefixLines(contentRef.current, form.content, setContent, "1. ", "項目內容") },
+    { icon: Link2, label: "連結", onClick: () => contentRef.current && insertLink(contentRef.current, form.content, setContent) },
+  ];
 
   const utils = trpc.useUtils();
   const { data: items = [], isLoading } = trpc.announcement.list.useQuery({ limit: 100 });
@@ -59,12 +134,13 @@ function AdminAnnouncementsContent() {
     onError: e => toast.error(e.message),
   });
 
-  const resetForm = () => { setForm(DEFAULT_FORM); setEditingId(null); setShowForm(false); };
+  const resetForm = () => { setForm(DEFAULT_FORM); setEditingId(null); setShowForm(false); setPreviewMode(false); };
 
   const handleEdit = (item: typeof items[0]) => {
     setForm({ title: item.title, content: item.content, type: item.type, isPinned: item.isPinned });
     setEditingId(item.id);
     setShowForm(true);
+    setPreviewMode(false);
   };
 
   const handleSubmit = () => {
@@ -128,8 +204,60 @@ function AdminAnnouncementsContent() {
                 </div>
               </div>
               <div>
-                <Label>內容 *</Label>
-                <Textarea value={form.content} onChange={e => setForm(p => ({ ...p, content: e.target.value }))} placeholder="公告內容..." rows={5} className="mt-1" />
+                <div className="flex items-center justify-between mb-1">
+                  <Label>內容 *</Label>
+                  <div className="flex gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setPreviewMode(false)}
+                      className={`text-xs px-2 py-1 rounded flex items-center gap-1 ${!previewMode ? "bg-orange-100 text-orange-700" : "text-muted-foreground hover:bg-muted"}`}
+                    >
+                      <PencilLine className="w-3 h-3" />編輯
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPreviewMode(true)}
+                      className={`text-xs px-2 py-1 rounded flex items-center gap-1 ${previewMode ? "bg-orange-100 text-orange-700" : "text-muted-foreground hover:bg-muted"}`}
+                    >
+                      <Eye className="w-3 h-3" />預覽
+                    </button>
+                  </div>
+                </div>
+
+                {!previewMode && (
+                  <div className="flex flex-wrap gap-1 mb-1.5 p-1.5 bg-muted/40 rounded-md border">
+                    {toolbarActions.map(a => (
+                      <button
+                        key={a.label}
+                        type="button"
+                        title={a.label}
+                        onClick={a.onClick}
+                        className="p-1.5 rounded hover:bg-white hover:shadow-sm text-muted-foreground hover:text-foreground transition-colors"
+                      >
+                        <a.icon className="w-3.5 h-3.5" />
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {previewMode ? (
+                  <div className="min-h-[130px] rounded-md border px-3 py-2">
+                    {form.content.trim() ? (
+                      <MarkdownContent content={form.content} />
+                    ) : (
+                      <p className="text-sm text-muted-foreground">（尚無內容，開始輸入後這裡會顯示預覽）</p>
+                    )}
+                  </div>
+                ) : (
+                  <Textarea
+                    ref={contentRef}
+                    value={form.content}
+                    onChange={e => setForm(p => ({ ...p, content: e.target.value }))}
+                    placeholder="公告內容...（支援 Markdown：**粗體**、# 標題、- 項目、[連結](https://...)）"
+                    rows={5}
+                  />
+                )}
+                <p className="text-xs text-muted-foreground mt-1">支援 Markdown：粗體、標題、清單、連結</p>
               </div>
               <div className="flex gap-3">
                 <Button onClick={handleSubmit} disabled={isPending} className="bg-orange-500 hover:bg-orange-600 text-white border-0">
@@ -168,7 +296,7 @@ function AdminAnnouncementsContent() {
                           </span>
                         </div>
                         <p className="font-semibold text-sm">{item.title}</p>
-                        <p className="text-xs text-muted-foreground mt-1 line-clamp-2 whitespace-pre-wrap">{item.content}</p>
+                        <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{toMarkdownPreviewText(item.content, 120)}</p>
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
                         <Button size="sm" variant="outline" onClick={() => handleEdit(item)}>

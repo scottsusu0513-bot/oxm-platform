@@ -1,4 +1,5 @@
 import { Resend } from 'resend';
+import { renderAnnouncementEmailHtml } from './announcementMarkdown';
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY ?? '';
 const FROM_EMAIL = process.env.FROM_EMAIL ?? '';
@@ -824,6 +825,9 @@ export async function sendPlatformAnnouncementEmail(params: {
   if (!FROM_EMAIL) throw new Error('[Email] 未設定 FROM_EMAIL，無法寄送 Email');
   const resend = getResend()!;
   const appUrl = process.env.VITE_APP_URL ?? 'http://localhost:3000';
+  const safeTitle = escapeHtml(params.announcementTitle);
+  const safeToName = escapeHtml(params.toName ?? '用戶');
+  const contentHtml = renderAnnouncementEmailHtml(params.announcementContent);
   await resend.emails.send({
     from: FROM_EMAIL,
     to: params.toEmail,
@@ -831,10 +835,10 @@ export async function sendPlatformAnnouncementEmail(params: {
     html: `
       <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
         <h2 style="color: #f97316;">OXM 平台公告</h2>
-        <p>親愛的 ${params.toName ?? '用戶'}，您好：</p>
-        <h3 style="color: #1f2937; margin: 16px 0 8px;">${params.announcementTitle}</h3>
-        <div style="background: #f5f5f5; padding: 16px; border-radius: 8px; margin: 16px 0; white-space: pre-wrap; line-height: 1.7;">
-          ${params.announcementContent.replace(/\n/g, '<br>')}
+        <p>親愛的 ${safeToName}，您好：</p>
+        <h3 style="color: #1f2937; margin: 16px 0 8px;">${safeTitle}</h3>
+        <div style="background: #f5f5f5; padding: 16px; border-radius: 8px; margin: 16px 0;">
+          ${contentHtml}
         </div>
         <a href="${appUrl}/announcements"
           style="background: #f97316; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none; display: inline-block; margin-top: 8px;">

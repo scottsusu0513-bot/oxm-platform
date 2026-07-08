@@ -22,6 +22,7 @@ import { useLocation, Link } from "wouter";
 import { allPosts } from "@/lib/blog";
 import { usePullToRefresh } from "@/hooks/usePullToRefresh";
 import { NativePullToRefreshLayout } from "@/components/NativePullToRefreshLayout";
+import { toMarkdownPreviewText } from "@/components/MarkdownContent";
 
 const ANNOUNCEMENT_TYPE_CONFIG: Record<string, { label: string; className: string; Icon: any }> = {
   update:      { label: "版本更新", className: "bg-blue-100 text-blue-700",  Icon: Zap },
@@ -69,7 +70,7 @@ function AnnouncementsSection({ navigate }: { navigate: (path: string) => void }
                     </span>
                   </div>
                   <p className="text-sm font-semibold truncate">{item.title}</p>
-                  <p className="text-xs text-muted-foreground truncate mt-0.5">{item.content}</p>
+                  <p className="text-xs text-muted-foreground truncate mt-0.5">{toMarkdownPreviewText(item.content, 60)}</p>
                 </div>
                 <ArrowRight className="w-4 h-4 text-muted-foreground shrink-0 mt-1" />
               </div>

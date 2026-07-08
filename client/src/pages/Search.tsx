@@ -567,7 +567,16 @@ export default function Search() {
     navigate(qs ? `/search?${qs}` : "/search", { replace: true });
   };
 
-  const { data, isLoading, isFetching } = trpc.factory.search.useQuery(searchInput);
+  // page is part of searchInput (the query key), so bumping it for "load
+  // more" would otherwise be treated as a brand-new, never-fetched query —
+  // isLoading would flip true again and swap the whole results grid (and the
+  // load-more button) out for the skeleton placeholder mid-scroll, which is
+  // what was actually causing the jump back to the top. Keeping the previous
+  // page's data visible while the next page loads keeps isLoading false for
+  // every fetch after the very first one.
+  const { data, isLoading, isFetching } = trpc.factory.search.useQuery(searchInput, {
+    placeholderData: (prev) => prev,
+  });
   const ads = data?.ads ?? [];
 
   // filterFingerprint detects when search conditions change (excluding page) to reset mobile accumulated list

@@ -169,6 +169,7 @@ export function toPlainPushSummary(text: string, maxLen = 100): string {
   const plain = text
     .replace(/<[^>]*>/g, "")
     .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/^[ \t]*(?:[-*+]|\d+[.)])\s+/gm, "")
     .replace(/[#*_~`>]/g, "")
     .replace(/\s+/g, " ")
     .trim();
