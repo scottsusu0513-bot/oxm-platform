@@ -336,6 +336,25 @@ export default function FactoryDetail() {
     knowsAbout: [...factoryIndustryArr, ...factorySubIndustryArr],
   });
 
+  // Same field-selection order as the server-side OG injection (cover ->
+  // avatar -> first factory photo -> first product photo -> OXM default),
+  // so the DOM after hydration matches what crawlers saw in the raw HTML.
+  const toAbsoluteImageUrl = (u?: string | null): string | null => {
+    if (!u) return null;
+    if (/^https?:\/\//i.test(u)) return u;
+    if (u.startsWith("/")) return `${window.location.origin}${u}`;
+    return null;
+  };
+  const firstProductImage = Array.isArray((factory as any).products)
+    ? (factory as any).products.find((p: any) => Array.isArray(p.images) && p.images.length > 0)?.images?.[0]
+    : undefined;
+  const ogImage =
+    toAbsoluteImageUrl((factory as any).coverImageUrl) ||
+    toAbsoluteImageUrl((factory as any).avatarUrl) ||
+    toAbsoluteImageUrl(photos[0]?.url) ||
+    toAbsoluteImageUrl(firstProductImage) ||
+    `${window.location.origin}/og-image.png`;
+
   const tocItems = [
     { id: "section-basic", label: "基本資料" },
     { id: "section-contact", label: "聯絡資訊" },
@@ -351,6 +370,16 @@ export default function FactoryDetail() {
         <title>{metaTitle}</title>
         <meta name="description" content={metaDesc} />
         <link rel="canonical" href={canonicalUrl} />
+        <meta property="og:type" content="website" />
+        <meta property="og:title" content={metaTitle} />
+        <meta property="og:description" content={metaDesc} />
+        <meta property="og:image" content={ogImage} />
+        <meta property="og:url" content={canonicalUrl} />
+        <meta property="og:site_name" content="OXM" />
+        <meta name="twitter:card" content="summary_large_image" />
+        <meta name="twitter:title" content={metaTitle} />
+        <meta name="twitter:description" content={metaDesc} />
+        <meta name="twitter:image" content={ogImage} />
         <script type="application/ld+json">{jsonLd}</script>
       </Helmet>
       <Navbar />
