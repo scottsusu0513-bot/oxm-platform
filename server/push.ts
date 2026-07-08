@@ -159,3 +159,19 @@ export async function sendPushToRecipients(opts: {
 
   return result;
 }
+
+/**
+ * Strip markdown/HTML-ish formatting and collapse whitespace so free-text
+ * content (e.g. an announcement body) is safe to show as a plain-text push
+ * notification body, and truncate to a reasonable length.
+ */
+export function toPlainPushSummary(text: string, maxLen = 100): string {
+  const plain = text
+    .replace(/<[^>]*>/g, "")
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/[#*_~`>]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (plain.length <= maxLen) return plain;
+  return plain.slice(0, maxLen - 1).trimEnd() + "…";
+}

@@ -394,7 +394,10 @@ export default function Search() {
   const [businessType, setBusinessType] = useState(() => params.get("businessType") ?? "all");
   const isComposing = useRef(false);
   const [showHistory, setShowHistory] = useState(false);
-  const [page, setPage] = useState(() => Math.max(1, parseInt(params.get("page") ?? "1", 10) || 1));
+  // page is transient UI/pagination state, intentionally not read from or
+  // synced to the URL — a stray ?page= from an old link should not affect
+  // the initial render.
+  const [page, setPage] = useState(1);
   const [sortBy, setSortBy] = useState(() => params.get("sortBy") ?? "rating");
 
   const [isMobile, setIsMobile] = useState(() => window.matchMedia("(max-width: 768px)").matches);
@@ -495,8 +498,10 @@ export default function Search() {
   };
 
   const onPageChange = (newPage: number) => {
+    // Intentionally does not touch the URL — pagination is local UI state,
+    // and syncing it via navigate() was what caused the scroll-to-top jump
+    // on mobile "load more".
     setPage(newPage);
-    syncURL({ page: newPage });
   };
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -1032,6 +1037,7 @@ export default function Search() {
               !isLoading && page < totalPages && (
                 <div className="flex justify-center mt-8">
                   <Button
+                    type="button"
                     variant="outline"
                     className="px-8 h-11 text-sm"
                     onClick={() => onPageChange(page + 1)}

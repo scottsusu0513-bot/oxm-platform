@@ -17,7 +17,7 @@ import { nanoid } from "nanoid";
 import { factories, conversations, reviews, reports, factoryCoManagers, users, upgradeConsultants } from "../drizzle/schema";
 import { desc, eq, and, sql, isNull } from "drizzle-orm";
 import { getDb } from "./db";
-import { sendPushToUser, sendPushToRecipients } from "./push";
+import { sendPushToUser, sendPushToRecipients, toPlainPushSummary } from "./push";
 import { createPlatformNotifications } from "./notifications";
 import { notifyUser, notifyFactoryMembers, notifyAdmins } from "./notifyHelper";
 import { runCollaborationOrderOverdueEmailCheck } from "./orderOverdueCheck";
@@ -3473,8 +3473,60 @@ export const appRouter = router({
       isPinned: z.boolean().default(false),
     })).mutation(async ({ input }) => {
       const announcementId = await db.createAnnouncement(input);
+      const titleSnap = input.title.length > 100 ? input.title.slice(0, 97) + "..." : input.title;
 
-      // 站內通知 + Email 廣播：fire-and-forget，不阻塞公告建立
+      // 站內通知：發給所有 active users，fire-and-forget，獨立於 push/email
+      (async () => {
+        try {
+          const allUsers = await db.getActiveUsersForAnnouncement();
+          const allIds = allUsers.map(u => u.id);
+          if (allIds.length > 0) {
+            await createPlatformNotifications(allIds.map(uid => ({
+              recipientUserId: uid,
+              eventType: "admin_announcement",
+              eventGroup: "platform",
+              message: `平台公告：${titleSnap}`,
+              actionUrl: `/announcements`,
+              titleSnapshot: titleSnap,
+              dedupeKey: `platform_announcement:${announcementId}:${uid}`,
+            })));
+          }
+        } catch (err) {
+          console.warn("[announcement] notification error:", err instanceof Error ? err.message : String(err));
+        }
+      })();
+
+      // 手機推播：只推給 pushAnnouncement === true 的使用者，fire-and-forget，獨立於站內通知/email
+      (async () => {
+        try {
+          const allUsers = await db.getActiveUsersForAnnouncement();
+          const pushIds = allUsers
+            .filter(u => ((u.notificationSettings as Record<string, boolean> | null) ?? {}).pushAnnouncement === true)
+            .map(u => u.id);
+
+          if (pushIds.length === 0) {
+            console.log(`[announcement] push skipped id=${announcementId}: no users with pushAnnouncement enabled`);
+            return;
+          }
+
+          const bodyText = toPlainPushSummary(input.content);
+          const result = await sendPushToRecipients({
+            userIds: pushIds,
+            title: titleSnap,
+            body: bodyText,
+            data: {
+              type: "admin_announcement",
+              announcementId: String(announcementId),
+              targetPath: "/announcements",
+            },
+          });
+          console.log(`[announcement] push done id=${announcementId} targetUsers=${result.targetUserCount} tokens=${result.tokenCount} success=${result.successCount} failed=${result.failureCount}`);
+        } catch (err) {
+          console.error(`[announcement] push failed id=${announcementId}:`, err instanceof Error ? err.message : String(err));
+        }
+      })();
+
+      // Email 廣播：fire-and-forget，不阻塞公告建立，獨立於站內通知/push
       (async () => {
         const INTER_EMAIL_DELAY_MS = 500;
         const RETRY_DELAYS_MS = [1500, 3000, 5000];
@@ -3487,25 +3539,6 @@ export const appRouter = router({
 
         try {
           const allUsers = await db.getActiveUsersForAnnouncement();
-          const allIds = allUsers.map(u => u.id);
-          const titleSnap = input.title.length > 100 ? input.title.slice(0, 97) + "..." : input.title;
-
-          // 站內通知：發給所有 active users
-          if (allIds.length > 0) {
-            try {
-              await createPlatformNotifications(allIds.map(uid => ({
-                recipientUserId: uid,
-                eventType: "admin_announcement",
-                eventGroup: "platform",
-                message: `平台公告：${titleSnap}`,
-                actionUrl: `/announcements`,
-                titleSnapshot: titleSnap,
-                dedupeKey: `platform_announcement:${announcementId}:${uid}`,
-              })));
-            } catch (err) {
-              console.warn("[announcement] notification error:", err instanceof Error ? err.message : String(err));
-            }
-          }
 
           // Email：opt-out，notificationSettings.announcement !== false 就寄
           const withEmail = allUsers.filter(u => {
