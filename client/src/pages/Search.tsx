@@ -21,6 +21,7 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { performLogin } from "@/const";
 import { toast } from "sonner";
 import { shareContent } from "@/lib/share";
+import { FloatingBackButton } from "@/components/FloatingBackButton";
 
 // ── 一鍵詢價購物車 hook ───────────────────────────────────────────────────
 type CartItem = { id: number; name: string };
@@ -672,6 +673,7 @@ export default function Search() {
         <meta name="description" content={pageDesc} />
       </Helmet>
       <Navbar />
+      <FloatingBackButton fallbackHref="/" />
       <div className={`container py-6 ${cart.length > 0 ? "pb-20 lg:pb-6" : ""}`}>
         <h1 className="sr-only">
           {seoIndustry ? `${seoIndustry}工廠` : "台灣工廠搜尋"}

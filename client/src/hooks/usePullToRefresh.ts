@@ -185,6 +185,18 @@ export function usePullToRefresh({ onRefresh, disabled, containerRef }: Options)
     const onTouchStart = (e: TouchEvent) => {
       if (e.touches.length > 1) return;
       if (isRefreshingRef.current || disabledRef.current) return;
+      // Never arm the gesture for a touch that starts on an element opted
+      // out via [data-ptr-ignore] (e.g. FloatingBackButton). Without this,
+      // a tap near the top of the screen — where scrollTop is 0 and this
+      // gesture is armed — only needs ~4px of natural finger jitter to lock
+      // "vertical" and call preventDefault() on touchmove, which makes the
+      // browser suppress the tap's click entirely on top of visibly
+      // dragging the (fixed-position, but DOM-nested) button down with the
+      // transformed content. The result: the first tap silently does
+      // nothing but nudge the button, and only the second, jitter-free tap
+      // actually fires the click.
+      const touchTarget = e.target;
+      if (touchTarget instanceof Element && touchTarget.closest("[data-ptr-ignore]")) return;
       const scrollTop =
         target === document.documentElement
           ? window.scrollY

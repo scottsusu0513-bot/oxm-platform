@@ -38,6 +38,11 @@ export function FloatingBackButton({
       onClick={handleBack}
       aria-label={label}
       style={{ top: topValue }}
+      // Opts this button out of usePullToRefresh's gesture tracking (see
+      // that hook's onTouchStart) — otherwise a tap here can be swallowed
+      // as the start of a pull-to-refresh drag on pages using
+      // NativePullToRefreshLayout, requiring a second tap to actually go back.
+      data-ptr-ignore
       className={`fixed left-3 z-40 inline-flex items-center gap-1.5 rounded-full border bg-background/90 px-3 py-1.5 text-sm font-medium shadow-md backdrop-blur-sm transition hover:bg-accent active:scale-95 ${className ?? ""}`}
     >
       <ArrowLeft className="w-4 h-4 shrink-0" />
