@@ -21,12 +21,13 @@ import { toast } from "sonner";
 import { usePullToRefresh } from "@/hooks/usePullToRefresh";
 import { NativePullToRefreshLayout } from "@/components/NativePullToRefreshLayout";
 import {
-  Factory, Package, MessageCircle, Settings, Plus, Pencil, Trash2, Save, Star, AlertTriangle, ImagePlus, X, ArrowLeft, Camera, Send, CheckCircle, Clock, XCircle, Wrench, Images, ChevronDown, Megaphone, Users, UserMinus, ClipboardList
+  Factory, Package, MessageCircle, Settings, Plus, Pencil, Trash2, Save, Star, AlertTriangle, ImagePlus, X, ArrowLeft, Camera, Send, CheckCircle, Clock, XCircle, Wrench, Images, ChevronDown, Megaphone, Users, UserMinus, ClipboardList, ArrowRightCircle
 } from "lucide-react";
 import { OrderTimelineBar } from "@/components/OrderTimelineBar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { COLLABORATION_ORDER_NEXT_STAGE, COLLABORATION_ORDER_STAGE_LABELS, COLLABORATION_ORDER_STAGE_TRANSITION_DATE_FIELD, type CollaborationOrderStage } from "@shared/collaborationOrderStage";
 
 // 千分位格式化
 function formatNumber(val: string): string {
@@ -2028,6 +2029,8 @@ function ReceivedOrdersPanel({ factoryId }: { factoryId: number }) {
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
   const [completeDialogTarget, setCompleteDialogTarget] = useState<number | null>(null);
   const [completionNote, setCompletionNote] = useState("");
+  const [advanceDialogTarget, setAdvanceDialogTarget] = useState<number | null>(null);
+  const [advanceNote, setAdvanceNote] = useState("");
 
   const earlyCompleteMut = trpc.collaborationOrder.earlyComplete.useMutation({
     onSuccess: () => {
@@ -2053,6 +2056,22 @@ function ReceivedOrdersPanel({ factoryId }: { factoryId: number }) {
       utils.collaborationOrder.listForFactory.invalidate({ factoryId });
     },
     onError: e => toast.error(e.message),
+  });
+
+  const advanceStageMut = trpc.collaborationOrder.advanceStage.useMutation({
+    onSuccess: () => {
+      toast.success("已進入下一階段");
+      setAdvanceDialogTarget(null);
+      setAdvanceNote("");
+      utils.collaborationOrder.listForFactory.invalidate({ factoryId });
+    },
+    onError: e => {
+      toast.error(e.message);
+      if (e.data?.code === "CONFLICT") {
+        setAdvanceDialogTarget(null);
+        utils.collaborationOrder.listForFactory.invalidate({ factoryId });
+      }
+    },
   });
 
   const requestCancelMut = trpc.collaborationOrder.requestCancel.useMutation({
@@ -2082,6 +2101,13 @@ function ReceivedOrdersPanel({ factoryId }: { factoryId: number }) {
   }
 
   const cancelTargetOrder = orders.find(o => o.id === cancelTarget);
+  const advanceTargetOrder = orders.find(o => o.id === advanceDialogTarget);
+  const advanceTargetStage = advanceTargetOrder ? ((advanceTargetOrder as any).currentStage as CollaborationOrderStage | null) : null;
+  const advanceTargetNextStage = advanceTargetStage ? COLLABORATION_ORDER_NEXT_STAGE[advanceTargetStage] : undefined;
+  const advanceTargetDateField = advanceTargetStage ? COLLABORATION_ORDER_STAGE_TRANSITION_DATE_FIELD[advanceTargetStage] : undefined;
+  const advanceTargetExpectedDate = advanceTargetDateField && advanceTargetOrder ? ((advanceTargetOrder as any)[advanceTargetDateField] as string | null) : null;
+  const advanceTargetTodayStr = new Date().toLocaleDateString("sv-SE");
+  const advanceTargetIsOverdue = !!advanceTargetExpectedDate && advanceTargetTodayStr >= advanceTargetExpectedDate;
   const sortedOrders = [...orders].sort((a, b) => {
     const aC = a.status === "completed";
     const bC = b.status === "completed";
@@ -2111,8 +2137,14 @@ function ReceivedOrdersPanel({ factoryId }: { factoryId: number }) {
             const canEarlyShip = ["accepted", "in_progress"].includes(order.status) && !earlyShippedAt;
             const today = new Date(); today.setHours(0, 0, 0, 0);
             const dueDate = order.finalPaymentDueDate ? new Date(order.finalPaymentDueDate + "T00:00:00") : null;
+            const currentStage = (order as any).currentStage as CollaborationOrderStage | null;
+            // 不可跳階：若訂單已有 currentStage 紀錄，必須先推進到「待結款」才能完成訂單
+            // （與後端 markCompleted 的檢查一致）；currentStage 為 null（舊資料）時沿用原本邏輯
             const canCompleteNow = ["accepted", "in_progress", "shipped"].includes(order.status) &&
+              (!currentStage || currentStage === "awaiting_final_payment") &&
               (!!earlyShippedAt || (!!dueDate && dueDate <= today));
+            const nextStage = currentStage ? COLLABORATION_ORDER_NEXT_STAGE[currentStage] : undefined;
+            const canAdvanceStage = order.status === "accepted" && !!nextStage;
 
             if (isCompleted && !isExpanded) {
               return (
@@ -2208,6 +2240,18 @@ function ReceivedOrdersPanel({ factoryId }: { factoryId: number }) {
                     </button>
                   ) : (
                     <>
+                      {canAdvanceStage && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="text-blue-700 border-blue-500 hover:bg-blue-50"
+                          disabled={advanceStageMut.isPending}
+                          onClick={() => setAdvanceDialogTarget(order.id)}
+                        >
+                          <ArrowRightCircle className="w-3.5 h-3.5 mr-1" />
+                          進入下一階段
+                        </Button>
+                      )}
                       {canEarlyComplete && (
                         <Button
                           size="sm"
@@ -2257,7 +2301,7 @@ function ReceivedOrdersPanel({ factoryId }: { factoryId: number }) {
                       查看訂單 →
                     </Link>
                     <Link href={`/chat/${order.conversationId}`} className="text-xs text-blue-600 hover:underline">
-                      查看對話 →
+                      進入對話 →
                     </Link>
                   </div>
                 </div>
@@ -2298,6 +2342,55 @@ function ReceivedOrdersPanel({ factoryId }: { factoryId: number }) {
               }}
             >
               {markCompletedMut.isPending ? "完成中…" : "確認完成"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 進入下一階段 Dialog */}
+      <Dialog open={advanceDialogTarget !== null} onOpenChange={open => { if (!open && !advanceStageMut.isPending) { setAdvanceDialogTarget(null); setAdvanceNote(""); } }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              進入下一階段：{advanceTargetNextStage ? COLLABORATION_ORDER_STAGE_LABELS[advanceTargetNextStage] : ""}
+            </DialogTitle>
+            <DialogDescription>確認後訂單將正式切換到新階段，並記錄本次操作與註記。</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-1">
+            {advanceTargetExpectedDate ? (
+              !advanceTargetIsOverdue && (
+                <div className="flex gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <p>原定於 {advanceTargetExpectedDate} 進入下一階段，目前尚未到達該日期。確定要提早進入下一階段嗎？</p>
+                </div>
+              )
+            ) : (
+              <p className="text-xs text-muted-foreground">此階段未設定預計日期，可直接推進。</p>
+            )}
+            <div>
+              <Label className="text-sm">階段性註記（選填）</Label>
+              <Textarea
+                className="mt-1"
+                placeholder="可記錄本次推進的原因、進度說明或其他備註"
+                value={advanceNote}
+                onChange={e => setAdvanceNote(e.target.value)}
+                rows={3}
+                maxLength={1000}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" disabled={advanceStageMut.isPending} onClick={() => { setAdvanceDialogTarget(null); setAdvanceNote(""); }}>取消</Button>
+            <Button
+              className="bg-blue-600 hover:bg-blue-700 text-white"
+              disabled={advanceStageMut.isPending}
+              onClick={() => {
+                if (advanceDialogTarget !== null) {
+                  advanceStageMut.mutate({ orderId: advanceDialogTarget, note: advanceNote.trim() || undefined });
+                }
+              }}
+            >
+              {advanceStageMut.isPending ? "推進中…" : "確認進入下一階段"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -2512,7 +2605,7 @@ function PlacedOrdersPanel({ factoryId }: { factoryId: number }) {
                     查看訂單 →
                   </Link>
                   <Link href={`/chat/${order.conversationId}`} className="text-xs text-blue-600 hover:underline">
-                    查看對話 →
+                    進入對話 →
                   </Link>
                 </div>
               </div>

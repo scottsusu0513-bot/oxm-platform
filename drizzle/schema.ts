@@ -179,11 +179,44 @@ export const collaborationOrders = mysqlTable("collaborationOrders", {
   earlyCompletedByUserId: int("earlyCompletedByUserId"),
   earlyShippedAt: timestamp("earlyShippedAt"),
   earlyShippedByUserId: int("earlyShippedByUserId"),
+  // 訂單製作階段：nullable，只有訂單被接受（accepted）時才初始化為 'awaiting_deposit'，
+  // pending/rejected/cancelled/cancel_requested 一律為 NULL（從未進入或已中止製作流程，
+  // 不應帶有誤導性的階段值）；status 進入 completed 時一併寫入 'completed'。
+  // 只能由「進入下一階段」手動操作推進，不會因日期抵達自動改變。
+  currentStage: mysqlEnum("currentStage", [
+    "awaiting_deposit", "in_production", "awaiting_shipment", "awaiting_final_payment", "completed",
+  ]),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
 
 export type CollaborationOrder = typeof collaborationOrders.$inferSelect;
+
+// ===== 合作確認單：階段推進歷史（Immutable audit trail）=====
+// actorUserId: nullable FK with ON DELETE SET NULL — record survives account deletion.
+// actorNameSnapshot / actorFactoryNameSnapshot: captured at time of action, guarantees
+// auditability even after the account or factory membership changes later.
+// isEarly + expectedDateAtTransition: snapshot of whether this transition happened before
+// the stage's own expected date node (and what that date was at the time).
+export const collaborationOrderStageHistory = mysqlTable("collaborationOrderStageHistory", {
+  id: int("id").autoincrement().primaryKey(),
+  orderId: int("orderId").notNull().references(() => collaborationOrders.id, { onDelete: "cascade" }),
+  actorUserId: int("actorUserId").references(() => users.id, { onDelete: "set null" }),
+  actorNameSnapshot: varchar("actorNameSnapshot", { length: 100 }).notNull().default(""),
+  actorFactoryNameSnapshot: varchar("actorFactoryNameSnapshot", { length: 200 }).notNull().default(""),
+  // nullable：舊訂單（currentStage 從未被初始化）直接完成時，沒有真實的前一階段可回填，
+  // 一律寫 NULL，不偽造它曾經進入 awaiting_final_payment 或任何其他階段。
+  fromStage: varchar("fromStage", { length: 30 }),
+  toStage: varchar("toStage", { length: 30 }).notNull().default(""),
+  note: varchar("note", { length: 1000 }),
+  isEarly: boolean("isEarly").notNull().default(false),
+  expectedDateAtTransition: varchar("expectedDateAtTransition", { length: 10 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  orderIdx: index("cosh_order_idx").on(t.orderId, t.createdAt),
+}));
+
+export type CollaborationOrderStageHistory = typeof collaborationOrderStageHistory.$inferSelect;
 
 // ===== 重複下訂申請表 =====
 export const collaborationOrderRepeatRequests = mysqlTable("collaborationOrderRepeatRequests", {

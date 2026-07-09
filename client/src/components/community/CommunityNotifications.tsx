@@ -79,27 +79,42 @@ export default function CommunityNotifications() {
       <FloatingBackButton fallbackHref="/" />
       <main className="container py-6 max-w-2xl">
 
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2">
-            <Bell className="w-5 h-5 text-orange-500" />
-            <h1 className="text-xl font-bold">通知中心</h1>
+        {/* 手機版（<sm）：三欄 grid，左欄是右欄的隱形鏡像（同寬），標題在中欄真正置中，
+            不會因為「全部已讀」按鈕的寬度把中心點往左推、也不會跟按鈕重疊（含 320/360px 窄螢幕：
+            按鈕在手機版縮成純 icon，把兩側欄位壓到最窄，中間可用空間最大化）。
+            桌面版（sm+）改回原本 flex justify-between 靠左標題／靠右按鈕版面。 */}
+        <div className="grid grid-cols-[auto_1fr_auto] items-center gap-2 mb-4 sm:flex sm:justify-between">
+          {/* 左欄：右欄按鈕的隱形鏡像，只用來撐出對稱寬度，不佔互動與可讀性 */}
+          <div className="sm:hidden invisible pointer-events-none" aria-hidden="true">
             {unreadCount > 0 && (
-              <span className="bg-orange-500 text-white text-xs rounded-full px-1.5 py-0.5 font-medium leading-none">
+              <Button variant="ghost" size="sm" tabIndex={-1} className="h-8 w-8 p-0">
+                <CheckCheck className="w-3.5 h-3.5" />
+              </Button>
+            )}
+          </div>
+          <div className="flex items-center gap-2 justify-self-center sm:justify-self-auto min-w-0">
+            <Bell className="w-5 h-5 text-orange-500 shrink-0" />
+            <h1 className="text-xl font-bold whitespace-nowrap">通知中心</h1>
+            {unreadCount > 0 && (
+              <span className="bg-orange-500 text-white text-xs rounded-full px-1.5 py-0.5 font-medium leading-none shrink-0">
                 {unreadCount}
               </span>
             )}
           </div>
-          {unreadCount > 0 && (
+          {unreadCount > 0 ? (
             <Button
               variant="ghost"
               size="sm"
               onClick={() => markAllMut.mutate()}
               disabled={markAllMut.isPending}
-              className="h-8 gap-1.5 text-xs text-muted-foreground"
+              className="h-8 w-8 p-0 sm:w-auto sm:px-3 sm:gap-1.5 text-xs text-muted-foreground justify-self-end sm:ml-auto"
+              aria-label="全部已讀"
             >
               <CheckCheck className="w-3.5 h-3.5" />
-              全部已讀
+              <span className="hidden sm:inline">全部已讀</span>
             </Button>
+          ) : (
+            <div className="sm:hidden" aria-hidden="true" />
           )}
         </div>
 

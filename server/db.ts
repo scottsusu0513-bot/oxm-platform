@@ -14,7 +14,7 @@ import {
   factoryCoManagerInvitations, factoryCoManagers,
   inquiryBatches, inquiryBatchItems,
   messageCampaigns, messageRecipients, messageReplies,
-  oauthStates, appLoginTickets, collaborationOrders, collaborationOrderChangeRequests, collaborationOrderOverdueNotifications, collaborationOrderRepeatRequests,
+  oauthStates, appLoginTickets, collaborationOrders, collaborationOrderChangeRequests, collaborationOrderOverdueNotifications, collaborationOrderRepeatRequests, collaborationOrderStageHistory,
   userAuthAccounts, emailVerificationTokens,
   pushNotificationTokens,
   factoryRevisions,
@@ -842,7 +842,7 @@ export async function deleteFactory(id: number, ownerId: number) {
 // ===== 全站瀏覽統計 =====
 
 // 台灣時間 (UTC+8) 的日期字串 YYYY-MM-DD
-function twDateStr(offsetDays = 0): string {
+export function twDateStr(offsetDays = 0): string {
   const now = new Date(Date.now() + 8 * 3600 * 1000);
   if (offsetDays) now.setUTCDate(now.getUTCDate() - offsetDays);
   return now.toISOString().slice(0, 10);
@@ -3329,6 +3329,7 @@ export async function getCollaborationOrderDetail(id: number) {
     expectedShipmentDate: collaborationOrders.expectedShipmentDate,
     finalPaymentDueDate: collaborationOrders.finalPaymentDueDate,
     status: collaborationOrders.status,
+    currentStage: collaborationOrders.currentStage,
     acceptedAt: collaborationOrders.acceptedAt,
     rejectedAt: collaborationOrders.rejectedAt,
     completedAt: collaborationOrders.completedAt,
@@ -3587,6 +3588,8 @@ export async function respondCollaborationOrder(
     }
     await db.update(collaborationOrders).set({
       status: "accepted",
+      // 訂單被接受的當下才初始化製作階段（不是建立訂單時）——pending 狀態沒有 currentStage
+      currentStage: "awaiting_deposit",
       acceptedAt: now,
       acceptedByUserId: acceptedAs.acceptedByUserId,
       acceptedAsType: acceptedAs.acceptedAsType ?? "user",
@@ -3667,19 +3670,178 @@ export async function earlyShipOrder(orderId: number, userId: number): Promise<v
   }).where(eq(collaborationOrders.id, orderId));
 }
 
+// 最小的 transaction connection 介面（mysql2 PoolConnection 的子集），只列出這裡用到的方法，
+// 方便單元測試用 mock 物件取代真正的資料庫連線，驗證呼叫順序與 rollback 行為。
+export type TxConnection = {
+  execute: (sql: string, values?: unknown[]) => Promise<[any, any]>;
+  beginTransaction: () => Promise<void>;
+  commit: () => Promise<void>;
+  rollback: () => Promise<void>;
+};
+
+/**
+ * markCollaborationOrderComplete 的核心 transaction 邏輯，接受外部傳入的連線（測試可注入
+ * mock connection）。UPDATE 與 history INSERT 使用同一條連線、同一個 transaction：
+ * 任何一步失敗都會 rollback，兩者一起成功才 commit，不會出現「訂單已完成但沒有歷史紀錄」
+ * 或「歷史寫入但訂單其實沒完成」的不一致狀態。
+ *
+ * WHERE 條件同時擋兩件事：
+ *   1. status 必須是 accepted/in_progress/shipped 之一（不可重複完成、不可對 pending 等狀態操作）
+ *   2. currentStage 必須是 NULL（舊資料，沒有階段紀錄）或剛好是 awaiting_final_payment
+ *      （不可跳階，需先用 advanceStage 推進到待結款）
+ * affectedRows=0 代表以上任一條件不成立，直接 CONFLICT，不寫任何歷史。
+ *
+ * fromStage 直接用「transaction 內查到的目前 currentStage」原樣寫入（可能是 null）——
+ * 舊訂單 currentStage 從未被初始化時，fromStage 就是 null，不偽造它曾經處於
+ * awaiting_final_payment 或任何其他階段。
+ */
+export async function markCollaborationOrderCompleteOnConn(
+  conn: TxConnection,
+  params: {
+    orderId: number;
+    completedByUserId: number;
+    completionNote: string | null;
+    actorNameSnapshot: string;
+    actorFactoryNameSnapshot: string;
+    isEarly: boolean;
+    expectedDateAtTransition: string | null;
+  },
+): Promise<void> {
+  await conn.beginTransaction();
+  try {
+    const [rows] = await conn.execute(
+      "SELECT `currentStage` FROM `collaborationOrders` WHERE `id` = ? FOR UPDATE",
+      [params.orderId],
+    );
+    const fromStage: string | null = (rows as any[])[0]?.currentStage ?? null;
+
+    const [header] = await conn.execute(
+      "UPDATE `collaborationOrders` " +
+      "SET `status` = ?, `currentStage` = ?, `completedAt` = NOW(), `completedByUserId` = ?, `completionNote` = ? " +
+      "WHERE `id` = ? AND `status` IN (?, ?, ?) AND (`currentStage` IS NULL OR `currentStage` = ?)",
+      [
+        "completed", "completed", params.completedByUserId, params.completionNote,
+        params.orderId, "accepted", "in_progress", "shipped", "awaiting_final_payment",
+      ],
+    );
+    if ((header as mysql.ResultSetHeader).affectedRows === 0) {
+      throw Object.assign(new Error("訂單狀態已更新，請重新整理"), { code: "CONFLICT" });
+    }
+
+    await conn.execute(
+      "INSERT INTO `collaborationOrderStageHistory` " +
+      "(`orderId`, `actorUserId`, `actorNameSnapshot`, `actorFactoryNameSnapshot`, `fromStage`, `toStage`, `note`, `isEarly`, `expectedDateAtTransition`) " +
+      "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      [
+        params.orderId, params.completedByUserId, params.actorNameSnapshot, params.actorFactoryNameSnapshot,
+        fromStage, "completed", params.completionNote, params.isEarly, params.expectedDateAtTransition,
+      ],
+    );
+    await conn.commit();
+  } catch (e) {
+    await conn.rollback().catch(() => {});
+    throw e;
+  }
+}
+
 export async function markCollaborationOrderComplete(
   orderId: number,
   completedByUserId: number,
-  completionNote: string | null
+  completionNote: string | null,
+  actorNameSnapshot: string,
+  actorFactoryNameSnapshot: string,
+  isEarly: boolean,
+  expectedDateAtTransition: string | null,
 ): Promise<void> {
+  const pool = await getRawPool();
+  const conn = await pool.getConnection();
+  try {
+    await markCollaborationOrderCompleteOnConn(conn, {
+      orderId, completedByUserId, completionNote, actorNameSnapshot, actorFactoryNameSnapshot,
+      isEarly, expectedDateAtTransition,
+    });
+  } finally {
+    conn.release();
+  }
+}
+
+// 訂單製作階段合法下一階段／預計日期節點 mapping：與前端共用同一份定義（shared/collaborationOrderStage.ts）
+export { COLLABORATION_ORDER_NEXT_STAGE, COLLABORATION_ORDER_STAGE_TRANSITION_DATE_FIELD } from "@shared/collaborationOrderStage";
+
+/**
+ * advanceCollaborationOrderStage 的核心 transaction 邏輯，接受外部傳入的連線（測試可注入
+ * mock connection）。conditional UPDATE 與 history INSERT 在同一條連線、同一個 transaction
+ * 內完成：UPDATE 用 WHERE status='accepted' AND currentStage=expectedCurrentStage 做樂觀鎖，
+ * affectedRows=0（代表已被別的操作改變）就直接 rollback + CONFLICT，不寫入任何歷史；
+ * 如果後續 history INSERT 失敗，UPDATE 也會一併 rollback，不會出現「階段已推進但沒有歷史」
+ * 的不一致狀態。
+ */
+export async function advanceCollaborationOrderStageOnConn(
+  conn: TxConnection,
+  params: {
+    orderId: number;
+    expectedCurrentStage: string;
+    nextStage: string;
+    actorUserId: number;
+    actorNameSnapshot: string;
+    actorFactoryNameSnapshot: string;
+    note: string | null;
+    isEarly: boolean;
+    expectedDateAtTransition: string | null;
+  },
+): Promise<void> {
+  await conn.beginTransaction();
+  try {
+    const [header] = await conn.execute(
+      "UPDATE `collaborationOrders` SET `currentStage` = ? WHERE `id` = ? AND `status` = ? AND `currentStage` = ?",
+      [params.nextStage, params.orderId, "accepted", params.expectedCurrentStage],
+    );
+    if ((header as mysql.ResultSetHeader).affectedRows === 0) {
+      throw Object.assign(new Error("訂單狀態已更新，請重新整理"), { code: "CONFLICT" });
+    }
+
+    await conn.execute(
+      "INSERT INTO `collaborationOrderStageHistory` " +
+      "(`orderId`, `actorUserId`, `actorNameSnapshot`, `actorFactoryNameSnapshot`, `fromStage`, `toStage`, `note`, `isEarly`, `expectedDateAtTransition`) " +
+      "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      [
+        params.orderId, params.actorUserId, params.actorNameSnapshot, params.actorFactoryNameSnapshot,
+        params.expectedCurrentStage, params.nextStage, params.note, params.isEarly, params.expectedDateAtTransition,
+      ],
+    );
+    await conn.commit();
+  } catch (e) {
+    await conn.rollback().catch(() => {});
+    throw e;
+  }
+}
+
+export async function advanceCollaborationOrderStage(params: {
+  orderId: number;
+  expectedCurrentStage: string;
+  nextStage: string;
+  actorUserId: number;
+  actorNameSnapshot: string;
+  actorFactoryNameSnapshot: string;
+  note: string | null;
+  isEarly: boolean;
+  expectedDateAtTransition: string | null;
+}): Promise<void> {
+  const pool = await getRawPool();
+  const conn = await pool.getConnection();
+  try {
+    await advanceCollaborationOrderStageOnConn(conn, params);
+  } finally {
+    conn.release();
+  }
+}
+
+export async function getCollaborationOrderStageHistory(orderId: number) {
   const db = await getDb();
-  if (!db) throw new Error("DB not available");
-  await db.update(collaborationOrders).set({
-    status: "completed",
-    completedAt: new Date(),
-    completedByUserId,
-    completionNote,
-  }).where(eq(collaborationOrders.id, orderId));
+  if (!db) return [];
+  return db.select().from(collaborationOrderStageHistory)
+    .where(eq(collaborationOrderStageHistory.orderId, orderId))
+    .orderBy(collaborationOrderStageHistory.createdAt);
 }
 
 export async function listFactoryCollaborationOrders(factoryId: number) {
@@ -3698,6 +3860,7 @@ export async function listFactoryCollaborationOrders(factoryId: number) {
     finalPaymentDueDate: collaborationOrders.finalPaymentDueDate,
     note: collaborationOrders.note,
     status: collaborationOrders.status,
+    currentStage: collaborationOrders.currentStage,
     acceptedAt: collaborationOrders.acceptedAt,
     rejectedAt: collaborationOrders.rejectedAt,
     completedAt: collaborationOrders.completedAt,

@@ -1,4 +1,6 @@
 import { COOKIE_NAME, THIRTY_DAYS_MS, COMMUNITY_FEATURE_STATUS, PLATFORM_NOTIFICATION_TYPES, COMMUNITY_PUBLIC_ENTRY_ENABLED } from "@shared/const";
+import { validateOrderDateChain } from "@shared/orderDateChain";
+import { COLLABORATION_ORDER_STAGE_LABELS, isStageTransitionEarly } from "@shared/collaborationOrderStage";
 import { sdk } from "./_core/sdk";
 import { enhanceSearchKeyword, getSearchIntent } from './semantic-search';
 import { sendNewInquiryEmail, sendFactoryApprovedEmail, sendFactoryRejectedEmail, sendFactorySubmittedEmail, sendReportEmail, sendSupportTicketEmail, sendReviewReplyEmail, sendNewMessageNotificationEmail, sendReportStatusUpdateEmail, sendTicketStatusUpdateEmail, sendMessageReplyNotificationEmail, sendEmailVerificationEmail, sendAdminBroadcastEmail, sendRevisionSubmittedEmail, sendRevisionApprovedEmail, sendRevisionRejectedEmail, sendUpgradeApplicationEmail, sendUpgradeNewCaseConsultantEmail, sendPlatformAnnouncementEmail, sendFirstContactEmail } from './email';
@@ -1574,6 +1576,14 @@ export const appRouter = router({
         const prod = await db.getProductById(input.productId);
         if (!prod || prod.factoryId !== factory.id) throw new TRPCError({ code: "BAD_REQUEST", message: "指定商品不屬於此工廠" });
       }
+      const dateOrderError = validateOrderDateChain({
+        depositDueDate: input.depositDueDate,
+        productionStartDate: input.productionStartDate,
+        expectedCompletionDate: input.expectedCompletionDate,
+        expectedShipmentDate: input.expectedShipmentDate,
+        finalPaymentDueDate: input.finalPaymentDueDate,
+      });
+      if (dateOrderError) throw new TRPCError({ code: "BAD_REQUEST", message: dateOrderError });
       const orderId = await db.createCollaborationOrder({
         conversationId: input.conversationId,
         factoryId: factory.id,
@@ -1955,6 +1965,14 @@ export const appRouter = router({
         ["accepted", "in_progress"].includes(order.status) &&
         !order.earlyShippedAt;
 
+      // 手動推進階段權限旗標＋下一階段（只有供應工廠方、且訂單仍在 accepted 期間可推進；
+      // currentStage 可能為 null——舊資料或尚未初始化階段時不允許推進）
+      const nextStage = order.currentStage ? db.COLLABORATION_ORDER_NEXT_STAGE[order.currentStage] : undefined;
+      const canAdvanceStage = isSellerMember && order.status === "accepted" && !!nextStage;
+      const stageDateField = order.currentStage ? db.COLLABORATION_ORDER_STAGE_TRANSITION_DATE_FIELD[order.currentStage] : undefined;
+      const currentStageExpectedDate = stageDateField ? ((order as any)[stageDateField] as string | null) : null;
+      const isCurrentStageOverdue = !!currentStageExpectedDate && db.twDateStr() >= currentStageExpectedDate;
+
       // Resolve completedByName if available
       let completedByName: string | null = null;
       if (order.completedByUserId) {
@@ -1968,9 +1986,10 @@ export const appRouter = router({
         }
       }
 
-      const [pendingChangeRequest, acceptedChangeHistory] = await Promise.all([
+      const [pendingChangeRequest, acceptedChangeHistory, stageHistory] = await Promise.all([
         db.getPendingCollaborationOrderChangeRequest(input.orderId),
         db.listAcceptedCollaborationOrderChangeRequests(input.orderId),
+        db.getCollaborationOrderStageHistory(input.orderId),
       ]);
 
       return {
@@ -1981,8 +2000,13 @@ export const appRouter = router({
         canEarlyShip,
         canRequestDateChange,
         canRespondDateChange,
+        canAdvanceStage,
+        nextStage,
+        currentStageExpectedDate,
+        isCurrentStageOverdue,
         pendingChangeRequest,
         acceptedChangeHistory,
+        stageHistory,
       };
     }),
 
@@ -2025,6 +2049,11 @@ export const appRouter = router({
       };
       const hasChange = Object.keys(oldValues).some(k => oldValues[k] !== newValues[k]);
       if (!hasChange) throw new TRPCError({ code: "BAD_REQUEST", message: "沒有任何日期發生變更" });
+
+      // 用「合併後的完整日期集合」驗證順序，避免前端只清空表單欄位（=沿用舊值）卻讓
+      // 舊值相對新填的日期變得不合法時繞過驗證
+      const dateOrderError = validateOrderDateChain(newValues as any);
+      if (dateOrderError) throw new TRPCError({ code: "BAD_REQUEST", message: dateOrderError });
 
       try {
         await db.createCollaborationOrderChangeRequest({
@@ -2160,6 +2189,13 @@ export const appRouter = router({
       const isOwner = factory.ownerId === ctx.user.id;
       const isCoMgr = !isOwner && await db.isActiveCoManager(factory.id, ctx.user.id);
       if (!isOwner && !isCoMgr) throw new TRPCError({ code: "FORBIDDEN", message: "只有供應工廠方可完成訂單" });
+      // 不可跳階：訂單若已有 currentStage 紀錄（本次新增的製作階段機制），必須先手動推進到
+      // 「待結款」才能完成訂單，避免這裡（既有完成訂單流程）繞過 advanceStage 的不可跳階保證。
+      // 舊資料 currentStage 為 null（migration 對 pending/rejected/legacy 狀態不回填）時不擋，
+      // 沿用完成訂單原本以日期／提早出貨旗標為準的既有邏輯。
+      if (order.currentStage && order.currentStage !== "awaiting_final_payment") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "請先使用「進入下一階段」推進到「待結款」才能完成訂單" });
+      }
       const hasEarlyShipped = !!order.earlyShippedAt;
       if (!hasEarlyShipped) {
         if (!order.finalPaymentDueDate) {
@@ -2173,7 +2209,18 @@ export const appRouter = router({
         }
       }
       const note = input.completionNote?.trim() || null;
-      await db.markCollaborationOrderComplete(order.id, ctx.user.id, note);
+      try {
+        await db.markCollaborationOrderComplete(
+          order.id, ctx.user.id, note,
+          ctx.user.name ?? ctx.user.email ?? "",
+          factory.name,
+          hasEarlyShipped,
+          order.finalPaymentDueDate ?? null,
+        );
+      } catch (e: any) {
+        if (e?.code === "CONFLICT") throw new TRPCError({ code: "CONFLICT", message: e.message });
+        throw e;
+      }
       // 通知買家：訂單已完成
       notifyUser(
         order.buyerUserId,
@@ -2196,6 +2243,81 @@ export const appRouter = router({
         }
       );
       return { success: true };
+    }),
+
+    // 手動推進訂單製作階段（Phase：階段性註記＋timeline）。日期抵達不會自動觸發，
+    // 一律要求供應工廠方明確按下「進入下一階段」才會改變 currentStage。
+    advanceStage: protectedProcedure.input(z.object({
+      orderId: z.number(),
+      note: z.string().max(1000).optional(),
+    })).mutation(async ({ ctx, input }) => {
+      requireVerifiedEmail(ctx.user);
+      const order = await db.getCollaborationOrderById(input.orderId);
+      if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "找不到合作確認單" });
+      if (order.status !== "accepted") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "此訂單狀態無法推進階段" });
+      }
+      const factory = await db.getFactoryById(order.factoryId);
+      if (!factory) throw new TRPCError({ code: "NOT_FOUND", message: "找不到工廠" });
+      const isOwner = factory.ownerId === ctx.user.id;
+      const isCoMgr = !isOwner && await db.isActiveCoManager(factory.id, ctx.user.id);
+      if (!isOwner && !isCoMgr) throw new TRPCError({ code: "FORBIDDEN", message: "只有供應工廠方可推進訂單階段" });
+
+      const currentStage = order.currentStage;
+      if (!currentStage) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "此訂單尚未設定製作階段，無法推進" });
+      }
+      const nextStage = db.COLLABORATION_ORDER_NEXT_STAGE[currentStage];
+      if (!nextStage) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: `無法從「${currentStage}」推進到下一階段` });
+      }
+
+      // 提早判斷：以「目前階段離開時」對應的預計日期節點跟今天比較（YYYY-MM-DD 字串比較，不轉 UTC）
+      const dateField = db.COLLABORATION_ORDER_STAGE_TRANSITION_DATE_FIELD[currentStage];
+      const expectedDate = dateField ? ((order as any)[dateField] as string | null) : null;
+      const todayStr = db.twDateStr();
+      const isEarly = isStageTransitionEarly(todayStr, expectedDate);
+
+      const note = input.note?.trim() || null;
+      try {
+        await db.advanceCollaborationOrderStage({
+          orderId: order.id,
+          expectedCurrentStage: currentStage,
+          nextStage,
+          actorUserId: ctx.user.id,
+          actorNameSnapshot: ctx.user.name ?? ctx.user.email ?? "",
+          actorFactoryNameSnapshot: factory.name,
+          note,
+          isEarly,
+          expectedDateAtTransition: expectedDate,
+        });
+      } catch (e: any) {
+        if (e?.code === "CONFLICT") throw new TRPCError({ code: "CONFLICT", message: e.message });
+        throw e;
+      }
+
+      const nextStageLabel = COLLABORATION_ORDER_STAGE_LABELS[nextStage as keyof typeof COLLABORATION_ORDER_STAGE_LABELS] ?? nextStage;
+      notifyUser(
+        order.buyerUserId,
+        {
+          actorUserId: ctx.user.id,
+          actorFactoryId: factory.id,
+          actorFactoryName: factory.name,
+          actorName: factory.name,
+          eventType: "collab_order_stage_advanced",
+          eventGroup: "collab_order",
+          message: `「${order.projectName}」已進入「${nextStageLabel}」`,
+          actionUrl: `/orders/${order.id}`,
+          titleSnapshot: order.projectName,
+          dedupeKey: `collab_order_stage:${order.id}:${nextStage}`,
+        },
+        {
+          title: "OXM 訂單階段更新",
+          body: `「${order.projectName}」已進入「${nextStageLabel}」`,
+          data: { type: "collab_order", targetPath: `/orders/${order.id}` },
+        }
+      );
+      return { success: true, nextStage };
     }),
 
     earlyComplete: protectedProcedure.input(z.object({
@@ -2410,6 +2532,14 @@ export const appRouter = router({
       if (!input.projectName || !input.description) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "請填寫合作項目名稱與描述" });
       }
+      const dateOrderError = validateOrderDateChain({
+        depositDueDate: input.depositDueDate,
+        productionStartDate: input.productionStartDate,
+        expectedCompletionDate: input.expectedCompletionDate,
+        expectedShipmentDate: input.expectedShipmentDate,
+        finalPaymentDueDate: input.finalPaymentDueDate,
+      });
+      if (dateOrderError) throw new TRPCError({ code: "BAD_REQUEST", message: dateOrderError });
 
       const newOrderId = await db.createCollaborationOrder({
         conversationId: originalOrder.conversationId,

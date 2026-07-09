@@ -16,6 +16,15 @@ import { useRoute, useLocation, useSearch, Link } from "wouter";
 import { useState, useRef, useEffect, useCallback } from "react";
 import { toast } from "sonner";
 import { Send, ArrowLeft, Factory, User, CheckCircle, XCircle, Plus, Package, FileText, ExternalLink, Download, ClipboardList, Star } from "lucide-react";
+import {
+  ORDER_DATE_CHAIN_FIELDS, ORDER_DATE_FIELD_LABELS,
+  getMinDateForField, applyDateChainChange, validateOrderDateChain,
+  type OrderDateChainValues, type OrderDateChainField,
+} from "@/lib/orderDateChain";
+
+const EMPTY_ORDER_DATES: OrderDateChainValues = {
+  depositDueDate: "", productionStartDate: "", expectedCompletionDate: "", expectedShipmentDate: "", finalPaymentDueDate: "",
+};
 
 // ── 型別 ──────────────────────────────────────────────────────────────────
 type AttachedProduct = {
@@ -266,11 +275,7 @@ function CollaborationOrderDialog({
   const [selectedProductId, setSelectedProductId] = useState<string>("");
   const [projectName, setProjectName] = useState("");
   const [description, setDescription] = useState("");
-  const [depositDueDate, setDepositDueDate] = useState("");
-  const [productionStartDate, setProductionStartDate] = useState("");
-  const [expectedCompletionDate, setExpectedCompletionDate] = useState("");
-  const [expectedShipmentDate, setExpectedShipmentDate] = useState("");
-  const [finalPaymentDueDate, setFinalPaymentDueDate] = useState("");
+  const [orderDates, setOrderDates] = useState<OrderDateChainValues>(EMPTY_ORDER_DATES);
   const [note, setNote] = useState("");
 
   const productsQuery = trpc.chat.getFactoryProducts.useQuery({ conversationId }, { enabled: open });
@@ -285,16 +290,20 @@ function CollaborationOrderDialog({
     onError: e => toast.error(e.message),
   });
 
+  function handleDateFieldChange(field: OrderDateChainField, value: string) {
+    const { next, clearedFields } = applyDateChainChange(orderDates, field, value);
+    setOrderDates(next);
+    if (clearedFields.length > 0) {
+      toast.info(`${clearedFields.map(f => ORDER_DATE_FIELD_LABELS[f]).join("、")}已早於新日期，請重新選擇`);
+    }
+  }
+
   function resetForm() {
     setSource("manual");
     setSelectedProductId("");
     setProjectName("");
     setDescription("");
-    setDepositDueDate("");
-    setProductionStartDate("");
-    setExpectedCompletionDate("");
-    setExpectedShipmentDate("");
-    setFinalPaymentDueDate("");
+    setOrderDates(EMPTY_ORDER_DATES);
     setNote("");
   }
 
@@ -312,16 +321,21 @@ function CollaborationOrderDialog({
       toast.error("請填寫合作項目名稱與合作內容描述");
       return;
     }
+    const dateOrderError = validateOrderDateChain(orderDates);
+    if (dateOrderError) {
+      toast.error(dateOrderError);
+      return;
+    }
     createMut.mutate({
       conversationId,
       productId: source === "product" && selectedProductId ? Number(selectedProductId) : null,
       projectName: projectName.trim(),
       description: description.trim(),
-      depositDueDate: depositDueDate || null,
-      productionStartDate: productionStartDate || null,
-      expectedCompletionDate: expectedCompletionDate || null,
-      expectedShipmentDate: expectedShipmentDate || null,
-      finalPaymentDueDate: finalPaymentDueDate || null,
+      depositDueDate: orderDates.depositDueDate || null,
+      productionStartDate: orderDates.productionStartDate || null,
+      expectedCompletionDate: orderDates.expectedCompletionDate || null,
+      expectedShipmentDate: orderDates.expectedShipmentDate || null,
+      finalPaymentDueDate: orderDates.finalPaymentDueDate || null,
       note: note.trim() || null,
     });
   }
@@ -385,28 +399,20 @@ function CollaborationOrderDialog({
             <Textarea value={description} onChange={e => setDescription(e.target.value)} placeholder="請描述合作內容、規格、數量等" rows={3} />
           </div>
 
-          {/* 日期欄位 */}
+          {/* 日期欄位：下一階段日期不得早於上一階段日期（同一天可以），用 min 讓日期選擇器
+              直接把無效日期灰掉不可點擊；修改前一日期後，已失效的後續日期會自動清空並提示 */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label className="text-xs">首款付款日期</Label>
-              <Input type="date" value={depositDueDate} onChange={e => setDepositDueDate(e.target.value)} />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs">製作開始日期</Label>
-              <Input type="date" value={productionStartDate} onChange={e => setProductionStartDate(e.target.value)} />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs">預計完成日期</Label>
-              <Input type="date" value={expectedCompletionDate} onChange={e => setExpectedCompletionDate(e.target.value)} />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs">預計出貨日期</Label>
-              <Input type="date" value={expectedShipmentDate} onChange={e => setExpectedShipmentDate(e.target.value)} />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs">尾款結款日期</Label>
-              <Input type="date" value={finalPaymentDueDate} onChange={e => setFinalPaymentDueDate(e.target.value)} />
-            </div>
+            {ORDER_DATE_CHAIN_FIELDS.map(field => (
+              <div key={field} className="space-y-1.5">
+                <Label className="text-xs">{ORDER_DATE_FIELD_LABELS[field]}</Label>
+                <Input
+                  type="date"
+                  value={orderDates[field]}
+                  min={getMinDateForField(field, orderDates)}
+                  onChange={e => handleDateFieldChange(field, e.target.value)}
+                />
+              </div>
+            ))}
           </div>
 
           {/* 備註 */}
@@ -446,12 +452,36 @@ function RepeatOrderRequestCard({
   const [open, setOpen] = useState(false);
   const [projectName, setProjectName] = useState(data.projectName ?? "");
   const [description, setDescription] = useState(data.description ?? "");
-  const [depositDueDate, setDepositDueDate] = useState("");
-  const [productionStartDate, setProductionStartDate] = useState("");
-  const [expectedCompletionDate, setExpectedCompletionDate] = useState("");
-  const [expectedShipmentDate, setExpectedShipmentDate] = useState("");
-  const [finalPaymentDueDate, setFinalPaymentDueDate] = useState("");
+  const [orderDates, setOrderDates] = useState<OrderDateChainValues>(EMPTY_ORDER_DATES);
   const [note, setNote] = useState("");
+
+  function handleDateFieldChange(field: OrderDateChainField, value: string) {
+    const { next, clearedFields } = applyDateChainChange(orderDates, field, value);
+    setOrderDates(next);
+    if (clearedFields.length > 0) {
+      toast.info(`${clearedFields.map(f => ORDER_DATE_FIELD_LABELS[f]).join("、")}已早於新日期，請重新選擇`);
+    }
+  }
+
+  function handleAccept() {
+    const dateOrderError = validateOrderDateChain(orderDates);
+    if (dateOrderError) {
+      toast.error(dateOrderError);
+      return;
+    }
+    respondMut.mutate({
+      requestId,
+      action: "accept",
+      projectName: projectName.trim(),
+      description: description.trim(),
+      depositDueDate: orderDates.depositDueDate || null,
+      productionStartDate: orderDates.productionStartDate || null,
+      expectedCompletionDate: orderDates.expectedCompletionDate || null,
+      expectedShipmentDate: orderDates.expectedShipmentDate || null,
+      finalPaymentDueDate: orderDates.finalPaymentDueDate || null,
+      note: note.trim() || null,
+    });
+  }
 
   const requestId: number = data?.requestId;
 
@@ -540,26 +570,17 @@ function RepeatOrderRequestCard({
               <Textarea value={description} onChange={e => setDescription(e.target.value)} rows={3} />
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label className="text-xs">首款付款日期</Label>
-                <Input type="date" value={depositDueDate} onChange={e => setDepositDueDate(e.target.value)} />
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs">製作開始日期</Label>
-                <Input type="date" value={productionStartDate} onChange={e => setProductionStartDate(e.target.value)} />
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs">預計完成日期</Label>
-                <Input type="date" value={expectedCompletionDate} onChange={e => setExpectedCompletionDate(e.target.value)} />
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs">預計出貨日期</Label>
-                <Input type="date" value={expectedShipmentDate} onChange={e => setExpectedShipmentDate(e.target.value)} />
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs">尾款結款日期</Label>
-                <Input type="date" value={finalPaymentDueDate} onChange={e => setFinalPaymentDueDate(e.target.value)} />
-              </div>
+              {ORDER_DATE_CHAIN_FIELDS.map(field => (
+                <div key={field} className="space-y-1.5">
+                  <Label className="text-xs">{ORDER_DATE_FIELD_LABELS[field]}</Label>
+                  <Input
+                    type="date"
+                    value={orderDates[field]}
+                    min={getMinDateForField(field, orderDates)}
+                    onChange={e => handleDateFieldChange(field, e.target.value)}
+                  />
+                </div>
+              ))}
             </div>
             <div className="space-y-1.5">
               <Label>備註（選填）</Label>
@@ -571,18 +592,7 @@ function RepeatOrderRequestCard({
             <Button
               className="bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white border-0"
               disabled={respondMut.isPending || !projectName.trim() || !description.trim()}
-              onClick={() => respondMut.mutate({
-                requestId,
-                action: "accept",
-                projectName: projectName.trim(),
-                description: description.trim(),
-                depositDueDate: depositDueDate || null,
-                productionStartDate: productionStartDate || null,
-                expectedCompletionDate: expectedCompletionDate || null,
-                expectedShipmentDate: expectedShipmentDate || null,
-                finalPaymentDueDate: finalPaymentDueDate || null,
-                note: note.trim() || null,
-              })}
+              onClick={handleAccept}
             >
               {respondMut.isPending ? "建立中…" : "確認建立新訂單"}
             </Button>

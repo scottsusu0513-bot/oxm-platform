@@ -12,8 +12,10 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from "@/components/ui/dialog";
-import { ArrowLeft, ClipboardList, MessageCircle, CalendarClock, CheckCircle2, XCircle } from "lucide-react";
+import { ArrowLeft, ClipboardList, MessageCircle, CalendarClock, CheckCircle2, XCircle, ArrowRightCircle, AlertTriangle, ListChecks } from "lucide-react";
 import { OrderTimelineBar } from "@/components/OrderTimelineBar";
+import { getMinDateForField, applyDateChainChange, validateOrderDateChain, type OrderDateChainField } from "@/lib/orderDateChain";
+import { COLLABORATION_ORDER_STAGE_LABELS, type CollaborationOrderStage } from "@shared/collaborationOrderStage";
 
 // ── 訂單狀態標籤 ──────────────────────────────────────────────────────────────
 const ORDER_STATUS_LABEL: Record<string, string> = {
@@ -115,6 +117,79 @@ function ChangeHistoryTimeline({ history }: { history: ChangeHistoryItem[] }) {
           );
         })}
       </div>
+    </div>
+  );
+}
+
+// ── 階段進度 timeline（比照企業升級案件進度的垂直 timeline 呈現）─────────────────
+// 固定 5 個製作階段 + 完成，順序來自 shared/collaborationOrderStage.ts，不可任意增減命名。
+const STAGE_TIMELINE_ORDER: CollaborationOrderStage[] = [
+  "awaiting_deposit", "in_production", "awaiting_shipment", "awaiting_final_payment", "completed",
+];
+
+type StageHistoryItem = {
+  id: number;
+  toStage: string;
+  actorNameSnapshot?: string | null;
+  actorFactoryNameSnapshot?: string | null;
+  note?: string | null;
+  isEarly: boolean;
+  expectedDateAtTransition?: string | null;
+  createdAt: Date | string;
+};
+
+function StageProgressTimeline({
+  currentStage,
+  history,
+  acceptedAt,
+}: {
+  currentStage: CollaborationOrderStage;
+  history: StageHistoryItem[];
+  acceptedAt: Date | string;
+}) {
+  const currentIdx = STAGE_TIMELINE_ORDER.indexOf(currentStage);
+  const findEntry = (stage: CollaborationOrderStage) => history.find(h => h.toStage === stage) ?? null;
+
+  return (
+    <div className="relative pl-6">
+      {STAGE_TIMELINE_ORDER.map((stage, idx) => {
+        const isLast = idx === STAGE_TIMELINE_ORDER.length - 1;
+        const isDone = idx < currentIdx || (idx === currentIdx && stage === "completed");
+        const isCurrent = idx === currentIdx && stage !== "completed";
+        const entry = idx === 0 ? null : findEntry(stage);
+        const enteredAt = idx === 0 ? acceptedAt : entry?.createdAt;
+        const dotCls = isDone
+          ? "bg-green-500"
+          : isCurrent
+          ? "bg-blue-500 ring-4 ring-blue-100"
+          : "bg-gray-300";
+        const labelCls = isDone ? "text-green-700" : isCurrent ? "text-blue-700" : "text-muted-foreground";
+
+        return (
+          <div key={stage} className="relative">
+            {!isLast && (
+              <div className={`absolute left-[-1.1rem] top-4 w-0.5 h-full ${idx < currentIdx ? "bg-green-200" : "bg-gray-200"}`} />
+            )}
+            <div className={`absolute left-[-1.4rem] top-1.5 w-3 h-3 rounded-full ${dotCls} ring-2 ring-white`} />
+            <div className="pb-5">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className={`text-sm font-medium ${labelCls}`}>{COLLABORATION_ORDER_STAGE_LABELS[stage]}</span>
+                {isCurrent && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">目前階段</span>}
+                {entry?.isEarly && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 font-medium">提早進入</span>}
+              </div>
+              {(isDone || isCurrent) && enteredAt && (
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {new Date(enteredAt).toLocaleString("zh-TW")}
+                  {entry?.actorNameSnapshot ? ` · 由 ${entry.actorNameSnapshot}${entry.actorFactoryNameSnapshot ? `（${entry.actorFactoryNameSnapshot}）` : ""}` : ""}
+                </p>
+              )}
+              {entry?.note && (
+                <p className="text-xs text-muted-foreground mt-1 bg-muted/40 rounded px-2 py-1">{entry.note}</p>
+              )}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -239,6 +314,10 @@ export default function OrderDetail() {
   const [completeDialogOpen, setCompleteDialogOpen] = useState(false);
   const [completionNote, setCompletionNote] = useState("");
 
+  // 進入下一階段 state
+  const [advanceDialogOpen, setAdvanceDialogOpen] = useState(false);
+  const [advanceNote, setAdvanceNote] = useState("");
+
   // Phase 4B 日期修改表單 state
   const [changeOpen, setChangeOpen] = useState(false);
   const [changeReason, setChangeReason] = useState("");
@@ -281,6 +360,23 @@ export default function OrderDetail() {
       utils.collaborationOrder.getById.invalidate({ orderId: orderId! });
     },
     onError: (e) => toast.error(e.message),
+  });
+
+  const advanceStageMut = trpc.collaborationOrder.advanceStage.useMutation({
+    onSuccess: () => {
+      toast.success("已進入下一階段");
+      setAdvanceDialogOpen(false);
+      setAdvanceNote("");
+      utils.collaborationOrder.getById.invalidate({ orderId: orderId! });
+    },
+    onError: (e) => {
+      toast.error(e.message);
+      // 併發衝突（訂單狀態已被更新）：關閉對話框並重新整理資料，避免使用者對著過期畫面重試
+      if (e.data?.code === "CONFLICT") {
+        setAdvanceDialogOpen(false);
+        utils.collaborationOrder.getById.invalidate({ orderId: orderId! });
+      }
+    },
   });
 
   if (authLoading || isLoading) return <AppLoading />;
@@ -331,6 +427,20 @@ export default function OrderDetail() {
       ...(formDates.expectedShipmentDate ? { expectedShipmentDate: formDates.expectedShipmentDate } : {}),
       ...(formDates.finalPaymentDueDate ? { finalPaymentDueDate: formDates.finalPaymentDueDate } : {}),
     };
+    // 留空＝沿用訂單目前值，驗證要用「合併後的完整日期集合」，跟後端 requestDateChange
+    // 的驗證邏輯一致，避免只驗證表單填的值卻漏掉沿用舊值後其實已經不合法的情況
+    const mergedForValidation = {
+      depositDueDate: dates.depositDueDate ?? order!.depositDueDate ?? undefined,
+      productionStartDate: dates.productionStartDate ?? order!.productionStartDate ?? undefined,
+      expectedCompletionDate: dates.expectedCompletionDate ?? order!.expectedCompletionDate ?? undefined,
+      expectedShipmentDate: dates.expectedShipmentDate ?? order!.expectedShipmentDate ?? undefined,
+      finalPaymentDueDate: dates.finalPaymentDueDate ?? order!.finalPaymentDueDate ?? undefined,
+    };
+    const dateOrderError = validateOrderDateChain(mergedForValidation);
+    if (dateOrderError) {
+      toast.error(dateOrderError);
+      return;
+    }
     requestDateChangeMut.mutate({
       orderId: orderId!,
       reason: changeReason || undefined,
@@ -341,8 +451,17 @@ export default function OrderDetail() {
   const pendingChangeRequest = order.pendingChangeRequest;
   const acceptedChangeHistory = order.acceptedChangeHistory ?? [];
 
+  // 不可跳階：若訂單已有 currentStage 紀錄，必須先推進到「待結款」才能完成訂單
+  // （與後端 markCompleted 的檢查一致）；currentStage 為 null（舊資料）時沿用原本邏輯
+  const currentStage = (order as any).currentStage as CollaborationOrderStage | null;
+  const stageBlocksComplete = !!currentStage && currentStage !== "awaiting_final_payment";
+  // 最後階段只能有一個明確入口：awaiting_final_payment（或 legacy 的 null）顯示「完成訂單」，
+  // 其餘進行中階段顯示「進入下一階段」，兩者不可同時出現
+  const showCompleteButton = order.canComplete && !stageBlocksComplete;
+
   const canCompleteNow = (() => {
     if (!order.canComplete) return false;
+    if (stageBlocksComplete) return false;
     if ((order as any).earlyShippedAt) return true;
     if (!order.finalPaymentDueDate) return false;
     const today = new Date();
@@ -451,6 +570,29 @@ export default function OrderDetail() {
           </CardContent>
         </Card>
 
+        {/* 階段進度：只有訂單已成立（曾被接受）才顯示製作階段 timeline */}
+        {order.acceptedAt && (
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center gap-2 text-base">
+                <ListChecks className="w-4 h-4 text-orange-500" />
+                階段進度
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="pt-1">
+              {order.currentStage ? (
+                <StageProgressTimeline
+                  currentStage={order.currentStage as CollaborationOrderStage}
+                  history={order.stageHistory ?? []}
+                  acceptedAt={order.acceptedAt}
+                />
+              ) : (
+                <p className="text-xs text-muted-foreground py-2">此訂單為舊制流程建立，無詳細階段進度資料。</p>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
         {/* 完成訂單資訊（status=completed 時顯示） */}
         {order.status === "completed" && (
           <Card className="border-green-200 bg-green-50/50">
@@ -507,8 +649,20 @@ export default function OrderDetail() {
               修改訂單日期
             </Button>
           )}
-          {/* 完成訂單按鈕 */}
-          {order.canComplete && (
+          {/* 進入下一階段按鈕（手動推進，日期抵達不會自動觸發） */}
+          {order.canAdvanceStage && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="flex-1 border-blue-500 text-blue-700 hover:bg-blue-50"
+              onClick={() => setAdvanceDialogOpen(true)}
+            >
+              <ArrowRightCircle className="w-4 h-4 mr-1.5" />
+              進入下一階段
+            </Button>
+          )}
+          {/* 完成訂單按鈕（與「進入下一階段」互斥：只在待結款或 legacy 無階段資料時顯示） */}
+          {showCompleteButton && (
             <Button
               variant="outline"
               size="sm"
@@ -571,6 +725,63 @@ export default function OrderDetail() {
         </DialogContent>
       </Dialog>
 
+      {/* 進入下一階段 Dialog */}
+      <Dialog
+        open={advanceDialogOpen}
+        onOpenChange={(open) => { if (!advanceStageMut.isPending) { setAdvanceDialogOpen(open); if (!open) setAdvanceNote(""); } }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              進入下一階段：{order.nextStage ? COLLABORATION_ORDER_STAGE_LABELS[order.nextStage as CollaborationOrderStage] : ""}
+            </DialogTitle>
+            <DialogDescription>
+              確認後訂單將正式切換到新階段，並記錄本次操作與註記。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            {order.currentStageExpectedDate ? (
+              !order.isCurrentStageOverdue && (
+                <div className="flex gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <p>
+                    原定於 {order.currentStageExpectedDate} 進入下一階段，目前尚未到達該日期。確定要提早進入下一階段嗎？
+                  </p>
+                </div>
+              )
+            ) : (
+              <p className="text-xs text-muted-foreground">此階段未設定預計日期，可直接推進。</p>
+            )}
+            <div className="space-y-1">
+              <Label className="text-sm">階段性註記（選填）</Label>
+              <Textarea
+                placeholder="可記錄本次推進的原因、進度說明或其他備註"
+                value={advanceNote}
+                onChange={(e) => setAdvanceNote(e.target.value)}
+                rows={4}
+                maxLength={1000}
+              />
+            </div>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              onClick={() => setAdvanceDialogOpen(false)}
+              disabled={advanceStageMut.isPending}
+            >
+              取消
+            </Button>
+            <Button
+              className="bg-blue-600 hover:bg-blue-700 text-white"
+              disabled={advanceStageMut.isPending}
+              onClick={() => advanceStageMut.mutate({ orderId: orderId!, note: advanceNote.trim() || undefined })}
+            >
+              {advanceStageMut.isPending ? "推進中…" : "確認進入下一階段"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Phase 4B：日期修改 Dialog */}
       <Dialog
         open={changeOpen}
@@ -594,7 +805,14 @@ export default function OrderDetail() {
                 <Input
                   type="date"
                   value={formDates[key]}
-                  onChange={(e) => setFormDates((prev) => ({ ...prev, [key]: e.target.value }))}
+                  min={getMinDateForField(key as OrderDateChainField, formDates)}
+                  onChange={(e) => {
+                    const { next, clearedFields } = applyDateChainChange(formDates, key as OrderDateChainField, e.target.value);
+                    setFormDates(next);
+                    if (clearedFields.length > 0) {
+                      toast.info(`${clearedFields.map(f => DATE_FIELD_LABELS[f]).join("、")}已早於新日期，請重新選擇`);
+                    }
+                  }}
                 />
               </div>
             ))}
