@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyDateChainChange, getMinDateForField, type OrderDateChainValues } from "@/lib/orderDateChain";
+import { applyDateChainChange, getMinDateForField, handleOrderDateFieldChange, type OrderDateChainValues } from "@/lib/orderDateChain";
 
 const EMPTY: OrderDateChainValues = {
   depositDueDate: "", productionStartDate: "", expectedCompletionDate: "", expectedShipmentDate: "", finalPaymentDueDate: "",
@@ -65,5 +65,62 @@ describe("getMinDateForField", () => {
   it("returns undefined when nothing precedes it or all preceding fields are blank", () => {
     expect(getMinDateForField("depositDueDate", EMPTY)).toBeUndefined();
     expect(getMinDateForField("finalPaymentDueDate", EMPTY)).toBeUndefined();
+  });
+});
+
+describe("handleOrderDateFieldChange (mobile second-layer guard)", () => {
+  // 手機瀏覽器／Capacitor 原生日期選擇器不一定會擋掉早於 min 的日期（native <input min>
+  // 在部分 iOS/Android picker 上可以被滑過去），所以 onChange 一定要在這裡重新驗證，
+  // 不能只依賴瀏覽器的 min 屬性。
+
+  it("案例 1：首款付款日期=2026-07-01 時，製作開始日期選 2026-06-30 必須被拒絕", () => {
+    const values: OrderDateChainValues = { ...EMPTY, depositDueDate: "2026-07-01" };
+    const result = handleOrderDateFieldChange(values, "productionStartDate", "2026-06-30");
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.message).toBe("製作開始日期不得早於首款付款日期");
+  });
+
+  it("案例 1：同一天（2026-07-01）允許", () => {
+    const values: OrderDateChainValues = { ...EMPTY, depositDueDate: "2026-07-01" };
+    const result = handleOrderDateFieldChange(values, "productionStartDate", "2026-07-01");
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.next.productionStartDate).toBe("2026-07-01");
+  });
+
+  it("案例 1：晚一天（2026-07-02）允許", () => {
+    const values: OrderDateChainValues = { ...EMPTY, depositDueDate: "2026-07-01" };
+    const result = handleOrderDateFieldChange(values, "productionStartDate", "2026-07-02");
+    expect(result.ok).toBe(true);
+  });
+
+  it("案例 2：製作開始日期=2026-07-05 時，預計完成日期選 2026-07-04 必須被拒絕", () => {
+    const values: OrderDateChainValues = { ...EMPTY, productionStartDate: "2026-07-05" };
+    const result = handleOrderDateFieldChange(values, "expectedCompletionDate", "2026-07-04");
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.message).toBe("預計完成日期不得早於製作開始日期");
+  });
+
+  it("案例 4：拒絕時不回傳更新後的 state，呼叫端必須維持原本的值（不可留下非法日期）", () => {
+    const values: OrderDateChainValues = { ...EMPTY, depositDueDate: "2026-07-01", productionStartDate: "2026-07-03" };
+    const result = handleOrderDateFieldChange(values, "productionStartDate", "2026-06-30");
+    expect(result.ok).toBe(false);
+    // ok=false 分支不含 next，呼叫端理應完全不呼叫 setState，原本的 2026-07-03 保持不變
+    expect("next" in result).toBe(false);
+  });
+
+  it("合法變更仍會清空後續失效日期（跟 applyDateChainChange 行為一致）", () => {
+    const values: OrderDateChainValues = {
+      ...EMPTY,
+      depositDueDate: "2026-07-01",
+      productionStartDate: "2026-07-03",
+      expectedCompletionDate: "2026-07-10",
+    };
+    const result = handleOrderDateFieldChange(values, "depositDueDate", "2026-07-05");
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.next.productionStartDate).toBe("");
+      expect(result.next.expectedCompletionDate).toBe("2026-07-10");
+      expect(result.clearedFields).toEqual(["productionStartDate"]);
+    }
   });
 });

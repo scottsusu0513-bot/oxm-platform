@@ -18,9 +18,10 @@ import { toast } from "sonner";
 import { Send, ArrowLeft, Factory, User, CheckCircle, XCircle, Plus, Package, FileText, ExternalLink, Download, ClipboardList, Star } from "lucide-react";
 import {
   ORDER_DATE_CHAIN_FIELDS, ORDER_DATE_FIELD_LABELS,
-  getMinDateForField, applyDateChainChange, validateOrderDateChain,
+  getMinDateForField, validateOrderDateChain, handleOrderDateFieldChange,
   type OrderDateChainValues, type OrderDateChainField,
 } from "@/lib/orderDateChain";
+import { OrderDatePicker } from "@/components/OrderDatePicker";
 
 const EMPTY_ORDER_DATES: OrderDateChainValues = {
   depositDueDate: "", productionStartDate: "", expectedCompletionDate: "", expectedShipmentDate: "", finalPaymentDueDate: "",
@@ -291,10 +292,16 @@ function CollaborationOrderDialog({
   });
 
   function handleDateFieldChange(field: OrderDateChainField, value: string) {
-    const { next, clearedFields } = applyDateChainChange(orderDates, field, value);
-    setOrderDates(next);
-    if (clearedFields.length > 0) {
-      toast.info(`${clearedFields.map(f => ORDER_DATE_FIELD_LABELS[f]).join("、")}已早於新日期，請重新選擇`);
+    // 第二層防護：手機瀏覽器／Capacitor 原生日期選擇器不一定會擋掉早於 min 的日期，
+    // onChange 拿到值後一定要重新驗證一次，不能只依賴 <input min> 或原生 picker 的行為
+    const result = handleOrderDateFieldChange(orderDates, field, value);
+    if (!result.ok) {
+      toast.error(result.message);
+      return;
+    }
+    setOrderDates(result.next);
+    if (result.clearedFields.length > 0) {
+      toast.info(`${result.clearedFields.map(f => ORDER_DATE_FIELD_LABELS[f]).join("、")}已早於新日期，請重新選擇`);
     }
   }
 
@@ -399,17 +406,18 @@ function CollaborationOrderDialog({
             <Textarea value={description} onChange={e => setDescription(e.target.value)} placeholder="請描述合作內容、規格、數量等" rows={3} />
           </div>
 
-          {/* 日期欄位：下一階段日期不得早於上一階段日期（同一天可以），用 min 讓日期選擇器
-              直接把無效日期灰掉不可點擊；修改前一日期後，已失效的後續日期會自動清空並提示 */}
+          {/* 日期欄位：下一階段日期不得早於上一階段日期（同一天可以）。桌面與手機共用同一顆
+              Calendar 日期選擇器，早於前一階段的日期直接反灰、不可點擊；修改前一日期後，
+              已失效的後續日期會自動清空並提示。onChange 仍經過 handleDateFieldChange，
+              第二層 state 驗證不因為換元件而省略。 */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {ORDER_DATE_CHAIN_FIELDS.map(field => (
               <div key={field} className="space-y-1.5">
                 <Label className="text-xs">{ORDER_DATE_FIELD_LABELS[field]}</Label>
-                <Input
-                  type="date"
+                <OrderDatePicker
                   value={orderDates[field]}
-                  min={getMinDateForField(field, orderDates)}
-                  onChange={e => handleDateFieldChange(field, e.target.value)}
+                  minDate={getMinDateForField(field, orderDates)}
+                  onChange={value => handleDateFieldChange(field, value)}
                 />
               </div>
             ))}
@@ -456,10 +464,16 @@ function RepeatOrderRequestCard({
   const [note, setNote] = useState("");
 
   function handleDateFieldChange(field: OrderDateChainField, value: string) {
-    const { next, clearedFields } = applyDateChainChange(orderDates, field, value);
-    setOrderDates(next);
-    if (clearedFields.length > 0) {
-      toast.info(`${clearedFields.map(f => ORDER_DATE_FIELD_LABELS[f]).join("、")}已早於新日期，請重新選擇`);
+    // 第二層防護：手機瀏覽器／Capacitor 原生日期選擇器不一定會擋掉早於 min 的日期，
+    // onChange 拿到值後一定要重新驗證一次，不能只依賴 <input min> 或原生 picker 的行為
+    const result = handleOrderDateFieldChange(orderDates, field, value);
+    if (!result.ok) {
+      toast.error(result.message);
+      return;
+    }
+    setOrderDates(result.next);
+    if (result.clearedFields.length > 0) {
+      toast.info(`${result.clearedFields.map(f => ORDER_DATE_FIELD_LABELS[f]).join("、")}已早於新日期，請重新選擇`);
     }
   }
 
@@ -573,11 +587,10 @@ function RepeatOrderRequestCard({
               {ORDER_DATE_CHAIN_FIELDS.map(field => (
                 <div key={field} className="space-y-1.5">
                   <Label className="text-xs">{ORDER_DATE_FIELD_LABELS[field]}</Label>
-                  <Input
-                    type="date"
+                  <OrderDatePicker
                     value={orderDates[field]}
-                    min={getMinDateForField(field, orderDates)}
-                    onChange={e => handleDateFieldChange(field, e.target.value)}
+                    minDate={getMinDateForField(field, orderDates)}
+                    onChange={value => handleDateFieldChange(field, value)}
                   />
                 </div>
               ))}

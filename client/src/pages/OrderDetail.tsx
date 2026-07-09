@@ -14,7 +14,8 @@ import {
 } from "@/components/ui/dialog";
 import { ArrowLeft, ClipboardList, MessageCircle, CalendarClock, CheckCircle2, XCircle, ArrowRightCircle, AlertTriangle, ListChecks } from "lucide-react";
 import { OrderTimelineBar } from "@/components/OrderTimelineBar";
-import { getMinDateForField, applyDateChainChange, validateOrderDateChain, type OrderDateChainField } from "@/lib/orderDateChain";
+import { OrderDatePicker } from "@/components/OrderDatePicker";
+import { getMinDateForField, validateOrderDateChain, handleOrderDateFieldChange, type OrderDateChainField } from "@/lib/orderDateChain";
 import { COLLABORATION_ORDER_STAGE_LABELS, type CollaborationOrderStage } from "@shared/collaborationOrderStage";
 
 // ── 訂單狀態標籤 ──────────────────────────────────────────────────────────────
@@ -802,15 +803,20 @@ export default function OrderDetail() {
                 <p className="text-xs text-muted-foreground">
                   目前：{order[key] ?? "未設定"}
                 </p>
-                <Input
-                  type="date"
+                <OrderDatePicker
                   value={formDates[key]}
-                  min={getMinDateForField(key as OrderDateChainField, formDates)}
-                  onChange={(e) => {
-                    const { next, clearedFields } = applyDateChainChange(formDates, key as OrderDateChainField, e.target.value);
-                    setFormDates(next);
-                    if (clearedFields.length > 0) {
-                      toast.info(`${clearedFields.map(f => DATE_FIELD_LABELS[f]).join("、")}已早於新日期，請重新選擇`);
+                  minDate={getMinDateForField(key as OrderDateChainField, formDates)}
+                  onChange={(value) => {
+                    // 第二層防護：即使 Calendar 已經把早於 minDate 的日期反灰＋disabled，
+                    // onChange 仍要重新驗證一次，不能因為換了元件就跳過 state 驗證
+                    const result = handleOrderDateFieldChange(formDates, key as OrderDateChainField, value);
+                    if (!result.ok) {
+                      toast.error(result.message);
+                      return;
+                    }
+                    setFormDates(result.next);
+                    if (result.clearedFields.length > 0) {
+                      toast.info(`${result.clearedFields.map(f => DATE_FIELD_LABELS[f]).join("、")}已早於新日期，請重新選擇`);
                     }
                   }}
                 />
