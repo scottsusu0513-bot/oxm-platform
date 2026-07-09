@@ -141,7 +141,8 @@ function AdminDashboardContent() {
       <div className="max-w-7xl mx-auto">
         <div className="flex items-center justify-between mb-8">
           <h1 className="text-3xl font-bold text-gray-900">管理員儀表板</h1>
-          <Button variant="outline" onClick={() => window.location.href = "/"} className="gap-2">
+          {/* 明確回到網站首頁：固定目標 + replace，不依賴瀏覽器歷史，避免與其他管理員頁面形成返回迴圈 */}
+          <Button variant="outline" onClick={() => setLocation("/", { replace: true })} className="gap-2">
             <ArrowLeft className="h-4 w-4" />
             返回首頁
           </Button>
@@ -301,7 +302,7 @@ function AdminDashboardContent() {
                         // 否則子層 height:% 會因父層無固定高度而失效，只剩 minHeight 的 2px 墊底
                         <div key={hour} className="flex-1 flex flex-col items-center justify-end h-12 group relative">
                           <div
-                            className="w-full bg-orange-400 rounded-sm transition-all"
+                            className="w-1.5 bg-orange-400 rounded-t-sm transition-all"
                             style={{ height: `${height}%`, minHeight: count > 0 ? 2 : 0 }}
                           />
                           <div className="absolute -top-6 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-xs px-1 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none z-10">

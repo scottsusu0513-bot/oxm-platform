@@ -461,31 +461,30 @@ export default function FactoryDetail() {
         </div>
 
         {/* ── Body: TOC + sections ── */}
-        <div className="flex items-start mt-6">
+        <div className="flex gap-8 items-start mt-6">
 
-          {/* TOC sidebar — 2xl+ only; zero-width flex item, nav extends left into gutter */}
-          <div className="hidden 2xl:block w-0 overflow-visible shrink-0">
-            <div className="w-28 sticky top-20 -ml-32">
-              <nav className="space-y-0.5">
-                {tocItems.map(item => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => {
-                      const el = document.getElementById(item.id);
-                      if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-                    }}
-                    className={`w-full text-left text-sm px-3 py-2 rounded-lg transition-colors ${
-                      activeSection === item.id
-                        ? "bg-orange-50 text-orange-700 font-medium"
-                        : "text-muted-foreground hover:text-foreground hover:bg-muted"
-                    }`}
-                  >
-                    {item.label}
-                  </button>
-                ))}
-              </nav>
-            </div>
+          {/* TOC sidebar — 桌面版（lg+）常駐顯示；sticky + self-start 讓它在 items-start 的
+              flex row 中維持自己的高度，捲動時浮動於 Navbar（h-16=64px）下方 top-20（80px） */}
+          <div className="hidden lg:block w-40 shrink-0 sticky top-20 self-start">
+            <nav className="space-y-0.5">
+              {tocItems.map(item => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => {
+                    const el = document.getElementById(item.id);
+                    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+                  }}
+                  className={`w-full text-left text-sm px-3 py-2 rounded-lg transition-colors ${
+                    activeSection === item.id
+                      ? "bg-orange-50 text-orange-700 font-medium"
+                      : "text-muted-foreground hover:text-foreground hover:bg-muted"
+                  }`}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </nav>
           </div>
 
           {/* Main sections */}

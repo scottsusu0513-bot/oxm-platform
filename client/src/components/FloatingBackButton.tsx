@@ -6,6 +6,10 @@ type FloatingBackButtonProps = {
   fallbackHref?: string;
   className?: string;
   noNavbar?: boolean;
+  // 明確父層返回：一律導向 fallbackHref（並 replace 掉目前歷史紀錄），不查詢瀏覽器
+  // history／sessionStorage 的上一頁。用於管理員後台等有固定階層的頁面，避免兩頁
+  // 互相 push 導致的 A → B → A 返回迴圈；一般頁面預設 false，行為不受影響。
+  deterministic?: boolean;
 };
 
 export function FloatingBackButton({
@@ -13,10 +17,15 @@ export function FloatingBackButton({
   fallbackHref = "/",
   className,
   noNavbar = false,
+  deterministic = false,
 }: FloatingBackButtonProps) {
   const [, navigate] = useLocation();
 
   const handleBack = () => {
+    if (deterministic) {
+      navigate(fallbackHref, { replace: true });
+      return;
+    }
     try {
       const prev = sessionStorage.getItem("oxm.previousPath");
       if (prev && prev !== window.location.pathname && prev.startsWith("/")) {

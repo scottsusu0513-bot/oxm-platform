@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { useLocation, useParams } from "wouter";
+import { useLocation, useParams, useSearch } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { AppLoading } from "@/components/AppLoading";
 import { trpc } from "@/lib/trpc";
@@ -56,7 +56,9 @@ export default function AdminMessages() {
 }
 
 // ── 管理員主頁（發送 + 列表）────────────────────────────────────────────────
-function AdminMessagesContent({ setLocation }: { setLocation: (p: string) => void }) {
+type AdminMessagesNavigate = (p: string, opts?: { replace?: boolean }) => void;
+
+function AdminMessagesContent({ setLocation }: { setLocation: AdminMessagesNavigate }) {
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
   const [targetType, setTargetType] = useState<"all_users" | "all_factory_managers" | "single">("all_users");
@@ -124,7 +126,7 @@ function AdminMessagesContent({ setLocation }: { setLocation: (p: string) => voi
   return (
     <div className="min-h-screen bg-gradient-to-br from-orange-50 to-amber-50 px-4 pb-4 md:px-8 md:pb-8 admin-page-top">
       <div className="max-w-5xl mx-auto">
-      <FloatingBackButton fallbackHref="/admin" noNavbar />
+      <FloatingBackButton fallbackHref="/admin" noNavbar deterministic />
         <div className="flex items-center gap-3 mb-6">
           <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
             <Send className="h-6 w-6" />站內信管理
@@ -249,7 +251,7 @@ function AdminMessagesContent({ setLocation }: { setLocation: (p: string) => voi
                           ? "bg-orange-50 border-orange-200 hover:bg-orange-100/70"
                           : "hover:bg-muted/30"
                     }`}
-                    onClick={() => setLocation(`/admin/messages/${c.id}`)}
+                    onClick={() => setLocation(`/admin/messages/${c.id}?from=${encodeURIComponent("/admin/messages")}`)}
                   >
                     <div className="flex items-start justify-between gap-2">
                       <p className="font-medium text-sm line-clamp-1 flex-1 min-w-0">{c.title}</p>
@@ -343,10 +345,20 @@ function AdminMessagesContent({ setLocation }: { setLocation: (p: string) => voi
 }
 
 // ── 管理員查看某封站內信的回覆列表與對話串 ──────────────────────────────────
-function CampaignThreadView({ campaignId, setLocation }: { campaignId: number; setLocation: (p: string) => void }) {
+// 只允許站內、以 /admin/ 開頭的合法路由當作返回目標，避免 open redirect
+function resolveAdminBackTarget(fromParam: string | null, fallback: string): string {
+  if (fromParam && fromParam.startsWith("/admin/")) return fromParam;
+  return fallback;
+}
+
+function CampaignThreadView({ campaignId, setLocation }: { campaignId: number; setLocation: AdminMessagesNavigate }) {
   const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
   const [selectedUserName, setSelectedUserName] = useState("");
   const utils = trpc.useUtils();
+  const search = useSearch();
+  // 對話頁的返回目標：優先使用合法的 from 來源頁，否則固定回到管理員站內信列表
+  // （回上一層時用 replace，不新增歷史紀錄，避免與列表頁互相 push 形成返回迴圈）
+  const backTarget = resolveAdminBackTarget(new URLSearchParams(search).get("from"), "/admin/messages");
 
   const campaignQuery = trpc.admin.getMessageCampaignDetail.useQuery({ campaignId });
   const usersQuery = trpc.admin.getCampaignAllRecipients.useQuery({ campaignId }, { refetchInterval: 15000 });
@@ -372,7 +384,7 @@ function CampaignThreadView({ campaignId, setLocation }: { campaignId: number; s
     <div className="min-h-screen bg-gradient-to-br from-orange-50 to-amber-50 px-4 pb-4 md:px-8 md:pb-8 admin-page-top">
       <div className="max-w-5xl mx-auto">
         <div className="flex items-center gap-3 mb-4">
-          <Button variant="outline" size="sm" onClick={() => setLocation("/admin/messages")} className="gap-1">
+          <Button variant="outline" size="sm" onClick={() => setLocation(backTarget, { replace: true })} className="gap-1">
             <ArrowLeft className="h-4 w-4" />返回
           </Button>
           <h1 className="text-xl font-bold text-gray-900 flex items-center gap-2">
