@@ -6402,9 +6402,36 @@ export async function countUpgradeApplications(status?: UpgradeApplication["stat
   return Number(row?.n ?? 0);
 }
 
+// 過件率分母：顧問「已經手評估」的案件 —— 明確列舉真正代表已開始評估或更後續流程的狀態，
+// 不用「排除 new/unassigned」的寬鬆寫法，避免 archived 等例外狀態被誤算進去。
+//   evaluating/viewed/contacted：顧問評估中（viewed/contacted 為舊資料的同義字）
+//   ineligible：顧問評估後判定資格不符（已評估過，但不算立案）
+//   accepted/consulting：已立案處理（consulting 為舊資料的同義字）
+//   submitted：已送出政府審核
+//   rejected：政府駁回（已評估、已立案、已送審，但最終未過件）
+//   approved/transforming/completed：政府核准／企業轉型中／案件結案
+// 不列入：new（等待查收）、unassigned（等待分派）、archived（管理員可能在任何階段封存，
+// 無法確定是否已評估過，不可一律算入）。
+const UPGRADE_EVALUATED_STATUSES = [
+  "evaluating", "viewed", "contacted",
+  "ineligible",
+  "accepted", "consulting",
+  "submitted",
+  "rejected",
+  "approved", "transforming", "completed",
+] as const;
+
+// 過件率分子：已正式進入立案／服務流程的案件 —— 只計入真正的立案結果，
+// 不包含評估後的負向結果（ineligible 資格不符、rejected 政府駁回）與 archived（無法確認是否曾評估）。
+const UPGRADE_ACCEPTED_STATUSES = [
+  "accepted", "consulting",
+  "submitted",
+  "approved", "transforming", "completed",
+] as const;
+
 export async function getUpgradePublicStats() {
   const db_ = await getDb();
-  if (!db_) return { appliedFactories: 0, approvedCases: 0, totalGrantAmountYen: 0, completedCases: 0 };
+  if (!db_) return { appliedFactories: 0, acceptedCases: 0, evaluatedCases: 0, totalGrantAmountYen: 0, completedCases: 0 };
 
   // 申請廠商：distinct factoryId（排除未綁定工廠的邊緣案件）
   const [fRow] = await db_
@@ -6412,11 +6439,19 @@ export async function getUpgradePublicStats() {
     .from(upgradeApplications)
     .where(isNotNull(upgradeApplications.factoryId));
 
-  // 有過件：進入「已立案處理」及之後所有階段的案件數
+  // 顧問已經手評估案件數 —— 過件率分母
+  const [eRow] = await db_
+    .select({ n: sql<number>`COUNT(*)` })
+    .from(upgradeApplications)
+    .where(inArray(upgradeApplications.status, UPGRADE_EVALUATED_STATUSES));
+
+  // acceptedCases：已正式立案處理案件數（accepted/consulting/submitted/approved/transforming/completed）——
+  // 過件率分子。注意這裡代表「已正式進入立案／服務流程」，不是僅指「政府核准補助」的案件數，
+  // 因此命名為 acceptedCases 而非 approvedCases，避免與 approved 這個 status 名稱混淆。
   const [aRow] = await db_
     .select({ n: sql<number>`COUNT(*)` })
     .from(upgradeApplications)
-    .where(inArray(upgradeApplications.status, ["accepted", "submitted", "rejected", "approved", "transforming", "completed"]));
+    .where(inArray(upgradeApplications.status, UPGRADE_ACCEPTED_STATUSES));
 
   // 累積補助金額：企業轉型中、案件結案（含 legacy approved）且已填入實際過案金額的案件加總（單位：元）
   const [gRow] = await db_
@@ -6432,7 +6467,8 @@ export async function getUpgradePublicStats() {
 
   return {
     appliedFactories: Number(fRow?.n ?? 0),
-    approvedCases: Number(aRow?.n ?? 0),
+    acceptedCases: Number(aRow?.n ?? 0),
+    evaluatedCases: Number(eRow?.n ?? 0),
     totalGrantAmountYen: Number(gRow?.n ?? 0),
     completedCases: Number(cRow?.n ?? 0),
   };

@@ -230,6 +230,12 @@
 }
 .carousel-appear { animation: carousel-appear 0.3s ease forwards; }
 
+/* ── Announcement font sizes (controlled set, no arbitrary inline style) ── */
+.announcement-text-sm   { font-size: 0.75rem;  line-height: 1.6; }
+.announcement-text-base { font-size: 1em;      line-height: inherit; }
+.announcement-text-lg   { font-size: 1.125rem; line-height: 1.6; }
+.announcement-text-xl   { font-size: 1.5rem;   line-height: 1.5; }
+
 /* ── Floating announcement button — unread state neon effects ──────────── */
 @keyframes announce-breathe {
   0%, 100% { opacity: 0.45; transform: scale(1); }

@@ -1,4 +1,4 @@
-import { Marked, type RendererObject, type Tokens } from "marked";
+import { Marked, type RendererObject, type Tokens, type TokenizerAndRendererExtension } from "marked";
 
 // Renders admin-authored Markdown (bold/italic/headings/lists/links/line
 // breaks/hr) into inline-styled HTML safe to drop straight into an email
@@ -27,6 +27,38 @@ const HEADING_STYLES: Record<number, string> = {
   3: "font-size:15px;font-weight:700;margin:12px 0 6px;color:#1f2937;",
 };
 const DEFAULT_HEADING_STYLE = "font-size:14px;font-weight:700;margin:10px 0 6px;color:#1f2937;";
+
+// 公告字級：與前台 client/src/lib/announcementFontSize.ts 的 :sm[]/:base[]/:lg[]/:xl[]
+// 語法一致，讓公告 Email 通知也能正確呈現字級（Email 需用 inline style，不能用 CSS class）。
+const FONT_SIZE_STYLES: Record<string, string> = {
+  sm: "font-size:12px;",
+  base: "",
+  lg: "font-size:18px;",
+  xl: "font-size:24px;",
+};
+
+const fontSizeExtension: TokenizerAndRendererExtension = {
+  name: "announcementFontSize",
+  level: "inline",
+  start(src: string) {
+    return src.match(/:(?:sm|base|lg|xl)\[/)?.index;
+  },
+  tokenizer(src: string) {
+    const match = /^:(sm|base|lg|xl)\[([^\]]*)\]/.exec(src);
+    if (!match) return undefined;
+    const [raw, size, inner] = match;
+    return {
+      type: "announcementFontSize",
+      raw,
+      size,
+      tokens: this.lexer.inlineTokens(inner),
+    } as Tokens.Generic;
+  },
+  renderer(token: any) {
+    const style = FONT_SIZE_STYLES[token.size] ?? "";
+    return `<span style="${style}">${this.parser.parseInline(token.tokens)}</span>`;
+  },
+};
 
 const renderer: RendererObject = {
   link({ href, tokens }: Tokens.Link): string {
@@ -68,6 +100,7 @@ const renderer: RendererObject = {
 // singleton) so this module's renderer/options can never leak into or be
 // affected by any other future use of the `marked` package in this codebase.
 const emailMarked = new Marked({ renderer, breaks: true, gfm: true });
+emailMarked.use({ extensions: [fontSizeExtension] });
 
 /** Converts admin-authored announcement Markdown into safe, inline-styled email HTML. */
 export function renderAnnouncementEmailHtml(markdown: string): string {

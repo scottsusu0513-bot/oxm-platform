@@ -518,8 +518,8 @@ function ThreadPanel({ campaignId, userId, userName, campaign }: { campaignId: n
         <CardTitle className="text-sm font-semibold">{userName} 的對話</CardTitle>
       </CardHeader>
       <CardContent className="flex-1 overflow-y-auto p-4 space-y-3 max-h-[420px]">
-        {/* 原始站內信內容 */}
-        <div className="flex justify-start">
+        {/* 原始站內信內容（管理員寄出） */}
+        <div className="flex justify-end">
           <div className="max-w-[85%] rounded-2xl px-4 py-2.5 text-sm bg-orange-50 border border-orange-200">
             <p className="text-xs font-bold text-orange-500 mb-1">★ 平台管理員（原始站內信）</p>
             <p className="font-medium mb-1">{campaign.title}</p>
@@ -535,9 +535,10 @@ function ThreadPanel({ campaignId, userId, userName, campaign }: { campaignId: n
           <p className="text-center text-muted-foreground text-sm py-4">目前沒有後續訊息</p>
         )}
         {thread.map((msg: any) => {
+          // isAdmin = 由管理員／平台方寄出 → 顯示於右側；對方（收件人）回覆 → 顯示於左側
           const isAdmin = msg.senderRole === "admin";
           return (
-            <div key={msg.id} className={`flex ${isAdmin ? "justify-start" : "justify-end"}`}>
+            <div key={msg.id} className={`flex ${isAdmin ? "justify-end" : "justify-start"}`}>
               <div className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-sm ${isAdmin ? "bg-orange-50 border border-orange-200" : "bg-primary text-primary-foreground"}`}>
                 {isAdmin && <p className="text-xs font-bold text-orange-500 mb-1">★ 平台管理員</p>}
                 <p className="whitespace-pre-wrap">{msg.content}</p>

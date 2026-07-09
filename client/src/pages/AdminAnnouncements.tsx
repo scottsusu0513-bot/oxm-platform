@@ -12,9 +12,16 @@ import { Switch } from "@/components/ui/switch";
 import { trpc } from "@/lib/trpc";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
-import { ArrowLeft, Plus, Pencil, Trash2, Pin, Zap, Wrench, Newspaper, Megaphone, Bold, Italic, Heading2, Link2, SeparatorHorizontal } from "lucide-react";
+import { ArrowLeft, Plus, Pencil, Trash2, Pin, Zap, Wrench, Newspaper, Megaphone, Bold, Italic, Heading2, Link2, SeparatorHorizontal, Type, ChevronDown } from "lucide-react";
 import { FloatingBackButton } from "@/components/FloatingBackButton";
 import MarkdownContent, { toMarkdownPreviewText } from "@/components/MarkdownContent";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from "@/components/ui/dropdown-menu";
+import { ANNOUNCEMENT_FONT_SIZES, ANNOUNCEMENT_FONT_SIZE_LABELS } from "@/lib/announcementFontSize";
 
 const TYPE_OPTIONS = [
   { value: "news",        label: "平台消息", icon: Newspaper },
@@ -128,6 +135,10 @@ function AdminAnnouncementsContent() {
     { icon: Link2, label: "連結", onClick: () => contentRef.current && insertLink(contentRef.current, form.content, setContent) },
     { icon: SeparatorHorizontal, label: "分隔線", onClick: () => contentRef.current && insertAtCursor(contentRef.current, form.content, setContent, "\n\n---\n\n") },
   ];
+  const applyFontSize = (size: (typeof ANNOUNCEMENT_FONT_SIZES)[number]) => {
+    if (!contentRef.current) return;
+    wrapSelection(contentRef.current, form.content, setContent, `:${size}[`, "]", "文字");
+  };
 
   const utils = trpc.useUtils();
   const { data: items = [], isLoading } = trpc.announcement.list.useQuery({ limit: 100 });
@@ -216,7 +227,7 @@ function AdminAnnouncementsContent() {
               <div>
                 <Label>內容 *</Label>
 
-                <div className="flex flex-wrap gap-1 mt-1 mb-1.5 p-1.5 bg-muted/40 rounded-md border">
+                <div className="flex flex-wrap items-center gap-1 mt-1 mb-1.5 p-1.5 bg-muted/40 rounded-md border">
                   {toolbarActions.map(a => (
                     <button
                       key={a.label}
@@ -228,6 +239,26 @@ function AdminAnnouncementsContent() {
                       <a.icon className="w-3.5 h-3.5" />
                     </button>
                   ))}
+                  <div className="w-px h-4 bg-border mx-0.5" />
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        type="button"
+                        title="字體大小"
+                        className="flex items-center gap-0.5 p-1.5 rounded hover:bg-white hover:shadow-sm text-muted-foreground hover:text-foreground transition-colors"
+                      >
+                        <Type className="w-3.5 h-3.5" />
+                        <ChevronDown className="w-2.5 h-2.5" />
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start">
+                      {ANNOUNCEMENT_FONT_SIZES.map(size => (
+                        <DropdownMenuItem key={size} onClick={() => applyFontSize(size)}>
+                          {ANNOUNCEMENT_FONT_SIZE_LABELS[size]}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 </div>
 
                 <Textarea
@@ -237,7 +268,7 @@ function AdminAnnouncementsContent() {
                   placeholder="公告內容...（支援 Markdown：**粗體**、# 標題、[連結](https://...)）"
                   rows={5}
                 />
-                <p className="text-xs text-muted-foreground mt-1">支援 Markdown：粗體、斜體、標題、連結與分隔線</p>
+                <p className="text-xs text-muted-foreground mt-1">支援 Markdown：粗體、斜體、標題、連結、分隔線與字體大小（選取文字後點擊字級工具套用）</p>
 
                 <div className="mt-2">
                   <Label className="text-xs text-muted-foreground">即時效果</Label>

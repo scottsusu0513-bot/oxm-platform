@@ -714,7 +714,7 @@ export default function Home() {
         </div>
       </section>
 
-      {/* 找代工指南 */}
+      {/* 找代工指南 — 暫時隱藏（未來重新設計後再啟用），保留頁面/路由/元件不動，僅從首頁渲染移除
       <section id="guides" className="py-5 md:py-16 bg-gray-50">
         <div className="container">
           <div className="flex items-end justify-between mb-4 md:mb-8">
@@ -753,6 +753,7 @@ export default function Home() {
           </div>
         </div>
       </section>
+      */}
 
       {/* CTA */}
       <section className="py-5 md:py-16 bg-white">

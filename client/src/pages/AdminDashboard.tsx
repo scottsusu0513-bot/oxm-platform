@@ -292,21 +292,25 @@ function AdminDashboardContent() {
               <div>
                 <div className="text-xs text-gray-500 mb-1">今日每小時訪客</div>
                 <div className="flex items-end gap-0.5 h-12">
-                  {viewStats.todayHours.map((count: number, hour: number) => {
+                  {(() => {
                     const max = Math.max(...viewStats.todayHours, 1);
-                    const height = Math.round((count / max) * 100);
-                    return (
-                      <div key={hour} className="flex-1 flex flex-col items-center group relative">
-                        <div
-                          className="w-full bg-orange-400 rounded-sm transition-all"
-                          style={{ height: `${height}%`, minHeight: count > 0 ? 2 : 0 }}
-                        />
-                        <div className="absolute -top-6 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-xs px-1 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none z-10">
-                          {hour}時: {count}
+                    return viewStats.todayHours.map((count: number, hour: number) => {
+                      const height = Math.round((count / max) * 100);
+                      return (
+                        // h-12（同外層）+ justify-end：讓百分比高度有明確的計算基準，
+                        // 否則子層 height:% 會因父層無固定高度而失效，只剩 minHeight 的 2px 墊底
+                        <div key={hour} className="flex-1 flex flex-col items-center justify-end h-12 group relative">
+                          <div
+                            className="w-full bg-orange-400 rounded-sm transition-all"
+                            style={{ height: `${height}%`, minHeight: count > 0 ? 2 : 0 }}
+                          />
+                          <div className="absolute -top-6 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-xs px-1 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none z-10">
+                            {hour}時: {count}
+                          </div>
                         </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    });
+                  })()}
                 </div>
                 <div className="flex justify-between text-xs text-gray-400 mt-1">
                   <span>0時</span>

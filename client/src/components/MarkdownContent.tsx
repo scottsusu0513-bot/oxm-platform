@@ -1,5 +1,7 @@
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkBreaks from "remark-breaks";
+import remarkDirective from "remark-directive";
+import { remarkAnnouncementFontSize } from "@/lib/announcementFontSize";
 
 const SAFE_URL_PROTOCOLS = ["http:", "https:", "mailto:"];
 
@@ -54,6 +56,8 @@ const components: Components = {
   code: ({ children }) => (
     <code className="px-1 py-0.5 rounded bg-muted text-[0.85em] break-words">{children}</code>
   ),
+  // 公告字級：由 remarkAnnouncementFontSize 產生的 className，僅限固定的 4 種受控字級。
+  span: ({ children, className }) => <span className={className}>{children}</span>,
 };
 
 /**
@@ -64,7 +68,11 @@ const components: Components = {
 export default function MarkdownContent({ content, className }: { content: string; className?: string }) {
   return (
     <div className={`text-sm break-words ${className ?? ""}`}>
-      <ReactMarkdown remarkPlugins={[remarkBreaks]} components={components} skipHtml>
+      <ReactMarkdown
+        remarkPlugins={[remarkBreaks, remarkDirective, remarkAnnouncementFontSize]}
+        components={components}
+        skipHtml
+      >
         {content}
       </ReactMarkdown>
     </div>
@@ -76,6 +84,7 @@ export function toMarkdownPreviewText(markdown: string, maxLen = 80): string {
   const plain = markdown
     .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
     .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/:(?:sm|base|lg|xl)\[([^\]]*)\]/g, "$1")
     .replace(/^[ \t]*(?:[-*+]|\d+[.)])\s+/gm, "")
     .replace(/[#>*_~`]/g, "")
     .replace(/\s+/g, " ")

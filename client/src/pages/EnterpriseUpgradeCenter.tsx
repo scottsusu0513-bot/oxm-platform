@@ -412,11 +412,15 @@ export default function EnterpriseUpgradeCenter() {
 
   const upgradeStats = useMemo(() => {
     const applied = rawStats?.appliedFactories ?? 0;
-    const approved = rawStats?.approvedCases ?? 0;
+    // acceptedCases：已正式立案處理案件數（非僅指政府核准案件，詳見 server/db.ts 註解）
+    const accepted = rawStats?.acceptedCases ?? 0;
+    // 過件率分母＝顧問已經手評估的案件數（排除尚未分派／顧問尚未查收的案件），
+    // 而非全部進件數，避免短時間湧入的新案件拉低過件率
+    const evaluated = rawStats?.evaluatedCases ?? 0;
     return {
       appliedFactories: applied,
-      approvedCases: approved,
-      approvalRate: applied > 0 ? Math.round((approved / applied) * 100) : 0,
+      acceptedCases: accepted,
+      approvalRate: evaluated > 0 ? Math.round((accepted / evaluated) * 100) : 0,
       totalGrantAmountWan: Math.floor((rawStats?.totalGrantAmountYen ?? 0) / 10000),
       completedCases: rawStats?.completedCases ?? 0,
     };
@@ -525,7 +529,7 @@ export default function EnterpriseUpgradeCenter() {
                     color="#4ade80"
                     rows={[
                       { label: "有送出申請", value: fmt(upgradeStats.appliedFactories, 5), unit: "家" },
-                      { label: "有過件",     value: fmt(upgradeStats.approvedCases, 5),    unit: "家" },
+                      { label: "有過件",     value: fmt(upgradeStats.acceptedCases, 5),    unit: "家" },
                       { label: "過件率",     value: fmt(upgradeStats.approvalRate, 2),     unit: "%" },
                     ]}
                     bar={upgradeStats.approvalRate}
