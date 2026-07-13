@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { Helmet } from "react-helmet-async";
 import { Link } from "wouter";
+import { renderJsonLd } from "@/components/seo/JsonLd";
+import { getAboutPageSchema, getAboutBreadcrumbSchema } from "@/lib/schema";
 import Navbar from "@/components/Navbar";
 import { FloatingBackButton } from "@/components/FloatingBackButton";
 import { Button } from "@/components/ui/button";
@@ -341,27 +343,21 @@ export default function AboutOXM() {
   return (
     <div className="min-h-screen bg-white">
       <Helmet>
-        <title>關於 OXM｜台灣傳統產業數位資源媒合平台</title>
+        <title>關於 OXM｜台灣傳統產業數位資源平台</title>
         <meta
           name="description"
-          content="OXM 是以台灣傳統產業為核心的數位資源媒合平台，整合工廠媒合、專業服務、人才培訓、品牌形象、產業資訊與商務交流。"
+          content="了解 OXM 如何整合台灣工廠媒合、企業升級、產業人才、品牌形象與產業資訊，成為台灣傳統產業的數位資源入口。"
         />
         <link rel="canonical" href={CANONICAL} />
         <meta property="og:type" content="website" />
         <meta property="og:site_name" content="OXM" />
         <meta property="og:url" content={CANONICAL} />
-        <meta property="og:title" content="關於 OXM｜台灣傳統產業數位資源媒合平台" />
+        <meta property="og:title" content="關於 OXM｜台灣傳統產業數位資源平台" />
         <meta
           property="og:description"
-          content="OXM 是以台灣傳統產業為核心的數位資源媒合平台，整合工廠媒合、專業服務、人才培訓、品牌形象、產業資訊與商務交流。"
+          content="了解 OXM 如何整合台灣工廠媒合、企業升級、產業人才、品牌形象與產業資訊，成為台灣傳統產業的數位資源入口。"
         />
-        <script type="application/ld+json">{JSON.stringify({
-          "@context": "https://schema.org",
-          "@type": "Organization",
-          "name": "OXM",
-          "url": BASE,
-          "description": "OXM 是以台灣傳統產業為核心的數位資源媒合平台，整合工廠媒合、專業服務、人才培訓、品牌形象、產業資訊與商務交流。",
-        })}</script>
+        {renderJsonLd([getAboutPageSchema(), getAboutBreadcrumbSchema()])}
       </Helmet>
 
       <Navbar />
@@ -424,7 +420,7 @@ export default function AboutOXM() {
               <div className="max-w-[520px] mx-auto">
                 <h2 className="text-2xl sm:text-3xl font-bold mb-4">OXM 是什麼？</h2>
                 <p className="text-muted-foreground leading-relaxed mb-4">
-                  OXM 是以台灣傳統產業為核心的數位資源媒合平台，協助企業、品牌商、創業者、設計師與採購人員尋找適合的台灣工廠，也協助工廠取得經營、人才、法律、品牌、政府資源與產業資訊。
+                  OXM 是台灣傳統產業的數位資源平台，整合工廠媒合、企業升級、產業人才、品牌形象與產業資訊，協助企業找到合適的製造與轉型資源。
                 </p>
                 <p className="text-muted-foreground leading-relaxed mb-4">
                   OXM 不只提供工廠搜尋，也希望逐步整合台灣傳統產業需要的各類服務，讓原本分散的資源可以在同一個入口被找到、被理解並建立合作。
@@ -581,6 +577,10 @@ export default function AboutOXM() {
           </div>
         </div>
       </section>
+
+      <p className="text-center text-xs text-muted-foreground py-4">
+        關於 OXM 內容最後更新：2026 年 7 月 13 日
+      </p>
     </div>
   );
 }

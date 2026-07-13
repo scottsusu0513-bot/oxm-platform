@@ -1,4 +1,7 @@
 import { Helmet } from "react-helmet-async";
+import { renderJsonLd } from "@/components/seo/JsonLd";
+import { BRAND } from "@/lib/brand";
+import { getOrganizationSchema, getWebsiteSchema } from "@/lib/schema";
 import Navbar from "@/components/Navbar";
 import FloatingAnnouncementButton from "@/components/FloatingAnnouncementButton";
 import { Button } from "@/components/ui/button";
@@ -363,8 +366,9 @@ export default function Home() {
   return (
     <NativePullToRefreshLayout contentRef={contentRef} indicatorRef={indicatorRef} iconRef={iconRef} phase={phase} className="min-h-screen bg-background animate-page-enter">
       <Helmet>
-        <title>OXM｜台灣傳統產業資源媒合平台｜工廠、設備與供應鏈服務</title>
-        <meta name="description" content="OXM 整合台灣傳統產業商家與供應鏈資源，協助使用者快速找到工廠、OEM/ODM 代工、工業設備、材料、包裝印刷與產業服務，讓找廠商、找資源、送詢價更有效率。" />
+        <title>OXM｜台灣工廠媒合與傳統產業數位資源平台</title>
+        <meta name="description" content={BRAND.description} />
+        {renderJsonLd([getOrganizationSchema(), getWebsiteSchema()])}
       </Helmet>
       <Navbar />
 
