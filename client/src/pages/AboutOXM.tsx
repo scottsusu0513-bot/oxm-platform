@@ -446,11 +446,14 @@ export default function AboutOXM() {
                 <p className="text-muted-foreground leading-relaxed mb-6">
                   OXM 因此建立，希望把傳統產業需要的工廠、人才、專業服務、資訊與交流空間整合起來，降低尋找資源與建立合作的門檻。
                 </p>
-                <p className="text-lg sm:text-xl font-bold border-l-4 border-orange-400 pl-4 py-1 bg-gradient-to-r from-orange-600 to-purple-600 bg-clip-text text-transparent mx-auto">
-                  <span className="block">好技術，不應該因為缺乏曝光而被忽略</span>
-                  <span className="block mt-1">真正的需求，也不該因為資訊分散而找不到出口</span>
-                </p>
               </div>
+              {/* 品牌宣言獨立於上方 max-w-[520px] 文字容器之外，改用 w-full + self-start
+                  避免容器寬度把第二行擠出換行；lg:whitespace-nowrap 確保桌面版兩行各自
+                  完整顯示、不會有單字或兩字被擠到第三行；手機版不加 nowrap，維持自然換行 */}
+              <p className="w-full self-start text-left mt-2 text-lg sm:text-xl font-bold border-l-4 border-orange-400 pl-4 py-1 bg-gradient-to-r from-orange-600 to-purple-600 bg-clip-text text-transparent lg:whitespace-nowrap">
+                <span className="block">好技術，不應該因為缺乏曝光而被忽略</span>
+                <span className="block mt-1">真正的需求，也不該因為資訊分散而找不到出口</span>
+              </p>
             </div>
           </div>
         </div>
