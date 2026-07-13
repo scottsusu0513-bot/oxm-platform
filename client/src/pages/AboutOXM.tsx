@@ -447,7 +447,8 @@ export default function AboutOXM() {
                   OXM 因此建立，希望把傳統產業需要的工廠、人才、專業服務、資訊與交流空間整合起來，降低尋找資源與建立合作的門檻。
                 </p>
                 <p className="text-lg sm:text-xl font-bold border-l-4 border-orange-400 pl-4 py-1 bg-gradient-to-r from-orange-600 to-purple-600 bg-clip-text text-transparent mx-auto">
-                  好技術，不應該因為缺乏曝光而被忽略；真正的需求，也不該因為資訊分散而找不到出口。
+                  <span className="block">好技術，不應該因為缺乏曝光而被忽略</span>
+                  <span className="block mt-1">真正的需求，也不該因為資訊分散而找不到出口</span>
                 </p>
               </div>
             </div>
