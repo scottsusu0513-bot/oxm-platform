@@ -28,6 +28,7 @@ const MemberCenter          = lazy(() => import("./pages/MemberCenter"));
 const Announcements         = lazy(() => import("./pages/Announcements"));
 const BlogList              = lazy(() => import("./pages/BlogList"));
 const BlogPost              = lazy(() => import("./pages/BlogPost"));
+const AboutOXM              = lazy(() => import("./pages/AboutOXM"));
 const PrivacyPolicyPage     = lazy(() => import("./pages/PrivacyPolicyPage"));
 const TermsPage             = lazy(() => import("./pages/TermsPage"));
 const VerifyEmailPage       = lazy(() => import("./pages/VerifyEmailPage"));
@@ -327,6 +328,7 @@ function Router() {
         <Route path="/blog" component={BlogList} />
         <Route path="/announcements" component={Announcements} />
         <Route path="/manual" component={UserManual} />
+        <Route path="/about" component={AboutOXM} />
         <Route path="/privacy" component={PrivacyPolicyPage} />
         <Route path="/terms" component={TermsPage} />
         <Route path="/verify-email" component={VerifyEmailPage} />

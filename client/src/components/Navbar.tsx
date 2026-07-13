@@ -61,7 +61,7 @@ const HUB_ITEMS: HubItem[] = [
     mCard: "from-teal-500/8 to-cyan-600/8 border-teal-300/20", mText: "text-teal-600/40",
   },
   {
-    label: "產業採購與資源中心", short: "找採購", soon: true,
+    label: "產業採購與資源中心", short: "找形象", soon: true,
     Icon: Package, iconCls: "text-amber-400/60",
     card: "bg-gradient-to-br from-amber-500/8 to-orange-600/8 border-amber-300/20 text-amber-900/30",
     cardHover: "",
@@ -92,6 +92,26 @@ export default function Navbar() {
   const [loginDialogOpen, setLoginDialogOpen] = useState(false);
   const [searchDropOpen, setSearchDropOpen] = useState(false);
   const searchDropTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // OXM 品牌區下拉選單（左上角）：目前僅「首頁」一個項目
+  const [brandMenuOpen, setBrandMenuOpen] = useState(false);
+  const brandMenuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!brandMenuOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (brandMenuRef.current && !brandMenuRef.current.contains(e.target as Node)) {
+        setBrandMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [brandMenuOpen]);
+
+  // 路由切換後自動關閉下拉選單
+  useEffect(() => {
+    setBrandMenuOpen(false);
+  }, [location]);
 
   useEffect(() => {
     if (mobileOpen) {
@@ -199,10 +219,29 @@ export default function Navbar() {
     <header className="sticky top-0 z-50 bg-white/95 backdrop-blur border-b border-border" style={{ paddingTop: "env(safe-area-inset-top, 0px)" }}>
       <div className="container flex items-center justify-between h-16 gap-2">
 
-        {/* Logo */}
-        <Link href="/" className="flex items-center font-extrabold text-xl no-underline shrink-0">
-          <span className="bg-gradient-to-r from-orange-500 to-amber-500 bg-clip-text text-transparent text-2xl tracking-tight">OXM</span>
-        </Link>
+        {/* Logo + 品牌下拉選單 */}
+        <div className="relative shrink-0" ref={brandMenuRef}>
+          <button
+            type="button"
+            onClick={() => setBrandMenuOpen(v => !v)}
+            aria-haspopup="true"
+            aria-expanded={brandMenuOpen}
+            className="flex items-center gap-0.5 font-extrabold text-xl no-underline cursor-pointer"
+          >
+            <span className="bg-gradient-to-r from-orange-500 to-amber-500 bg-clip-text text-transparent text-2xl tracking-tight">OXM</span>
+            <ChevronDown className={`w-4 h-4 text-muted-foreground/70 transition-transform duration-150 ${brandMenuOpen ? "rotate-180" : ""}`} />
+          </button>
+
+          {brandMenuOpen && (
+            <div className="absolute top-full left-0 mt-1.5 w-[160px] bg-white border border-border rounded-xl shadow-lg z-[200] py-1.5 overflow-hidden">
+              <Link href="/" onClick={() => setBrandMenuOpen(false)}>
+                <div className="px-3.5 py-2 text-sm font-medium text-foreground hover:bg-orange-50 hover:text-orange-700 transition-colors cursor-pointer">
+                  首頁
+                </div>
+              </Link>
+            </div>
+          )}
+        </div>
 
         {/* ── Desktop: 六大方向入口（lg: 1024px+） ── */}
         <nav className="hidden lg:flex items-center gap-3 flex-1 justify-center min-w-0 mx-2">
