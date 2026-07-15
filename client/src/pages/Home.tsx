@@ -1,7 +1,6 @@
 import { Helmet } from "react-helmet-async";
-import { renderJsonLd } from "@/components/seo/JsonLd";
-import { BRAND } from "@/lib/brand";
-import { getOrganizationSchema, getWebsiteSchema } from "@/lib/schema";
+import { useRemoveServerSeoHead } from "@/hooks/useRemoveServerSeoHead";
+import { PUBLIC_PAGE_SEO } from "@/lib/publicPageSeo";
 import Navbar from "@/components/Navbar";
 import FloatingAnnouncementButton from "@/components/FloatingAnnouncementButton";
 import { Button } from "@/components/ui/button";
@@ -326,6 +325,7 @@ function MultiSelect({ options, value, onChange, placeholder, disabled, withClea
 }
 
 export default function Home() {
+  useRemoveServerSeoHead();
   const [, navigate] = useLocation();
   const { user, isAuthenticated } = useAuth();
   const coManagedQuery = trpc.factory.getCoManagedFactories.useQuery(undefined, {
@@ -366,9 +366,20 @@ export default function Home() {
   return (
     <NativePullToRefreshLayout contentRef={contentRef} indicatorRef={indicatorRef} iconRef={iconRef} phase={phase} className="min-h-screen bg-background animate-page-enter">
       <Helmet>
-        <title>OXM｜台灣工廠媒合與傳統產業數位資源平台</title>
-        <meta name="description" content={BRAND.description} />
-        {renderJsonLd([getOrganizationSchema(), getWebsiteSchema()])}
+        <title>{PUBLIC_PAGE_SEO.home.title}</title>
+        <meta name="description" content={PUBLIC_PAGE_SEO.home.description} />
+        <link rel="canonical" href={PUBLIC_PAGE_SEO.home.canonical} />
+        <meta property="og:type" content={PUBLIC_PAGE_SEO.home.ogType} />
+        <meta property="og:site_name" content="OXM" />
+        <meta property="og:title" content={PUBLIC_PAGE_SEO.home.title} />
+        <meta property="og:description" content={PUBLIC_PAGE_SEO.home.description} />
+        <meta property="og:image" content={PUBLIC_PAGE_SEO.home.ogImage} />
+        <meta property="og:url" content={PUBLIC_PAGE_SEO.home.canonical} />
+        {/* Organization + WebSite JSON-LD 完全交給 server 端注入
+            （server/_core/publicPageMeta.ts），不在這裡重複宣告。實測並讀
+            react-helmet-async 原始碼確認：React 19 下，Helmet 對沒有 src
+            的行內 script 不會 hoist 到 <head>，client 端宣告等於白宣告，
+            見 client/src/hooks/useRemoveServerSeoHead.ts 的說明。 */}
       </Helmet>
       <Navbar />
 

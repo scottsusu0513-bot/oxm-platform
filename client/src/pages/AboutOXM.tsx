@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { Helmet } from "react-helmet-async";
 import { Link } from "wouter";
-import { renderJsonLd } from "@/components/seo/JsonLd";
-import { getAboutPageSchema, getAboutBreadcrumbSchema } from "@/lib/schema";
+import { useRemoveServerSeoHead } from "@/hooks/useRemoveServerSeoHead";
+import { PUBLIC_PAGE_SEO } from "@/lib/publicPageSeo";
 import Navbar from "@/components/Navbar";
 import { FloatingBackButton } from "@/components/FloatingBackButton";
 import { Button } from "@/components/ui/button";
@@ -10,9 +10,6 @@ import {
   Search, Factory, Users, Briefcase, Camera, Newspaper, MessageSquare,
   Rocket, TrendingUp, GraduationCap, ArrowRight, CheckCircle2, Lock,
 } from "lucide-react";
-
-const BASE = "https://www.oxmmatch.com";
-const CANONICAL = `${BASE}/about`;
 
 // ── 卡片樣式共用 class（圓角、淡陰影、白底，符合全站風格）──────────────────
 const CARD_CLASS = "rounded-2xl border border-border bg-white p-6 shadow-sm";
@@ -340,24 +337,24 @@ function ServiceBannerSection({ id, left, right }: { id?: string; left: BannerSe
 }
 
 export default function AboutOXM() {
+  useRemoveServerSeoHead();
   return (
     <div className="min-h-screen bg-white">
       <Helmet>
-        <title>關於 OXM｜台灣傳統產業數位資源平台</title>
-        <meta
-          name="description"
-          content="了解 OXM 如何整合台灣工廠媒合、企業升級、產業人才、品牌形象與產業資訊，成為台灣傳統產業的數位資源入口。"
-        />
-        <link rel="canonical" href={CANONICAL} />
-        <meta property="og:type" content="website" />
+        <title>{PUBLIC_PAGE_SEO.about.title}</title>
+        <meta name="description" content={PUBLIC_PAGE_SEO.about.description} />
+        <link rel="canonical" href={PUBLIC_PAGE_SEO.about.canonical} />
+        <meta property="og:type" content={PUBLIC_PAGE_SEO.about.ogType} />
         <meta property="og:site_name" content="OXM" />
-        <meta property="og:url" content={CANONICAL} />
-        <meta property="og:title" content="關於 OXM｜台灣傳統產業數位資源平台" />
-        <meta
-          property="og:description"
-          content="了解 OXM 如何整合台灣工廠媒合、企業升級、產業人才、品牌形象與產業資訊，成為台灣傳統產業的數位資源入口。"
-        />
-        {renderJsonLd([getAboutPageSchema(), getAboutBreadcrumbSchema()])}
+        <meta property="og:url" content={PUBLIC_PAGE_SEO.about.canonical} />
+        <meta property="og:title" content={PUBLIC_PAGE_SEO.about.title} />
+        <meta property="og:description" content={PUBLIC_PAGE_SEO.about.description} />
+        <meta property="og:image" content={PUBLIC_PAGE_SEO.about.ogImage} />
+        {/* AboutPage + BreadcrumbList JSON-LD 完全交給 server 端注入
+            （server/_core/publicPageMeta.ts），不在這裡重複宣告。實測並讀
+            react-helmet-async 原始碼確認：React 19 下，Helmet 對沒有 src
+            的行內 script 不會 hoist 到 <head>，client 端宣告等於白宣告，
+            見 client/src/hooks/useRemoveServerSeoHead.ts 的說明。 */}
       </Helmet>
 
       <Navbar />

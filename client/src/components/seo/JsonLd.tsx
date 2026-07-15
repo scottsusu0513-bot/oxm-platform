@@ -12,17 +12,14 @@
 // renderJsonLd(data) 一般函式呼叫，呼叫後回傳的就是已經 resolve 好的原生
 // <script> 元素（element.type 是字串 "script"），可以安全地直接放進
 // <Helmet> 內。
+import { toSafeJsonLdString, type JsonLdObject } from "@shared/seo/schema";
 
-export type JsonLdObject = Record<string, unknown>;
-
-// 避免 JSON 字串中出現原始 "<" 字元（例如資料剛好包含 "</script>" 這類子字串時，
-// 會提前結束 <script> 標籤），統一轉義為 "<"，其餘 JSON 內容不受影響。
-function toSafeJsonLd(data: JsonLdObject | JsonLdObject[]): string {
-  return JSON.stringify(data).replace(/</g, "\\u003c");
-}
+export type { JsonLdObject };
 
 // 在 <Helmet> 內請一律以 {renderJsonLd(data)} 的函式呼叫形式使用，
 // 不要包成 <SomeComponent data={...} /> 這種 JSX 元件標籤。
+// 轉義邏輯（"<" 換成 "<"）與 server 端 publicPageMeta.ts 共用同一份
+// toSafeJsonLdString（shared/seo/schema.ts），避免兩邊序列化規則不一致。
 export function renderJsonLd(data: JsonLdObject | JsonLdObject[]) {
-  return <script type="application/ld+json">{toSafeJsonLd(data)}</script>;
+  return <script type="application/ld+json">{toSafeJsonLdString(data)}</script>;
 }

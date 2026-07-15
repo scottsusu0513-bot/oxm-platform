@@ -10,6 +10,7 @@ import { setupSecurityHeaders, setupOriginCheck } from "./security";
 import { apiLimiter, loginLimiter, uploadLimiter, messageLimiter, submitReviewLimiter, adminLimiter, searchLimiter, reportLimiter } from "./rateLimit";
 import { COOKIE_NAME } from "@shared/const";
 import { INDUSTRY_SLUGS, PHASE1_SUB_INDUSTRY_PAGES } from "../../shared/constants";
+import { escapeXmlText } from "@shared/seo/xml";
 import { getDb, getApprovedFactoriesForSitemap, ensureConsultantsSeeded } from "../db";
 import { runCollaborationOrderOverdueEmailCheck } from "../orderOverdueCheck";
 
@@ -121,12 +122,16 @@ async function startServer() {
       "\n" +
       "Disallow: /admin\n" +
       "Disallow: /admin/\n" +
+      "Disallow: /admin-message\n" +
       "Disallow: /messages\n" +
       "Disallow: /chat\n" +
       "Disallow: /dashboard\n" +
       "Disallow: /register-factory\n" +
       "Disallow: /favorites\n" +
       "Disallow: /member\n" +
+      "Disallow: /orders\n" +
+      "Disallow: /notifications\n" +
+      "Disallow: /verify-email\n" +
       "Disallow: /api\n" +
       "Disallow: /api/trpc\n" +
       "\n" +
@@ -139,35 +144,35 @@ async function startServer() {
     const BASE = "https://www.oxmmatch.com";
     const today = new Date().toISOString().slice(0, 10);
 
-    const esc = (s: string) =>
-      s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-
-    const entry = (loc: string, priority: string, changefreq: string, lastmod = today) =>
-      `  <url>\n    <loc>${esc(loc)}</loc>\n    <lastmod>${lastmod}</lastmod>\n    <changefreq>${changefreq}</changefreq>\n    <priority>${priority}</priority>\n  </url>`;
+    // lastmod 省略時不輸出 <lastmod> 標籤，避免對沒有真實更新時間的固定頁
+    // 偽造成「每次請求都是今天」；既有呼叫則明確傳入 today，維持原本行為不變。
+    const entry = (loc: string, priority: string, changefreq: string, lastmod?: string) =>
+      `  <url>\n    <loc>${escapeXmlText(loc)}</loc>${lastmod ? `\n    <lastmod>${lastmod}</lastmod>` : ""}\n    <changefreq>${changefreq}</changefreq>\n    <priority>${priority}</priority>\n  </url>`;
 
     const urls: string[] = [];
 
     // 固定公開頁
-    urls.push(entry(`${BASE}/`, "1.0", "daily"));
-    urls.push(entry(`${BASE}/search`, "0.9", "daily"));
-    urls.push(entry(`${BASE}/announcements`, "0.6", "weekly"));
-    urls.push(entry(`${BASE}/privacy`, "0.3", "monthly"));
-    urls.push(entry(`${BASE}/terms`, "0.3", "monthly"));
+    urls.push(entry(`${BASE}/`, "1.0", "daily", today));
+    urls.push(entry(`${BASE}/about`, "0.6", "monthly"));
+    urls.push(entry(`${BASE}/search`, "0.9", "daily", today));
+    urls.push(entry(`${BASE}/announcements`, "0.6", "weekly", today));
+    urls.push(entry(`${BASE}/privacy`, "0.3", "monthly", today));
+    urls.push(entry(`${BASE}/terms`, "0.3", "monthly", today));
 
     // Blog / 找代工指南
-    urls.push(entry(`${BASE}/blog`, "0.7", "weekly"));
-    urls.push(entry(`${BASE}/blog/oem-vs-odm`, "0.6", "weekly"));
-    urls.push(entry(`${BASE}/blog/what-is-moq`, "0.6", "weekly"));
-    urls.push(entry(`${BASE}/blog/first-time-factory-guide`, "0.6", "weekly"));
+    urls.push(entry(`${BASE}/blog`, "0.7", "weekly", today));
+    urls.push(entry(`${BASE}/blog/oem-vs-odm`, "0.6", "weekly", today));
+    urls.push(entry(`${BASE}/blog/what-is-moq`, "0.6", "weekly", today));
+    urls.push(entry(`${BASE}/blog/first-time-factory-guide`, "0.6", "weekly", today));
 
     // 主產業頁
     for (const slug of Object.values(INDUSTRY_SLUGS)) {
-      urls.push(entry(`${BASE}/industry/${slug}`, "0.8", "weekly"));
+      urls.push(entry(`${BASE}/industry/${slug}`, "0.8", "weekly", today));
     }
 
     // 子產業頁（Phase 1）
     for (const { industrySlug, subSlug } of PHASE1_SUB_INDUSTRY_PAGES) {
-      urls.push(entry(`${BASE}/industry/${industrySlug}/${subSlug}`, "0.7", "weekly"));
+      urls.push(entry(`${BASE}/industry/${industrySlug}/${subSlug}`, "0.7", "weekly", today));
     }
 
     // 已審核工廠頁
