@@ -7,6 +7,7 @@ import { createServer as createViteServer } from "vite";
 import viteConfig from "../../vite.config";
 import { buildFactoryMeta, injectMetaIntoHtml, parseFactoryPath, stripQueryString } from "./ogMeta";
 import { injectPublicPageSeo } from "./publicPageMeta";
+import { injectPrerenderedBody } from "./prerenderedBody";
 
 export async function setupVite(app: Express, server: Server) {
   const serverOptions = {
@@ -60,6 +61,13 @@ export async function setupVite(app: Express, server: Server) {
         // 其他路由（沒有專屬 SEO 設定）保留原本的 index.html 預設值不變。
         const seoPage = injectPublicPageSeo(page, pathname);
         if (seoPage !== null) page = seoPage;
+
+        // GEO 第二階段 B：/about 額外把 build-time 產生的靜態正文片段塞進
+        // <div id="root">，讓爬蟲不執行 JS 也能讀到主要正文。dev 環境若還沒
+        // 跑過 pnpm build／pnpm prerender:about，片段檔案不存在時安全地回傳
+        // null，不影響其餘行為。
+        const bodyPage = injectPrerenderedBody(page, pathname);
+        if (bodyPage !== null) page = bodyPage;
       }
 
       res.status(200).set({ "Content-Type": "text/html" }).end(page);
@@ -136,7 +144,12 @@ export function serveStatic(app: Express) {
     // 保底。
     try {
       const template = await getCachedTemplate();
-      const page = injectPublicPageSeo(template, pathname) ?? template;
+      let page = injectPublicPageSeo(template, pathname) ?? template;
+      // GEO 第二階段 B：/about 額外把 build-time 產生的靜態正文片段塞進
+      // <div id="root">，讓爬蟲不執行 JS 也能讀到主要正文；片段檔案不存在
+      // （例如尚未執行過 pnpm build）時安全地略過，不影響其餘行為。
+      const bodyPage = injectPrerenderedBody(page, pathname);
+      if (bodyPage !== null) page = bodyPage;
       res.status(200).set({ "Content-Type": "text/html" }).end(page);
     } catch (err) {
       console.error(

@@ -3,6 +3,7 @@ import { Helmet } from "react-helmet-async";
 import { Link } from "wouter";
 import { useRemoveServerSeoHead } from "@/hooks/useRemoveServerSeoHead";
 import { PUBLIC_PAGE_SEO } from "@/lib/publicPageSeo";
+import { ABOUT_CONTENT } from "@shared/content/about";
 import Navbar from "@/components/Navbar";
 import { FloatingBackButton } from "@/components/FloatingBackButton";
 import { Button } from "@/components/ui/button";
@@ -38,7 +39,7 @@ type BannerService = {
 
 const FACTORY_SERVICE: BannerService = {
   icon: Search,
-  title: "找工廠",
+  title: ABOUT_CONTENT.serviceNames[0],
   description: "依產業、地區、OEM、ODM 等條件\n快速搜尋少量製造與打樣工廠\n查看實際能力並直接提出詢價",
   statusLabel: "已開放",
   action: { label: "前往搜尋工廠", href: "/search" },
@@ -51,7 +52,7 @@ const FACTORY_SERVICE: BannerService = {
 
 const SUBSIDY_SERVICE: BannerService = {
   icon: TrendingUp,
-  title: "找資源",
+  title: ABOUT_CONTENT.serviceNames[1],
   description: "透過 OXM 找資源入口\n了解企業升級所需專業服務\n逐步整合法律顧問與產業資源",
   statusLabel: "已開放",
   action: { label: "了解企業升級中心", href: "/upgrade-center" },
@@ -64,7 +65,7 @@ const SUBSIDY_SERVICE: BannerService = {
 
 const TALENT_SERVICE: BannerService = {
   icon: GraduationCap,
-  title: "找人才",
+  title: ABOUT_CONTENT.serviceNames[2],
   description: "串聯缺工需求、職業訓練、證照課程\n讓培訓內容更貼近產業實際需求\n協助學員取得技能後更快銜接工作",
   statusLabel: "規劃中",
   disabledLabel: "即將推出",
@@ -77,7 +78,7 @@ const TALENT_SERVICE: BannerService = {
 
 const IMAGE_SERVICE: BannerService = {
   icon: Camera,
-  title: "找形象",
+  title: ABOUT_CONTENT.serviceNames[3],
   description: "媒合商業攝影、產品攝影、影音製作\n串聯 LOGO、品牌識別、視覺設計團隊\n協助傳統產業建立完整數位形象",
   statusLabel: "規劃中",
   disabledLabel: "即將推出",
@@ -90,7 +91,7 @@ const IMAGE_SERVICE: BannerService = {
 
 const NEWS_SERVICE: BannerService = {
   icon: Newspaper,
-  title: "找消息",
+  title: ABOUT_CONTENT.serviceNames[4],
   description: "彙整政府政策、補助公告、法規異動\n整理產業活動、展覽等重要資訊\n讓工廠更容易掌握第一手產業消息",
   statusLabel: "規劃中",
   disabledLabel: "即將推出",
@@ -103,7 +104,7 @@ const NEWS_SERVICE: BannerService = {
 
 const DISCUSSION_SERVICE: BannerService = {
   icon: MessageSquare,
-  title: "找討論",
+  title: ABOUT_CONTENT.serviceNames[5],
   description: "提供產業交流、需求發布、公開競標\n建立合作討論與商務交流的空間\n讓工廠與產業夥伴發現更多合作機會",
   statusLabel: "準備中",
   disabledLabel: "準備中",
@@ -129,13 +130,13 @@ const ECOSYSTEM_BOTTOM = [
 ];
 
 // ── 誰適合使用 OXM ──────────────────────────────────────────────────────
-const AUDIENCE_ROLES = [
-  { icon: Search, title: "品牌商與採購人員", content: "尋找製造、加工、零件、包裝及產品開發資源。" },
-  { icon: Rocket, title: "創業者與設計師", content: "尋找少量製造、打樣、OEM、ODM 與設計協作夥伴。" },
-  { icon: Factory, title: "台灣工廠與工作室", content: "建立數位曝光、取得詢價、尋找人才與經營升級資源。" },
-  { icon: Briefcase, title: "專業顧問與服務團隊", content: "接觸有補助、法律、品牌及企業升級需求的工廠。" },
-  { icon: Users, title: "職業訓練單位與學員", content: "了解產業用人需求、開設適合課程並銜接就業機會。" },
-];
+// title/content 文字來自 shared/content/about.ts（與 build-time 預渲染共用同
+// 一份資料），這裡只補上頁面專屬的 icon。
+const AUDIENCE_ROLE_ICONS = [Search, Rocket, Factory, Briefcase, Users];
+const AUDIENCE_ROLES = ABOUT_CONTENT.audienceRoles.map((role, i) => ({
+  ...role,
+  icon: AUDIENCE_ROLE_ICONS[i],
+}));
 
 // Hero 整體背景圖：鋪在整個 Hero section 之下（非右側卡片內）。<img> 若 404 會顯示
 // 破圖 icon（不像 CSS background-image 會靜默失敗），因此用 onError 監聽載入失敗，
@@ -373,13 +374,13 @@ export default function AboutOXM() {
                 <span className="text-muted-foreground/90">關於 OXM</span>
               </div>
               <h1 className="text-3xl sm:text-4xl lg:text-[2.75rem] font-extrabold leading-tight tracking-tight mb-5">
-                台灣傳統產業的數位資源入口
+                {ABOUT_CONTENT.heroH1}
               </h1>
               <p className="text-base sm:text-lg text-muted-foreground leading-relaxed mb-4">
-                OXM 整合台灣工廠、專業服務、人才培訓、品牌形象、產業資訊與交流合作，讓工廠在經營、接單、缺工與升級的每一個階段，都能更快找到所需要的資源。
+                {ABOUT_CONTENT.heroLead}
               </p>
               <p className="text-sm sm:text-base text-muted-foreground/80 leading-relaxed mb-8">
-                從找工廠開始，串聯台灣傳統產業需要的每一項資源。
+                {ABOUT_CONTENT.heroSub}
               </p>
               <div className="flex flex-col sm:flex-row gap-3">
                 <Link href="/search">
@@ -415,37 +416,37 @@ export default function AboutOXM() {
           <div className="grid lg:grid-cols-2 gap-10 lg:gap-0">
             <div className="lg:pr-10 flex flex-col items-center text-center">
               <div className="max-w-[520px] mx-auto">
-                <h2 className="text-2xl sm:text-3xl font-bold mb-4">OXM 是什麼？</h2>
+                <h2 className="text-2xl sm:text-3xl font-bold mb-4">{ABOUT_CONTENT.whatIsTitle}</h2>
                 <p className="text-muted-foreground leading-relaxed mb-4">
-                  OXM 是台灣傳統產業的數位資源平台，整合工廠媒合、企業升級、產業人才、品牌形象與產業資訊，協助企業找到合適的製造與轉型資源。
+                  {ABOUT_CONTENT.whatIsParagraphs[0]}
                 </p>
                 <p className="text-muted-foreground leading-relaxed mb-4">
-                  OXM 不只提供工廠搜尋，也希望逐步整合台灣傳統產業需要的各類服務，讓原本分散的資源可以在同一個入口被找到、被理解並建立合作。
+                  {ABOUT_CONTENT.whatIsParagraphs[1]}
                 </p>
                 <p className="text-muted-foreground leading-relaxed">
-                  平台最終目標不是只建立一份工廠名錄，而是形成一個能夠實際搜尋、聯繫、交流與媒合的產業生態系。
+                  {ABOUT_CONTENT.whatIsParagraphs[2]}
                 </p>
               </div>
             </div>
             <div className="lg:pl-10 lg:border-l lg:border-border/60 flex flex-col items-center text-center">
               <div className="max-w-[520px] mx-auto">
-                <h2 className="text-2xl sm:text-3xl font-bold mb-4">為什麼會有 OXM？</h2>
+                <h2 className="text-2xl sm:text-3xl font-bold mb-4">{ABOUT_CONTENT.whyTitle}</h2>
                 <p className="text-muted-foreground leading-relaxed mb-4">
-                  台灣有許多具備成熟技術、設備與製造經驗的工廠，但因為缺少數位曝光、資料分散或沒有專業行銷團隊，優秀的能力不一定能被外界看見。
+                  {ABOUT_CONTENT.whyParagraphs[0]}
                 </p>
                 <p className="text-muted-foreground leading-relaxed mb-4">
-                  同時，需求方也常常不知道該從哪裡找工廠、如何判斷加工能力，或該向誰詢問人才、補助、法律與品牌升級等問題。
+                  {ABOUT_CONTENT.whyParagraphs[1]}
                 </p>
                 <p className="text-muted-foreground leading-relaxed mb-6">
-                  OXM 因此建立，希望把傳統產業需要的工廠、人才、專業服務、資訊與交流空間整合起來，降低尋找資源與建立合作的門檻。
+                  {ABOUT_CONTENT.whyParagraphs[2]}
                 </p>
               </div>
               {/* 品牌宣言獨立於上方 max-w-[520px] 文字容器之外，改用 w-full + self-start
                   避免容器寬度把第二行擠出換行；lg:whitespace-nowrap 確保桌面版兩行各自
                   完整顯示、不會有單字或兩字被擠到第三行；手機版不加 nowrap，維持自然換行 */}
               <p className="w-full self-start text-left mt-2 text-lg sm:text-xl font-bold border-l-4 border-orange-400 pl-4 py-1 bg-gradient-to-r from-orange-600 to-purple-600 bg-clip-text text-transparent lg:whitespace-nowrap">
-                <span className="block">好技術，不應該因為缺乏曝光而被忽略</span>
-                <span className="block mt-1">真正的需求，也不該因為資訊分散而找不到出口</span>
+                <span className="block">{ABOUT_CONTENT.brandStatementLines[0]}</span>
+                <span className="block mt-1">{ABOUT_CONTENT.brandStatementLines[1]}</span>
               </p>
             </div>
           </div>
@@ -455,7 +456,7 @@ export default function AboutOXM() {
       {/* ── 區塊 3～5：三組雙橫幅服務入口 ── */}
       <section className="py-12 md:py-16 border-t border-border/60 bg-slate-50">
         <div className="container space-y-6">
-          <h2 className="text-2xl sm:text-3xl font-bold text-center mb-2">OXM 六大服務入口</h2>
+          <h2 className="text-2xl sm:text-3xl font-bold text-center mb-2">{ABOUT_CONTENT.servicesTitle}</h2>
           <ServiceBannerSection id="oxm-service-banners" left={FACTORY_SERVICE} right={SUBSIDY_SERVICE} />
           <ServiceBannerSection left={TALENT_SERVICE} right={IMAGE_SERVICE} />
           <ServiceBannerSection left={NEWS_SERVICE} right={DISCUSSION_SERVICE} />
@@ -472,7 +473,7 @@ export default function AboutOXM() {
         <Users className="absolute -right-6 -bottom-6 h-52 w-52 text-purple-400 opacity-[0.04] rotate-[-10deg] pointer-events-none hidden sm:block" aria-hidden="true" />
 
         <div className="container relative z-10">
-          <h2 className="text-2xl sm:text-3xl font-bold mb-10 text-center">誰適合使用 OXM？</h2>
+          <h2 className="text-2xl sm:text-3xl font-bold mb-10 text-center">{ABOUT_CONTENT.audienceTitle}</h2>
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-8">
             {AUDIENCE_ROLES.map(role => (
               <div key={role.title} className="flex flex-col items-center text-center gap-2 sm:items-start sm:text-left">
@@ -551,23 +552,23 @@ export default function AboutOXM() {
       {/* ── 區塊 8：最終 CTA ── */}
       <section className="py-12 md:py-16 border-t border-border/60">
         <div className="container max-w-2xl text-center">
-          <h2 className="text-2xl sm:text-3xl font-bold mb-3">從 OXM，開始找到適合你的台灣產業資源</h2>
+          <h2 className="text-2xl sm:text-3xl font-bold mb-3">{ABOUT_CONTENT.ctaTitle}</h2>
           <p className="text-muted-foreground mb-8">
-            從找工廠開始，逐步連結補助、人才、品牌、資訊與合作機會。
+            {ABOUT_CONTENT.ctaDescription}
           </p>
           <div className="flex flex-col sm:flex-row gap-3 justify-center">
-            <Link href="/search">
+            <Link href={ABOUT_CONTENT.ctaButtons[0].href}>
               <Button
                 size="lg"
                 className="w-full sm:w-auto bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white border-0 shadow-lg shadow-orange-500/20"
               >
                 <Search className="w-4 h-4 mr-2" />
-                搜尋台灣工廠
+                {ABOUT_CONTENT.ctaButtons[0].label}
               </Button>
             </Link>
-            <Link href="/upgrade-center">
+            <Link href={ABOUT_CONTENT.ctaButtons[1].href}>
               <Button size="lg" variant="outline" className="w-full sm:w-auto border-purple-300 text-purple-700 hover:bg-purple-50">
-                了解企業升級中心
+                {ABOUT_CONTENT.ctaButtons[1].label}
                 <ArrowRight className="w-4 h-4 ml-2" />
               </Button>
             </Link>
@@ -576,7 +577,7 @@ export default function AboutOXM() {
       </section>
 
       <p className="text-center text-xs text-muted-foreground py-4">
-        關於 OXM 內容最後更新：2026 年 7 月 13 日
+        關於 OXM 內容最後更新：{ABOUT_CONTENT.lastUpdated}
       </p>
     </div>
   );
