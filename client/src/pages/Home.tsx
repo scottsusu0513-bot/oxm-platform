@@ -1,6 +1,7 @@
 import { Helmet } from "react-helmet-async";
 import { useRemoveServerSeoHead } from "@/hooks/useRemoveServerSeoHead";
 import { PUBLIC_PAGE_SEO } from "@/lib/publicPageSeo";
+import { HOME_CONTENT, type TextSegment } from "@shared/content/home";
 import Navbar from "@/components/Navbar";
 import FloatingAnnouncementButton from "@/components/FloatingAnnouncementButton";
 import { Button } from "@/components/ui/button";
@@ -19,7 +20,7 @@ import {
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, Fragment } from "react";
 import { useLocation, Link } from "wouter";
 import { allPosts } from "@/lib/blog";
 import { usePullToRefresh } from "@/hooks/usePullToRefresh";
@@ -31,6 +32,17 @@ const ANNOUNCEMENT_TYPE_CONFIG: Record<string, { label: string; className: strin
   maintenance: { label: "停機維護", className: "bg-red-100 text-red-700",   Icon: Wrench },
   news:        { label: "平台消息", className: "bg-green-100 text-green-700", Icon: Newspaper },
 };
+
+// 把 shared/content/home.ts 的 TextSegment[] 重建回帶顏色 <span> 的 JSX；沒有
+// highlight 的片段用 Fragment（不是 <span>）包住，確保渲染出的 DOM 結構跟原本
+// 手刻的「純文字 + 中間插入 <span>」寫法完全一樣，不會多出新的包裹元素。
+function renderSegments(segments: TextSegment[], highlightClassName: { orange: string; purple: string }) {
+  return segments.map((seg, i) => {
+    if (seg.highlight === "orange") return <span key={i} className={highlightClassName.orange}>{seg.text}</span>;
+    if (seg.highlight === "purple") return <span key={i} className={highlightClassName.purple}>{seg.text}</span>;
+    return <Fragment key={i}>{seg.text}</Fragment>;
+  });
+}
 
 function AnnouncementsSection({ navigate }: { navigate: (path: string) => void }) {
   const { data: items = [] } = trpc.announcement.list.useQuery({ limit: 3 });
@@ -422,14 +434,14 @@ export default function Home() {
               </div>
             </div>
 
-            <h1 className="sr-only">台灣傳統產業資源媒合平台</h1>
+            <h1 className="sr-only">{HOME_CONTENT.heroH1}</h1>
             <div className="inline-flex items-center gap-2 bg-gradient-to-r from-orange-100 to-purple-100 text-orange-700 px-3 py-1 rounded-full text-xs md:text-sm font-medium mb-3 md:mb-6">
               <Zap className="w-3 h-3 md:w-4 md:h-4" />
-              台灣傳產資源媒合平台
+              {HOME_CONTENT.heroBadge}
             </div>
             <p className="text-3xl md:text-6xl font-extrabold text-foreground mb-3 md:mb-5 leading-tight tracking-tight">
-              找到適合你的<br />
-              <span className="bg-gradient-to-r from-orange-500 via-amber-500 to-purple-500 bg-clip-text text-transparent">台灣傳產資源</span>
+              {HOME_CONTENT.heroHeadlineLine1}<br />
+              <span className="bg-gradient-to-r from-orange-500 via-amber-500 to-purple-500 bg-clip-text text-transparent">{HOME_CONTENT.heroHeadlineLine2}</span>
             </p>
 
             {/* 測試招募貼紙 — mobile */}
@@ -448,13 +460,9 @@ export default function Home() {
             </div>
 
             <p className="text-xs md:text-xl text-muted-foreground mb-4 md:mb-8 max-w-xl mx-auto">
-              整合全台工廠、OEM/ODM 代工、
-              <span className="text-orange-500 font-semibold">設備商</span>
-              、材料商與
-              <span className="text-purple-500 font-semibold">產業服務</span>
-              ，讓品牌、企業、採購者與一般使用者
+              {renderSegments(HOME_CONTENT.heroDescriptionParts.slice(0, 5), { orange: "text-orange-500 font-semibold", purple: "text-purple-500 font-semibold" })}
               <br className="hidden md:block" />
-              都能更快找到合適的合作對象
+              {renderSegments(HOME_CONTENT.heroDescriptionParts.slice(5), { orange: "text-orange-500 font-semibold", purple: "text-purple-500 font-semibold" })}
             </p>
           </div>
 
@@ -593,7 +601,7 @@ export default function Home() {
               <span className="text-purple-500">工作室</span>
               ，一次找齊
             </h2>
-            <p className="text-sm text-muted-foreground">不同需求，找到最合適的合作夥伴</p>
+            <p className="text-sm text-muted-foreground">{HOME_CONTENT.compareSection.subtitle}</p>
           </div>
           <div className="grid md:grid-cols-2 gap-3 md:gap-6 max-w-4xl mx-auto">
             {/* 代工廠 */}
@@ -604,15 +612,15 @@ export default function Home() {
                     <Factory className="w-5 h-5 md:w-8 md:h-8 text-white" />
                   </div>
                   <div>
-                    <h3 className="text-base md:text-xl font-bold text-orange-500">工廠</h3>
-                    <p className="text-xs md:text-sm text-muted-foreground">ODM / OEM 製造</p>
+                    <h3 className="text-base md:text-xl font-bold text-orange-500">{HOME_CONTENT.compareSection.cards[0].title}</h3>
+                    <p className="text-xs md:text-sm text-muted-foreground">{HOME_CONTENT.compareSection.cards[0].subtitle}</p>
                   </div>
                 </div>
                 <p className="text-xs md:text-sm text-muted-foreground mb-2 md:mb-4 leading-normal md:leading-relaxed">
-                  專業大規模生產，擁有完整設備與生產線。適合需要量產的品牌商，提供 ODM 設計代工與 OEM 純製造服務。
+                  {HOME_CONTENT.compareSection.cards[0].description}
                 </p>
                 <ul className="space-y-1 md:space-y-2 text-xs md:text-sm">
-                  {["大量生產，成本更低", "完整設備與品管流程", "ODM/OEM 彈性選擇"].map(item => (
+                  {HOME_CONTENT.compareSection.cards[0].bullets.map(item => (
                     <li key={item} className="flex items-center gap-1.5 md:gap-2 text-muted-foreground">
                       <CheckCircle className="w-3 h-3 md:w-4 md:h-4 text-orange-500 shrink-0" />
                       {item}
@@ -630,15 +638,15 @@ export default function Home() {
                     <Wrench className="w-5 h-5 md:w-8 md:h-8 text-white" />
                   </div>
                   <div>
-                    <h3 className="text-base md:text-xl font-bold text-purple-500">設計工作室</h3>
-                    <p className="text-xs md:text-sm text-muted-foreground">少量訂製・創意設計</p>
+                    <h3 className="text-base md:text-xl font-bold text-purple-500">{HOME_CONTENT.compareSection.cards[1].title}</h3>
+                    <p className="text-xs md:text-sm text-muted-foreground">{HOME_CONTENT.compareSection.cards[1].subtitle}</p>
                   </div>
                 </div>
                 <p className="text-xs md:text-sm text-muted-foreground mb-2 md:mb-4 leading-normal md:leading-relaxed">
-                  靈活接受少量訂單與特殊訂製需求。適合個人創作者、新創品牌與設計師，提供打樣服務與個性化製作。
+                  {HOME_CONTENT.compareSection.cards[1].description}
                 </p>
                 <ul className="space-y-1 md:space-y-2 text-xs md:text-sm">
-                  {["少量接單，門檻低", "個性化訂製服務", "提供打樣與設計協助"].map(item => (
+                  {HOME_CONTENT.compareSection.cards[1].bullets.map(item => (
                     <li key={item} className="flex items-center gap-1.5 md:gap-2 text-muted-foreground">
                       <CheckCircle className="w-3 h-3 md:w-4 md:h-4 text-purple-500 shrink-0" />
                       {item}
@@ -655,8 +663,8 @@ export default function Home() {
       <section className="py-8 md:py-16 bg-gray-50">
         <div className="container">
           <div className="text-center mb-6 md:mb-10">
-            <h2 className="text-2xl sm:text-3xl font-bold mb-3">熱門產業分類</h2>
-            <p className="text-muted-foreground text-sm sm:text-base">涵蓋十大產業，快速找到您需要的合作夥伴</p>
+            <h2 className="text-2xl sm:text-3xl font-bold mb-3">{HOME_CONTENT.industriesSection.title}</h2>
+            <p className="text-muted-foreground text-sm sm:text-base">{HOME_CONTENT.industriesSection.subtitle}</p>
           </div>
           <div className="grid grid-cols-3 sm:grid-cols-3 md:grid-cols-5 gap-3">
             {INDUSTRY_OPTIONS.map((ind) => {
@@ -686,10 +694,10 @@ export default function Home() {
         <div className="container">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 md:gap-8 text-center">
             {[
-              { icon: Factory, num: "500+", label: "工廠" },
-              { icon: Sparkles, num: "300+", label: "設計工作室" },
-              { icon: Star, num: "4.8", label: "平均評分" },
-              { icon: CheckCircle, num: "10+", label: "產業類別" },
+              { icon: Factory, ...HOME_CONTENT.statsSection.items[0] },
+              { icon: Sparkles, ...HOME_CONTENT.statsSection.items[1] },
+              { icon: Star, ...HOME_CONTENT.statsSection.items[2] },
+              { icon: CheckCircle, ...HOME_CONTENT.statsSection.items[3] },
             ].map(s => (
               <div key={s.label}>
                 <s.icon className="w-6 h-6 md:w-8 md:h-8 mx-auto mb-1 md:mb-2 opacity-90" />
@@ -705,15 +713,15 @@ export default function Home() {
       <section className="py-5 md:py-16 bg-white">
         <div className="container">
           <div className="text-center mb-4 md:mb-10">
-            <h2 className="text-xl md:text-3xl font-bold mb-2">為什麼選擇 OXM？</h2>
-            <p className="text-xs md:text-base text-muted-foreground">最完整的代工媒合服務，工廠與工作室都在這裡</p>
+            <h2 className="text-xl md:text-3xl font-bold mb-2">{HOME_CONTENT.featuresSection.title}</h2>
+            <p className="text-xs md:text-base text-muted-foreground">{HOME_CONTENT.featuresSection.subtitle}</p>
           </div>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-6">
             {[
-              { icon: Search, title: "精準搜尋", desc: "依產業、地區、資本額篩選，快速鎖定夥伴", color: "text-blue-500 bg-blue-50" },
-              { icon: MessageCircle, title: "即時詢問", desc: "直接與業主線上溝通，即時取得報價", color: "text-green-500 bg-green-50" },
-              { icon: Star, title: "評價系統", desc: "真實評分讓你選擇更有信心", color: "text-yellow-500 bg-yellow-50" },
-              { icon: Shield, title: "資訊透明", desc: "規格、價格區間一目了然", color: "text-purple-500 bg-purple-50" },
+              { icon: Search, title: HOME_CONTENT.featuresSection.items[0].title, desc: HOME_CONTENT.featuresSection.items[0].description, color: "text-blue-500 bg-blue-50" },
+              { icon: MessageCircle, title: HOME_CONTENT.featuresSection.items[1].title, desc: HOME_CONTENT.featuresSection.items[1].description, color: "text-green-500 bg-green-50" },
+              { icon: Star, title: HOME_CONTENT.featuresSection.items[2].title, desc: HOME_CONTENT.featuresSection.items[2].description, color: "text-yellow-500 bg-yellow-50" },
+              { icon: Shield, title: HOME_CONTENT.featuresSection.items[3].title, desc: HOME_CONTENT.featuresSection.items[3].description, color: "text-purple-500 bg-purple-50" },
             ].map((feat) => (
               <Card key={feat.title} className="border-0 shadow-sm hover:shadow-md transition-shadow">
                 <CardContent className="p-3 md:p-6 text-center">
@@ -773,13 +781,9 @@ export default function Home() {
       {/* CTA */}
       <section className="py-5 md:py-16 bg-white">
         <div className="container text-center">
-          <h2 className="text-xl md:text-3xl font-bold mb-3">準備好開始了嗎？</h2>
+          <h2 className="text-xl md:text-3xl font-bold mb-3">{HOME_CONTENT.ctaSection.title}</h2>
           <p className="text-sm md:text-base text-muted-foreground mb-5 md:mb-8 max-w-lg mx-auto">
-            不論你是尋找合作夥伴的品牌商，還是想要曝光的
-            <span className="text-orange-500 font-medium">工廠</span>
-            或
-            <span className="text-purple-500 font-medium">工作室</span>
-            業主，OXM 都是你最佳的選擇！
+            {renderSegments(HOME_CONTENT.ctaSection.descriptionParts, { orange: "text-orange-500 font-medium", purple: "text-purple-500 font-medium" })}
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
             <Button
@@ -788,7 +792,7 @@ export default function Home() {
               onClick={() => navigate("/search")}
             >
               <Search className="w-5 h-5 mr-2" />
-              開始搜尋
+              {HOME_CONTENT.ctaSection.buttons[0].label}
             </Button>
             <Button
               size="lg"
@@ -803,7 +807,7 @@ export default function Home() {
               }}
             >
               <ArrowRight className="w-5 h-5 mr-2" />
-              免費刊登工廠／工作室
+              {HOME_CONTENT.ctaSection.buttons[1].label}
             </Button>
           </div>
         </div>

@@ -34,8 +34,11 @@ function resolvePrerenderedFile(filename: string): string {
   return candidates.find(p => fs.existsSync(p)) ?? candidates[0];
 }
 
-const PRERENDERED_PAGES: Record<string, string> = {
-  "/about": resolvePrerenderedFile("about.html"),
+// 第二階段 C：擴充成同時支援首頁（/）與 /about 的通用多頁注入器，而不是
+// 各自維護一份幾乎一樣的字串處理邏輯。新增頁面只需要在這裡多加一筆設定。
+const PRERENDERED_PAGES: Record<string, { file: string; marker: string }> = {
+  "/": { file: resolvePrerenderedFile("home.html"), marker: "home" },
+  "/about": { file: resolvePrerenderedFile("about.html"), marker: "about" },
 };
 
 const cache = new Map<string, string | null>();
@@ -44,25 +47,28 @@ function normalizePathname(pathname: string): string {
   return pathname.length > 1 && pathname.endsWith("/") ? pathname.slice(0, -1) : pathname;
 }
 
-function readPrerenderedFragment(pathname: string): string | null {
+function readPrerenderedFragment(pathname: string): { fragment: string; marker: string } | null {
   const normalized = normalizePathname(pathname) || "/";
-  const filePath = PRERENDERED_PAGES[normalized];
-  if (!filePath) return null;
+  const entry = PRERENDERED_PAGES[normalized];
+  if (!entry) return null;
 
-  if (cache.has(normalized)) return cache.get(normalized) ?? null;
+  if (cache.has(normalized)) {
+    const cached = cache.get(normalized) ?? null;
+    return cached ? { fragment: cached, marker: entry.marker } : null;
+  }
 
   let content: string | null = null;
   try {
-    content = fs.readFileSync(filePath, "utf-8");
+    content = fs.readFileSync(entry.file, "utf-8");
   } catch (err) {
     console.error(
-      `[prerenderedBody] failed to read prerendered fragment for ${normalized} at ${filePath}:`,
+      `[prerenderedBody] failed to read prerendered fragment for ${normalized} at ${entry.file}:`,
       err instanceof Error ? err.message : String(err)
     );
     content = null;
   }
   cache.set(normalized, content);
-  return content;
+  return content ? { fragment: content, marker: entry.marker } : null;
 }
 
 /**
@@ -72,9 +78,9 @@ function readPrerenderedFragment(pathname: string): string | null {
  * `pnpm build`／`pnpm prerender:about`）一律安全地回傳 null，不拋錯。
  */
 export function injectPrerenderedBody(html: string, pathname: string): string | null {
-  const fragment = readPrerenderedFragment(pathname);
-  if (!fragment) return null;
+  const result = readPrerenderedFragment(pathname);
+  if (!result) return null;
   if (!ROOT_DIV_RE.test(html)) return null;
 
-  return html.replace(ROOT_DIV_RE, `<div id="root" data-oxm-prerendered="about">${fragment}</div>`);
+  return html.replace(ROOT_DIV_RE, `<div id="root" data-oxm-prerendered="${result.marker}">${result.fragment}</div>`);
 }

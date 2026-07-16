@@ -98,8 +98,14 @@ describe("injectPrerenderedBody", () => {
     expect(html).not.toContain('<div id="root"></div>');
   });
 
-  it("does not override the home page (\"/\")", () => {
-    expect(injectPrerenderedBody(BASE_HTML, "/")).toBeNull();
+  it("injects the home page's own fragment for \"/\", not the About fragment (Stage 2C)", () => {
+    // 第二階段 C 之後 "/" 也有自己的預渲染片段，這裡確認 /about 的注入邏輯
+    // 不會誤把 about 的內容套用到 "/"，兩者互不污染（詳見 prerenderHome.test.ts）。
+    const out = injectPrerenderedBody(BASE_HTML, "/");
+    if (out !== null) {
+      expect(out).not.toContain(ABOUT_CONTENT.whatIsTitle);
+      expect(out).toContain('data-oxm-prerendered="home"');
+    }
   });
 
   it("does not affect other SPA routes (e.g. /search)", () => {
