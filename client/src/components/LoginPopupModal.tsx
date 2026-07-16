@@ -88,7 +88,7 @@ export default function LoginPopupModal() {
                 >
                   <div className="flex-1 min-w-0">
                     <p className="font-bold text-sm sm:text-base text-gray-900 leading-snug">{item.title}</p>
-                    <p className="text-xs sm:text-sm text-gray-500 leading-relaxed mt-0.5 line-clamp-2">{item.summary}</p>
+                    <p className="text-xs sm:text-sm text-gray-500 leading-relaxed mt-0.5 line-clamp-3">{item.summary}</p>
                   </div>
                   <button
                     type="button"
