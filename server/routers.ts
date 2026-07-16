@@ -3783,14 +3783,20 @@ export const appRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: err instanceof Error ? err.message : "更新失敗" });
       }
     }),
-    // 一般使用者：目前登入帳號今天應該顯示的登入彈窗，最多 5 則（都看過就回傳
-    // 空陣列，不影響首頁載入）。userId 一律取自 ctx.user.id（session），
-    // 不相信前端傳入的任何使用者識別資訊。
-    toShow: protectedProcedure.query(async ({ ctx }) => {
-      const items = await db.getLoginPopupsToShow(ctx.user.id);
+    // 首頁登入彈窗通知：未登入訪客與已登入會員都可以呼叫，依 ctx.user 是否存在
+    // 分流——會員檢查今天是否已完成顯示（查 loginPopupViews），訪客一律直接
+    // 回傳目前有效啟用的消息，不查詢也不建立任何觀看紀錄（不用 cookie／
+    // localStorage／IP／裝置識別等替代身分）。userId 一律取自 ctx.user.id
+    // （session），不相信前端傳入的任何使用者識別資訊。
+    toShow: publicProcedure.query(async ({ ctx }) => {
+      const items = ctx.user
+        ? await db.getLoginPopupsToShowForUser(ctx.user.id)
+        : await db.getLoginPopupsToShowForGuest();
       return { items };
     }),
     // 使用者點擊「我知道了」或「點擊進入完整公告」後呼叫，標記今天已完成顯示。
+    // 只有已登入會員的前端才會呼叫這個 mutation；維持 protectedProcedure，
+    // 未登入呼叫一律 UNAUTHORIZED，不接受前端傳入 userId。
     // idempotent：重複呼叫、網路重試都不會出錯或造成重複紀錄。
     markViewed: protectedProcedure.input(z.object({
       id: z.number().int().positive(),

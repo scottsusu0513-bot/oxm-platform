@@ -169,9 +169,91 @@ describe("loginPopup: 權限", () => {
     })).rejects.toThrow();
   });
 
-  it("未登入使用者不取得彈窗", async () => {
+  it("未登入訪客直接呼叫 markViewed 回傳 UNAUTHORIZED（markViewed 維持 protectedProcedure）", async () => {
     const caller = appRouter.createCaller(createPublicContext());
-    await expect(caller.loginPopup.toShow()).rejects.toThrow();
+    await expect(caller.loginPopup.markViewed({ id: 1 })).rejects.toThrow();
+  });
+});
+
+// ── 2b. 未登入訪客（toShow 改為 publicProcedure 後的訪客版本）───────────
+describe("loginPopup.toShow: 未登入訪客", () => {
+  it("未登入訪客可呼叫 toShow，不回傳 UNAUTHORIZED，可取得有效啟用彈窗", async () => {
+    const admin = appRouter.createCaller(adminCtx());
+    const created = await admin.loginPopup.create({
+      title: "訪客可見測試彈窗", summary: "短文", announcementId: newsAnnouncementId, isActive: true,
+    });
+    try {
+      const guest = appRouter.createCaller(createPublicContext());
+      const { items } = await guest.loginPopup.toShow();
+      expect(items.find(i => i.id === created.id)).toBeTruthy();
+    } finally {
+      await deactivate(admin, created.id);
+    }
+  });
+
+  it("未登入訪客最多取得 5 則，排序為 updatedAt DESC、id DESC", async () => {
+    const admin = appRouter.createCaller(adminCtx());
+    const created: number[] = [];
+    try {
+      for (let i = 1; i <= 6; i++) {
+        const r = await admin.loginPopup.create({ title: `訪客五則-P${i}`, summary: "短文", announcementId: newsAnnouncementId, isActive: true });
+        created.push(r.id);
+      }
+      // 第 6 則會觸發自動停用最舊一則（既有規則，訪客/會員共用同一份資料）
+      const guest = appRouter.createCaller(createPublicContext());
+      const { items } = await guest.loginPopup.toShow();
+      expect(items.length).toBe(5);
+      // 最新 5 則（P6~P2），依 updatedAt desc／id desc：P6 > P5 > P4 > P3 > P2
+      expect(items.map(i => i.id)).toEqual([...created].slice(1).reverse());
+    } finally {
+      for (const id of created) await deactivate(admin, id);
+    }
+  });
+
+  it("停用的消息、非平台消息、綁定公告已失效者，訪客一樣看不到", async () => {
+    const admin = appRouter.createCaller(adminCtx());
+    const inactive = await admin.loginPopup.create({
+      title: "訪客-停用測試", summary: "短文", announcementId: newsAnnouncementId, isActive: true,
+    });
+    await deactivate(admin, inactive.id);
+
+    const deletableAnnId = await db.createAnnouncement({ title: "訪客測試-即將失效公告", content: "測試", type: "news" });
+    const invalidated = await admin.loginPopup.create({
+      title: "訪客-失效公告測試", summary: "短文", announcementId: deletableAnnId, isActive: true,
+    });
+    await db.deleteAnnouncement(deletableAnnId);
+
+    try {
+      const guest = appRouter.createCaller(createPublicContext());
+      const { items } = await guest.loginPopup.toShow();
+      expect(items.find(i => i.id === inactive.id)).toBeUndefined();
+      expect(items.find(i => i.id === invalidated.id)).toBeUndefined();
+      // 非平台消息公告從一開始就無法綁定／啟用（見 loginPopup.create: 綁定驗證），
+      // 所以不存在「非 news 但啟用中」的資料可以測，這條規則本來就已經在建立
+      // 時被擋下，訪客/會員都不可能看到這種資料。
+    } finally {
+      await deactivate(admin, invalidated.id);
+    }
+  });
+
+  it("未登入訪客呼叫 toShow 不會建立任何 loginPopupViews 紀錄", async () => {
+    const admin = appRouter.createCaller(adminCtx());
+    const created = await admin.loginPopup.create({
+      title: "訪客不寫入測試彈窗", summary: "短文", announcementId: newsAnnouncementId, isActive: true,
+    });
+    try {
+      const conn = await getDb();
+      const [[{ n: before }]] = await conn!.execute(sql`SELECT COUNT(*) as n FROM loginPopupViews`) as unknown as [{ n: number }[], unknown];
+
+      const guest = appRouter.createCaller(createPublicContext());
+      await guest.loginPopup.toShow();
+      await guest.loginPopup.toShow(); // 多呼叫幾次，確認完全是唯讀
+
+      const [[{ n: after }]] = await conn!.execute(sql`SELECT COUNT(*) as n FROM loginPopupViews`) as unknown as [{ n: number }[], unknown];
+      expect(after).toBe(before);
+    } finally {
+      await deactivate(admin, created.id);
+    }
   });
 });
 

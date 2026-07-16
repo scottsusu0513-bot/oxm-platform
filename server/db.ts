@@ -2083,24 +2083,15 @@ export type LoginPopupToShowItem = {
 };
 
 /**
- * 一般使用者登入後首頁應顯示的登入彈窗，最多 MAX_ACTIVE_LOGIN_POPUPS 則
- * （今天尚未看過的前提下）。顯示條件只有：isActive=true、綁定公告存在且為
- * 平台消息、使用者今天尚未看過；沒有時間區間判斷——啟用立即生效、停用立即
- * 停止顯示。今天已看過則回傳空陣列。
+ * 共用查詢：目前有效且啟用中的登入彈窗，最多 MAX_ACTIVE_LOGIN_POPUPS 則。
+ * 顯示條件只有：isActive=true、綁定公告存在且為平台消息；沒有時間區間
+ * 判斷——啟用立即生效、停用立即停止顯示。不論訪客或會員都是同一份資料，
+ * 差別只在於「今天是否已看過」這一層要不要檢查（見下方兩個呼叫端函式），
+ * 避免維護兩份幾乎一樣的 SQL。
  */
-export async function getLoginPopupsToShow(userId: number): Promise<LoginPopupToShowItem[]> {
+async function getActiveLoginPopupsForDisplay(): Promise<LoginPopupToShowItem[]> {
   const db = await getDb();
   if (!db) return [];
-
-  const today = twDateStr();
-
-  // 今天已經看過（點過「我知道了」或任一「進入完整公告」）就不再顯示，
-  // 判定基準是 userId + 台灣時間日期，與裝置/瀏覽器/cookie/localStorage 無關。
-  const [alreadyViewed] = await db.select({ id: loginPopupViews.id })
-    .from(loginPopupViews)
-    .where(and(eq(loginPopupViews.userId, userId), eq(loginPopupViews.date, today)))
-    .limit(1);
-  if (alreadyViewed) return [];
 
   const rows = await db.select({
     id: loginPopups.id,
@@ -2131,6 +2122,36 @@ export async function getLoginPopupsToShow(userId: number): Promise<LoginPopupTo
       announcementTitle: r.announcementTitle,
       updatedAt: r.updatedAt,
     }));
+}
+
+/**
+ * 未登入訪客版本：不查詢、也不建立任何觀看紀錄（不使用 cookie／localStorage／
+ * IP／裝置識別等替代身分），每次進首頁或重新整理都直接回傳目前有效啟用的
+ * 消息——訪客沒有「今天是否看過」這個狀態可言。
+ */
+export async function getLoginPopupsToShowForGuest(): Promise<LoginPopupToShowItem[]> {
+  return getActiveLoginPopupsForDisplay();
+}
+
+/**
+ * 已登入會員版本：以 userId + 台灣時間日期判斷今天是否已完成顯示過，是的話
+ * 回傳空陣列；否則回傳目前有效啟用的消息（與訪客版本共用同一份查詢）。
+ */
+export async function getLoginPopupsToShowForUser(userId: number): Promise<LoginPopupToShowItem[]> {
+  const db = await getDb();
+  if (!db) return [];
+
+  const today = twDateStr();
+
+  // 今天已經看過（點過「我知道了」或任一「進入完整公告」）就不再顯示，
+  // 判定基準是 userId + 台灣時間日期，與裝置/瀏覽器/cookie/localStorage 無關。
+  const [alreadyViewed] = await db.select({ id: loginPopupViews.id })
+    .from(loginPopupViews)
+    .where(and(eq(loginPopupViews.userId, userId), eq(loginPopupViews.date, today)))
+    .limit(1);
+  if (alreadyViewed) return [];
+
+  return getActiveLoginPopupsForDisplay();
 }
 
 /**
