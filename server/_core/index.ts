@@ -3,6 +3,7 @@ import express from "express";
 import { createServer } from "http";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerOAuthRoutes } from "./oauth";
+import { registerDevLoginRoutes } from "./devLogin";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
@@ -65,6 +66,7 @@ async function startServer() {
   });
 
   registerOAuthRoutes(app);
+  registerDevLoginRoutes(app);
 
   app.get("/api/health", async (_req, res) => {
     res.set({

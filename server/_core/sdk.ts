@@ -1,7 +1,6 @@
 import { AXIOS_TIMEOUT_MS, COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
 import { ForbiddenError } from "@shared/_core/errors";
 import axios, { type AxiosInstance } from "axios";
-import { parse as parseCookieHeader } from "cookie";
 import type { Request } from "express";
 import { SignJWT, jwtVerify } from "jose";
 import type { User } from "../../drizzle/schema";
@@ -145,13 +144,30 @@ class SDKServer {
     } as GetUserInfoResponse;
   }
 
-  private parseCookies(cookieHeader: string | undefined) {
-    if (!cookieHeader) {
-      return new Map<string, string>();
-    }
-
-    const parsed = parseCookieHeader(cookieHeader);
-    return new Map(Object.entries(parsed));
+  /**
+   * 回傳原始 Cookie header 中，名稱等於 name 的「所有」值（依出現順序）。
+   *
+   * 一般情況下同名 cookie 只會有一個值，但瀏覽器允許同名 cookie 因為過去
+   * Path／Domain 屬性不同而同時並存並在同一個請求裡全部送出；`cookie` 套件的
+   * parse() 只會保留其中一個（先出現的那個），如果那個剛好是瀏覽器裡殘留的
+   * 舊 session，就會讓真正有效、剛登入建立的新 session 被忽略，導致明明剛
+   * 登入完成卻被判定成未登入／無權限。這裡改成把「同名的每一個值」都留著，
+   * 交給呼叫端依序嘗試驗證，用第一個驗證成功的，而不是只看第一個出現的。
+   */
+  private getCookieValues(cookieHeader: string | undefined, name: string): string[] {
+    if (!cookieHeader) return [];
+    return cookieHeader
+      .split(";")
+      .map(part => part.trim())
+      .filter(part => part.startsWith(`${name}=`))
+      .map(part => {
+        const raw = part.slice(name.length + 1);
+        try {
+          return decodeURIComponent(raw);
+        } catch {
+          return raw;
+        }
+      });
   }
 
   private getSessionSecret() {
@@ -246,9 +262,12 @@ class SDKServer {
   }
 
   async authenticateRequest(req: Request): Promise<User> {
-    const cookies = this.parseCookies(req.headers.cookie);
-    const sessionCookie = cookies.get(COOKIE_NAME);
-    const session = await this.verifySession(sessionCookie);
+    const candidates = this.getCookieValues(req.headers.cookie, COOKIE_NAME);
+    let session: Awaited<ReturnType<SDKServer["verifySession"]>> = null;
+    for (const candidate of candidates) {
+      session = await this.verifySession(candidate);
+      if (session) break;
+    }
 
     if (!session) {
       throw ForbiddenError("Invalid session cookie");

@@ -372,6 +372,37 @@ export const announcements = mysqlTable("announcements", {
 
 export type Announcement = typeof announcements.$inferSelect;
 
+// ===== 登入彈窗（綁定既有「平台消息」公告的登入曝光入口，不是獨立公告系統）=====
+export const loginPopups = mysqlTable("loginPopups", {
+  id: int("id").autoincrement().primaryKey(),
+  title: varchar("title", { length: 200 }).notNull(),
+  summary: varchar("summary", { length: 500 }).notNull(),
+  // 綁定的平台公告；nullable 是為了在公告被刪除時只把這欄設成 NULL（見下方
+  // FK onDelete），而不是連帶把整筆登入彈窗紀錄一起刪掉——後台需要保留紀錄
+  // 並顯示「綁定公告已失效」。
+  announcementId: int("announcementId").references(() => announcements.id, { onDelete: "set null" }),
+  // 顯示控制只有啟用/停用——isActive=true 立即生效、isActive=false 立即停止顯示，
+  // 沒有額外的時間區間判斷。
+  isActive: boolean("isActive").default(false).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+export type LoginPopup = typeof loginPopups.$inferSelect;
+
+// ===== 登入彈窗每日觀看紀錄 =====
+// 判定「今天是否已顯示過」的唯一依據是 userId + 台灣時間日期，故意不記錄裝置
+// ／瀏覽器／IP，確保跨裝置、跨瀏覽器、清快取、登出再登入都視為同一天只算一次。
+export const loginPopupViews = mysqlTable("loginPopupViews", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull().references(() => users.id, { onDelete: "cascade" }),
+  date: varchar("date", { length: 10 }).notNull(), // YYYY-MM-DD（台灣時間 Asia/Taipei）
+  loginPopupId: int("loginPopupId").references(() => loginPopups.id, { onDelete: "set null" }), // 稽核用：當天實際看到的是哪一則
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => ({
+  userDateIdx: uniqueIndex("login_popup_view_user_date_idx").on(table.userId, table.date),
+}));
+export type LoginPopupView = typeof loginPopupViews.$inferSelect;
+
 // ===== 工廠照片集 =====
 export const factoryPhotos = mysqlTable("factoryPhotos", {
   id: int("id").autoincrement().primaryKey(),

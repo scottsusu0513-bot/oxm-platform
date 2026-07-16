@@ -3742,6 +3742,64 @@ export const appRouter = router({
     }),
   }),
 
+  // ===== 登入彈窗（綁定既有「平台消息」公告的登入曝光入口）=====
+  loginPopup: router({
+    // 管理員：列表（含綁定公告是否仍然有效）
+    adminList: adminProcedure.query(async () => {
+      return db.getLoginPopupsForAdmin();
+    }),
+    // 管理員：綁定公告選擇器的候選清單——只回傳已發布的「平台消息」，
+    // 不讓前端自己組 announcementId，也不暴露草稿/其他類型公告。
+    announcementOptions: adminProcedure.input(z.object({
+      keyword: z.string().max(200).optional(),
+    })).query(async ({ input }) => {
+      return db.getPublishedNewsAnnouncementsForPicker(input.keyword);
+    }),
+    create: adminProcedure.input(z.object({
+      title: z.string().min(1).max(200),
+      summary: z.string().min(1).max(500),
+      announcementId: z.number().int().positive(),
+      isActive: z.boolean().default(false),
+    })).mutation(async ({ input }) => {
+      try {
+        const { id, deactivatedIds } = await db.createLoginPopup(input);
+        return { success: true, id, deactivatedCount: deactivatedIds.length };
+      } catch (err) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: err instanceof Error ? err.message : "建立失敗" });
+      }
+    }),
+    update: adminProcedure.input(z.object({
+      id: z.number(),
+      title: z.string().min(1).max(200).optional(),
+      summary: z.string().min(1).max(500).optional(),
+      announcementId: z.number().int().positive().optional(),
+      isActive: z.boolean().optional(),
+    })).mutation(async ({ input }) => {
+      const { id, ...data } = input;
+      try {
+        const { deactivatedIds } = await db.updateLoginPopup(id, data);
+        return { success: true, deactivatedCount: deactivatedIds.length };
+      } catch (err) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: err instanceof Error ? err.message : "更新失敗" });
+      }
+    }),
+    // 一般使用者：目前登入帳號今天應該顯示的登入彈窗，最多 5 則（都看過就回傳
+    // 空陣列，不影響首頁載入）。userId 一律取自 ctx.user.id（session），
+    // 不相信前端傳入的任何使用者識別資訊。
+    toShow: protectedProcedure.query(async ({ ctx }) => {
+      const items = await db.getLoginPopupsToShow(ctx.user.id);
+      return { items };
+    }),
+    // 使用者點擊「我知道了」或「點擊進入完整公告」後呼叫，標記今天已完成顯示。
+    // idempotent：重複呼叫、網路重試都不會出錯或造成重複紀錄。
+    markViewed: protectedProcedure.input(z.object({
+      id: z.number().int().positive(),
+    })).mutation(async ({ ctx, input }) => {
+      await db.markLoginPopupViewed(ctx.user.id, input.id);
+      return { success: true };
+    }),
+  }),
+
   // ===== 一鍵詢價 =====
   inquiryBatch: router({
     createAndSend: protectedProcedure.input(z.object({

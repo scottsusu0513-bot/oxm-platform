@@ -10,7 +10,7 @@ import {
   reviews, reviews as reviewsTable,
   advertisements, advertisements as advertisementsTable,
   favorites, factoryPhotos, reports, supportTickets, reportStatusHistory, ticketStatusHistory,
-  announcements, pageViews,
+  announcements, pageViews, loginPopups, loginPopupViews,
   factoryCoManagerInvitations, factoryCoManagers,
   inquiryBatches, inquiryBatchItems,
   messageCampaigns, messageRecipients, messageReplies,
@@ -1876,6 +1876,273 @@ export async function deleteAnnouncement(id: number) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
   await db.delete(announcements).where(eq(announcements.id, id));
+}
+
+// ===== 登入彈窗（綁定既有「平台消息」公告的登入曝光入口）=====
+//
+// 這個表的資料結構刻意不做「草稿／已發布／封存」狀態機——announcements 這張表
+// 本身就沒有這個概念（一筆存在即代表已發布，delete 是直接硬刪除，沒有軟刪除
+// 欄位）。因此這裡「公告是否有效可綁定」的唯一判斷依據簡化為：
+//   1. announcementId 對應的公告仍然存在（沒被刪除）
+//   2. 該公告的 type === "news"（平台消息）
+// 這與需求文件假設的「草稿/已發布/已封存」狀態機不同，是依實際 schema 現況
+// 做的最小合理調整。
+
+// 「一天一次」判定沿用上方 pageViews 已經驗證過的 twDateStr()（台灣時間
+// YYYY-MM-DD），確保每天重新計算的基準是 Asia/Taipei 00:00，而不是每隔 24 小時。
+
+async function getValidNewsAnnouncementById(announcementId: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const [row] = await db.select().from(announcements).where(eq(announcements.id, announcementId)).limit(1);
+  if (!row) return null;
+  if (row.type !== "news") return null;
+  return row;
+}
+
+/** 管理員後台專用：可綁定的公告清單（類型為平台消息）。給下拉／可搜尋選擇器用，不含草稿/其他類型。 */
+export async function getPublishedNewsAnnouncementsForPicker(keyword?: string) {
+  const db = await getDb();
+  if (!db) return [];
+  const conditions = [eq(announcements.type, "news")];
+  if (keyword && keyword.trim()) {
+    conditions.push(like(announcements.title, `%${keyword.trim()}%`));
+  }
+  return db.select({ id: announcements.id, title: announcements.title, createdAt: announcements.createdAt })
+    .from(announcements)
+    .where(and(...conditions))
+    .orderBy(desc(announcements.createdAt))
+    .limit(50);
+}
+
+export type LoginPopupAdminRow = {
+  id: number;
+  title: string;
+  summary: string;
+  announcementId: number | null;
+  isActive: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+  boundAnnouncementTitle: string | null;
+  boundAnnouncementCreatedAt: Date | null;
+  boundAnnouncementValid: boolean;
+  // 啟用中彈窗依 updatedAt DESC、id DESC 排序後的順位（1~5）；未啟用則為 null。
+  activeRank: number | null;
+};
+
+/** 管理員後台列表：帶出綁定公告的標題/發布日期、即時判斷綁定是否仍然有效、
+ * 以及啟用中彈窗目前的排序順位（1~5，對應前台會顯示的順序）。 */
+export async function getLoginPopupsForAdmin(): Promise<LoginPopupAdminRow[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.select({
+    id: loginPopups.id,
+    title: loginPopups.title,
+    summary: loginPopups.summary,
+    announcementId: loginPopups.announcementId,
+    isActive: loginPopups.isActive,
+    createdAt: loginPopups.createdAt,
+    updatedAt: loginPopups.updatedAt,
+    boundAnnouncementTitle: announcements.title,
+    boundAnnouncementCreatedAt: announcements.createdAt,
+    boundAnnouncementType: announcements.type,
+  })
+    .from(loginPopups)
+    .leftJoin(announcements, eq(loginPopups.announcementId, announcements.id))
+    .orderBy(desc(loginPopups.updatedAt), desc(loginPopups.id));
+
+  let activeRankCounter = 0;
+  return rows.map(r => {
+    const isActive = r.isActive;
+    const activeRank = isActive ? ++activeRankCounter : null;
+    return {
+      id: r.id,
+      title: r.title,
+      summary: r.summary,
+      announcementId: r.announcementId,
+      isActive,
+      createdAt: r.createdAt,
+      updatedAt: r.updatedAt,
+      boundAnnouncementTitle: r.boundAnnouncementTitle,
+      boundAnnouncementCreatedAt: r.boundAnnouncementCreatedAt,
+      // 公告已刪除（announcementId 被 FK 設成 NULL 或找不到 join 結果）或類型已被
+      // 改成非平台消息，都視為「綁定公告已失效」。
+      boundAnnouncementValid: r.announcementId != null && r.boundAnnouncementTitle != null && r.boundAnnouncementType === "news",
+      activeRank,
+    };
+  });
+}
+
+export const MAX_ACTIVE_LOGIN_POPUPS = 5;
+
+/**
+ * 保證同時最多 MAX_ACTIVE_LOGIN_POPUPS 則登入彈窗處於啟用狀態。
+ *
+ * 任何可能讓 isActive 由 false 變 true 的流程（新增即啟用、編輯切換成啟用）
+ * 完成後都必須呼叫這個函式：在同一個 transaction 內查出所有 isActive=true、
+ * 依 updatedAt DESC、id DESC 排序，只保留前 5 筆，其餘一律改成 isActive=false
+ * ——只調整狀態，不刪除任何登入彈窗紀錄。
+ *
+ * 回傳被自動停用的 id 清單，方便呼叫端（router）回報「已超過上限，較舊消息
+ * 已自動停用」的提示。
+ */
+export async function enforceMaxFiveActiveLoginPopups(): Promise<{ deactivatedIds: number[] }> {
+  const db = await getDb();
+  if (!db) return { deactivatedIds: [] };
+
+  return db.transaction(async (tx) => {
+    const active = await tx.select({ id: loginPopups.id })
+      .from(loginPopups)
+      .where(eq(loginPopups.isActive, true))
+      .orderBy(desc(loginPopups.updatedAt), desc(loginPopups.id));
+
+    if (active.length <= MAX_ACTIVE_LOGIN_POPUPS) return { deactivatedIds: [] };
+
+    const idsToDeactivate = active.slice(MAX_ACTIVE_LOGIN_POPUPS).map(r => r.id);
+    await tx.update(loginPopups).set({ isActive: false }).where(inArray(loginPopups.id, idsToDeactivate));
+    return { deactivatedIds: idsToDeactivate };
+  });
+}
+
+export async function createLoginPopup(data: {
+  title: string;
+  summary: string;
+  announcementId: number;
+  isActive?: boolean;
+}): Promise<{ id: number; deactivatedIds: number[] }> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+
+  const announcement = await getValidNewsAnnouncementById(data.announcementId);
+  if (!announcement) {
+    throw new Error("綁定的公告不存在，或不是已發布的平台消息公告");
+  }
+
+  const isActive = data.isActive ?? false;
+  const result = await db.insert(loginPopups).values({
+    title: data.title,
+    summary: data.summary,
+    announcementId: data.announcementId,
+    isActive,
+  });
+  const id = result[0].insertId;
+
+  const { deactivatedIds } = isActive ? await enforceMaxFiveActiveLoginPopups() : { deactivatedIds: [] as number[] };
+  return { id, deactivatedIds };
+}
+
+export async function updateLoginPopup(id: number, data: Partial<{
+  title: string;
+  summary: string;
+  announcementId: number;
+  isActive: boolean;
+}>): Promise<{ deactivatedIds: number[] }> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+
+  if (data.announcementId !== undefined) {
+    const announcement = await getValidNewsAnnouncementById(data.announcementId);
+    if (!announcement) {
+      throw new Error("綁定的公告不存在，或不是已發布的平台消息公告");
+    }
+  }
+
+  // 停用中的彈窗要重新啟用前，必須確認目前綁定（可能是本次更新前就已存在的
+  // 綁定，未必是這次一起更新的 announcementId）仍然有效，不能只信任前端。
+  if (data.isActive === true) {
+    const [current] = await db.select().from(loginPopups).where(eq(loginPopups.id, id)).limit(1);
+    if (!current) throw new Error("找不到該登入彈窗");
+    const effectiveAnnouncementId = data.announcementId ?? current.announcementId;
+    if (!effectiveAnnouncementId) {
+      throw new Error("綁定公告已失效，請重新綁定有效的平台消息公告後才能啟用");
+    }
+    const announcement = await getValidNewsAnnouncementById(effectiveAnnouncementId);
+    if (!announcement) {
+      throw new Error("綁定公告已失效，請重新綁定有效的平台消息公告後才能啟用");
+    }
+  }
+
+  await db.update(loginPopups).set(data).where(eq(loginPopups.id, id));
+
+  const { deactivatedIds } = data.isActive === true
+    // 這則彈窗自己也可能被 enforce 判定為第 6 名以後而被停用（例如同時有 5 則
+    // 已經啟用、時間又比較舊），這是預期行為：規則對所有彈窗一視同仁，不會
+    // 因為是「剛剛這次更新」的就特別放行。
+    ? await enforceMaxFiveActiveLoginPopups()
+    : { deactivatedIds: [] as number[] };
+  return { deactivatedIds };
+}
+
+export type LoginPopupToShowItem = {
+  id: number;
+  title: string;
+  summary: string;
+  announcementId: number;
+  announcementTitle: string;
+  updatedAt: Date;
+};
+
+/**
+ * 一般使用者登入後首頁應顯示的登入彈窗，最多 MAX_ACTIVE_LOGIN_POPUPS 則
+ * （今天尚未看過的前提下）。顯示條件只有：isActive=true、綁定公告存在且為
+ * 平台消息、使用者今天尚未看過；沒有時間區間判斷——啟用立即生效、停用立即
+ * 停止顯示。今天已看過則回傳空陣列。
+ */
+export async function getLoginPopupsToShow(userId: number): Promise<LoginPopupToShowItem[]> {
+  const db = await getDb();
+  if (!db) return [];
+
+  const today = twDateStr();
+
+  // 今天已經看過（點過「我知道了」或任一「進入完整公告」）就不再顯示，
+  // 判定基準是 userId + 台灣時間日期，與裝置/瀏覽器/cookie/localStorage 無關。
+  const [alreadyViewed] = await db.select({ id: loginPopupViews.id })
+    .from(loginPopupViews)
+    .where(and(eq(loginPopupViews.userId, userId), eq(loginPopupViews.date, today)))
+    .limit(1);
+  if (alreadyViewed) return [];
+
+  const rows = await db.select({
+    id: loginPopups.id,
+    title: loginPopups.title,
+    summary: loginPopups.summary,
+    announcementId: loginPopups.announcementId,
+    updatedAt: loginPopups.updatedAt,
+    announcementTitle: announcements.title,
+    announcementType: announcements.type,
+  })
+    .from(loginPopups)
+    .innerJoin(announcements, eq(loginPopups.announcementId, announcements.id))
+    .where(and(
+      eq(loginPopups.isActive, true),
+      eq(announcements.type, "news"),
+    ))
+    // 排序：1) 最新更新（updatedAt desc）2) updatedAt 相同時以 id desc 穩定排序。
+    .orderBy(desc(loginPopups.updatedAt), desc(loginPopups.id))
+    .limit(MAX_ACTIVE_LOGIN_POPUPS);
+
+  return rows
+    .filter((r): r is typeof r & { announcementId: number } => r.announcementId != null) // 理論上 inner join 已保證非 null，這裡再防一層
+    .map(r => ({
+      id: r.id,
+      title: r.title,
+      summary: r.summary,
+      announcementId: r.announcementId,
+      announcementTitle: r.announcementTitle,
+      updatedAt: r.updatedAt,
+    }));
+}
+
+/**
+ * 使用者點擊「我知道了」或「點擊進入完整公告」後，由後端寫入今天已完成顯示。
+ * 用 INSERT IGNORE + (userId, date) 唯一索引達成 idempotent：重複點擊、網路重試
+ * 都不會產生重複紀錄或拋錯。
+ */
+export async function markLoginPopupViewed(userId: number, loginPopupId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  const today = twDateStr();
+  await db.execute(sql`INSERT IGNORE INTO loginPopupViews (userId, date, loginPopupId) VALUES (${userId}, ${today}, ${loginPopupId})`);
 }
 
 // ===== 共同管理者 =====

@@ -16,8 +16,22 @@ export async function setupVite(app: Express, server: Server) {
     allowedHosts: true as const,
   };
 
+  // vite.config.ts 匯出的是 defineConfig((env) => {...}) 的函式形式（讓
+  // isDev/command 判斷式能正確依 command 決定要不要加 dev-only 的
+  // vitePluginManusDebugCollector()）。直接 `{...viteConfig}` 對一個函式做
+  // spread 只會拿到空物件 {}（函式沒有自己的可列舉屬性），等於 root／
+  // resolve.alias／plugins／build 全部被靜默丟棄，Vite 會退回預設把 root
+  // 當成 process.cwd()（專案根目錄），導致完全解析不到實際在 client/ 底下
+  // 的 client/src/main.tsx，dev server 對外看起來像是「main.tsx 找不到檔案」
+  // ——這正是本機預覽出現純 HTML、Tailwind/React 都沒載入的根本原因。
+  // 修正方式：若是函式形式，先呼叫它取得實際 config 物件，再展開。
+  const resolvedViteConfig =
+    typeof viteConfig === "function"
+      ? await viteConfig({ command: "serve", mode: "development" })
+      : viteConfig;
+
   const vite = await createViteServer({
-    ...viteConfig,
+    ...resolvedViteConfig,
     configFile: false,
     server: serverOptions,
     appType: "custom",

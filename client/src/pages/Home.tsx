@@ -4,6 +4,7 @@ import { PUBLIC_PAGE_SEO } from "@/lib/publicPageSeo";
 import { HOME_CONTENT, type TextSegment } from "@shared/content/home";
 import Navbar from "@/components/Navbar";
 import FloatingAnnouncementButton from "@/components/FloatingAnnouncementButton";
+import LoginPopupModal from "@/components/LoginPopupModal";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -394,6 +395,7 @@ export default function Home() {
             見 client/src/hooks/useRemoveServerSeoHead.ts 的說明。 */}
       </Helmet>
       <Navbar />
+      <LoginPopupModal />
 
       {/* Hero Section */}
       <section className="relative overflow-hidden py-8 md:py-24">

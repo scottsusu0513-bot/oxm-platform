@@ -5,6 +5,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
 import { useLocation } from "wouter";
+import { useEffect } from "react";
 import { ChevronLeft, Megaphone, Wrench, Newspaper, Zap, Pin } from "lucide-react";
 import MarkdownContent from "@/components/MarkdownContent";
 
@@ -27,6 +28,17 @@ function TypeBadge({ type }: { type: "update" | "maintenance" | "news" }) {
 export default function Announcements() {
   const [, navigate] = useLocation();
   const { data: items = [], isLoading } = trpc.announcement.list.useQuery({ limit: 50 });
+
+  // 登入彈窗「點擊進入完整公告」會導向 /announcements?highlight=<id>——這裡沒有
+  // 獨立的公告詳情頁路由，所以用錨點捲動＋短暫醒目提示的方式導向同一則公告，
+  // 而不是另外做一套第二份公告內容。
+  const highlightId = new URLSearchParams(window.location.search).get("highlight");
+
+  useEffect(() => {
+    if (!highlightId || items.length === 0) return;
+    const el = document.getElementById(`announcement-${highlightId}`);
+    el?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [highlightId, items.length]);
 
   return (
     <div className="min-h-screen bg-background">
@@ -60,7 +72,15 @@ export default function Announcements() {
         ) : (
           <div className="space-y-4">
             {items.map(item => (
-              <Card key={item.id} className={item.isPinned ? "border-orange-200 bg-orange-50/50" : ""}>
+              <Card
+                key={item.id}
+                id={`announcement-${item.id}`}
+                className={
+                  String(item.id) === highlightId
+                    ? "border-orange-400 ring-2 ring-orange-300 bg-orange-50/60"
+                    : item.isPinned ? "border-orange-200 bg-orange-50/50" : ""
+                }
+              >
                 <CardContent className="p-5">
                   <div className="flex items-start justify-between gap-3 mb-2">
                     <div className="flex items-center gap-2 flex-wrap">
