@@ -5,7 +5,7 @@ import {
   Factory, Mail, User, LogOut, LayoutDashboard, Menu, X,
   UserPlus, Search, Settings, Heart, UserCircle, ChevronDown,
   FileText, ScrollText, Bell, Briefcase, Lock,
-  Rocket, Users, Package, BookOpen, MessageSquare,
+  Rocket, Users, Package, BookOpen, MessageSquare, Lightbulb,
 } from "lucide-react";
 import UnverifiedEmailHint from "@/components/UnverifiedEmailHint";
 import { useState, useEffect, useRef } from "react";
@@ -22,6 +22,13 @@ import {
 
 type NavIcon = ComponentType<SVGProps<SVGSVGElement> & { className?: string }>;
 
+interface HubDropdownItem {
+  title: string;
+  description: string;
+  href: string;
+  Icon: NavIcon;
+}
+
 interface HubItem {
   label: string;
   short: string;
@@ -36,6 +43,8 @@ interface HubItem {
   mCard: string;
   /** Mobile card text color */
   mText: string;
+  /** 若設定，此入口改為可點擊展開/收合的下拉選單，取代直接導頁或鎖定顯示 */
+  dropdown?: HubDropdownItem[];
 }
 
 const HUB_ITEMS: HubItem[] = [
@@ -47,11 +56,19 @@ const HUB_ITEMS: HubItem[] = [
     mCard: "from-orange-500/10 to-purple-600/10 border-orange-300/40", mText: "text-orange-700",
   },
   {
-    label: "企業升級中心", short: "找補助", soon: true,
+    label: "企業升級中心", short: "找資源", soon: false,
     Icon: Rocket, iconCls: "text-blue-400/60",
     card: "bg-gradient-to-br from-blue-600/8 to-violet-600/8 border-blue-300/20 text-blue-900/30",
     cardHover: "",
     mCard: "from-blue-600/8 to-violet-600/8 border-blue-300/20", mText: "text-blue-600/40",
+    dropdown: [
+      {
+        title: "政府補助專區",
+        description: "SBIR、CITD、SIIR 等企業補助媒合",
+        href: "/upgrade-center",
+        Icon: Lightbulb,
+      },
+    ],
   },
   {
     label: "人才與技術中心", short: "找人才", soon: true,
@@ -108,9 +125,35 @@ export default function Navbar() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [brandMenuOpen]);
 
+  // 桌面版「找資源」下拉選單：點擊觸發、點擊外部或 Escape 收合
+  const [resourceDropOpen, setResourceDropOpen] = useState(false);
+  const resourceDropRef = useRef<HTMLDivElement | null>(null);
+  // 手機版「找資源」在主選單內展開的子選單（不直接導頁）
+  const [mobileResourceOpen, setMobileResourceOpen] = useState(false);
+
+  useEffect(() => {
+    if (!resourceDropOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (resourceDropRef.current && !resourceDropRef.current.contains(e.target as Node)) {
+        setResourceDropOpen(false);
+      }
+    };
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setResourceDropOpen(false);
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("keydown", handleEscape);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, [resourceDropOpen]);
+
   // 路由切換後自動關閉下拉選單
   useEffect(() => {
     setBrandMenuOpen(false);
+    setResourceDropOpen(false);
+    setMobileResourceOpen(false);
   }, [location]);
 
   useEffect(() => {
@@ -120,6 +163,7 @@ export default function Navbar() {
       return;
     }
     setMenuClosing(true);
+    setMobileResourceOpen(false);
     const t = setTimeout(() => {
       setMenuVisible(false);
       setMenuClosing(false);
@@ -129,6 +173,8 @@ export default function Navbar() {
 
   const openSearchDrop = () => {
     if (searchDropTimer.current) clearTimeout(searchDropTimer.current);
+    setBrandMenuOpen(false);
+    setResourceDropOpen(false);
     setSearchDropOpen(true);
   };
   const closeSearchDropDelayed = () => {
@@ -223,7 +269,12 @@ export default function Navbar() {
         <div className="relative shrink-0" ref={brandMenuRef}>
           <button
             type="button"
-            onClick={() => setBrandMenuOpen(v => !v)}
+            onClick={() => {
+              setSearchDropOpen(false);
+              setResourceDropOpen(false);
+              setMobileResourceOpen(false);
+              setBrandMenuOpen(v => !v);
+            }}
             aria-haspopup="true"
             aria-expanded={brandMenuOpen}
             className="flex items-center gap-0.5 font-extrabold text-xl no-underline cursor-pointer"
@@ -246,17 +297,40 @@ export default function Navbar() {
         {/* ── Desktop: 六大方向入口（lg: 1024px+） ── */}
         <nav className="hidden lg:flex items-center gap-3 flex-1 justify-center min-w-0 mx-2">
           {HUB_ITEMS.map((hub) => {
-            if (hub.label === "企業升級中心") {
+            if (hub.dropdown) {
               return (
-                <Link key={hub.label} href="/upgrade-center">
+                <div key={hub.label} className="relative" ref={resourceDropRef}>
                   <button
                     type="button"
+                    onClick={() => {
+                      setBrandMenuOpen(false);
+                      setSearchDropOpen(false);
+                      setResourceDropOpen(v => !v);
+                    }}
+                    aria-haspopup="menu"
+                    aria-expanded={resourceDropOpen}
                     className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg border text-[11px] font-semibold transition-all duration-150 whitespace-nowrap cursor-pointer bg-gradient-to-br from-blue-600/10 to-violet-600/10 border-blue-300/40 text-blue-700 hover:from-blue-600/20 hover:to-violet-600/20 hover:border-blue-400/60 hover:shadow-sm hover:shadow-blue-500/10 hover:-translate-y-px"
                   >
                     <hub.Icon className="w-3.5 h-3.5 shrink-0 text-blue-500" />
                     {hub.short}
+                    <ChevronDown className={`w-2.5 h-2.5 opacity-60 transition-transform duration-150 ${resourceDropOpen ? "rotate-180" : ""}`} />
                   </button>
-                </Link>
+                  {resourceDropOpen && (
+                    <div className="absolute top-full left-0 mt-1.5 w-72 bg-white border border-border rounded-xl shadow-lg z-[200] py-1.5 overflow-hidden">
+                      {hub.dropdown.map((item) => (
+                        <Link key={item.href} href={item.href} onClick={() => setResourceDropOpen(false)}>
+                          <div className="flex items-start gap-2.5 px-3.5 py-2.5 hover:bg-orange-50 transition-colors cursor-pointer">
+                            <item.Icon className="w-4 h-4 mt-0.5 shrink-0 text-blue-500" />
+                            <div className="min-w-0">
+                              <p className="text-sm font-semibold text-foreground">{item.title}</p>
+                              <p className="text-xs text-muted-foreground mt-0.5 leading-snug">{item.description}</p>
+                            </div>
+                          </div>
+                        </Link>
+                      ))}
+                    </div>
+                  )}
+                </div>
               );
             }
 
@@ -503,15 +577,45 @@ export default function Navbar() {
             {HUB_ITEMS.map((hub) => {
               const cardBase = `flex flex-col items-center gap-2 p-3 rounded-xl border bg-gradient-to-br ${hub.mCard} transition-colors`;
 
-              if (hub.label === "企業升級中心") {
+              if (hub.dropdown) {
                 return (
-                  <Link key={hub.label} href="/upgrade-center" onClick={() => setMobileOpen(false)}>
-                    <div className={`${cardBase} active:opacity-80`}>
-                      <hub.Icon className="w-5 h-5 text-blue-500" />
-                      <span className="text-xs font-semibold text-center text-blue-700">{hub.short}</span>
-                      <span className="text-[9px] text-blue-500/70">進入中心 →</span>
-                    </div>
-                  </Link>
+                  <div key={hub.label} className="col-span-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBrandMenuOpen(false);
+                        setMobileResourceOpen(v => !v);
+                      }}
+                      aria-haspopup="menu"
+                      aria-expanded={mobileResourceOpen}
+                      className={`w-full flex items-center justify-between gap-2 p-3 rounded-xl border bg-gradient-to-br ${hub.mCard} transition-colors active:opacity-80`}
+                    >
+                      <span className="flex items-center gap-2">
+                        <hub.Icon className="w-5 h-5 text-blue-500" />
+                        <span className="text-xs font-semibold text-blue-700">{hub.short}</span>
+                      </span>
+                      <ChevronDown className={`w-4 h-4 text-blue-500/70 transition-transform duration-150 ${mobileResourceOpen ? "rotate-180" : ""}`} />
+                    </button>
+                    {mobileResourceOpen && (
+                      <div className="mt-1.5 ml-1 border-l-2 border-blue-200 pl-3 space-y-1">
+                        {hub.dropdown.map((item) => (
+                          <Link
+                            key={item.href}
+                            href={item.href}
+                            onClick={() => { setMobileOpen(false); setMobileResourceOpen(false); }}
+                          >
+                            <div className="flex items-start gap-2 py-2 active:opacity-70 cursor-pointer">
+                              <item.Icon className="w-4 h-4 mt-0.5 shrink-0 text-blue-500" />
+                              <div className="min-w-0">
+                                <p className="text-xs font-semibold text-foreground">{item.title}</p>
+                                <p className="text-[10px] text-muted-foreground mt-0.5 leading-snug">{item.description}</p>
+                              </div>
+                            </div>
+                          </Link>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 );
               }
 
