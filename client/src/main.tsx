@@ -2,11 +2,34 @@ import { trpc } from "@/lib/trpc";
 import { UNAUTHED_ERR_MSG } from '@shared/const';
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { httpBatchLink, TRPCClientError } from "@trpc/client";
+import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import superjson from "superjson";
 import App from "./App";
 import { performLogin } from "./const";
 import "./index.css";
+
+// window.__showOxmApp 定義在 client/index.html（同一份一次性函式也給 5 秒
+// fallback 呼叫），這裡不重複寫一份 DOM 操作，避免兩套流程各自維護、互相
+// 競態或以後改邏輯只改到其中一邊。
+declare global {
+  interface Window {
+    __showOxmApp?: () => void;
+  }
+}
+
+// GEO 預渲染的裸文字（client/index.html 的 #app-loading + inline <style> 已把
+// #root 預設隱藏）要在 React 真正完成首次掛載後才能拿掉，不能用固定的
+// setTimeout 猜時間——太早拿掉等於白做，太晚又會多等。掛在跟 <App/> 同一棵
+// render 樹下、緊鄰的一個空節點，靠 useEffect 只在 mount 後才觸發一次的特性，
+// 保證這一刻 React 已經把整棵初始樹（包含 <App/>）commit 進 DOM。
+function AppReadySignal() {
+  useEffect(() => {
+    window.__showOxmApp?.();
+  }, []);
+
+  return null;
+}
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -67,6 +90,7 @@ const trpcClient = trpc.createClient({
 createRoot(document.getElementById("root")!).render(
   <trpc.Provider client={trpcClient} queryClient={queryClient}>
     <QueryClientProvider client={queryClient}>
+      <AppReadySignal />
       <App />
     </QueryClientProvider>
   </trpc.Provider>
