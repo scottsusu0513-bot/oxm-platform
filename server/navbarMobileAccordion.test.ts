@@ -71,4 +71,62 @@ describe("Navbar.tsx: 手機版六入口 Accordion 使用單一 state", () => {
     // React 19 原生支援 inert prop，isOpen=false 時整個面板（含子連結）不可聚焦、不可互動。
     expect(source).toMatch(/inert=\{!isOpen\}/);
   });
+
+  it("mobileOpen 開啟時存在 body scroll lock 邏輯（非只有 overflow:hidden）", () => {
+    const lockEffectMatch = source.match(
+      /useEffect\(\(\) => \{\s*\n\s*if \(!mobileOpen\) return;[\s\S]*?\}, \[mobileOpen\]\);/
+    );
+    expect(lockEffectMatch, "找不到 mobileOpen 的 body scroll lock useEffect").not.toBeNull();
+    const lockEffect = lockEffectMatch![0];
+
+    // 不只是 document.body.style.overflow = "hidden"，還要有 position:fixed +
+    // 負值 top 的做法，這是 iOS Safari／Android Chrome／Capacitor WebView 都可靠
+    // 防止背景捲動與位置跳動的關鍵。
+    expect(lockEffect).toMatch(/body\.style\.position = "fixed"/);
+    expect(lockEffect).toMatch(/body\.style\.top = `-\$\{scrollY\}px`/);
+    expect(lockEffect).toMatch(/body\.style\.overflow = "hidden"/);
+  });
+
+  it("scroll lock cleanup 會恢復 body 原本 inline styles 並呼叫 window.scrollTo 還原 scrollY", () => {
+    const lockEffectMatch = source.match(
+      /useEffect\(\(\) => \{\s*\n\s*if \(!mobileOpen\) return;[\s\S]*?\}, \[mobileOpen\]\);/
+    );
+    const lockEffect = lockEffectMatch![0];
+
+    // cleanup 必須把每個曾經覆蓋過的 body style 都還原成呼叫當下記錄的 previous 值，
+    // 而不是寫死清空成空字串（避免覆蓋掉 body 原本就存在的 inline style）。
+    expect(lockEffect).toMatch(/const previous = \{/);
+    expect(lockEffect).toMatch(/body\.style\.position = previous\.position;/);
+    expect(lockEffect).toMatch(/body\.style\.top = previous\.top;/);
+    expect(lockEffect).toMatch(/body\.style\.overflow = previous\.overflow;/);
+    expect(lockEffect).toMatch(/window\.scrollTo\(0, scrollY\);/);
+  });
+
+  it("手機選單自身的捲動容器具有 overflow-y-auto 與 overscroll-contain", () => {
+    expect(source).toMatch(/overflow-y-auto overscroll-contain touch-pan-y/);
+    expect(source).toMatch(/WebkitOverflowScrolling: "touch"/);
+  });
+
+  it("手機選單 overlay 透過 createPortal 掛到 document.body，脫離 header 的 stacking context", () => {
+    expect(source).toMatch(/import \{ createPortal \} from "react-dom";/);
+    expect(source).toMatch(/menuVisible && createPortal\(/);
+    expect(source).toMatch(/fixed inset-0 z-\[60\]/);
+  });
+
+  it("找資源手機版不再使用低透明度 disabled 視覺，找人才等未開放入口仍維持低透明度", () => {
+    const resourceItemMatch = source.match(
+      /key: "resource",[\s\S]*?dropdown: \[[\s\S]*?\],\s*\n\s*\},/
+    );
+    expect(resourceItemMatch, "找不到找資源的 HUB_ITEMS 定義").not.toBeNull();
+    const resourceItem = resourceItemMatch![0];
+
+    expect(resourceItem).not.toMatch(/text-blue-400\/60/);
+    expect(resourceItem).not.toMatch(/text-blue-600\/40/);
+    expect(resourceItem).toMatch(/mText: "text-blue-700"/);
+    expect(resourceItem).toMatch(/iconCls: "text-blue-600"/);
+
+    const talentItemMatch = source.match(/key: "talent",[\s\S]*?dropdown: \[[\s\S]*?\],\s*\n\s*\},/);
+    expect(talentItemMatch, "找不到找人才的 HUB_ITEMS 定義").not.toBeNull();
+    expect(talentItemMatch![0]).toMatch(/text-teal-600\/40/);
+  });
 });

@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import UnverifiedEmailHint from "@/components/UnverifiedEmailHint";
 import { useState, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import type { ComponentType, SVGProps } from "react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import LoginDialog from "@/components/LoginDialog";
@@ -73,10 +74,15 @@ const HUB_ITEMS: HubItem[] = [
   {
     key: "resource",
     label: "企業升級中心", short: "找資源", soon: false,
-    Icon: Rocket, iconCls: "text-blue-400/60",
+    // iconCls／mCard／mText 用於手機版 Accordion 橫條與桌面「找工廠」分支；
+    // 找資源桌面版 dropdown 觸發鈕的樣式是獨立硬編碼（見下方 hub.key === "resource"
+    // 分支），不讀這幾個欄位，故調整這裡不會影響桌面版。找資源已是正式開放入口，
+    // 這裡改用清楚可辨識的藍紫色，避免跟找人才／找形象等「即將開放」的低透明度
+    // muted 樣式混淆。
+    Icon: Rocket, iconCls: "text-blue-600",
     card: "bg-gradient-to-br from-blue-600/8 to-violet-600/8 border-blue-300/20 text-blue-900/30",
     cardHover: "",
-    mCard: "from-blue-600/8 to-violet-600/8 border-blue-300/20", mText: "text-blue-600/40",
+    mCard: "from-blue-500/15 to-violet-600/15 border-blue-300/50", mText: "text-blue-700",
     dropdown: [
       {
         title: "政府補助專區",
@@ -182,11 +188,14 @@ export default function Navbar() {
     };
   }, [resourceDropOpen]);
 
-  // 路由切換後自動關閉下拉選單
+  // 路由切換後自動關閉下拉選單／手機主選單。手機選單內每個會導頁的連結本來就會
+  // 自行呼叫 setMobileOpen(false)，這裡是防禦性保險（例如瀏覽器上一頁/下一頁），
+  // 確保任何情況下路由一變就不會殘留 body scroll lock。
   useEffect(() => {
     setBrandMenuOpen(false);
     setResourceDropOpen(false);
     setMobileOpenHub(null);
+    setMobileOpen(false);
   }, [location]);
 
   useEffect(() => {
@@ -203,6 +212,55 @@ export default function Navbar() {
     }, 200);
     return () => clearTimeout(t);
   }, [mobileOpen]);
+
+  // 手機主選單背景 scroll lock：mobileOpen 開啟時鎖住 body 捲動，並記住開啟前的
+  // scrollY；關閉（或元件 unmount）時完整還原 body 原本的 inline style 與捲動位置。
+  // 只用 overflow:hidden 在部分 iOS Safari／WebView 情況下背景仍可能滑動或跳動，
+  // 這裡改用「body position:fixed + 負值 top」的做法，是目前公認在 iOS Safari／
+  // Android Chrome／Capacitor WebView 都可靠的做法。
+  useEffect(() => {
+    if (!mobileOpen) return;
+
+    const scrollY = window.scrollY;
+    const body = document.body;
+
+    const previous = {
+      position: body.style.position,
+      top: body.style.top,
+      left: body.style.left,
+      right: body.style.right,
+      width: body.style.width,
+      overflow: body.style.overflow,
+    };
+
+    body.style.position = "fixed";
+    body.style.top = `-${scrollY}px`;
+    body.style.left = "0";
+    body.style.right = "0";
+    body.style.width = "100%";
+    body.style.overflow = "hidden";
+
+    return () => {
+      body.style.position = previous.position;
+      body.style.top = previous.top;
+      body.style.left = previous.left;
+      body.style.right = previous.right;
+      body.style.width = previous.width;
+      body.style.overflow = previous.overflow;
+
+      window.scrollTo(0, scrollY);
+    };
+  }, [mobileOpen]);
+
+  // 手機選單內會另外開啟 LoginDialog 的兩個按鈕（註冊／登入）專用：跳過選單本身
+  // 200ms 的淡出動畫、立即卸載，確保 LoginDialog 開啟當下手機選單 overlay 已經
+  // 不在畫面上，不會有選單淡出過程短暫蓋住 LoginDialog 的情況。
+  const closeMobileMenuForDialog = () => {
+    setMobileOpen(false);
+    setMenuClosing(false);
+    setMenuVisible(false);
+    setMobileOpenHub(null);
+  };
 
   const openSearchDrop = () => {
     if (searchDropTimer.current) clearTimeout(searchDropTimer.current);
@@ -598,11 +656,23 @@ export default function Navbar() {
         </div>
       </div>
 
-      {/* ── Mobile Menu ── */}
-      {menuVisible && (
+      {/* ── Mobile Menu ──
+          Portal 到 document.body：脫離 <header> 自身的 stacking context，
+          避免同為 z-50、但在 DOM 中排在 header 之後的頁面浮動按鈕（返回鍵、
+          聯繫工廠按鈕、公告按鈕等）視覺上蓋過手機選單。外層 fixed inset-0
+          從 header 高度往下鋪滿整個 viewport，作為背景 pointer-event 阻擋層；
+          內層才是實際可捲動的選單內容，捲動只發生在這裡，不會傳遞到背景頁面。 */}
+      {menuVisible && createPortal(
         <div
-          className={`lg:hidden border-t border-border bg-white px-4 pt-3 ${menuClosing ? "animate-menu-exit" : "animate-menu-enter"}`}
-          style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 16px)" }}
+          className="lg:hidden fixed inset-0 z-[60]"
+          style={{ paddingTop: "calc(4rem + env(safe-area-inset-top, 0px))" }}
+        >
+        <div
+          className={`h-full overflow-y-auto overscroll-contain touch-pan-y border-t border-border bg-white px-4 pt-3 ${menuClosing ? "animate-menu-exit" : "animate-menu-enter"}`}
+          style={{
+            WebkitOverflowScrolling: "touch",
+            paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 16px)",
+          }}
         >
           {/* 六大方向入口 — 統一滿寬橫條 Accordion，一次最多展開一個 */}
           <p className="text-[10px] font-semibold text-muted-foreground/50 uppercase tracking-widest px-1 pt-1 pb-2">OXM 主要入口</p>
@@ -625,7 +695,9 @@ export default function Navbar() {
                       <hub.Icon className={`w-5 h-5 shrink-0 ${hub.iconCls}`} />
                       <span className={`text-sm font-semibold truncate ${hub.mText}`}>{hub.short}</span>
                     </span>
-                    <ChevronDown className={`w-4 h-4 shrink-0 opacity-60 transition-transform duration-200 ${isOpen ? "rotate-180" : ""}`} />
+                    <ChevronDown
+                      className={`w-4 h-4 shrink-0 transition-transform duration-200 ${isOpen ? "rotate-180" : ""} ${hub.key === "resource" ? "text-blue-600" : "opacity-60"}`}
+                    />
                   </button>
 
                   <div
@@ -749,7 +821,7 @@ export default function Navbar() {
 
           {!isAuthenticated && (
             <div className="border-t border-border/50 pt-2 mt-3 space-y-2">
-              <Button type="button" variant="outline" className="w-full justify-center" onClick={(e) => { e.preventDefault(); setMobileOpen(false); setLoginDialogOpen(true); }}>
+              <Button type="button" variant="outline" className="w-full justify-center" onClick={(e) => { e.preventDefault(); closeMobileMenuForDialog(); setLoginDialogOpen(true); }}>
                 <UserPlus className="w-4 h-4 mr-2" />
                 註冊用戶
               </Button>
@@ -759,7 +831,7 @@ export default function Navbar() {
                   註冊工廠
                 </Button>
               </Link>
-              <Button type="button" className="w-full bg-gradient-to-r from-orange-500 to-amber-500 text-white border-0" onClick={(e) => { e.preventDefault(); setMobileOpen(false); setLoginDialogOpen(true); }}>
+              <Button type="button" className="w-full bg-gradient-to-r from-orange-500 to-amber-500 text-white border-0" onClick={(e) => { e.preventDefault(); closeMobileMenuForDialog(); setLoginDialogOpen(true); }}>
                 登入
               </Button>
               <p className="text-xs text-muted-foreground text-center pt-1 leading-5">
@@ -768,6 +840,8 @@ export default function Navbar() {
             </div>
           )}
         </div>
+        </div>,
+        document.body
       )}
     </header>
     <LoginDialog open={loginDialogOpen} onOpenChange={setLoginDialogOpen} />
