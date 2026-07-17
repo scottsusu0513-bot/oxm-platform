@@ -22,14 +22,21 @@ import {
 
 type NavIcon = ComponentType<SVGProps<SVGSVGElement> & { className?: string }>;
 
+/** 手機版 Accordion 用的穩定 key，六大入口各對應一個，不隨文案調整而改變 */
+type MobileHubKey = "factory" | "resource" | "talent" | "brand" | "news" | "discussion";
+
 interface HubDropdownItem {
   title: string;
   description: string;
-  href: string;
+  /** 有值才可導頁；未開放子項不設定 href */
+  href?: string;
+  disabled?: boolean;
   Icon: NavIcon;
 }
 
 interface HubItem {
+  /** 手機版 Accordion 展開狀態用的穩定識別（見 mobileOpenHub） */
+  key: MobileHubKey;
   label: string;
   short: string;
   soon: boolean;
@@ -43,19 +50,28 @@ interface HubItem {
   mCard: string;
   /** Mobile card text color */
   mText: string;
-  /** 若設定，此入口改為可點擊展開/收合的下拉選單，取代直接導頁或鎖定顯示 */
-  dropdown?: HubDropdownItem[];
+  /**
+   * 桌面版「找資源」下拉選單的子項內容，也是手機版 Accordion 展開內容的唯一
+   * 資料來源（title／description／href／disabled／Icon），桌面與手機共用同一份，
+   * 不在手機 JSX 另外硬編碼六份文案。
+   */
+  dropdown: HubDropdownItem[];
 }
 
 const HUB_ITEMS: HubItem[] = [
   {
+    key: "factory",
     label: "商機媒合中心", short: "找工廠", soon: false,
     Icon: Search, iconCls: "text-orange-500",
     card: "bg-gradient-to-br from-orange-500/10 to-purple-600/10 border-orange-300/40 text-orange-700",
     cardHover: "hover:from-orange-500/20 hover:to-purple-600/20 hover:border-orange-400/60 hover:shadow-sm hover:shadow-orange-500/10 hover:-translate-y-px",
     mCard: "from-orange-500/10 to-purple-600/10 border-orange-300/40", mText: "text-orange-700",
+    dropdown: [
+      { title: "搜尋工廠", description: "瀏覽台灣工廠與代工資源", href: "/search", Icon: Search },
+    ],
   },
   {
+    key: "resource",
     label: "企業升級中心", short: "找資源", soon: false,
     Icon: Rocket, iconCls: "text-blue-400/60",
     card: "bg-gradient-to-br from-blue-600/8 to-violet-600/8 border-blue-300/20 text-blue-900/30",
@@ -71,32 +87,48 @@ const HUB_ITEMS: HubItem[] = [
     ],
   },
   {
+    key: "talent",
     label: "人才與技術中心", short: "找人才", soon: true,
     Icon: Users, iconCls: "text-teal-400/60",
     card: "bg-gradient-to-br from-teal-500/8 to-cyan-600/8 border-teal-300/20 text-teal-900/30",
     cardHover: "",
     mCard: "from-teal-500/8 to-cyan-600/8 border-teal-300/20", mText: "text-teal-600/40",
+    dropdown: [
+      { title: "人才與技術媒合", description: "即將開放", disabled: true, Icon: Users },
+    ],
   },
   {
+    key: "brand",
     label: "產業採購與資源中心", short: "找形象", soon: true,
     Icon: Package, iconCls: "text-amber-400/60",
     card: "bg-gradient-to-br from-amber-500/8 to-orange-600/8 border-amber-300/20 text-amber-900/30",
     cardHover: "",
     mCard: "from-amber-500/8 to-orange-600/8 border-amber-300/20", mText: "text-amber-600/40",
+    dropdown: [
+      { title: "品牌與形象升級", description: "即將開放", disabled: true, Icon: Package },
+    ],
   },
   {
+    key: "news",
     label: "傳產知識與情報中心", short: "找消息", soon: true,
     Icon: BookOpen, iconCls: "text-indigo-400/60",
     card: "bg-gradient-to-br from-indigo-600/8 to-purple-700/8 border-indigo-300/20 text-indigo-900/30",
     cardHover: "",
     mCard: "from-indigo-600/8 to-purple-700/8 border-indigo-300/20", mText: "text-indigo-600/40",
+    dropdown: [
+      { title: "產業消息與情報", description: "即將開放", disabled: true, Icon: BookOpen },
+    ],
   },
   {
+    key: "discussion",
     label: "產業討論區", short: "找討論", soon: true,
     Icon: MessageSquare, iconCls: "text-rose-400/60",
     card: "bg-gradient-to-br from-rose-500/8 to-pink-600/8 border-rose-300/20 text-rose-900/30",
     cardHover: "",
     mCard: "from-rose-500/8 to-pink-600/8 border-rose-300/20", mText: "text-rose-600/40",
+    dropdown: [
+      { title: "產業討論區", description: "即將開放", disabled: true, Icon: MessageSquare },
+    ],
   },
 ];
 
@@ -128,8 +160,9 @@ export default function Navbar() {
   // 桌面版「找資源」下拉選單：點擊觸發、點擊外部或 Escape 收合
   const [resourceDropOpen, setResourceDropOpen] = useState(false);
   const resourceDropRef = useRef<HTMLDivElement | null>(null);
-  // 手機版「找資源」在主選單內展開的子選單（不直接導頁）
-  const [mobileResourceOpen, setMobileResourceOpen] = useState(false);
+  // 手機版六大入口 Accordion：單一 state 記錄目前展開的入口 key，一次最多展開一個；
+  // 點其他入口時原本展開的自動收合，再次點擊目前展開的入口則收合。
+  const [mobileOpenHub, setMobileOpenHub] = useState<MobileHubKey | null>(null);
 
   useEffect(() => {
     if (!resourceDropOpen) return;
@@ -153,7 +186,7 @@ export default function Navbar() {
   useEffect(() => {
     setBrandMenuOpen(false);
     setResourceDropOpen(false);
-    setMobileResourceOpen(false);
+    setMobileOpenHub(null);
   }, [location]);
 
   useEffect(() => {
@@ -163,7 +196,7 @@ export default function Navbar() {
       return;
     }
     setMenuClosing(true);
-    setMobileResourceOpen(false);
+    setMobileOpenHub(null);
     const t = setTimeout(() => {
       setMenuVisible(false);
       setMenuClosing(false);
@@ -272,7 +305,7 @@ export default function Navbar() {
             onClick={() => {
               setSearchDropOpen(false);
               setResourceDropOpen(false);
-              setMobileResourceOpen(false);
+              setMobileOpenHub(null);
               setBrandMenuOpen(v => !v);
             }}
             aria-haspopup="true"
@@ -297,7 +330,7 @@ export default function Navbar() {
         {/* ── Desktop: 六大方向入口（lg: 1024px+） ── */}
         <nav className="hidden lg:flex items-center gap-3 flex-1 justify-center min-w-0 mx-2">
           {HUB_ITEMS.map((hub) => {
-            if (hub.dropdown) {
+            if (hub.key === "resource") {
               return (
                 <div key={hub.label} className="relative" ref={resourceDropRef}>
                   <button
@@ -317,8 +350,8 @@ export default function Navbar() {
                   </button>
                   {resourceDropOpen && (
                     <div className="absolute top-full left-0 mt-1.5 w-72 bg-white border border-border rounded-xl shadow-lg z-[200] py-1.5 overflow-hidden">
-                      {hub.dropdown.map((item) => (
-                        <Link key={item.href} href={item.href} onClick={() => setResourceDropOpen(false)}>
+                      {hub.dropdown.filter((item) => item.href && !item.disabled).map((item) => (
+                        <Link key={item.href} href={item.href!} onClick={() => setResourceDropOpen(false)}>
                           <div className="flex items-start gap-2.5 px-3.5 py-2.5 hover:bg-orange-50 transition-colors cursor-pointer">
                             <item.Icon className="w-4 h-4 mt-0.5 shrink-0 text-blue-500" />
                             <div className="min-w-0">
@@ -571,75 +604,74 @@ export default function Navbar() {
           className={`lg:hidden border-t border-border bg-white px-4 pt-3 ${menuClosing ? "animate-menu-exit" : "animate-menu-enter"}`}
           style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 16px)" }}
         >
-          {/* 六大方向入口 — 2 欄卡片 */}
+          {/* 六大方向入口 — 統一滿寬橫條 Accordion，一次最多展開一個 */}
           <p className="text-[10px] font-semibold text-muted-foreground/50 uppercase tracking-widest px-1 pt-1 pb-2">OXM 主要入口</p>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="flex flex-col gap-2">
             {HUB_ITEMS.map((hub) => {
-              const cardBase = `flex flex-col items-center gap-2 p-3 rounded-xl border bg-gradient-to-br ${hub.mCard} transition-colors`;
+              const isOpen = mobileOpenHub === hub.key;
+              return (
+                <div key={hub.key}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBrandMenuOpen(false);
+                      setMobileOpenHub(current => (current === hub.key ? null : hub.key));
+                    }}
+                    aria-expanded={isOpen}
+                    aria-controls={`mobile-hub-panel-${hub.key}`}
+                    className={`w-full h-12 flex items-center justify-between gap-2 px-4 rounded-xl border bg-gradient-to-br ${hub.mCard} transition-colors active:opacity-80`}
+                  >
+                    <span className="flex items-center gap-3 min-w-0">
+                      <hub.Icon className={`w-5 h-5 shrink-0 ${hub.iconCls}`} />
+                      <span className={`text-sm font-semibold truncate ${hub.mText}`}>{hub.short}</span>
+                    </span>
+                    <ChevronDown className={`w-4 h-4 shrink-0 opacity-60 transition-transform duration-200 ${isOpen ? "rotate-180" : ""}`} />
+                  </button>
 
-              if (hub.dropdown) {
-                return (
-                  <div key={hub.label} className="col-span-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setBrandMenuOpen(false);
-                        setMobileResourceOpen(v => !v);
-                      }}
-                      aria-haspopup="menu"
-                      aria-expanded={mobileResourceOpen}
-                      className={`w-full flex items-center justify-between gap-2 p-3 rounded-xl border bg-gradient-to-br ${hub.mCard} transition-colors active:opacity-80`}
-                    >
-                      <span className="flex items-center gap-2">
-                        <hub.Icon className="w-5 h-5 text-blue-500" />
-                        <span className="text-xs font-semibold text-blue-700">{hub.short}</span>
-                      </span>
-                      <ChevronDown className={`w-4 h-4 text-blue-500/70 transition-transform duration-150 ${mobileResourceOpen ? "rotate-180" : ""}`} />
-                    </button>
-                    {mobileResourceOpen && (
-                      <div className="mt-1.5 ml-1 border-l-2 border-blue-200 pl-3 space-y-1">
-                        {hub.dropdown.map((item) => (
-                          <Link
-                            key={item.href}
-                            href={item.href}
-                            onClick={() => { setMobileOpen(false); setMobileResourceOpen(false); }}
-                          >
-                            <div className="flex items-start gap-2 py-2 active:opacity-70 cursor-pointer">
-                              <item.Icon className="w-4 h-4 mt-0.5 shrink-0 text-blue-500" />
+                  <div
+                    id={`mobile-hub-panel-${hub.key}`}
+                    aria-hidden={!isOpen}
+                    inert={!isOpen}
+                    style={{
+                      display: "grid",
+                      gridTemplateRows: isOpen ? "1fr" : "0fr",
+                      transition: "grid-template-rows 200ms ease-out",
+                    }}
+                  >
+                    <div className="overflow-hidden">
+                      <div className="mt-1.5 mb-0.5 mx-1 space-y-1">
+                        {hub.dropdown.map((item) =>
+                          item.href && !item.disabled ? (
+                            <Link
+                              key={item.title}
+                              href={item.href}
+                              onClick={() => { setMobileOpen(false); setMobileOpenHub(null); }}
+                            >
+                              <div className="flex items-start gap-2 py-2 px-3 rounded-lg hover:bg-orange-50 active:opacity-70 cursor-pointer transition-colors">
+                                <item.Icon className={`w-4 h-4 mt-0.5 shrink-0 ${hub.iconCls}`} />
+                                <div className="min-w-0">
+                                  <p className="text-xs font-semibold text-foreground">{item.title}</p>
+                                  <p className="text-[10px] text-muted-foreground mt-0.5 leading-snug">{item.description}</p>
+                                </div>
+                              </div>
+                            </Link>
+                          ) : (
+                            <div
+                              key={item.title}
+                              aria-disabled="true"
+                              className="flex items-start gap-2 py-2 px-3 rounded-lg opacity-60 cursor-not-allowed select-none"
+                            >
+                              <item.Icon className={`w-4 h-4 mt-0.5 shrink-0 ${hub.iconCls}`} />
                               <div className="min-w-0">
                                 <p className="text-xs font-semibold text-foreground">{item.title}</p>
                                 <p className="text-[10px] text-muted-foreground mt-0.5 leading-snug">{item.description}</p>
                               </div>
                             </div>
-                          </Link>
-                        ))}
+                          )
+                        )}
                       </div>
-                    )}
-                  </div>
-                );
-              }
-
-              if (!hub.soon) {
-                return (
-                  <Link key={hub.label} href="/" onClick={() => setMobileOpen(false)}>
-                    <div className={`${cardBase} active:opacity-80`}>
-                      <hub.Icon className={`w-5 h-5 ${hub.iconCls}`} />
-                      <span className={`text-xs font-semibold text-center ${hub.mText}`}>{hub.short}</span>
-                      <span className="text-[9px] text-orange-500/70">進入首頁 →</span>
                     </div>
-                  </Link>
-                );
-              }
-
-              return (
-                <div
-                  key={hub.label}
-                  aria-disabled="true"
-                  className={`${cardBase} cursor-not-allowed select-none opacity-60`}
-                >
-                  <hub.Icon className={`w-5 h-5 ${hub.iconCls}`} />
-                  <span className={`text-xs font-semibold text-center ${hub.mText}`}>{hub.short}</span>
-                  <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-400 leading-none">即將開放</span>
+                  </div>
                 </div>
               );
             })}

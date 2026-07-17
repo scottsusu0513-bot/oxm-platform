@@ -36,6 +36,9 @@ export default function LoginDialog({ open, onOpenChange }: LoginDialogProps) {
           >
             <GoogleIcon />
             以 Google 帳號登入
+            <span className="ml-auto shrink-0 text-[10px] font-semibold text-orange-600 bg-orange-50 border border-orange-200 rounded-full px-2 py-0.5 whitespace-nowrap">
+              最推薦
+            </span>
           </Button>
 
           {/* LINE */}

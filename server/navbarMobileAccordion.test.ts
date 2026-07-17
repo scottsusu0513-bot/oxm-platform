@@ -1,0 +1,74 @@
+import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+
+// 同 server/factoryContactLogin.test.ts 的做法：此專案 vitest 僅涵蓋
+// server/**/*.test.ts、environment: "node"，沒有 jsdom／React Testing Library，
+// 無法對 Navbar 做真正的 DOM render／互動測試。這裡改用原始碼內容斷言，針對
+// 「手機版六入口 Accordion 使用單一 state、一次最多展開一個」這個具體回歸情境
+// 做最低限度防護，不新增任何測試相關套件或設定。
+
+const NAVBAR_PATH = path.resolve(
+  import.meta.dirname,
+  "..",
+  "client",
+  "src",
+  "components",
+  "Navbar.tsx"
+);
+
+describe("Navbar.tsx: 手機版六入口 Accordion 使用單一 state", () => {
+  const source = fs.readFileSync(NAVBAR_PATH, "utf-8");
+
+  it("mobileOpenHub 是唯一的 Accordion 展開狀態，不存在六個各自的 boolean state", () => {
+    expect(source).toMatch(
+      /const \[mobileOpenHub, setMobileOpenHub\] = useState<MobileHubKey \| null>\(null\);/
+    );
+    // 確保沒有殘留舊版或另外新增的逐項 boolean state（例如 mobileResourceOpen、
+    // mobileFactoryOpen 等），避免新舊 state 並存造成不一致。
+    expect(source).not.toMatch(/mobileResourceOpen/);
+    expect(source).not.toMatch(/\[mobile[A-Z]\w*Open,\s*set/);
+  });
+
+  it("切換邏輯符合「點擊同一入口收合、點擊其他入口自動互斥」規則", () => {
+    expect(source).toMatch(
+      /setMobileOpenHub\(current => \(current === hub\.key \? null : hub\.key\)\)/
+    );
+  });
+
+  it("六個入口都定義了穩定 key，且與 MobileHubKey 一致", () => {
+    const keys = ["factory", "resource", "talent", "brand", "news", "discussion"];
+    for (const key of keys) {
+      expect(source).toMatch(new RegExp(`key: "${key}"`));
+    }
+    expect(source).toMatch(
+      /type MobileHubKey = "factory" \| "resource" \| "talent" \| "brand" \| "news" \| "discussion";/
+    );
+  });
+
+  it("主選單關閉、路由變更、導頁子項都會把 mobileOpenHub 重置為 null", () => {
+    const occurrences = source.match(/setMobileOpenHub\(null\)/g) ?? [];
+    // 三個必要重置點：mobileOpen 關閉 effect、路由變更 effect、Accordion 子項導頁 onClick
+    expect(occurrences.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("未開放子項不使用 <Link>，維持不可導頁的語意區塊", () => {
+    const disabledBranchMatch = source.match(
+      /aria-disabled="true"\s*\n\s*className="flex items-start gap-2 py-2 px-3 rounded-lg opacity-60 cursor-not-allowed select-none"/
+    );
+    expect(disabledBranchMatch, "找不到未開放子項的 disabled 區塊").not.toBeNull();
+  });
+
+  it("桌面版找工廠仍是 hover 展開、找資源仍是點擊 dropdown（分支未被誤合併）", () => {
+    expect(source).toMatch(/if \(hub\.key === "resource"\)/);
+    expect(source).toMatch(/if \(!hub\.soon\)/);
+    expect(source).toMatch(/商機媒合中心 — click 導向媒合首頁，hover 顯示下拉/);
+  });
+
+  it("收合面板加上 inert，避免鍵盤 Tab 聚焦到不可見的子連結", () => {
+    // grid-template-rows: 0fr 只是視覺上收合，Link 仍在 DOM 中；沒有額外處理的話
+    // 鍵盤使用者仍可能 Tab 進入看不到的 /search、/upgrade-center 連結。
+    // React 19 原生支援 inert prop，isOpen=false 時整個面板（含子連結）不可聚焦、不可互動。
+    expect(source).toMatch(/inert=\{!isOpen\}/);
+  });
+});

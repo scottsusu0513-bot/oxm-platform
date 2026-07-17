@@ -21,6 +21,7 @@ import {
 import { shareContent } from "@/lib/share";
 import { usePullToRefresh } from "@/hooks/usePullToRefresh";
 import { NativePullToRefreshLayout } from "@/components/NativePullToRefreshLayout";
+import LoginDialog from "@/components/LoginDialog";
 
 function normalizeDescription(text: string): string {
   return text.replace(/\n{3,}/g, "\n\n");
@@ -225,8 +226,10 @@ export default function FactoryDetail() {
     setShowUpdateConfirm(false);
   };
 
+  const [loginDialogOpen, setLoginDialogOpen] = useState(false);
+
   const handleChat = (productId?: number, productName?: string) => {
-    if (!isAuthenticated) { performLogin(); return; }
+    if (!isAuthenticated) { setLoginDialogOpen(true); return; }
     const params = new URLSearchParams();
     params.set("factoryId", String(factoryId));
     if (productId) params.set("productId", String(productId));
@@ -1012,6 +1015,7 @@ export default function FactoryDetail() {
       >
         <MessageCircle className="w-6 h-6" />
       </button>
+      <LoginDialog open={loginDialogOpen} onOpenChange={setLoginDialogOpen} />
     </>
   );
 }
