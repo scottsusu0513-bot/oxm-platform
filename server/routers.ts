@@ -3601,8 +3601,17 @@ export const appRouter = router({
       content: z.string().min(1),
       type: z.enum(["update", "maintenance", "news"]).default("news"),
       isPinned: z.boolean().default(false),
+      // 只有 type === "news" 才會實際被存下來；格式驗證與「非 news 一律 null」
+      // 這條規則的真正落地保證在 db.ts 的 normalizeAnnouncementActionUrl，
+      // 這裡只是把值傳過去，不在 Router 層另外維護一份規則。
+      actionUrl: z.string().max(500).nullable().optional(),
     })).mutation(async ({ input }) => {
-      const announcementId = await db.createAnnouncement(input);
+      let announcementId: number;
+      try {
+        announcementId = await db.createAnnouncement(input);
+      } catch (err) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: err instanceof Error ? err.message : "建立公告失敗" });
+      }
       const titleSnap = input.title.length > 100 ? input.title.slice(0, 97) + "..." : input.title;
 
       // 站內通知：發給所有 active users，fire-and-forget，獨立於 push/email
@@ -3731,9 +3740,16 @@ export const appRouter = router({
       content: z.string().min(1).optional(),
       type: z.enum(["update", "maintenance", "news"]).optional(),
       isPinned: z.boolean().optional(),
+      // .nullable() 讓「明確傳 null 清空」與「完全沒帶這個欄位」在 db.ts 那邊
+      // 可以被精確區分（用 "actionUrl" in data 判斷有沒有帶，而不是看值本身）。
+      actionUrl: z.string().max(500).nullable().optional(),
     })).mutation(async ({ input }) => {
       const { id, ...data } = input;
-      await db.updateAnnouncement(id, data);
+      try {
+        await db.updateAnnouncement(id, data);
+      } catch (err) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: err instanceof Error ? err.message : "更新公告失敗" });
+      }
       return { success: true };
     }),
     delete: adminProcedure.input(z.object({ id: z.number() })).mutation(async ({ input }) => {

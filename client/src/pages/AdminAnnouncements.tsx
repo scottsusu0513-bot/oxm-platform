@@ -38,8 +38,8 @@ const TYPE_CONFIG: Record<string, { label: string; className: string }> = {
   news:        { label: "平台消息", className: "bg-green-100 text-green-700 border-green-200" },
 };
 
-type FormState = { title: string; content: string; type: "update" | "maintenance" | "news"; isPinned: boolean };
-const DEFAULT_FORM: FormState = { title: "", content: "", type: "news", isPinned: false };
+type FormState = { title: string; content: string; type: "update" | "maintenance" | "news"; isPinned: boolean; actionUrl: string };
+const DEFAULT_FORM: FormState = { title: "", content: "", type: "news", isPinned: false, actionUrl: "" };
 
 // ── Markdown 工具列 helper：對 textarea 目前選取範圍插入語法 ──────────────
 function wrapSelection(
@@ -163,7 +163,15 @@ function AdminAnnouncementsContent() {
   const resetForm = () => { setForm(DEFAULT_FORM); setEditingId(null); setShowForm(false); };
 
   const handleEdit = (item: typeof items[0]) => {
-    setForm({ title: item.title, content: item.content, type: item.type, isPinned: item.isPinned });
+    setForm({
+      title: item.title,
+      content: item.content,
+      type: item.type,
+      isPinned: item.isPinned,
+      // 非 news 公告即使資料庫因舊資料異常殘留 actionUrl，表單也一律以空字串
+      // 呈現（欄位本來就只在 news 時顯示），避免使用者誤以為那是目前生效的值。
+      actionUrl: item.type === "news" ? (item.actionUrl ?? "") : "",
+    });
     setEditingId(item.id);
     setShowForm(true);
   };
@@ -171,10 +179,13 @@ function AdminAnnouncementsContent() {
   const handleSubmit = () => {
     if (!form.title.trim()) { toast.error("請填寫標題"); return; }
     if (!form.content.trim()) { toast.error("請填寫內容"); return; }
+    // 後端仍是最終驗證依據；這裡只是確保非 news 公告不會把欄位裡殘留的舊網址
+    // 送出去，即使切換類型時的 state 清空邏輯有任何遺漏也有這一層防線。
+    const actionUrl = form.type === "news" ? (form.actionUrl.trim() || null) : null;
     if (editingId) {
-      updateMut.mutate({ id: editingId, ...form });
+      updateMut.mutate({ id: editingId, title: form.title, content: form.content, type: form.type, isPinned: form.isPinned, actionUrl });
     } else {
-      createMut.mutate(form);
+      createMut.mutate({ title: form.title, content: form.content, type: form.type, isPinned: form.isPinned, actionUrl });
     }
   };
 
@@ -223,7 +234,17 @@ function AdminAnnouncementsContent() {
               <div className="grid sm:grid-cols-2 gap-4">
                 <div>
                   <Label>類型</Label>
-                  <Select value={form.type} onValueChange={v => setForm(p => ({ ...p, type: v as FormState["type"] }))}>
+                  <Select
+                    value={form.type}
+                    onValueChange={v => setForm(p => ({
+                      ...p,
+                      type: v as FormState["type"],
+                      // 離開 news 時同一次 setState 內立即清空，不留下「欄位已
+                      // 隱藏但 state 還殘留舊網址」的中間狀態；儲存時也不會把
+                      // 舊網址送到後端（見 handleSubmit 的第二層防線）。
+                      actionUrl: v === "news" ? p.actionUrl : "",
+                    }))}
+                  >
                     <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       {TYPE_OPTIONS.map(o => (
@@ -239,6 +260,20 @@ function AdminAnnouncementsContent() {
                   <span className="text-sm flex items-center gap-1"><Pin className="w-3.5 h-3.5" />置頂公告</span>
                 </div>
               </div>
+              {form.type === "news" && (
+                <div>
+                  <Label>相關內容連結（選填）</Label>
+                  <Input
+                    value={form.actionUrl}
+                    onChange={e => setForm(p => ({ ...p, actionUrl: e.target.value }))}
+                    placeholder="例如：/upgrade-center 或 https://example.com/page"
+                    className="mt-1"
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    填寫後，使用者可在完整公告下方點選「了解更多」前往相關頁面。
+                  </p>
+                </div>
+              )}
               <div>
                 <Label>內容 *</Label>
 

@@ -4,10 +4,11 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
-import { useLocation } from "wouter";
+import { Link, useLocation } from "wouter";
 import { useEffect } from "react";
-import { ChevronLeft, Megaphone, Wrench, Newspaper, Zap, Pin } from "lucide-react";
+import { ChevronLeft, Megaphone, Wrench, Newspaper, Zap, Pin, ArrowRight, ExternalLink } from "lucide-react";
 import MarkdownContent from "@/components/MarkdownContent";
+import { isNativeApp, openExternalUrl } from "@/lib/platform";
 
 const TYPE_CONFIG = {
   update:      { label: "版本更新", icon: Zap,       className: "bg-blue-100 text-blue-700 border-blue-200" },
@@ -22,6 +23,50 @@ function TypeBadge({ type }: { type: "update" | "maintenance" | "news" }) {
     <Badge className={`${cfg.className} border text-xs font-medium`}>
       <Icon className="w-3 h-3 mr-1" />{cfg.label}
     </Badge>
+  );
+}
+
+// 公告完整內容下方的「了解更多」按鈕——唯一允許出現這顆按鈕的地方（見本檔案
+// 下方的渲染條件：type === "news" && actionUrl）。站內路徑走 wouter 既有的
+// SPA 導頁；站外網址在 Web 用真正的 <a target="_blank" rel="noopener
+// noreferrer">（保留瀏覽器原生「開新分頁」行為），在 Capacitor APP 改用
+// @capacitor/browser 開系統瀏覽器，避免站外網域被 WebView 直接劫持。
+function AnnouncementActionButton({ actionUrl }: { actionUrl: string }) {
+  const isInternal = actionUrl.startsWith("/") && !actionUrl.startsWith("//");
+
+  if (isInternal) {
+    return (
+      <Link href={actionUrl}>
+        <Button variant="outline" size="sm" className="w-full sm:w-auto gap-1.5">
+          了解更多
+          <ArrowRight className="w-3.5 h-3.5" />
+        </Button>
+      </Link>
+    );
+  }
+
+  if (isNativeApp()) {
+    return (
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="w-full sm:w-auto gap-1.5"
+        onClick={() => { void openExternalUrl(actionUrl); }}
+      >
+        了解更多
+        <ExternalLink className="w-3.5 h-3.5" />
+      </Button>
+    );
+  }
+
+  return (
+    <Button variant="outline" size="sm" className="w-full sm:w-auto gap-1.5" asChild>
+      <a href={actionUrl} target="_blank" rel="noopener noreferrer">
+        了解更多
+        <ExternalLink className="w-3.5 h-3.5" />
+      </a>
+    </Button>
   );
 }
 
@@ -97,6 +142,11 @@ export default function Announcements() {
                   </div>
                   <h2 className="font-semibold text-base mb-2">{item.title}</h2>
                   <MarkdownContent content={item.content} className="text-muted-foreground" />
+                  {item.type === "news" && item.actionUrl && (
+                    <div className="mt-4 pt-4 border-t border-border/60">
+                      <AnnouncementActionButton actionUrl={item.actionUrl} />
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             ))}

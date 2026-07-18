@@ -38,3 +38,24 @@ export function getAppPlatform(): AppPlatform {
   } catch {}
   return "web";
 }
+
+/**
+ * Opens an external https:// URL in the system browser on native (Capacitor
+ * `@capacitor/browser`, so it doesn't hijack the app's own WebView), or a new
+ * tab on web (`noopener,noreferrer`). Same fallback pattern already used by
+ * FloatingAnnouncementButton's LINE link and performLogin's OAuth redirect —
+ * kept here as a small shared helper for other callers (e.g. announcement
+ * action links) that need the same behavior without duplicating it.
+ */
+export async function openExternalUrl(url: string): Promise<void> {
+  if (isNativeApp()) {
+    try {
+      const { Browser } = await import("@capacitor/browser");
+      await Browser.open({ url });
+      return;
+    } catch {
+      // fall through to window.open below
+    }
+  }
+  window.open(url, "_blank", "noopener,noreferrer");
+}

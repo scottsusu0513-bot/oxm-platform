@@ -30,6 +30,7 @@ import {
   type CommunityBid, type CommunityBidReviewHistory, type CommunityBidOffer,
   type UpgradeApplication, type InsertUpgradeApplication,
   type UpgradeConsultant,
+  type Announcement,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 import { ADJACENT_REGIONS, INDUSTRY_SLUGS } from "../shared/constants";
@@ -1859,17 +1860,124 @@ export async function getAnnouncements(limit = 20) {
     .limit(limit);
 }
 
-export async function createAnnouncement(data: { title: string; content: string; type: "update" | "maintenance" | "news"; isPinned?: boolean }) {
+export type AnnouncementType = "update" | "maintenance" | "news";
+
+/**
+ * actionUrl 格式驗證：只接受兩種形式。
+ *   - 站內路徑：以 "/" 開頭，且不是 "//" 開頭（protocol-relative URL 會被誤判
+ *     成站內路徑但實際指向任意網域，必須明確排除）
+ *   - 站外網址：必須以 "https://" 開頭，且能被 new URL() 成功解析
+ * 一律拒絕 javascript:／data:／vbscript:／http:／無協定字串／其他任意格式。
+ * 這是全站唯一的 actionUrl 格式規則，Router 與資料層都呼叫這個函式，避免
+ * 兩邊各自維護一份可能不一致的規則。
+ */
+export function isValidAnnouncementActionUrl(url: string): boolean {
+  if (url.startsWith("//")) return false;
+  if (url.startsWith("/")) return true;
+  if (url.startsWith("https://")) {
+    try {
+      new URL(url);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+/**
+ * actionUrl 正規化 — createAnnouncement／updateAnnouncement 共用的唯一收斂點，
+ * 是「type !== news 一律 null」這條規則實際落地保證的地方（不只依賴前端或
+ * Router；即使呼叫端繞過 Router 直接呼叫這個函式，規則依然成立）。
+ *
+ * 回傳三態，呼叫端據此判斷要不要把 actionUrl 放進實際要寫入的欄位集合：
+ *   - undefined：這次不需要更動 actionUrl（只有 type === "news" 且呼叫端明確
+ *     表示「這次沒有要動 actionUrl」時才會發生，用於 update 的 partial 語意，
+ *     保留資料庫既有值）
+ *   - null：明確清空（非 news、或呼叫端明確傳入 null／空字串時）
+ *   - string：驗證通過、trim 後的合法網址
+ *
+ * type !== "news" 時一律回傳 null（無論 actionUrl 傳入什麼，包含 undefined），
+ * 不會因為值不合法而拋錯——非 news 公告本來就不該有這個欄位，不需要因此擋住
+ * 其他類型公告的儲存。只有 type === "news" 且確定「這次要設定/清除」時，才會
+ * 對非空字串做格式驗證，格式不合法會拋出 Error（由呼叫端轉換成清楚的錯誤訊息）。
+ *
+ * @param hasIntent 這次呼叫是否明確表示「要處理 actionUrl 這個欄位」。create
+ *   永遠是 true（沒有「維持原值」這個語意）；update 只有 payload 真的包含
+ *   actionUrl 這個 key 時才是 true。
+ */
+export function normalizeAnnouncementActionUrl(
+  type: AnnouncementType,
+  actionUrl: string | null | undefined,
+  hasIntent: boolean,
+): string | null | undefined {
+  if (type !== "news") return null;
+  if (!hasIntent) return undefined;
+  if (actionUrl == null) return null;
+  const trimmed = actionUrl.trim();
+  if (trimmed === "") return null;
+  if (!isValidAnnouncementActionUrl(trimmed)) {
+    throw new Error(`無效的相關內容連結：${trimmed}`);
+  }
+  return trimmed;
+}
+
+export async function getAnnouncementById(id: number): Promise<Announcement | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const [row] = await db.select().from(announcements).where(eq(announcements.id, id)).limit(1);
+  return row;
+}
+
+export async function createAnnouncement(data: {
+  title: string;
+  content: string;
+  type: AnnouncementType;
+  isPinned?: boolean;
+  actionUrl?: string | null;
+}) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
-  const result = await db.insert(announcements).values(data);
+  // create 沒有「維持原值」的語意，一定會明確寫入 actionUrl（hasIntent 固定
+  // true），未提供時視同「明確沒有網址」。
+  const actionUrl = normalizeAnnouncementActionUrl(data.type, data.actionUrl ?? null, true);
+  const result = await db.insert(announcements).values({
+    title: data.title,
+    content: data.content,
+    type: data.type,
+    isPinned: data.isPinned,
+    actionUrl: actionUrl ?? null,
+  });
   return result[0].insertId;
 }
 
-export async function updateAnnouncement(id: number, data: Partial<{ title: string; content: string; type: "update" | "maintenance" | "news"; isPinned: boolean }>) {
+export async function updateAnnouncement(
+  id: number,
+  data: Partial<{ title: string; content: string; type: AnnouncementType; isPinned: boolean; actionUrl: string | null }>,
+) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
-  await db.update(announcements).set(data).where(eq(announcements.id, id));
+
+  const { actionUrl, type, ...rest } = data;
+  const setData: Partial<{ title: string; content: string; type: AnnouncementType; isPinned: boolean; actionUrl: string | null }> = { ...rest };
+  if (type !== undefined) setData.type = type;
+
+  // 決定「這次更新完成後」實際生效的 type：payload 有帶就用那個，沒帶就要查
+  // 資料庫目前的值——即使這次完全沒有要動 type／actionUrl，也必須知道有效
+  // type，才能判斷是否該強制把 actionUrl 清成 null（例如既有非 news 公告若
+  // 因為舊資料異常仍殘留 actionUrl，任何一次更新都應該順便清掉，不能只在
+  // 明確改 type 或 actionUrl 時才處理）。
+  const effectiveType = type ?? (await getAnnouncementById(id))?.type;
+  const hasActionUrlIntent = "actionUrl" in data;
+
+  if (effectiveType) {
+    const normalized = normalizeAnnouncementActionUrl(effectiveType, actionUrl, hasActionUrlIntent);
+    if (normalized !== undefined) {
+      setData.actionUrl = normalized;
+    }
+  }
+
+  await db.update(announcements).set(setData).where(eq(announcements.id, id));
 }
 
 export async function deleteAnnouncement(id: number) {

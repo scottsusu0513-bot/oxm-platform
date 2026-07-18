@@ -366,6 +366,10 @@ export const announcements = mysqlTable("announcements", {
   content: text("content").notNull(),
   type: mysqlEnum("type", ["update", "maintenance", "news"]).default("news").notNull(),
   isPinned: boolean("isPinned").default(false).notNull(),
+  // 「相關內容連結」——只有 type="news"（平台消息）可以設定，其他類型一律
+  // NULL，由 server/db.ts 的 normalizeAnnouncementActionUrl() 在資料層強制
+  // 保證（create/update 都會走同一個函式），不只依賴前端或 router。
+  actionUrl: varchar("actionUrl", { length: 500 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
