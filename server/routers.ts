@@ -5552,14 +5552,18 @@ export const appRouter = router({
       if (status === "new" && assignedConsultant?.isActive && assignedConsultant.userId) {
         const notifyConsultant = assignedConsultant;
         void db.getUserById(notifyConsultant.userId!).then(async (consultantUser) => {
-          if (!consultantUser?.email) {
+          // LINE／Apple 登入的顧問帳號 users.email 可能是 null，實際可聯絡信箱是
+          // 已驗證的 primaryEmail；統一 primaryEmail ?? email，與專案其他讀信箱
+          // 邏輯一致。
+          const consultantEmail = consultantUser?.primaryEmail ?? consultantUser?.email ?? null;
+          if (!consultantEmail) {
             console.warn(`[Email] Consultant #${notifyConsultant.id} userId=${notifyConsultant.userId} has no email — skipping new-case notification for app #${id}`);
             return;
           }
-          console.log(`[Email] Sending new-case email to consultant ${notifyConsultant.name} <${consultantUser.email}> for app #${id}`);
+          console.log(`[Email] Sending new-case email to consultant #${notifyConsultant.id} userId=${notifyConsultant.userId} for app #${id}`);
           await sendUpgradeNewCaseConsultantEmail({
             consultantName: notifyConsultant.name,
-            consultantEmail: consultantUser.email,
+            consultantEmail,
             companyName: input.companyName,
             location: input.location,
             contactName: input.contactName,
@@ -5569,7 +5573,7 @@ export const appRouter = router({
             applicationId: id,
             appliedAt: new Date().toLocaleString("zh-TW", { timeZone: "Asia/Taipei" }),
           });
-          console.log(`[Email] New-case email sent to ${consultantUser.email} for app #${id}`);
+          console.log(`[Email] New-case email sent to consultant #${notifyConsultant.id} userId=${notifyConsultant.userId} for app #${id}`);
           // 通知中心 + Push 通知顧問
           notifyUser(
             notifyConsultant.userId!,
@@ -5955,7 +5959,10 @@ export const appRouter = router({
       if (backfilledApps.length > 0) {
         const consultantSnapshot = consultant;
         void db.getUserById(input.userId).then(async (consultantUser) => {
-          if (!consultantUser?.email) {
+          // 同新案件通知：統一 primaryEmail ?? email，避免 LINE／Apple 登入且
+          // 只設定 primaryEmail 的顧問收不到補派通知。
+          const consultantEmail = consultantUser?.primaryEmail ?? consultantUser?.email ?? null;
+          if (!consultantEmail) {
             console.warn("[Email] backfill: consultant user has no email, skipping");
             return;
           }
@@ -5963,7 +5970,7 @@ export const appRouter = router({
             try {
               await sendUpgradeNewCaseConsultantEmail({
                 consultantName: consultantSnapshot.name,
-                consultantEmail: consultantUser.email,
+                consultantEmail,
                 companyName: app.companyName,
                 location: app.location,
                 contactName: app.contactName,

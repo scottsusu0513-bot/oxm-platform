@@ -6474,8 +6474,16 @@ export async function listAllConsultants(): Promise<ConsultantWithBoundUser[]> {
   const userMap = new Map<number, BoundUserInfo>();
 
   if (userIds.length > 0) {
+    // LINE／Apple 登入的使用者 users.email 可能一直是 null（只有 Google 登入才會
+    // 自動寫入），真正可聯絡的信箱是使用者自行驗證過的 primaryEmail。與專案其他
+    // 讀信箱邏輯（如 getRecipientsWithEmails）一致，統一 COALESCE(primaryEmail, email)。
     const fetched = await db_
-      .select({ id: users.id, name: users.name, email: users.email, createdAt: users.createdAt })
+      .select({
+        id: users.id,
+        name: users.name,
+        email: sql<string | null>`COALESCE(${users.primaryEmail}, ${users.email})`,
+        createdAt: users.createdAt,
+      })
       .from(users)
       .where(inArray(users.id, userIds));
     fetched.forEach(u => userMap.set(u.id, u));
