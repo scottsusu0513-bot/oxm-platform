@@ -957,18 +957,22 @@ describe("NewsDetail.tsx：production document.title 空白修正（原始碼內
 
   it("Helmet 掛載在 loading／NotFound／正常內容的條件分支之外，不是只在資料載入後才第一次出現", () => {
     const source = readNewsDetailSource();
+    // 只檢查 NewsDetail 這個預設匯出的元件本身（PDF 附件卡片是獨立的
+    // NewsAttachmentCard 子元件，定義在它前面，本來就有自己合法的 return，
+    // 不屬於這個「唯一一次 return」規則要鎖定的範圍）。
+    const componentSource = source.slice(source.indexOf("export default function NewsDetail()"));
     // 唯一一次 return，Helmet 和 {body} 在同一個 JSX 樹裡；不能有「isLoading
     // 時 return 一份 JSX、資料載入後又 return 另一份帶 Helmet 的 JSX」這種
     // 每個分支各自決定要不要掛 Helmet 的寫法（那正是原本會產生空 title 的
     // 結構）。
-    const returnCount = (source.match(/\breturn\s*\(/g) ?? []).length;
-    const helmetIdx = source.indexOf("<Helmet>");
-    const bodyAssignIdx = source.indexOf("let body:");
+    const returnCount = (componentSource.match(/\breturn\s*\(/g) ?? []).length;
+    const helmetIdx = componentSource.indexOf("<Helmet>");
+    const bodyAssignIdx = componentSource.indexOf("let body:");
     expect(helmetIdx).toBeGreaterThan(-1);
     expect(bodyAssignIdx).toBeGreaterThan(-1);
     expect(helmetIdx).toBeGreaterThan(bodyAssignIdx); // Helmet 在 body 三態都決定好之後才渲染，同一棵樹裡
     // isLoading／NotFound／正常內容三個分支都只是在組 `body` 這個變數，
-    // 不是各自 return，所以合法的 `return (` 在整個檔案應該只出現一次。
+    // 不是各自 return，所以合法的 `return (` 在 NewsDetail 元件本身應該只出現一次。
     expect(returnCount).toBe(1);
   });
 

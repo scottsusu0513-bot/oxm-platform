@@ -15,16 +15,10 @@ import { Command, CommandInput, CommandList, CommandEmpty, CommandItem } from "@
 import { trpc } from "@/lib/trpc";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
-import { ArrowLeft, Plus, Pencil, Trash2, Pin, Zap, Wrench, Newspaper, Megaphone, Bold, Italic, Heading2, Link2, SeparatorHorizontal, Type, ChevronDown, LogIn, Check, ChevronsUpDown, AlertTriangle } from "lucide-react";
+import { ArrowLeft, Plus, Pencil, Trash2, Pin, Zap, Wrench, Newspaper, Megaphone, LogIn, Check, ChevronsUpDown, AlertTriangle } from "lucide-react";
 import { FloatingBackButton } from "@/components/FloatingBackButton";
 import MarkdownContent, { toMarkdownPreviewText } from "@/components/MarkdownContent";
-import {
-  DropdownMenu,
-  DropdownMenuTrigger,
-  DropdownMenuContent,
-  DropdownMenuItem,
-} from "@/components/ui/dropdown-menu";
-import { ANNOUNCEMENT_FONT_SIZES, ANNOUNCEMENT_FONT_SIZE_LABELS } from "@/lib/announcementFontSize";
+import { MarkdownToolbar } from "@/components/MarkdownToolbar";
 
 const TYPE_OPTIONS = [
   { value: "news",        label: "平台消息", icon: Newspaper },
@@ -40,81 +34,6 @@ const TYPE_CONFIG: Record<string, { label: string; className: string }> = {
 
 type FormState = { title: string; content: string; type: "update" | "maintenance" | "news"; isPinned: boolean; actionUrl: string };
 const DEFAULT_FORM: FormState = { title: "", content: "", type: "news", isPinned: false, actionUrl: "" };
-
-// ── Markdown 工具列 helper：對 textarea 目前選取範圍插入語法 ──────────────
-function wrapSelection(
-  textarea: HTMLTextAreaElement,
-  value: string,
-  onChange: (next: string) => void,
-  prefix: string,
-  suffix: string,
-  placeholder: string,
-) {
-  const start = textarea.selectionStart ?? value.length;
-  const end = textarea.selectionEnd ?? value.length;
-  const selected = value.slice(start, end);
-  const inserted = selected || placeholder;
-  const next = value.slice(0, start) + prefix + inserted + suffix + value.slice(end);
-  onChange(next);
-  requestAnimationFrame(() => {
-    textarea.focus();
-    const selStart = start + prefix.length;
-    textarea.setSelectionRange(selStart, selStart + inserted.length);
-  });
-}
-
-// 對目前選取涵蓋的每一行開頭加上 prefix（標題／項目符號／編號清單皆是逐行語法）
-function prefixLines(
-  textarea: HTMLTextAreaElement,
-  value: string,
-  onChange: (next: string) => void,
-  linePrefix: string,
-  placeholder: string,
-) {
-  const start = textarea.selectionStart ?? 0;
-  const end = textarea.selectionEnd ?? 0;
-  const lineStart = value.lastIndexOf("\n", start - 1) + 1;
-  let lineEnd = value.indexOf("\n", end);
-  if (lineEnd === -1) lineEnd = value.length;
-  const block = value.slice(lineStart, lineEnd);
-  const content = block.trim() === "" ? placeholder : block;
-  const prefixed = content.split("\n").map(line => (line ? `${linePrefix}${line}` : line)).join("\n");
-  const next = value.slice(0, lineStart) + prefixed + value.slice(lineEnd);
-  onChange(next);
-  requestAnimationFrame(() => {
-    textarea.focus();
-    textarea.setSelectionRange(lineStart, lineStart + prefixed.length);
-  });
-}
-
-function insertLink(textarea: HTMLTextAreaElement, value: string, onChange: (next: string) => void) {
-  const start = textarea.selectionStart ?? value.length;
-  const end = textarea.selectionEnd ?? value.length;
-  const selected = value.slice(start, end);
-  const linkText = selected || "連結文字";
-  const inserted = `[${linkText}](https://)`;
-  const next = value.slice(0, start) + inserted + value.slice(end);
-  onChange(next);
-  requestAnimationFrame(() => {
-    textarea.focus();
-    // Select the "https://" placeholder so the admin can immediately type the real URL over it.
-    const urlStart = start + `[${linkText}](`.length;
-    textarea.setSelectionRange(urlStart, urlStart + "https://".length);
-  });
-}
-
-// 插入一段純文字到游標位置（有選取則取代選取範圍）；用於分隔線這類不需要「包住文字」的插入。
-function insertAtCursor(textarea: HTMLTextAreaElement, value: string, onChange: (next: string) => void, text: string) {
-  const start = textarea.selectionStart ?? value.length;
-  const end = textarea.selectionEnd ?? value.length;
-  const next = value.slice(0, start) + text + value.slice(end);
-  onChange(next);
-  requestAnimationFrame(() => {
-    textarea.focus();
-    const cursor = start + text.length;
-    textarea.setSelectionRange(cursor, cursor);
-  });
-}
 
 export default function AdminAnnouncements() {
   const { user, loading } = useAuth();
@@ -132,17 +51,6 @@ function AdminAnnouncementsContent() {
   const contentRef = useRef<HTMLTextAreaElement>(null);
 
   const setContent = (next: string) => setForm(p => ({ ...p, content: next }));
-  const toolbarActions: Array<{ icon: typeof Bold; label: string; onClick: () => void }> = [
-    { icon: Bold, label: "粗體", onClick: () => contentRef.current && wrapSelection(contentRef.current, form.content, setContent, "**", "**", "粗體文字") },
-    { icon: Italic, label: "斜體", onClick: () => contentRef.current && wrapSelection(contentRef.current, form.content, setContent, "*", "*", "斜體文字") },
-    { icon: Heading2, label: "標題", onClick: () => contentRef.current && prefixLines(contentRef.current, form.content, setContent, "## ", "標題文字") },
-    { icon: Link2, label: "連結", onClick: () => contentRef.current && insertLink(contentRef.current, form.content, setContent) },
-    { icon: SeparatorHorizontal, label: "分隔線", onClick: () => contentRef.current && insertAtCursor(contentRef.current, form.content, setContent, "\n\n---\n\n") },
-  ];
-  const applyFontSize = (size: (typeof ANNOUNCEMENT_FONT_SIZES)[number]) => {
-    if (!contentRef.current) return;
-    wrapSelection(contentRef.current, form.content, setContent, `:${size}[`, "]", "文字");
-  };
 
   const utils = trpc.useUtils();
   const { data: items = [], isLoading } = trpc.announcement.list.useQuery({ limit: 100 });
@@ -277,39 +185,7 @@ function AdminAnnouncementsContent() {
               <div>
                 <Label>內容 *</Label>
 
-                <div className="flex flex-wrap items-center gap-1 mt-1 mb-1.5 p-1.5 bg-muted/40 rounded-md border">
-                  {toolbarActions.map(a => (
-                    <button
-                      key={a.label}
-                      type="button"
-                      title={a.label}
-                      onClick={a.onClick}
-                      className="p-1.5 rounded hover:bg-white hover:shadow-sm text-muted-foreground hover:text-foreground transition-colors"
-                    >
-                      <a.icon className="w-3.5 h-3.5" />
-                    </button>
-                  ))}
-                  <div className="w-px h-4 bg-border mx-0.5" />
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <button
-                        type="button"
-                        title="字體大小"
-                        className="flex items-center gap-0.5 p-1.5 rounded hover:bg-white hover:shadow-sm text-muted-foreground hover:text-foreground transition-colors"
-                      >
-                        <Type className="w-3.5 h-3.5" />
-                        <ChevronDown className="w-2.5 h-2.5" />
-                      </button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="start">
-                      {ANNOUNCEMENT_FONT_SIZES.map(size => (
-                        <DropdownMenuItem key={size} onClick={() => applyFontSize(size)}>
-                          {ANNOUNCEMENT_FONT_SIZE_LABELS[size]}
-                        </DropdownMenuItem>
-                      ))}
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </div>
+                <MarkdownToolbar contentRef={contentRef} content={form.content} onChange={setContent} />
 
                 <Textarea
                   ref={contentRef}

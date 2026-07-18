@@ -109,16 +109,16 @@ export function setupOriginCheck(app: Express) {
 }
 
 /**
- * 圖片上傳驗證
+ * 圖片上傳驗證。maxBytes 預設 5MB，維持既有所有呼叫端目前的行為不變；
+ * 找消息封面／內文圖片需要 10MB 上限，會明確傳入這個參數覆蓋預設值。
  */
-export async function validateImageUpload(file: Buffer): Promise<{ valid: boolean; error?: string }> {
+export async function validateImageUpload(file: Buffer, maxBytes = 5 * 1024 * 1024): Promise<{ valid: boolean; error?: string }> {
   if (!file || file.length === 0) {
     return { valid: false, error: "檔案為空" };
   }
 
-  // 檢查大小 (5MB)
-  if (file.length > 5 * 1024 * 1024) {
-    return { valid: false, error: "檔案大小超過 5MB" };
+  if (file.length > maxBytes) {
+    return { valid: false, error: `檔案大小超過 ${Math.round(maxBytes / (1024 * 1024))}MB` };
   }
 
   // 檢查 magic number

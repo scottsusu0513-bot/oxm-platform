@@ -12,7 +12,7 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import * as db from "./db";
 import { notifyOwner } from "./_core/notification";
-import { storagePut, storagePresignedUrl } from "./storage";
+import { storagePut, storagePresignedUrl, storageDelete } from "./storage";
 import { validateImageUpload } from "./_core/security";
 import { INDUSTRY_OPTIONS, TAIWAN_REGIONS, CAPITAL_OPTIONS, INDUSTRY_SLUGS } from "../shared/constants";
 import { nanoid } from "nanoid";
@@ -23,6 +23,15 @@ import { sendPushToUser, sendPushToRecipients, toPlainPushSummary } from "./push
 import { createPlatformNotifications } from "./notifications";
 import { notifyUser, notifyFactoryMembers, notifyAdmins } from "./notifyHelper";
 import { runCollaborationOrderOverdueEmailCheck } from "./orderOverdueCheck";
+import {
+  isPrivateStorageConfigured,
+  privateStorageCreateUploadUrl,
+  privateStorageHeadObject,
+  privateStorageReadHeadBytes,
+  privateStorageDeleteObject,
+  privateStorageCopyObject,
+  privateStorageCreateDownloadUrl,
+} from "./privateStorage";
 
 function requireVerifiedEmail(user: { primaryEmailVerifiedAt: Date | null }): void {
   if (!user.primaryEmailVerifiedAt) {
@@ -3955,8 +3964,11 @@ export const appRouter = router({
     getBySlug: publicProcedure.input(z.object({ slug: z.string().min(1).max(200) })).query(async ({ input }) => {
       const item = await db.getPublishedNewsBySlug(input.slug);
       if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "找不到這則消息" });
-      const industryNames = await db.getNewsIndustryNames(item.id);
-      return { ...item, industryNames };
+      const [industryNames, attachments] = await Promise.all([
+        db.getNewsIndustryNames(item.id),
+        db.getNewsAttachmentsPublic(item.id),
+      ]);
+      return { ...item, industryNames, attachments };
     }),
 
     // ---- 管理員後台 ----
@@ -4046,6 +4058,251 @@ export const appRouter = router({
     // 新紀錄、也不會影響已經 sent 的紀錄，因此重複點擊或編輯後再點擊都是安全的。
     retryNotifications: adminProcedure.input(z.object({ id: z.number() })).mutation(async ({ input }) => {
       return retryNewsNotifications(input.id);
+    }),
+
+    // ---- 封面圖片／內文圖片：公開內容，沿用既有 storagePut 慣例（回傳公開
+    // URL），不像 PDF 附件需要登入保護。base64 in、URL out，跟工廠大頭貼／
+    // 產品圖片上傳是同一套既有模式，不另外發明第二套上傳流程。 ----
+    uploadCoverImage: adminProcedure.input(z.object({
+      newsId: z.number(),
+      base64: z.string(),
+      mimeType: z.string(),
+      altText: z.string().max(200).optional(),
+    })).mutation(async ({ input }) => {
+      const item = await db.getNewsById(input.newsId);
+      if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "找不到這則消息，請先儲存草稿" });
+
+      const base64Data = input.base64.includes(",") ? input.base64.split(",")[1] : input.base64;
+      const buffer = Buffer.from(base64Data, "base64");
+      const validation = await validateImageUpload(buffer, 10 * 1024 * 1024);
+      if (!validation.valid) throw new TRPCError({ code: "BAD_REQUEST", message: validation.error ?? "圖片格式不正確" });
+
+      const ext = input.mimeType.includes("png") ? "png" : input.mimeType.includes("webp") ? "webp" : "jpg";
+      const key = `news-covers/${input.newsId}/${nanoid()}.${ext}`;
+      const { url } = await storagePut(key, buffer, input.mimeType);
+
+      const { previousKey } = await db.setNewsCover(input.newsId, { key, url, alt: input.altText?.trim() || null });
+      if (previousKey && previousKey !== key) {
+        await storageDelete(previousKey).catch(err => console.warn(`[news] failed to delete old cover key for newsId=${input.newsId}:`, err instanceof Error ? err.message : err));
+      }
+      return { url };
+    }),
+
+    removeCoverImage: adminProcedure.input(z.object({ newsId: z.number() })).mutation(async ({ input }) => {
+      const { previousKey } = await db.clearNewsCover(input.newsId);
+      if (previousKey) {
+        await storageDelete(previousKey).catch(err => console.warn(`[news] failed to delete cover key for newsId=${input.newsId}:`, err instanceof Error ? err.message : err));
+      }
+      return { success: true };
+    }),
+
+    uploadContentImage: adminProcedure.input(z.object({
+      newsId: z.number(),
+      base64: z.string(),
+      mimeType: z.string(),
+      fileName: z.string().max(200).optional(),
+    })).mutation(async ({ input }) => {
+      const item = await db.getNewsById(input.newsId);
+      if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "找不到這則消息，請先儲存草稿" });
+
+      const base64Data = input.base64.includes(",") ? input.base64.split(",")[1] : input.base64;
+      const buffer = Buffer.from(base64Data, "base64");
+      const validation = await validateImageUpload(buffer, 10 * 1024 * 1024);
+      if (!validation.valid) throw new TRPCError({ code: "BAD_REQUEST", message: validation.error ?? "圖片格式不正確" });
+
+      const ext = input.mimeType.includes("png") ? "png" : input.mimeType.includes("webp") ? "webp" : "jpg";
+      const key = `news-content/${input.newsId}/${nanoid()}.${ext}`;
+      const { url } = await storagePut(key, buffer, input.mimeType);
+
+      const altText = input.fileName ? input.fileName.replace(/\.[^.]+$/, "") : "";
+      return { url, altText };
+    }),
+
+    // ---- PDF 附件：獨立私有 bucket，presigned 直傳 + finalize 二次驗證 ----
+    // 25MB PDF 轉 base64 會膨脹到約 33MB，超過既有 tRPC body limit（圖片路由
+    // 15MB／其餘 100kb），因此不比照封面/內文圖片的 base64-over-tRPC，改用
+    // 前端直傳私有 S3 的 presigned URL 流程。
+
+    // 管理員後台附件列表：刻意不回傳 storageKey，前端不需要也不該拿到內部路徑。
+    getAdminAttachments: adminProcedure.input(z.object({ newsId: z.number() })).query(async ({ input }) => {
+      const rows = await db.getNewsAttachmentsForAdmin(input.newsId);
+      return rows.map(({ storageKey: _storageKey, ...rest }) => ({
+        ...rest,
+        ...db.computeNewsAttachmentStatus({
+          expirationType: rest.expirationType as db.NewsAttachmentExpirationType,
+          downloadExpiresAt: rest.downloadExpiresAt,
+          storageDeletedAt: rest.storageDeletedAt,
+        }),
+      }));
+    }),
+
+    // 第一步：建立上傳工作階段。只回傳一次性、限定單一 UUID key 的 presigned
+    // PUT 網址，不回傳 AWS 憑證，網址本身不記錄到 log。
+    createPdfUploadSession: adminProcedure.input(z.object({
+      newsId: z.number(),
+      fileName: z.string().min(1).max(200),
+      declaredMimeType: z.string(),
+      declaredSizeBytes: z.number().int().min(1).max(25 * 1024 * 1024),
+    })).mutation(async ({ input }) => {
+      if (!isPrivateStorageConfigured()) {
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: "私有附件儲存尚未設定" });
+      }
+      const item = await db.getNewsById(input.newsId);
+      if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "找不到這則消息，請先儲存草稿" });
+      if (input.declaredMimeType !== "application/pdf") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "只允許上傳 PDF 檔案" });
+      }
+      const currentCount = await db.getNewsAttachmentCount(input.newsId);
+      if (currentCount >= db.MAX_NEWS_ATTACHMENTS_PER_NEWS) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: `每篇消息最多只能有 ${db.MAX_NEWS_ATTACHMENTS_PER_NEWS} 份附件` });
+      }
+
+      const storageKey = `news-attachments/tmp/${nanoid()}.pdf`;
+      const uploadUrl = await privateStorageCreateUploadUrl(storageKey, "application/pdf", 600);
+      return { uploadUrl, storageKey, expiresInSeconds: 600 };
+    }),
+
+    // 第二步：前端直傳私有 S3 完成後呼叫。重新用 HeadObject／Range GET 驗證
+    // 實際檔案大小、型別、magic bytes，不信任前端宣稱的值；驗證失敗會刪掉剛
+    // 上傳的物件，不建立 metadata。驗證通過後把物件從 tmp 前綴搬到正式附件
+    // 的永久 key，再交給 db.createNewsAttachment（在 transaction 裡原子性地
+    // 檢查 5 份上限、算出到期時間）。
+    finalizePdfUpload: adminProcedure.input(z.object({
+      newsId: z.number(),
+      storageKey: z.string().regex(/^news-attachments\/tmp\/[A-Za-z0-9_-]{6,64}\.pdf$/, "無效的暫存檔案路徑"),
+      displayName: z.string().min(1).max(200),
+      originalFileName: z.string().min(1).max(200),
+      expirationType: z.enum(["after_publish_30d", "custom", "never"]).default("after_publish_30d"),
+      customDownloadExpiresAt: z.string().datetime().optional(),
+    })).mutation(async ({ ctx, input }) => {
+      if (!isPrivateStorageConfigured()) {
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: "私有附件儲存尚未設定" });
+      }
+      const item = await db.getNewsById(input.newsId);
+      if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "找不到這則消息" });
+      if (input.expirationType === "custom" && !input.customDownloadExpiresAt) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "自訂到期時間為必填" });
+      }
+
+      const cleanupTmpAndThrow = async (message: string): Promise<never> => {
+        await privateStorageDeleteObject(input.storageKey).catch(err =>
+          console.warn(`[news] failed to delete invalid tmp attachment ${input.storageKey}:`, err instanceof Error ? err.message : err));
+        throw new TRPCError({ code: "BAD_REQUEST", message });
+      };
+
+      const meta = await privateStorageHeadObject(input.storageKey);
+      if (!meta.exists) return cleanupTmpAndThrow("找不到已上傳的檔案，請重新上傳");
+      if (meta.sizeBytes <= 0 || meta.sizeBytes > 25 * 1024 * 1024) return cleanupTmpAndThrow("檔案大小不符合限制（上限 25MB）");
+      if (meta.contentType && !meta.contentType.includes("pdf") && meta.contentType !== "application/octet-stream") {
+        return cleanupTmpAndThrow("檔案類型不正確，請上傳 PDF");
+      }
+
+      const head = await privateStorageReadHeadBytes(input.storageKey, 5);
+      const isPdfMagic = head.length >= 5 && head[0] === 0x25 && head[1] === 0x50 && head[2] === 0x44 && head[3] === 0x46 && head[4] === 0x2d;
+      if (!isPdfMagic) return cleanupTmpAndThrow("檔案內容不是有效的 PDF");
+
+      const permanentKey = `news-attachments/${input.newsId}/${nanoid()}.pdf`;
+      await privateStorageCopyObject(input.storageKey, permanentKey);
+      await privateStorageDeleteObject(input.storageKey).catch(err =>
+        console.warn(`[news] failed to delete tmp attachment after copy ${input.storageKey}:`, err instanceof Error ? err.message : err));
+
+      let attachmentId: number;
+      try {
+        attachmentId = await db.createNewsAttachment({
+          newsId: input.newsId,
+          displayName: input.displayName,
+          originalFileName: input.originalFileName,
+          storageKey: permanentKey,
+          mimeType: "application/pdf",
+          sizeBytes: meta.sizeBytes,
+          uploadedBy: ctx.user!.id,
+          expirationType: input.expirationType,
+          customDownloadExpiresAt: input.customDownloadExpiresAt ? new Date(input.customDownloadExpiresAt) : null,
+        });
+      } catch (err) {
+        await privateStorageDeleteObject(permanentKey).catch(delErr =>
+          console.warn(`[news] failed to delete orphaned permanent attachment ${permanentKey}:`, delErr instanceof Error ? delErr.message : delErr));
+        throw new TRPCError({ code: "BAD_REQUEST", message: err instanceof Error ? err.message : "建立附件失敗" });
+      }
+      return { success: true, id: attachmentId };
+    }),
+
+    updateAttachmentExpiration: adminProcedure.input(z.object({
+      id: z.number(),
+      expirationType: z.enum(["after_publish_30d", "custom", "never"]),
+      customDownloadExpiresAt: z.string().datetime().optional(),
+    })).mutation(async ({ input }) => {
+      try {
+        await db.updateNewsAttachmentExpiration(input.id, {
+          expirationType: input.expirationType,
+          downloadExpiresAt: input.customDownloadExpiresAt ? new Date(input.customDownloadExpiresAt) : null,
+        });
+      } catch (err) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: err instanceof Error ? err.message : "更新到期規則失敗" });
+      }
+      return { success: true };
+    }),
+
+    renameAttachment: adminProcedure.input(z.object({
+      id: z.number(),
+      displayName: z.string().min(1).max(200),
+    })).mutation(async ({ input }) => {
+      await db.renameNewsAttachment(input.id, input.displayName);
+      return { success: true };
+    }),
+
+    deleteAttachment: adminProcedure.input(z.object({ id: z.number() })).mutation(async ({ input }) => {
+      const deleted = await db.deleteNewsAttachment(input.id);
+      if (deleted?.storageKey) {
+        await privateStorageDeleteObject(deleted.storageKey).catch(err =>
+          console.warn(`[news] failed to delete attachment storage key=${deleted.storageKey}:`, err instanceof Error ? err.message : err));
+      }
+      return { success: true };
+    }),
+
+    // 會員下載連結：每次呼叫都重新驗證登入／狀態／過期／實體檔案是否存在，
+    // 不信任前端傳入的任何時間。一般會員只能下載已發布消息的附件；管理員
+    // 可以下載草稿附件，也可以預覽「已過期但實體檔案尚未被排程清除」的附件
+    // （因為檔案客觀上還存在，屬於資訊安全的產品決策，已於完成報告中說明）——
+    // 但即使是管理員，只要 storageDeletedAt 已經有值，一律不允許再取得下載連結。
+    getPdfDownloadUrl: protectedProcedure.input(z.object({ attachmentId: z.number() })).mutation(async ({ ctx, input }) => {
+      const attachment = await db.getNewsAttachmentById(input.attachmentId);
+      if (!attachment) throw new TRPCError({ code: "NOT_FOUND", message: "找不到此附件" });
+      const newsItem = await db.getNewsById(attachment.newsId);
+      if (!newsItem) throw new TRPCError({ code: "NOT_FOUND", message: "找不到此附件" });
+
+      const isAdmin = ctx.user.role === "admin";
+      if (newsItem.status !== "published" && !isAdmin) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "找不到此附件" });
+      }
+      if (attachment.storageDeletedAt != null) {
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: "已超過下載期限，如有需要請聯繫管理員。" });
+      }
+
+      const { isExpired } = db.computeNewsAttachmentStatus(attachment);
+      if (isExpired && !isAdmin) {
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: "已超過下載期限，如有需要請聯繫管理員。" });
+      }
+
+      if (!isPrivateStorageConfigured()) {
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: "私有附件儲存尚未設定" });
+      }
+      const meta = await privateStorageHeadObject(attachment.storageKey);
+      if (!meta.exists) {
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: "已超過下載期限，如有需要請聯繫管理員。" });
+      }
+
+      let ttlSeconds = 300;
+      if (!isExpired && attachment.expirationType !== "never" && attachment.downloadExpiresAt) {
+        const secondsUntilExpiry = Math.floor((attachment.downloadExpiresAt.getTime() - Date.now()) / 1000);
+        ttlSeconds = Math.min(300, secondsUntilExpiry);
+      }
+      if (ttlSeconds <= 0) {
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: "已超過下載期限，如有需要請聯繫管理員。" });
+      }
+
+      const url = await privateStorageCreateDownloadUrl(attachment.storageKey, attachment.displayName, ttlSeconds);
+      return { url, expiresInSeconds: ttlSeconds };
     }),
   }),
 

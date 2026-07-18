@@ -1,4 +1,4 @@
-import { eq, and, like, desc, asc, sql, inArray, or, isNull, gt, isNotNull, getTableColumns } from "drizzle-orm";
+import { eq, and, like, desc, asc, sql, inArray, or, isNull, gt, isNotNull, lte, ne, getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
 import { createHash } from "crypto";
@@ -23,7 +23,7 @@ import {
   communityReactions, communityMentions, communityNotifications,
   communityBids, communityBidIndustries, communityBidReviewHistory, communityBidOffers,
   upgradeApplications, upgradeConsultants,
-  news, newsIndustries, newsNotifications,
+  news, newsIndustries, newsNotifications, newsAttachments,
   type Factory, type InsertFactory, type Product, type InsertProduct, type Favorite, type InsertFavorite,
   type CommunityPost, type CommunityComment,
   type CommunityBoardFollow, type FactoryFollow, type CommunityContentFollow,
@@ -32,7 +32,7 @@ import {
   type UpgradeApplication, type InsertUpgradeApplication,
   type UpgradeConsultant,
   type Announcement,
-  type News, type InsertNews,
+  type News, type InsertNews, type NewsAttachment,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 import { ADJACENT_REGIONS, INDUSTRY_SLUGS, INDUSTRY_OPTIONS } from "../shared/constants";
@@ -2205,9 +2205,10 @@ export async function updateNews(id: number, data: UpdateNewsInput): Promise<{ s
     if (data.status !== undefined) {
       setData.status = data.status;
       if (data.status === "published") {
-        setData.publishedAt = new Date();
+        const publishNow = new Date();
+        setData.publishedAt = publishNow;
         if (current.firstPublishedAt == null) {
-          setData.firstPublishedAt = new Date();
+          setData.firstPublishedAt = publishNow;
           shouldNotify = true;
         }
       }
@@ -2216,8 +2217,316 @@ export async function updateNews(id: number, data: UpdateNewsInput): Promise<{ s
     if (Object.keys(setData).length > 0) {
       await tx.update(news).set(setData).where(eq(news.id, id));
     }
+
+    if (shouldNotify) {
+      // 第一次發布：把「草稿階段就上傳、規則是發布後 30 天」且還沒被算出期限的
+      // 附件，一次設定 downloadExpiresAt = firstPublishedAt + 30 天。跟上面同一個
+      // transaction、同一把 news 列鎖之下完成——重試或併發呼叫第二次進來時，
+      // current.firstPublishedAt 一定已經有值，shouldNotify 為 false，不會再次
+      // 執行這段、也就不會把期限往後推。
+      const expiresAt = new Date((setData.firstPublishedAt as Date).getTime() + THIRTY_DAYS_MS);
+      await tx.update(newsAttachments)
+        .set({ downloadExpiresAt: expiresAt })
+        .where(and(
+          eq(newsAttachments.newsId, id),
+          eq(newsAttachments.expirationType, "after_publish_30d"),
+          isNull(newsAttachments.downloadExpiresAt),
+        ));
+    }
     return { shouldNotify };
   });
+}
+
+// ===== 找消息：封面圖片 =====
+// 封面是公開消息內容的一部分（訪客可見），不像 PDF 附件需要登入保護，因此
+// 直接沿用 storagePut 既有的「回傳公開 URL」慣例即可，跟工廠大頭貼／封面圖
+// 是同一套做法。coverImageKey 只在後端內部用來精準刪除舊的 S3 object。
+
+/** 回傳「更新前」的 coverImageKey，讓呼叫端（router）決定要不要刪除舊的 S3 object。 */
+export async function setNewsCover(
+  newsId: number,
+  cover: { key: string; url: string; alt: string | null },
+): Promise<{ previousKey: string | null }> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  const [current] = await db.select({ coverImageKey: news.coverImageKey }).from(news).where(eq(news.id, newsId)).limit(1);
+  await db.update(news).set({
+    coverImageKey: cover.key,
+    coverImageUrl: cover.url,
+    coverImageAlt: cover.alt,
+  }).where(eq(news.id, newsId));
+  return { previousKey: current?.coverImageKey ?? null };
+}
+
+export async function clearNewsCover(newsId: number): Promise<{ previousKey: string | null }> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  const [current] = await db.select({ coverImageKey: news.coverImageKey }).from(news).where(eq(news.id, newsId)).limit(1);
+  await db.update(news).set({ coverImageKey: null, coverImageUrl: null, coverImageAlt: null }).where(eq(news.id, newsId));
+  return { previousKey: current?.coverImageKey ?? null };
+}
+
+// ===== 找消息：PDF 附件 metadata =====
+// storageKey 只給後端內部使用（刪除物件、簽發下載連結），公開/會員端查詢一律
+// 用下面的白名單 select，結構性保證 storageKey／mimeType 這類內部欄位不會被
+// 意外回傳給前端。
+
+export const MAX_NEWS_ATTACHMENTS_PER_NEWS = 5;
+const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+
+export async function getNewsAttachmentCount(newsId: number): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const [[{ n }]] = [await db.select({ n: sql<number>`COUNT(*)` }).from(newsAttachments).where(eq(newsAttachments.newsId, newsId))];
+  return Number(n);
+}
+
+export type NewsAttachmentExpirationType = "after_publish_30d" | "custom" | "never";
+
+export interface CreateNewsAttachmentInput {
+  newsId: number;
+  displayName: string;
+  originalFileName: string;
+  storageKey: string;
+  mimeType: string;
+  sizeBytes: number;
+  uploadedBy: number;
+  expirationType: NewsAttachmentExpirationType;
+  /** 僅 expirationType === "custom" 時使用；呼叫端需先驗證是未來時間。 */
+  customDownloadExpiresAt?: Date | null;
+}
+
+/**
+ * 用 transaction + news 表的 FOR UPDATE 鎖，讓「這篇目前有幾筆附件」「這篇是否
+ * 已經發布過」的讀取跟這次新增鎖在一起，避免多個 finalize 併發呼叫各自讀到
+ * 舊的數量一起衝破 5 份上限，也確保 after_publish_30d 的初始到期時間是根據
+ * 當下最新的發布狀態算出來，不是根據過期的讀取結果。
+ */
+export async function createNewsAttachment(data: CreateNewsAttachmentInput): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+
+  return db.transaction(async (tx) => {
+    const [newsRow] = await tx.select({ id: news.id, firstPublishedAt: news.firstPublishedAt })
+      .from(news).where(eq(news.id, data.newsId)).limit(1).for("update");
+    if (!newsRow) throw new Error("找不到此則消息");
+
+    const [[{ n }]] = [await tx.select({ n: sql<number>`COUNT(*)` }).from(newsAttachments).where(eq(newsAttachments.newsId, data.newsId))];
+    if (Number(n) >= MAX_NEWS_ATTACHMENTS_PER_NEWS) {
+      throw new Error(`每篇消息最多只能有 ${MAX_NEWS_ATTACHMENTS_PER_NEWS} 份附件`);
+    }
+
+    let downloadExpiresAt: Date | null = null;
+    if (data.expirationType === "custom") {
+      if (!data.customDownloadExpiresAt || data.customDownloadExpiresAt.getTime() <= Date.now()) {
+        throw new Error("自訂到期時間必須晚於目前時間");
+      }
+      downloadExpiresAt = data.customDownloadExpiresAt;
+    } else if (data.expirationType === "after_publish_30d" && newsRow.firstPublishedAt != null) {
+      // 這篇消息已經發布過，代表這份附件是「發布後才補上傳」——直接從上傳完成
+      // 時間起算 30 天。還沒發布過的話 downloadExpiresAt 維持 NULL，交給
+      // updateNews() 在第一次真正轉為 published 的當下才寫入。
+      downloadExpiresAt = new Date(Date.now() + THIRTY_DAYS_MS);
+    }
+    // expirationType === "never"，或 after_publish_30d 且尚未發布：downloadExpiresAt 維持 null。
+
+    const [[{ maxOrder }]] = [await tx.select({ maxOrder: sql<number>`COALESCE(MAX(${newsAttachments.sortOrder}), -1)` }).from(newsAttachments).where(eq(newsAttachments.newsId, data.newsId))];
+    const result = await tx.insert(newsAttachments).values({
+      newsId: data.newsId,
+      displayName: data.displayName,
+      originalFileName: data.originalFileName,
+      storageKey: data.storageKey,
+      mimeType: data.mimeType,
+      sizeBytes: data.sizeBytes,
+      sortOrder: Number(maxOrder) + 1,
+      uploadedBy: data.uploadedBy,
+      expirationType: data.expirationType,
+      downloadExpiresAt,
+    });
+    return result[0].insertId;
+  });
+}
+
+/**
+ * 管理員調整某一份附件的到期規則（延長期限／改成自訂日期／改成永久有效）。
+ * storageDeletedAt 一旦有值就代表實體檔案已經從私有 bucket 刪除——這裡刻意
+ * 拒絕修改，不讓「改期限」變成偷偷「復活」一份已經不存在的檔案；管理員只能
+ * 走重新上傳。
+ */
+export async function updateNewsAttachmentExpiration(
+  id: number,
+  update: { expirationType: NewsAttachmentExpirationType; downloadExpiresAt?: Date | null },
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  const [row] = await db.select({ storageDeletedAt: newsAttachments.storageDeletedAt })
+    .from(newsAttachments).where(eq(newsAttachments.id, id)).limit(1);
+  if (!row) throw new Error("找不到此附件");
+  if (row.storageDeletedAt != null) {
+    throw new Error("檔案已從儲存空間刪除，如需重新提供，請重新上傳");
+  }
+
+  if (update.expirationType === "custom") {
+    if (!update.downloadExpiresAt || update.downloadExpiresAt.getTime() <= Date.now()) {
+      throw new Error("自訂到期時間必須晚於目前時間");
+    }
+    await db.update(newsAttachments)
+      .set({ expirationType: "custom", downloadExpiresAt: update.downloadExpiresAt })
+      .where(eq(newsAttachments.id, id));
+  } else if (update.expirationType === "never") {
+    await db.update(newsAttachments)
+      .set({ expirationType: "never", downloadExpiresAt: null })
+      .where(eq(newsAttachments.id, id));
+  } else {
+    await db.update(newsAttachments)
+      .set({ expirationType: "after_publish_30d" })
+      .where(eq(newsAttachments.id, id));
+  }
+}
+
+/** isExpired／isStorageDeleted 一律由後端算，不信任前端傳入的時間。 */
+export function computeNewsAttachmentStatus(a: {
+  expirationType: NewsAttachmentExpirationType;
+  downloadExpiresAt: Date | null;
+  storageDeletedAt: Date | null;
+}): { isExpired: boolean; isStorageDeleted: boolean } {
+  const isStorageDeleted = a.storageDeletedAt != null;
+  const isExpired = a.expirationType !== "never" && a.downloadExpiresAt != null && a.downloadExpiresAt.getTime() <= Date.now();
+  return { isExpired, isStorageDeleted };
+}
+
+/** 管理員後台用：包含 storageKey，僅限 adminProcedure 呼叫端使用，不得直接轉發給公開/會員端。 */
+export async function getNewsAttachmentsForAdmin(newsId: number): Promise<NewsAttachment[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(newsAttachments).where(eq(newsAttachments.newsId, newsId)).orderBy(newsAttachments.sortOrder);
+}
+
+export interface PublicNewsAttachment {
+  id: number;
+  displayName: string;
+  sizeBytes: number;
+  sortOrder: number;
+  expirationType: NewsAttachmentExpirationType;
+  downloadExpiresAt: Date | null;
+  isExpired: boolean;
+  isStorageDeleted: boolean;
+}
+
+/**
+ * 公開/會員端用：白名單欄位，結構性保證不會洩漏 storageKey／mimeType／
+ * deleteFailureReason 等內部欄位。即使已過期或已被清除，還是回傳這筆
+ * metadata（isExpired/isStorageDeleted 標示狀態），讓文章頁能顯示「已過期」
+ * 而不是整筆消失。
+ */
+export async function getNewsAttachmentsPublic(newsId: number): Promise<PublicNewsAttachment[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.select({
+    id: newsAttachments.id,
+    displayName: newsAttachments.displayName,
+    sizeBytes: newsAttachments.sizeBytes,
+    sortOrder: newsAttachments.sortOrder,
+    expirationType: newsAttachments.expirationType,
+    downloadExpiresAt: newsAttachments.downloadExpiresAt,
+    storageDeletedAt: newsAttachments.storageDeletedAt,
+  }).from(newsAttachments).where(eq(newsAttachments.newsId, newsId)).orderBy(newsAttachments.sortOrder);
+  return rows.map(({ storageDeletedAt, ...r }) => ({
+    ...r,
+    ...computeNewsAttachmentStatus({ expirationType: r.expirationType, downloadExpiresAt: r.downloadExpiresAt, storageDeletedAt }),
+  }));
+}
+
+export async function getNewsAttachmentById(id: number): Promise<NewsAttachment | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const [row] = await db.select().from(newsAttachments).where(eq(newsAttachments.id, id)).limit(1);
+  return row;
+}
+
+export async function renameNewsAttachment(id: number, displayName: string): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(newsAttachments).set({ displayName }).where(eq(newsAttachments.id, id));
+}
+
+/** 回傳被刪除那一筆的 storageKey，讓呼叫端決定要不要刪除對應的 S3 object。 */
+export async function deleteNewsAttachment(id: number): Promise<{ storageKey: string } | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const [row] = await db.select({ storageKey: newsAttachments.storageKey }).from(newsAttachments).where(eq(newsAttachments.id, id)).limit(1);
+  if (!row) return undefined;
+  await db.delete(newsAttachments).where(eq(newsAttachments.id, id));
+  return row;
+}
+
+// ===== 找消息：PDF 附件自動清理排程用 =====
+// 跟上面「管理員手動刪除」（deleteNewsAttachment，整筆連 metadata 一起刪掉）不同，
+// 排程清理只刪實體檔案、保留 metadata 列（storageDeletedAt 標示已刪），讓文章頁
+// 還能顯示「已超過下載期限」而不是整筆消失，也保留稽核紀錄。
+
+export interface CleanupCandidateAttachment {
+  id: number;
+  storageKey: string;
+  displayName: string;
+}
+
+/**
+ * 排程清理用：到期、非永久、尚未刪除過實體檔案的附件。一律用後端 now，不信任
+ * 呼叫端傳入的時間。
+ *
+ * 刻意用 lte(downloadExpiresAt, new Date()) 而不是原始 SQL 的 NOW()：drizzle 的
+ * mysql timestamp 欄位寫入時是把 JS Date 的 UTC 年月日時分秒數字原樣當成字面
+ * 字串送給 MySQL（見 drizzle-orm mysql-core timestamp.js 的 mapToDriverValue），
+ * 讀回時再把那組數字原樣當成 UTC 重建成 Date——只要「寫入」跟「讀取」都經過
+ * drizzle，兩邊互相抵銷、還原出原本的正確時間。但如果拿一個「drizzle 寫入的
+ * 欄位」去跟「MySQL 原生 NOW()」比較，NOW() 反映的是 session time_zone 真正
+ * 的當下時刻，兩者就不是同一套換算方式，只要 MySQL session time_zone 不是
+ * UTC（例如本機常見的 SYSTEM／Asia/Taipei），比較結果就會整整偏移一個時區
+ * offset（本機環境下曾經因此把「一小時後才到期」的附件誤判成「已經到期」）。
+ * 用 lte() 讓「現在」也走 drizzle 的同一套序列化，兩邊的偏移量互相抵銷，
+ * 不管 MySQL session time_zone 設定什麼都能得到正確的先後順序判斷。
+ */
+export async function getNewsAttachmentsDueForCleanup(limit = 200): Promise<CleanupCandidateAttachment[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select({
+    id: newsAttachments.id,
+    storageKey: newsAttachments.storageKey,
+    displayName: newsAttachments.displayName,
+  }).from(newsAttachments).where(and(
+    isNotNull(newsAttachments.downloadExpiresAt),
+    lte(newsAttachments.downloadExpiresAt, new Date()),
+    ne(newsAttachments.expirationType, "never"),
+    isNull(newsAttachments.storageDeletedAt),
+  )).limit(limit);
+}
+
+/** 單筆 S3 DeleteObject 成功（或物件本來就已經不存在，視同成功）後呼叫。 */
+export async function markNewsAttachmentStorageDeleted(id: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  const now = new Date();
+  await db.update(newsAttachments)
+    .set({ storageDeletedAt: now, lastDeleteAttemptAt: now, deleteFailureReason: null })
+    .where(eq(newsAttachments.id, id));
+}
+
+/**
+ * 單筆刪除失敗時呼叫：只累加次數、記錄精簡的失敗原因，不設定 storageDeletedAt，
+ * 讓下次排程可以重試；單筆失敗不影響同一批次其他附件（呼叫端逐筆 try/catch）。
+ */
+export async function recordNewsAttachmentDeleteFailure(id: number, reason: string): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  const truncated = reason.replace(/[\r\n]/g, " ").slice(0, 280);
+  await db.update(newsAttachments)
+    .set({
+      deleteAttempts: sql`${newsAttachments.deleteAttempts} + 1`,
+      lastDeleteAttemptAt: new Date(),
+      deleteFailureReason: truncated,
+    })
+    .where(eq(newsAttachments.id, id));
 }
 
 /** 「重要消息」的收件資格：沿用既有平台公告的通知資格規則，不另外維護一套判斷邏輯。 */

@@ -5,7 +5,7 @@
   "license": "MIT",
   "scripts": {
     "dev": "cross-env NODE_ENV=development PORT=3000 tsx watch server/_core/index.ts",
-    "build": "vite build && tsx scripts/prerender-about.ts && tsx scripts/prerender-home.ts && esbuild server/_core/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist",
+    "build": "vite build && tsx scripts/prerender-about.ts && tsx scripts/prerender-home.ts && esbuild server/_core/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist && esbuild server/jobs/cleanupExpiredNewsAttachments.ts --platform=node --packages=external --bundle --format=esm --outdir=dist/jobs",
     "prerender:about": "tsx scripts/prerender-about.ts",
     "prerender:home": "tsx scripts/prerender-home.ts",
     "start": "NODE_ENV=production node dist/index.js",
@@ -17,7 +17,9 @@
     "test": "vitest run",
     "db:push": "drizzle-kit migrate",
     "cleanup:expired-pdfs": "tsx scripts/cleanup-expired-pdfs.ts",
-    "cleanup:community-images": "tsx scripts/cleanup-community-images.ts"
+    "cleanup:community-images": "tsx scripts/cleanup-community-images.ts",
+    "cleanup:expired-news-attachments": "node dist/jobs/cleanupExpiredNewsAttachments.js",
+    "cleanup:expired-news-attachments:dev": "tsx server/jobs/cleanupExpiredNewsAttachments.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.89.0",

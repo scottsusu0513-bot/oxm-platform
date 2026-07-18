@@ -397,6 +397,13 @@ export const news = mysqlTable("news", {
   // 從 NULL 變成有值的那一次觸發，下架重新發布不會再次寫入、也就不會再通知。
   firstPublishedAt: timestamp("firstPublishedAt"),
   createdBy: int("createdBy").references(() => users.id),
+  // 封面圖片：選填，公開消息內容的一部分（訪客可見）。coverImageKey 保留供
+  // 後端在移除／更換封面時精準刪除對應的 S3 object，避免只清 URL 留下孤兒
+  // 檔案；coverImageUrl 是實際顯示用的公開網址（沿用 storagePut 的既有慣例
+  // ——這個 helper 目前所有呼叫端都只回傳公開 URL，沒有私有物件的概念）。
+  coverImageKey: varchar("coverImageKey", { length: 300 }),
+  coverImageUrl: varchar("coverImageUrl", { length: 1000 }),
+  coverImageAlt: varchar("coverImageAlt", { length: 200 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 }, (t) => ({
@@ -405,6 +412,50 @@ export const news = mysqlTable("news", {
 
 export type News = typeof news.$inferSelect;
 export type InsertNews = typeof news.$inferInsert;
+
+// 找消息 PDF 附件。storageKey 是內部管理用（後端刪除/簽發下載連結時使用），
+// 公開 API 一律不得回傳這個欄位——見 server/db.ts 的 getNewsAttachmentsPublic
+// 只挑選白名單欄位（id/displayName/sizeBytes/sortOrder）。sortOrder 決定同一
+// 篇消息內的顯示順序，用整數而不是塞進 JSON／逗號字串，才能穩定排序、
+// 個別更新單一附件。
+export const newsAttachments = mysqlTable("newsAttachments", {
+  id: int("id").autoincrement().primaryKey(),
+  newsId: int("newsId").notNull().references(() => news.id, { onDelete: "cascade" }),
+  displayName: varchar("displayName", { length: 200 }).notNull(),
+  originalFileName: varchar("originalFileName", { length: 200 }).notNull(),
+  storageKey: varchar("storageKey", { length: 300 }).notNull(),
+  mimeType: varchar("mimeType", { length: 100 }).notNull(),
+  sizeBytes: int("sizeBytes").notNull(),
+  sortOrder: int("sortOrder").default(0).notNull(),
+  uploadedBy: int("uploadedBy").notNull().references(() => users.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  // 下載期限：
+  //   after_publish_30d — 這篇消息第一次正式發布時，downloadExpiresAt 才會
+  //     設成 firstPublishedAt + 30 天（見 server/db.ts 的 updateNews 首次發布
+  //     transaction）；如果附件是在消息已發布之後才上傳，finalize 當下就直接
+  //     設成「上傳完成時間 + 30 天」，不用等一個不會再發生的「第一次發布」。
+  //   custom — downloadExpiresAt 必填，後端驗證必須晚於當下時間。
+  //   never — downloadExpiresAt 永遠是 NULL，不會被自動清理排程處理。
+  // 一旦 downloadExpiresAt 被設定過，編輯/下架/重新發布/改 publishedAt 都不
+  // 得再次覆寫；要延長或改期限只能透過管理員明確的「修改附件期限」操作。
+  expirationType: mysqlEnum("expirationType", ["after_publish_30d", "custom", "never"]).default("after_publish_30d").notNull(),
+  downloadExpiresAt: timestamp("downloadExpiresAt"),
+  // 自動清理排程（server/jobs/cleanupExpiredNewsAttachments.ts）寫入的欄位。
+  // storageDeletedAt 非 NULL 代表 S3 物件已經被刪除——這是「檔案是否還在」的
+  // 唯一真相來源，之後不能只靠改 downloadExpiresAt 讓檔案「復活」，必須重新
+  // 上傳。deleteAttempts／lastDeleteAttemptAt／deleteFailureReason 讓刪除失敗
+  // 時排程可以安全重試，且不會讓單筆失敗擋住其他附件。
+  storageDeletedAt: timestamp("storageDeletedAt"),
+  deleteAttempts: int("deleteAttempts").default(0).notNull(),
+  lastDeleteAttemptAt: timestamp("lastDeleteAttemptAt"),
+  deleteFailureReason: varchar("deleteFailureReason", { length: 300 }),
+}, (t) => ({
+  newsIdIdx: index("news_attachments_news_id_idx").on(t.newsId, t.sortOrder),
+  cleanupIdx: index("news_attachments_cleanup_idx").on(t.downloadExpiresAt, t.expirationType, t.storageDeletedAt),
+}));
+
+export type NewsAttachment = typeof newsAttachments.$inferSelect;
+export type InsertNewsAttachment = typeof newsAttachments.$inferInsert;
 
 // 找消息 x 產業：多對多。產業用 shared/constants.ts 的 INDUSTRIES 名稱字串當
 // 識別碼（沿用 factories.industry 既有的「名稱即識別碼」慣例，見該常數檔案的
