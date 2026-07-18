@@ -3,7 +3,7 @@ import { validateOrderDateChain } from "@shared/orderDateChain";
 import { COLLABORATION_ORDER_STAGE_LABELS, isStageTransitionEarly } from "@shared/collaborationOrderStage";
 import { sdk } from "./_core/sdk";
 import { enhanceSearchKeyword, getSearchIntent } from './semantic-search';
-import { sendNewInquiryEmail, sendFactoryApprovedEmail, sendFactoryRejectedEmail, sendFactorySubmittedEmail, sendReportEmail, sendSupportTicketEmail, sendReviewReplyEmail, sendNewMessageNotificationEmail, sendReportStatusUpdateEmail, sendTicketStatusUpdateEmail, sendMessageReplyNotificationEmail, sendEmailVerificationEmail, sendAdminBroadcastEmail, sendRevisionSubmittedEmail, sendRevisionApprovedEmail, sendRevisionRejectedEmail, sendUpgradeApplicationEmail, sendUpgradeNewCaseConsultantEmail, sendPlatformAnnouncementEmail, sendFirstContactEmail } from './email';
+import { sendNewInquiryEmail, sendFactoryApprovedEmail, sendFactoryRejectedEmail, sendFactorySubmittedEmail, sendReportEmail, sendSupportTicketEmail, sendReviewReplyEmail, sendNewMessageNotificationEmail, sendReportStatusUpdateEmail, sendTicketStatusUpdateEmail, sendMessageReplyNotificationEmail, sendEmailVerificationEmail, sendAdminBroadcastEmail, sendRevisionSubmittedEmail, sendRevisionApprovedEmail, sendRevisionRejectedEmail, sendUpgradeApplicationEmail, sendUpgradeNewCaseConsultantEmail, sendPlatformAnnouncementEmail, sendFirstContactEmail, sendNewsEmail } from './email';
 import { sha256Hex, generateRawToken } from './_core/oauthHelpers';
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
@@ -28,6 +28,188 @@ function requireVerifiedEmail(user: { primaryEmailVerifiedAt: Date | null }): vo
   if (!user.primaryEmailVerifiedAt) {
     throw new TRPCError({ code: "FORBIDDEN", message: "UNVERIFIED_EMAIL" });
   }
+}
+
+/**
+ * 找消息分眾通知的實際寄送入口：蒐集去重後的收件人 → 各管道分別以
+ * INSERT-IGNORE 語意建立 pending 紀錄（只有「這次真的新建立」的紀錄會被
+ * 實際寄送）→ 逐一寄送並回寫 pending/sent/failed。Email／Push 兩個管道各自
+ * fire-and-forget、互不阻塞，單一使用者寄送失敗不會中斷整批（loop 內
+ * try/catch，見下方）。呼叫端只在「這次更新真的是第一次 draft→published」
+ * 時才會呼叫這個函式（見 db.createNews／db.updateNews 的 shouldNotify）。
+ * 一律不把 Email 位址／Push token 印進 console，只印 userId。
+ */
+async function dispatchNewsNotifications(params: {
+  newsId: number;
+  title: string;
+  summary: string;
+  slug: string;
+  isImportant: boolean;
+  industryNames: string[];
+}): Promise<void> {
+  const recipients = await db.gatherNewsRecipients({ isImportant: params.isImportant, industryNames: params.industryNames });
+  if (recipients.length === 0) {
+    console.log(`[news] notify skipped newsId=${params.newsId}: no eligible recipients`);
+    return;
+  }
+
+  const emailRecipients = recipients.filter(r => r.email);
+  const pushRecipients = recipients.filter(r => r.pushEnabled);
+
+  // Email：沿用 announcement 廣播既有的節流／重試模式。
+  (async () => {
+    if (emailRecipients.length === 0) return;
+    const created = await db.createPendingNewsNotifications(params.newsId, emailRecipients.map(r => r.id), "email");
+    if (created.length === 0) return;
+    const createdMap = new Map(created.map(c => [c.userId, c.id]));
+    const INTER_EMAIL_DELAY_MS = 500;
+    const RETRY_DELAYS_MS = [1500, 3000, 5000];
+    const isRateLimitError = (err: unknown): boolean => {
+      if (!err || typeof err !== 'object') return false;
+      const e = err as Record<string, unknown>;
+      const status = e['statusCode'] ?? e['status'] ?? (e['response'] as Record<string, unknown>)?.['status'];
+      return status === 429;
+    };
+
+    let successCount = 0, failCount = 0;
+    for (const r of emailRecipients) {
+      const notifId = createdMap.get(r.id);
+      if (notifId == null || !r.email) continue;
+      let sent = false, lastErr: unknown;
+      for (let attempt = 1; attempt <= RETRY_DELAYS_MS.length + 1; attempt++) {
+        try {
+          await sendNewsEmail({ toEmail: r.email, toName: r.name, newsTitle: params.title, newsSummary: params.summary, newsSlug: params.slug });
+          sent = true;
+          break;
+        } catch (err) {
+          lastErr = err;
+          if (attempt <= RETRY_DELAYS_MS.length && isRateLimitError(err)) {
+            await new Promise(res => setTimeout(res, RETRY_DELAYS_MS[attempt - 1]));
+          } else {
+            break;
+          }
+        }
+      }
+      if (sent) {
+        successCount++;
+        await db.markNewsNotificationSent(notifId);
+      } else {
+        failCount++;
+        await db.markNewsNotificationFailed(notifId, lastErr instanceof Error ? lastErr.message : String(lastErr));
+        console.error(`[news] email failed newsId=${params.newsId} userId=${r.id}`);
+      }
+      await new Promise(res => setTimeout(res, INTER_EMAIL_DELAY_MS));
+    }
+    console.log(`[news] email queue done newsId=${params.newsId} success=${successCount} failed=${failCount}`);
+  })();
+
+  // Push：逐一寄送以取得每個使用者各自的成功/失敗狀態（sendPushToRecipients
+  // 只回傳整批彙總數字，無法對應回各自的通知紀錄），單一使用者失敗不影響其他人。
+  (async () => {
+    if (pushRecipients.length === 0) return;
+    const created = await db.createPendingNewsNotifications(params.newsId, pushRecipients.map(r => r.id), "push");
+    if (created.length === 0) return;
+    const createdMap = new Map(created.map(c => [c.userId, c.id]));
+    const bodyText = toPlainPushSummary(params.summary);
+
+    let successCount = 0, failCount = 0;
+    for (const r of pushRecipients) {
+      const notifId = createdMap.get(r.id);
+      if (notifId == null) continue;
+      try {
+        const result = await sendPushToUser(r.id, {
+          title: params.title,
+          body: bodyText,
+          data: { type: "news", newsId: String(params.newsId), targetPath: `/news/${params.slug}` },
+        });
+        if (result.status === "sent" && result.successCount > 0) {
+          successCount++;
+          await db.markNewsNotificationSent(notifId);
+        } else if (result.status === "skipped") {
+          // 沒有有效裝置 token，視為「無需寄送」而非失敗，避免下次發布流程重跑時無限重試。
+          await db.markNewsNotificationSent(notifId);
+        } else {
+          failCount++;
+          await db.markNewsNotificationFailed(notifId, result.status === "error" ? result.message : "push failed");
+        }
+      } catch (err) {
+        failCount++;
+        await db.markNewsNotificationFailed(notifId, err instanceof Error ? err.message : String(err));
+        console.error(`[news] push failed newsId=${params.newsId} userId=${r.id}`);
+      }
+    }
+    console.log(`[news] push queue done newsId=${params.newsId} success=${successCount} failed=${failCount}`);
+  })();
+}
+
+/**
+ * 管理員限定的「重試本篇失敗通知」：只處理既有 newsNotifications 紀錄裡狀態
+ * 是 pending／failed 的那些（db.getRetryableNewsNotifications 的查詢條件本身
+ * 就排除了 status='sent'，不需要在這裡另外判斷「是否已寄過」）。涵蓋兩種
+ * 情境：pending 紀錄建立後程序中斷、從未真正寄出；以及先前寄送失敗的紀錄。
+ * 每個收件人重試前重新讀一次目前的 notificationSettings／email——建立通知
+ * 紀錄之後使用者可能才退訂，重試不應該無視這個變化硬寄。單一收件人失敗只
+ * 標記那一筆為 failed，不中斷其他人的重試。這個函式不建立任何新的
+ * newsNotifications 紀錄，只處理既有紀錄，所以不會因為呼叫這支函式而讓
+ * 「編輯已發布消息」意外變成再次通知全體會員。
+ */
+async function retryNewsNotifications(newsId: number): Promise<{ emailRetried: number; pushRetried: number; total: number }> {
+  const item = await db.getNewsById(newsId);
+  if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "找不到這則消息" });
+
+  const retryable = await db.getRetryableNewsNotifications(newsId);
+  let emailRetried = 0;
+  let pushRetried = 0;
+
+  for (const row of retryable) {
+    const user = await db.getUserById(row.userId);
+    if (!user || user.deletedAt) {
+      await db.markNewsNotificationFailed(row.id, "使用者不存在或已刪除帳號");
+      continue;
+    }
+    const settings = (user.notificationSettings as Record<string, boolean> | null) ?? {};
+
+    if (row.channel === "email") {
+      const email = user.primaryEmail ?? user.email;
+      if (!email || settings['news'] === false) {
+        await db.markNewsNotificationFailed(row.id, !email ? "使用者無 email" : "使用者已退訂找消息 Email");
+        continue;
+      }
+      try {
+        await sendNewsEmail({ toEmail: email, toName: user.name, newsTitle: item.title, newsSummary: item.summary, newsSlug: item.slug });
+        await db.markNewsNotificationSent(row.id);
+        emailRetried++;
+      } catch (err) {
+        await db.markNewsNotificationFailed(row.id, err instanceof Error ? err.message : String(err));
+        console.error(`[news] retry email failed newsId=${newsId} userId=${row.userId}`);
+      }
+    } else {
+      if (settings['pushNews'] === false) {
+        await db.markNewsNotificationFailed(row.id, "使用者已退訂找消息推播");
+        continue;
+      }
+      try {
+        const result = await sendPushToUser(row.userId, {
+          title: item.title,
+          body: toPlainPushSummary(item.summary),
+          data: { type: "news", newsId: String(newsId), targetPath: `/news/${item.slug}` },
+        });
+        if (result.status === "sent" && result.successCount > 0) {
+          await db.markNewsNotificationSent(row.id);
+          pushRetried++;
+        } else if (result.status === "skipped") {
+          await db.markNewsNotificationSent(row.id);
+        } else {
+          await db.markNewsNotificationFailed(row.id, result.status === "error" ? result.message : "push failed");
+        }
+      } catch (err) {
+        await db.markNewsNotificationFailed(row.id, err instanceof Error ? err.message : String(err));
+        console.error(`[news] retry push failed newsId=${newsId} userId=${row.userId}`);
+      }
+    }
+  }
+
+  return { emailRetried, pushRetried, total: retryable.length };
 }
 
 // Returns null (no filter) for admin or when community is public; otherwise restricts to platform-only types.
@@ -3755,6 +3937,115 @@ export const appRouter = router({
     delete: adminProcedure.input(z.object({ id: z.number() })).mutation(async ({ input }) => {
       await db.deleteAnnouncement(input.id);
       return { success: true };
+    }),
+  }),
+
+  // ===== 找消息（產業情報／News）=====
+  // 獨立於 announcement router 之外，見 server/db.ts news 相關函式的註解。
+  news: router({
+    // ---- 公開頁 ----
+    list: publicProcedure.input(z.object({
+      category: z.enum(["all", "important", "competition", "exhibition", "industry"]).default("all"),
+      industryName: z.string().max(50).optional(),
+      offset: z.number().int().min(0).default(0),
+      limit: z.number().int().min(1).max(50).default(20),
+    })).query(async ({ input }) => {
+      return db.listPublicNews(input);
+    }),
+    getBySlug: publicProcedure.input(z.object({ slug: z.string().min(1).max(200) })).query(async ({ input }) => {
+      const item = await db.getPublishedNewsBySlug(input.slug);
+      if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "找不到這則消息" });
+      const industryNames = await db.getNewsIndustryNames(item.id);
+      return { ...item, industryNames };
+    }),
+
+    // ---- 管理員後台 ----
+    adminList: adminProcedure.query(async () => {
+      const items = await db.getAdminNewsList();
+      const industryMap = await db.getNewsIndustryNamesBatch(items.map(i => i.id));
+      return items.map(item => ({ ...item, industryNames: industryMap.get(item.id) ?? [] }));
+    }),
+    adminGet: adminProcedure.input(z.object({ id: z.number() })).query(async ({ input }) => {
+      const item = await db.getNewsById(input.id);
+      if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "找不到這則消息" });
+      const industryNames = await db.getNewsIndustryNames(item.id);
+      return { ...item, industryNames };
+    }),
+    // 發布確認彈窗用：預估這次分類設定會通知到多少去重後的會員，純讀取、不建立任何紀錄。
+    estimateRecipients: adminProcedure.input(z.object({
+      isImportant: z.boolean(),
+      industryNames: z.array(z.string().max(50)).max(20).default([]),
+    })).query(async ({ input }) => {
+      const recipients = await db.gatherNewsRecipients(input);
+      return { count: recipients.length };
+    }),
+    create: adminProcedure.input(z.object({
+      slug: z.string().min(1).max(200),
+      title: z.string().min(1).max(200),
+      summary: z.string().min(1).max(500),
+      content: z.string().min(1),
+      status: z.enum(["draft", "published"]).default("draft"),
+      isImportant: z.boolean().default(false),
+      isCompetition: z.boolean().default(false),
+      isExhibition: z.boolean().default(false),
+      industryNames: z.array(z.string().max(50)).max(20).default([]),
+    })).mutation(async ({ input, ctx }) => {
+      let result: { id: number; shouldNotify: boolean };
+      try {
+        result = await db.createNews({ ...input, createdBy: ctx.user!.id });
+      } catch (err) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: err instanceof Error ? err.message : "建立消息失敗" });
+      }
+      if (result.shouldNotify) {
+        void dispatchNewsNotifications({
+          newsId: result.id,
+          title: input.title,
+          summary: input.summary,
+          slug: input.slug,
+          isImportant: input.isImportant,
+          industryNames: input.industryNames,
+        });
+      }
+      return { success: true, id: result.id };
+    }),
+    update: adminProcedure.input(z.object({
+      id: z.number(),
+      slug: z.string().min(1).max(200).optional(),
+      title: z.string().min(1).max(200).optional(),
+      summary: z.string().min(1).max(500).optional(),
+      content: z.string().min(1).optional(),
+      status: z.enum(["draft", "published", "withdrawn"]).optional(),
+      isImportant: z.boolean().optional(),
+      isCompetition: z.boolean().optional(),
+      isExhibition: z.boolean().optional(),
+      industryNames: z.array(z.string().max(50)).max(20).optional(),
+    })).mutation(async ({ input }) => {
+      const { id, ...data } = input;
+      let result: { shouldNotify: boolean };
+      try {
+        result = await db.updateNews(id, data);
+      } catch (err) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: err instanceof Error ? err.message : "更新消息失敗" });
+      }
+      if (result.shouldNotify) {
+        const [item, industryNames] = await Promise.all([db.getNewsById(id), db.getNewsIndustryNames(id)]);
+        if (item) {
+          void dispatchNewsNotifications({
+            newsId: id,
+            title: item.title,
+            summary: item.summary,
+            slug: item.slug,
+            isImportant: item.isImportant,
+            industryNames,
+          });
+        }
+      }
+      return { success: true };
+    }),
+    // 管理員限定：重試這則消息目前狀態是 pending／failed 的通知紀錄，不會建立
+    // 新紀錄、也不會影響已經 sent 的紀錄，因此重複點擊或編輯後再點擊都是安全的。
+    retryNotifications: adminProcedure.input(z.object({ id: z.number() })).mutation(async ({ input }) => {
+      return retryNewsNotifications(input.id);
     }),
   }),
 

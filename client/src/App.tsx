@@ -55,6 +55,9 @@ const AdminSupportCenter    = lazy(() => import("./pages/AdminSupportCenter"));
 const AdminUpgradeApplications = lazy(() => import("./pages/AdminUpgradeApplications"));
 const ConsultantCases        = lazy(() => import("./pages/ConsultantCases"));
 const AdminAnnouncements    = lazy(() => import("./pages/AdminAnnouncements"));
+const AdminNews             = lazy(() => import("./pages/AdminNews"));
+const News                  = lazy(() => import("./pages/News"));
+const NewsDetail            = lazy(() => import("./pages/NewsDetail"));
 const AdminMessages         = lazy(() => import("./pages/AdminMessages"));
 const AdminMessageDetail    = lazy(() => import("./pages/AdminMessageDetail"));
 
@@ -321,11 +324,16 @@ function Router() {
         <Route path="/admin/support" component={AdminSupportCenter} />
         <Route path="/admin/upgrade-applications" component={AdminUpgradeApplications} />
         <Route path="/admin/announcements" component={AdminAnnouncements} />
+        <Route path="/admin/news" component={AdminNews} />
         <Route path="/admin/messages/:campaignId" component={AdminMessages} />
         <Route path="/admin/messages" component={AdminMessages} />
         <Route path="/admin-message/:id" component={AdminMessageDetail} />
         <Route path="/blog/:slug" component={BlogPost} />
         <Route path="/blog" component={BlogList} />
+        {/* /news、/news/:slug：目前不對外開放入口（Navbar「找消息」維持鎖定），
+            但路由本身必須完整存在，讓管理員／測試者可以直接輸入網址瀏覽。 */}
+        <Route path="/news/:slug" component={NewsDetail} />
+        <Route path="/news" component={News} />
         <Route path="/announcements" component={Announcements} />
         <Route path="/manual" component={UserManual} />
         <Route path="/about" component={AboutOXM} />

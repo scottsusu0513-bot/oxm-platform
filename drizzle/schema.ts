@@ -376,6 +376,71 @@ export const announcements = mysqlTable("announcements", {
 
 export type Announcement = typeof announcements.$inferSelect;
 
+// ===== 找消息（產業情報／News）=====
+// 刻意獨立於 announcements／loginPopups，不混用同一張表：公告走「送出即公開、
+// 無草稿」，找消息需要草稿／發布／下架狀態機與分眾通知，兩者的生命週期規則不同，
+// 混在同一張表會讓公告既有的查詢與通知邏輯被迫遷就找消息的新規則。
+export const news = mysqlTable("news", {
+  id: int("id").autoincrement().primaryKey(),
+  slug: varchar("slug", { length: 200 }).notNull().unique(),
+  title: varchar("title", { length: 200 }).notNull(),
+  summary: varchar("summary", { length: 500 }).notNull(),
+  content: text("content").notNull(),
+  status: mysqlEnum("status", ["draft", "published", "withdrawn"]).default("draft").notNull(),
+  isImportant: boolean("isImportant").default(false).notNull(),
+  isCompetition: boolean("isCompetition").default(false).notNull(),
+  isExhibition: boolean("isExhibition").default(false).notNull(),
+  // 「目前對外顯示」的發布時間——每次 draft/withdrawn -> published 都會更新，
+  // 驅動列表排序與 72 小時 NEW 徽章。
+  publishedAt: timestamp("publishedAt"),
+  // 「第一次」從草稿轉為已發布的時間，之後永遠不再變動；分眾通知只在這個欄位
+  // 從 NULL 變成有值的那一次觸發，下架重新發布不會再次寫入、也就不會再通知。
+  firstPublishedAt: timestamp("firstPublishedAt"),
+  createdBy: int("createdBy").references(() => users.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (t) => ({
+  statusPublishedIdx: index("news_status_published_idx").on(t.status, t.publishedAt),
+}));
+
+export type News = typeof news.$inferSelect;
+export type InsertNews = typeof news.$inferInsert;
+
+// 找消息 x 產業：多對多。產業用 shared/constants.ts 的 INDUSTRIES 名稱字串當
+// 識別碼（沿用 factories.industry 既有的「名稱即識別碼」慣例，見該常數檔案的
+// 註解——OXM 目前完全沒有一張「產業」資料表，新增/刪除/更名產業本來就只改
+// 這個常數檔案，不動 DB），後端在寫入前一律驗證是否存在於 INDUSTRY_OPTIONS。
+export const newsIndustries = mysqlTable("newsIndustries", {
+  id: int("id").autoincrement().primaryKey(),
+  newsId: int("newsId").notNull().references(() => news.id, { onDelete: "cascade" }),
+  industryName: varchar("industryName", { length: 50 }).notNull(),
+}, (t) => ({
+  newsIndustryUq: uniqueIndex("news_industry_uq").on(t.newsId, t.industryName),
+  industryLookupIdx: index("news_industry_lookup_idx").on(t.industryName),
+}));
+
+export type NewsIndustry = typeof newsIndustries.$inferSelect;
+
+// 找消息通知紀錄：強制防重複的唯一保證來源。(newsId, userId, channel) 唯一索引
+// 確保就算發布流程重跑、或同一使用者同時符合重要消息＋多個產業，同一則消息、
+// 同一個管道，每個使用者最多只會有一筆紀錄——寄送與否看這張表，不是看記憶體
+// 裡的 Set。
+export const newsNotifications = mysqlTable("newsNotifications", {
+  id: int("id").autoincrement().primaryKey(),
+  newsId: int("newsId").notNull().references(() => news.id, { onDelete: "cascade" }),
+  userId: int("userId").notNull().references(() => users.id, { onDelete: "cascade" }),
+  channel: mysqlEnum("channel", ["email", "push"]).notNull(),
+  status: mysqlEnum("status", ["pending", "sent", "failed"]).default("pending").notNull(),
+  error: varchar("error", { length: 500 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  sentAt: timestamp("sentAt"),
+}, (t) => ({
+  newsUserChannelUq: uniqueIndex("news_notif_uq").on(t.newsId, t.userId, t.channel),
+  statusIdx: index("news_notif_status_idx").on(t.status),
+}));
+
+export type NewsNotification = typeof newsNotifications.$inferSelect;
+
 // ===== 登入彈窗（綁定既有「平台消息」公告的登入曝光入口，不是獨立公告系統）=====
 export const loginPopups = mysqlTable("loginPopups", {
   id: int("id").autoincrement().primaryKey(),

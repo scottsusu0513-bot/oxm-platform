@@ -24,7 +24,9 @@ export function consumePendingNavigatePath(): string | null {
   return p;
 }
 
-function resolveTargetPath(data: Record<string, string> | undefined): string {
+// 導出供測試直接驗證「現有點擊處理器認得的欄位格式」（見
+// server/news.test.ts），不是給其他業務程式碼呼叫用的公開 API。
+export function resolveTargetPath(data: Record<string, string> | undefined): string {
   if (!data) return "/messages";
   if (data.targetPath && data.targetPath.startsWith("/")) return data.targetPath;
   if (data.conversationId) return `/chat/${data.conversationId}`;

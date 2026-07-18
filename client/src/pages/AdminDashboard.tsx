@@ -4,7 +4,7 @@ import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { AlertCircle, BarChart3, Users, Factory, Zap, MessageSquare, Star, ArrowLeft, ShieldCheck, Shield, HeadphonesIcon, Megaphone, Eye, Send, CheckCircle, XCircle, TrendingUp } from "lucide-react";
+import { AlertCircle, BarChart3, Users, Factory, Zap, MessageSquare, Star, ArrowLeft, ShieldCheck, Shield, HeadphonesIcon, Megaphone, Newspaper, Eye, Send, CheckCircle, XCircle, TrendingUp } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
@@ -245,6 +245,19 @@ function AdminDashboardContent() {
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-gray-600 flex items-center gap-2">
                 <Megaphone className="h-4 w-4" />平台公告
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold text-orange-500">→</div>
+            </CardContent>
+          </Card>
+
+          {/* 消息管理入口——僅管理員後台可見，找消息公開入口（Navbar）仍維持鎖定，
+              這裡只是讓管理員不用手動輸入網址就能管理消息內容。 */}
+          <Card className="cursor-pointer hover:shadow-lg transition-shadow" onClick={() => setLocation("/admin/news")}>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-gray-600 flex items-center gap-2">
+                <Newspaper className="h-4 w-4" />消息管理
               </CardTitle>
             </CardHeader>
             <CardContent>

@@ -23,6 +23,7 @@ import {
   communityReactions, communityMentions, communityNotifications,
   communityBids, communityBidIndustries, communityBidReviewHistory, communityBidOffers,
   upgradeApplications, upgradeConsultants,
+  news, newsIndustries, newsNotifications,
   type Factory, type InsertFactory, type Product, type InsertProduct, type Favorite, type InsertFavorite,
   type CommunityPost, type CommunityComment,
   type CommunityBoardFollow, type FactoryFollow, type CommunityContentFollow,
@@ -31,9 +32,10 @@ import {
   type UpgradeApplication, type InsertUpgradeApplication,
   type UpgradeConsultant,
   type Announcement,
+  type News, type InsertNews,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
-import { ADJACENT_REGIONS, INDUSTRY_SLUGS } from "../shared/constants";
+import { ADJACENT_REGIONS, INDUSTRY_SLUGS, INDUSTRY_OPTIONS } from "../shared/constants";
 import { COMMUNITY_FEATURE_STATUS, COMMUNITY_CROSS_INDUSTRY_SLUG } from "../shared/const";
 import type { AISearchIntent } from './semantic-search';
 
@@ -1984,6 +1986,391 @@ export async function deleteAnnouncement(id: number) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
   await db.delete(announcements).where(eq(announcements.id, id));
+}
+
+// ===== 找消息（產業情報／News）=====
+//
+// 刻意獨立於 announcements 之外（見 drizzle/schema.ts news 表註解），只共用底層
+// 能力：Markdown 顯示交給前端沿用既有的 MarkdownContent；Email／Push 分別呼叫
+// email.ts／push.ts 既有的底層寄送函式，不重寫一套新的寄送機制。
+
+export type NewsCategory = "all" | "important" | "competition" | "exhibition" | "industry";
+
+/** slug 格式：小寫英數字，可用 "-" 分段，避免任何需要額外編碼的字元進到網址。 */
+export function isValidNewsSlug(slug: string): boolean {
+  return slug.length > 0 && slug.length <= 200 && /^[a-z0-9]+(-[a-z0-9]+)*$/.test(slug);
+}
+
+/** 後端一律用 shared/constants.ts 的 INDUSTRY_OPTIONS 驗證，不信任前端傳來的產業名稱字串。 */
+export function validateNewsIndustryNames(names: string[]): void {
+  const invalid = names.filter(n => !(INDUSTRY_OPTIONS as readonly string[]).includes(n));
+  if (invalid.length > 0) {
+    throw new Error(`無效的產業分類：${invalid.join("、")}`);
+  }
+}
+
+async function setNewsIndustries(newsId: number, industryNames: string[]) {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  const unique = Array.from(new Set(industryNames));
+  validateNewsIndustryNames(unique);
+  await db.delete(newsIndustries).where(eq(newsIndustries.newsId, newsId));
+  if (unique.length > 0) {
+    await db.insert(newsIndustries).values(unique.map(industryName => ({ newsId, industryName })));
+  }
+}
+
+export async function getNewsIndustryNames(newsId: number): Promise<string[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.select({ industryName: newsIndustries.industryName }).from(newsIndustries).where(eq(newsIndustries.newsId, newsId));
+  return rows.map(r => r.industryName);
+}
+
+/** 列表頁批次取多筆消息各自的產業標籤，避免每筆消息各查一次造成 N+1。 */
+export async function getNewsIndustryNamesBatch(newsIds: number[]): Promise<Map<number, string[]>> {
+  const map = new Map<number, string[]>();
+  if (newsIds.length === 0) return map;
+  const db = await getDb();
+  if (!db) return map;
+  const rows = await db.select({ newsId: newsIndustries.newsId, industryName: newsIndustries.industryName })
+    .from(newsIndustries).where(inArray(newsIndustries.newsId, newsIds));
+  for (const r of rows) {
+    const arr = map.get(r.newsId) ?? [];
+    arr.push(r.industryName);
+    map.set(r.newsId, arr);
+  }
+  return map;
+}
+
+export async function getNewsById(id: number): Promise<News | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const [row] = await db.select().from(news).where(eq(news.id, id)).limit(1);
+  return row;
+}
+
+/** 公開頁專用：只回傳 status === "published"，草稿／已下架一律視為不存在（給前端當 404 處理）。 */
+export async function getPublishedNewsBySlug(slug: string): Promise<News | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const [row] = await db.select().from(news)
+    .where(and(eq(news.slug, slug), eq(news.status, "published")))
+    .limit(1);
+  return row;
+}
+
+export interface ListPublicNewsParams {
+  category: NewsCategory;
+  industryName?: string;
+  offset?: number;
+  limit?: number;
+}
+
+/** 只有 status === "published" 會出現；依 publishedAt DESC、id DESC 排序，避免同秒發布時排序不穩定。 */
+export async function listPublicNews(params: ListPublicNewsParams): Promise<{ items: News[]; total: number }> {
+  const db = await getDb();
+  if (!db) return { items: [], total: 0 };
+  const limit = Math.min(params.limit ?? 20, 50);
+  const offset = params.offset ?? 0;
+
+  const conditions = [eq(news.status, "published")];
+  if (params.category === "important") conditions.push(eq(news.isImportant, true));
+  else if (params.category === "competition") conditions.push(eq(news.isCompetition, true));
+  else if (params.category === "exhibition") conditions.push(eq(news.isExhibition, true));
+  else if (params.category === "industry") {
+    if (!params.industryName) return { items: [], total: 0 };
+    const idRows = await db.selectDistinct({ newsId: newsIndustries.newsId })
+      .from(newsIndustries).where(eq(newsIndustries.industryName, params.industryName));
+    const ids = idRows.map(r => r.newsId);
+    if (ids.length === 0) return { items: [], total: 0 };
+    conditions.push(inArray(news.id, ids));
+  }
+  // category === "all"：不額外限制，所有已發布項目都出現，不需要 admin 選任何分類。
+
+  const where = and(...conditions);
+  const [countResult] = await db.select({ count: sql<number>`COUNT(*)` }).from(news).where(where);
+  const items = await db.select().from(news).where(where)
+    .orderBy(desc(news.publishedAt), desc(news.id))
+    .limit(limit).offset(offset);
+  return { items, total: Number(countResult?.count ?? 0) };
+}
+
+export async function getAdminNewsList(limit = 100): Promise<News[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(news).orderBy(desc(news.updatedAt)).limit(limit);
+}
+
+export interface CreateNewsInput {
+  slug: string;
+  title: string;
+  summary: string;
+  content: string;
+  status: "draft" | "published";
+  isImportant?: boolean;
+  isCompetition?: boolean;
+  isExhibition?: boolean;
+  industryNames?: string[];
+  createdBy: number;
+}
+
+export async function createNews(data: CreateNewsInput): Promise<{ id: number; shouldNotify: boolean }> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  if (!isValidNewsSlug(data.slug)) throw new Error(`無效的網址代稱：${data.slug}`);
+  const industryNames = Array.from(new Set(data.industryNames ?? []));
+  validateNewsIndustryNames(industryNames);
+
+  const existing = await db.select({ id: news.id }).from(news).where(eq(news.slug, data.slug)).limit(1);
+  if (existing.length > 0) throw new Error(`此網址代稱已被使用：${data.slug}`);
+
+  const publishNow = data.status === "published";
+  const now = new Date();
+  const result = await db.insert(news).values({
+    slug: data.slug,
+    title: data.title,
+    summary: data.summary,
+    content: data.content,
+    status: data.status,
+    isImportant: data.isImportant ?? false,
+    isCompetition: data.isCompetition ?? false,
+    isExhibition: data.isExhibition ?? false,
+    publishedAt: publishNow ? now : null,
+    firstPublishedAt: publishNow ? now : null,
+    createdBy: data.createdBy,
+  });
+  const id = result[0].insertId;
+  if (industryNames.length > 0) {
+    await db.insert(newsIndustries).values(industryNames.map(industryName => ({ newsId: id, industryName })));
+  }
+  // 建立當下就是 published，等同「第一次從草稿轉為已發布」，需要觸發分眾通知。
+  return { id, shouldNotify: publishNow };
+}
+
+export interface UpdateNewsInput {
+  slug?: string;
+  title?: string;
+  summary?: string;
+  content?: string;
+  status?: "draft" | "published" | "withdrawn";
+  isImportant?: boolean;
+  isCompetition?: boolean;
+  isExhibition?: boolean;
+  industryNames?: string[];
+}
+
+/**
+ * Partial update。是否要觸發分眾通知只看 firstPublishedAt 在這次更新「之前」
+ * 是不是 NULL——用 transaction 包住「讀取目前 firstPublishedAt → 條件式寫入」，
+ * 避免發布流程重跑或併發呼叫把同一次發布誤判成兩次「第一次發布」。真正防止
+ * 重複寄送的最後防線仍是 newsNotifications 的唯一索引（見
+ * createPendingNewsNotifications），這裡的 transaction 只是讓絕大多數情況下
+ * 第一層就不會誤判，屬於防禦縱深，不是唯一保證。
+ */
+export async function updateNews(id: number, data: UpdateNewsInput): Promise<{ shouldNotify: boolean }> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+
+  if (data.slug !== undefined) {
+    if (!isValidNewsSlug(data.slug)) throw new Error(`無效的網址代稱：${data.slug}`);
+    const existing = await db.select({ id: news.id }).from(news).where(eq(news.slug, data.slug)).limit(1);
+    if (existing.length > 0 && existing[0].id !== id) throw new Error(`此網址代稱已被使用：${data.slug}`);
+  }
+
+  if (data.industryNames !== undefined) {
+    await setNewsIndustries(id, data.industryNames);
+  }
+
+  return db.transaction(async (tx) => {
+    // FOR UPDATE：兩個發布請求幾乎同時進入時（例如同一個 API 因逾時被重試、
+    // 或使用者連點兩下），沒有這個鎖的話兩個 transaction 可能都讀到
+    // firstPublishedAt 仍是 NULL、都判斷「這是第一次發布」而各自觸發一次分眾
+    // 通知。加上 FOR UPDATE 後，第二個 transaction 會被擋到第一個 commit
+    // 為止，取得鎖之後讀到的一定是「已經有 firstPublishedAt」的最新值，
+    // shouldNotify 自然變成 false，只有真正最先執行的那個會觸發通知。
+    const [current] = await tx.select().from(news).where(eq(news.id, id)).limit(1).for("update");
+    if (!current) throw new Error("找不到此則消息");
+
+    const setData: Partial<InsertNews> = {};
+    if (data.slug !== undefined) setData.slug = data.slug;
+    if (data.title !== undefined) setData.title = data.title;
+    if (data.summary !== undefined) setData.summary = data.summary;
+    if (data.content !== undefined) setData.content = data.content;
+    if (data.isImportant !== undefined) setData.isImportant = data.isImportant;
+    if (data.isCompetition !== undefined) setData.isCompetition = data.isCompetition;
+    if (data.isExhibition !== undefined) setData.isExhibition = data.isExhibition;
+
+    let shouldNotify = false;
+    if (data.status !== undefined) {
+      setData.status = data.status;
+      if (data.status === "published") {
+        setData.publishedAt = new Date();
+        if (current.firstPublishedAt == null) {
+          setData.firstPublishedAt = new Date();
+          shouldNotify = true;
+        }
+      }
+    }
+
+    if (Object.keys(setData).length > 0) {
+      await tx.update(news).set(setData).where(eq(news.id, id));
+    }
+    return { shouldNotify };
+  });
+}
+
+/** 「重要消息」的收件資格：沿用既有平台公告的通知資格規則，不另外維護一套判斷邏輯。 */
+async function getImportantNewsRecipients() {
+  return getActiveUsersForAnnouncement();
+}
+
+/**
+ * 「產業消息」收件資格：擁有或共同管理「主產業符合、且審核狀態為 approved」
+ * 工廠的使用者。同一使用者可能同時是不同工廠的 owner／co-manager，這裡先在
+ * userId 這層用 Set 去重，回傳的清單本身就不會有重複 id。
+ */
+async function getIndustryNewsRecipients(industryNames: string[]) {
+  if (industryNames.length === 0) return [];
+  const db = await getDb();
+  if (!db) return [];
+
+  const matchedFactories = await db.select({ id: factories.id, ownerId: factories.ownerId })
+    .from(factories)
+    .where(and(
+      eq(factories.status, "approved"),
+      sql`JSON_OVERLAPS(${factories.industry}, ${JSON.stringify(industryNames)})`,
+    ));
+  if (matchedFactories.length === 0) return [];
+
+  const userIds = new Set<number>(matchedFactories.map(f => f.ownerId));
+  const factoryIds = matchedFactories.map(f => f.id);
+  const coMgrRows = await db.select({ userId: factoryCoManagers.userId })
+    .from(factoryCoManagers)
+    .where(and(inArray(factoryCoManagers.factoryId, factoryIds), isNull(factoryCoManagers.removedAt)));
+  for (const r of coMgrRows) userIds.add(r.userId);
+  if (userIds.size === 0) return [];
+
+  return db.select({
+    id: users.id,
+    email: sql<string | null>`COALESCE(${users.primaryEmail}, ${users.email})`,
+    name: users.name,
+    notificationSettings: users.notificationSettings,
+  }).from(users).where(and(inArray(users.id, Array.from(userIds)), isNull(users.deletedAt)));
+}
+
+export interface NewsRecipientInfo {
+  id: number;
+  email: string | null; // 已套用「news」opt-out 規則；opt-out 或無 email 時為 null
+  name: string | null;
+  pushEnabled: boolean; // 已套用「pushNews」opt-out 規則
+}
+
+/**
+ * 找消息目前還沒有會員中心 UI 可以設定 notificationSettings.news／pushNews，
+ * 所以本階段的預設值刻意是「預設允許」——未設定（undefined/null）或非 false
+ * 的任何值都視為允許；只有明確設成 false 才排除。等之後補上設定 UI，使用者
+ * 才有辦法主動關閉，在那之前不應該讓完全没設定過的既有會員被排除在外。
+ */
+function isNewsEmailAllowed(settings: Record<string, boolean> | null | undefined): boolean {
+  return (settings ?? {})['news'] !== false;
+}
+function isNewsPushAllowed(settings: Record<string, boolean> | null | undefined): boolean {
+  return (settings ?? {})['pushNews'] !== false;
+}
+
+/**
+ * 找消息分眾通知的唯一收件人聚合入口：重要消息 + 產業消息兩個來源合併、以
+ * userId 去重（對應規格「蒐集 → 蒐集 → 合併 → 去重 → 才建立各管道寄送工作」）。
+ * 純競賽／純展覽（isImportant=false 且沒有勾選任何產業）一律回傳空陣列，
+ * 呼叫端據此完全不建立 Email／Push 工作、也不寄送。
+ */
+export async function gatherNewsRecipients(opts: { isImportant: boolean; industryNames: string[] }): Promise<NewsRecipientInfo[]> {
+  if (!opts.isImportant && opts.industryNames.length === 0) return [];
+
+  const [importantList, industryList] = await Promise.all([
+    opts.isImportant ? getImportantNewsRecipients() : Promise.resolve([] as Awaited<ReturnType<typeof getImportantNewsRecipients>>),
+    opts.industryNames.length > 0 ? getIndustryNewsRecipients(opts.industryNames) : Promise.resolve([] as Awaited<ReturnType<typeof getIndustryNewsRecipients>>),
+  ]);
+
+  const merged = new Map<number, NewsRecipientInfo>();
+  for (const u of [...importantList, ...industryList]) {
+    if (merged.has(u.id)) continue;
+    const s = (u.notificationSettings as Record<string, boolean> | null) ?? {};
+    merged.set(u.id, {
+      id: u.id,
+      email: (u.email && isNewsEmailAllowed(s)) ? u.email : null,
+      name: u.name,
+      pushEnabled: isNewsPushAllowed(s),
+    });
+  }
+  return Array.from(merged.values());
+}
+
+/**
+ * 針對這則消息、這批使用者、這個管道，把「還沒有紀錄」的部分建成 pending 通知
+ * 紀錄；已經存在的（不論任何狀態）一律跳過，不重複建立、也不重複寄送。唯一
+ * 防線是 news_notif_uq (newsId, userId, channel)——就算這個函式因重試被呼叫
+ * 兩次，第二次的 insert 會因唯一索引衝突被 catch 吞掉，不會造成兩筆紀錄或
+ * 兩次寄送。回傳「這次真的新建立」的紀錄，只有這些才需要實際寄送。
+ */
+export async function createPendingNewsNotifications(
+  newsId: number,
+  userIds: number[],
+  channel: "email" | "push",
+): Promise<{ id: number; userId: number }[]> {
+  if (userIds.length === 0) return [];
+  const db = await getDb();
+  if (!db) return [];
+
+  const existingRows = await db.select({ userId: newsNotifications.userId })
+    .from(newsNotifications)
+    .where(and(
+      eq(newsNotifications.newsId, newsId),
+      eq(newsNotifications.channel, channel),
+      inArray(newsNotifications.userId, userIds),
+    ));
+  const existingIds = new Set(existingRows.map(r => r.userId));
+  const toCreate = userIds.filter(uid => !existingIds.has(uid));
+  if (toCreate.length === 0) return [];
+
+  const created: { id: number; userId: number }[] = [];
+  for (const userId of toCreate) {
+    try {
+      const result = await db.insert(newsNotifications).values({ newsId, userId, channel, status: "pending" });
+      created.push({ id: result[0].insertId, userId });
+    } catch {
+      // 唯一索引衝突：代表已經有紀錄了（例如併發呼叫），略過即可，不是錯誤。
+      console.warn(`[news] duplicate notification record skipped newsId=${newsId} channel=${channel}`);
+    }
+  }
+  return created;
+}
+
+export async function markNewsNotificationSent(id: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(newsNotifications).set({ status: "sent", sentAt: new Date() }).where(eq(newsNotifications.id, id));
+}
+
+export async function markNewsNotificationFailed(id: number, error: string): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(newsNotifications).set({ status: "failed", error: error.slice(0, 500) }).where(eq(newsNotifications.id, id));
+}
+
+/**
+ * 撈出這則消息「還沒有成功送達」的通知紀錄（pending 或 failed），供管理員
+ * 手動觸發補寄——涵蓋「pending 建立後程序中斷、從未真正寄送」與「寄送失敗」
+ * 兩種情況。查詢條件只有 pending／failed 這兩種狀態，status='sent' 的紀錄
+ * 從資料來源這一層就不會被撈到，不可能被這個機制誤觸重寄。
+ */
+export async function getRetryableNewsNotifications(newsId: number): Promise<{ id: number; userId: number; channel: "email" | "push" }[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select({ id: newsNotifications.id, userId: newsNotifications.userId, channel: newsNotifications.channel })
+    .from(newsNotifications)
+    .where(and(eq(newsNotifications.newsId, newsId), inArray(newsNotifications.status, ["pending", "failed"])));
 }
 
 // ===== 登入彈窗（綁定既有「平台消息」公告的登入曝光入口）=====

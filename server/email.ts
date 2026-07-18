@@ -853,6 +853,50 @@ export async function sendPlatformAnnouncementEmail(params: {
   });
 }
 
+// ===== 找消息（產業情報／News）Email =====
+// 結構刻意與 sendPlatformAnnouncementEmail 一致（品牌識別、標題、CTA 按鈕、
+// 退訂資訊），只是 CTA 導向該篇消息的 /news/:slug，並多帶一段摘要。不修改
+// sendPlatformAnnouncementEmail 本身、不影響既有平台公告的寄送行為。
+export async function sendNewsEmail(params: {
+  toEmail: string;
+  toName: string | null;
+  newsTitle: string;
+  newsSummary: string;
+  newsSlug: string;
+}) {
+  if (!isEmailEnabled()) throw new Error('[Email] 未設定 RESEND_API_KEY，無法寄送找消息通知信');
+  if (!FROM_EMAIL) throw new Error('[Email] 未設定 FROM_EMAIL，無法寄送 Email');
+  const resend = getResend()!;
+  const appUrl = process.env.VITE_APP_URL ?? 'http://localhost:3000';
+  const safeTitle = escapeHtml(params.newsTitle);
+  const safeSummary = escapeHtml(params.newsSummary);
+  const safeToName = escapeHtml(params.toName ?? '用戶');
+  const articleUrl = `${appUrl}/news/${params.newsSlug}`;
+  await resend.emails.send({
+    from: FROM_EMAIL,
+    to: params.toEmail,
+    subject: `【OXM 找消息】${params.newsTitle}`,
+    html: `
+      <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #f97316;">OXM 找消息</h2>
+        <p>親愛的 ${safeToName}，您好：</p>
+        <h3 style="color: #1f2937; margin: 16px 0 8px;">${safeTitle}</h3>
+        <div style="background: #f5f5f5; padding: 16px; border-radius: 8px; margin: 16px 0; color: #4b5563;">
+          ${safeSummary}
+        </div>
+        <a href="${articleUrl}"
+          style="background: #f97316; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none; display: inline-block; margin-top: 8px;">
+          查看完整內容
+        </a>
+        <p style="color: #999; font-size: 12px; margin-top: 24px;">
+          此信件由 OXM 平台自動發送，請勿直接回覆。<br>
+          如不希望收到此類通知，可至 <a href="${appUrl}/member" style="color: #f97316;">會員中心 → 通知設定</a> 關閉「找消息」Email 通知。
+        </p>
+      </div>
+    `,
+  });
+}
+
 // ===== Phase 4C: 訂單日期節點逾期通知 =====
 export async function sendOrderOverdueEmail(params: {
   to: string;
