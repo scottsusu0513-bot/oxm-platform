@@ -11,7 +11,7 @@ import { openExternalUrl } from "@/lib/platform";
 import { useAuth } from "@/_core/hooks/useAuth";
 import LoginDialog from "@/components/LoginDialog";
 import { toast } from "sonner";
-import { Share2, Newspaper, FileText as FileTextIcon, Download, ExternalLink } from "lucide-react";
+import { Share2, Newspaper, FileText as FileTextIcon, Download, ExternalLink, Globe } from "lucide-react";
 import NotFound from "./NotFound";
 import { Card, CardContent } from "@/components/ui/card";
 
@@ -46,8 +46,12 @@ type NewsAttachment = {
  * protectedProcedure 現拿現簽的短效下載連結，loading 狀態避免連點造成重複請求。
  * 已過期／實體檔案已被排程清除：卡片保留，按鈕停用，不打開 LoginDialog、
  * 不呼叫下載 API，直接顯示固定文案。
+ *
+ * 純視覺調整成「補充資訊」欄位裡的緊湊列（跟以前獨立大卡片比，padding／
+ * 字級縮小、拿掉自己的 border，改用外層容器的 divide-y 分隔多筆附件）——
+ * 登入限制／過期判斷／storageDeletedAt／signed URL 呼叫邏輯完全沒有變。
  */
-function NewsAttachmentCard({ attachment, isAuthenticated, onRequireLogin }: {
+function NewsAttachmentRow({ attachment, isAuthenticated, onRequireLogin }: {
   attachment: NewsAttachment;
   isAuthenticated: boolean;
   onRequireLogin: () => void;
@@ -71,13 +75,13 @@ function NewsAttachmentCard({ attachment, isAuthenticated, onRequireLogin }: {
   };
 
   return (
-    <div className="rounded-lg border px-4 py-3">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2.5 min-w-0">
-          <FileTextIcon className="w-5 h-5 shrink-0 text-muted-foreground" />
+    <div className="py-2 first:pt-0 last:pb-0">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <FileTextIcon className="w-4 h-4 shrink-0 text-muted-foreground" />
           <div className="min-w-0">
-            <p className="text-sm font-medium truncate">{attachment.displayName}</p>
-            <p className="text-xs text-muted-foreground">
+            <p className="text-sm font-medium truncate" title={attachment.displayName}>{attachment.displayName}</p>
+            <p className="text-xs text-muted-foreground truncate">
               PDF · {formatFileSize(attachment.sizeBytes)}
               {!disabled && attachment.expirationType === "never" && " · 永久有效"}
               {!disabled && attachment.expirationType !== "never" && attachment.downloadExpiresAt &&
@@ -97,7 +101,7 @@ function NewsAttachmentCard({ attachment, isAuthenticated, onRequireLogin }: {
         )}
       </div>
       {disabled && (
-        <p className="text-xs text-red-500 mt-2">已超過下載期限，如有需要請聯繫管理員。</p>
+        <p className="text-xs text-red-500 mt-1.5">已超過下載期限，如有需要請聯繫管理員。</p>
       )}
     </div>
   );
@@ -175,39 +179,54 @@ export default function NewsDetail() {
 
             <MarkdownContent content={item.content} className="text-base text-foreground/90" allowImages />
 
-            {/* 消息來源：只在有 sourceUrl 時顯示（後端已經保證「有名稱必須有
-                網址」，不會出現只有名稱、按鈕卻點不了的狀態）。永遠開新分頁，
-                不把會員導離 OXM 目前這個 /news/:slug 頁面本身。 */}
-            {item.sourceUrl && (
-              <div className="mt-8 rounded-lg border bg-muted/20 px-4 py-3 flex items-center justify-between gap-3">
-                <p className="text-sm text-muted-foreground truncate">
-                  <span className="text-xs">來源：</span>
-                  {item.sourceName || "原始消息來源"}
-                </p>
-                <Button
-                  variant="outline" size="sm" className="gap-1.5 shrink-0"
-                  onClick={() => openExternalUrl(item.sourceUrl!)}
-                >
-                  查看原始消息
-                  <ExternalLink className="w-3.5 h-3.5" />
-                </Button>
-              </div>
-            )}
+            {/* 補充資訊：消息來源＋PDF 附件合併成同一組緊湊區塊。兩者都沒有
+                時整個區塊完全不渲染，不留空白／分隔線；只有一項時只顯示那
+                一項，不留空的另一欄。桌面/平板兩者都有時用左右兩欄（來源
+                左、附件右，md:grid-cols-2），手機疊成上下兩排（預設
+                grid-cols-1，來源在上、附件在下，跟這裡的 JSX 順序一致）。
+                sourceUrl 只在有值時顯示（後端已經保證「有名稱必須有網址」，
+                不會出現只有名稱、按鈕卻點不了的狀態），永遠開新分頁，不把
+                會員導離 OXM 目前這個 /news/:slug 頁面本身。 */}
+            {(item.sourceUrl || item.attachments.length > 0) && (
+              <div className={`mt-8 pt-6 border-t ${item.sourceUrl && item.attachments.length > 0 ? "grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4 items-start" : ""}`}>
+                {item.sourceUrl && (
+                  <div className="rounded-lg border bg-muted/20 px-3.5 py-3">
+                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-1.5">
+                      <Globe className="w-3.5 h-3.5 shrink-0" />
+                      消息來源
+                    </div>
+                    <p className="text-sm font-medium truncate mb-2" title={item.sourceName || "原始消息來源"}>
+                      {item.sourceName || "原始消息來源"}
+                    </p>
+                    <Button
+                      variant="outline" size="sm" className="gap-1.5"
+                      onClick={() => openExternalUrl(item.sourceUrl!)}
+                      aria-label="查看原始消息"
+                    >
+                      查看原始消息
+                      <ExternalLink className="w-3.5 h-3.5" />
+                    </Button>
+                  </div>
+                )}
 
-            {/* 相關附件：沒有附件時整個區塊完全不渲染，不留空白 */}
-            {item.attachments.length > 0 && (
-              <div className="mt-10 pt-6 border-t">
-                <h2 className="text-sm font-semibold text-muted-foreground mb-3">相關附件</h2>
-                <div className="space-y-2.5">
-                  {item.attachments.map(att => (
-                    <NewsAttachmentCard
-                      key={att.id}
-                      attachment={att}
-                      isAuthenticated={isAuthenticated}
-                      onRequireLogin={() => setLoginDialogOpen(true)}
-                    />
-                  ))}
-                </div>
+                {item.attachments.length > 0 && (
+                  <div className="rounded-lg border bg-muted/20 px-3.5 py-3 min-w-0">
+                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-1.5">
+                      <FileTextIcon className="w-3.5 h-3.5 shrink-0" />
+                      附件下載
+                    </div>
+                    <div className="divide-y">
+                      {item.attachments.map(att => (
+                        <NewsAttachmentRow
+                          key={att.id}
+                          attachment={att}
+                          isAuthenticated={isAuthenticated}
+                          onRequireLogin={() => setLoginDialogOpen(true)}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 

@@ -826,18 +826,14 @@ describe("News.tsx 第三輪 UI 優化：分類標題、空狀態、最近更新
     expect(fn).toMatch(/label\.endsWith\("消息"\) \? `目前還沒有\$\{label\}` : `目前還沒有\$\{label\}相關消息`/);
   });
 
-  it("最近更新：只在目前分類不是「全部最新」且該分類確定為空時才發查詢，limit=3、category=all", () => {
+  it("跨分類「最近更新」已完全移除：不再有 shouldFetchRecent／recentData／showRecent，也沒有 limit: 3 的 fallback 查詢", () => {
     const source = readNewsPageSource();
-    const start = source.indexOf("const shouldFetchRecent");
-    const end = source.indexOf("const categoryMeta");
-    const block = source.slice(start, end);
-
-    expect(block).toMatch(/const shouldFetchRecent = category !== "all" && isEmpty;/);
-    expect(block).toMatch(/category: "all", offset: 0, limit: 3/);
-    expect(block).toMatch(/enabled: shouldFetchRecent/);
-    // 平台完全没有消息時 recentData.items 也会是空陣列，showRecent 因此一併為 false，
-    // 不會多開一個「一定顯示」的判斷分支去繞過這個保證。
-    expect(block).toMatch(/const showRecent = shouldFetchRecent && \(recentData\?\.items\.length \?\? 0\) > 0;/);
+    expect(source).not.toMatch(/shouldFetchRecent/);
+    expect(source).not.toMatch(/recentData/);
+    expect(source).not.toMatch(/showRecent/);
+    expect(source).not.toMatch(/limit: 3/);
+    expect(source).not.toMatch(/最近更新/);
+    expect(source).not.toMatch(/以下是 OXM 近期整理的其他消息/);
   });
 
   it("NewsListItem（主列表與最近更新共用）不渲染分類／產業標籤與「查看完整內容」，整列仍是 Link", () => {

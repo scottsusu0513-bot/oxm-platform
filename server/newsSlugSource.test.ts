@@ -382,14 +382,16 @@ describe("NewsDetail.tsx：消息來源區塊（原始碼內容斷言）", () =>
   it("按鈕文字是「查看原始消息」、帶 ExternalLink icon、用既有 openExternalUrl（Capacitor App 會走原生瀏覽器，Web 會開新分頁＋noopener noreferrer）", () => {
     const source = readSource();
     const start = source.indexOf("item.sourceUrl && (");
-    const end = source.indexOf("相關附件：沒有附件時", start);
+    const end = source.indexOf("item.attachments.length > 0 && (", start);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
     const block = source.slice(start, end);
     expect(block).toMatch(/查看原始消息/);
     expect(block).toMatch(/<ExternalLink/);
     expect(block).toMatch(/openExternalUrl\(item\.sourceUrl!\)/);
   });
 
-  it("消息來源區塊在文章內容之後、相關附件區塊之前", () => {
+  it("消息來源區塊在文章內容之後、附件區塊之前（JSX 順序＝桌面左欄/手機上排 在 附件右欄/手機下排 之前）", () => {
     const source = readSource();
     const contentIdx = source.indexOf("<MarkdownContent content={item.content}");
     const sourceIdx = source.indexOf("item.sourceUrl && (");
@@ -397,6 +399,30 @@ describe("NewsDetail.tsx：消息來源區塊（原始碼內容斷言）", () =>
     expect(contentIdx).toBeGreaterThan(-1);
     expect(sourceIdx).toBeGreaterThan(contentIdx);
     expect(attachmentsIdx).toBeGreaterThan(sourceIdx);
+  });
+
+  it("消息來源＋PDF 附件合併成同一個「補充資訊」外層區塊，只有其中一項存在時外層仍會渲染（不是各自獨立的兩個區塊）", () => {
+    const source = readSource();
+    // 唯一的外層開關是「來源或附件任一存在」，不是像舊版那樣兩個各自獨立的
+    // {item.sourceUrl && (...)} / {item.attachments.length > 0 && (...)} 頂層區塊。
+    expect(source).toMatch(/\{\(item\.sourceUrl \|\| item\.attachments\.length > 0\) && \(/);
+  });
+
+  it("桌面/平板兩欄（md:grid-cols-2）只在來源與附件同時存在時套用，只有一項時不會被硬塞進兩欄版面", () => {
+    const source = readSource();
+    expect(source).toMatch(/item\.sourceUrl && item\.attachments\.length > 0 \? "grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4 items-start" : ""/);
+  });
+
+  it("補充資訊區塊只有一個 border-t（跟文章內容之間），來源與附件兩欄之間沒有多餘的分隔線或重複標題", () => {
+    const source = readSource();
+    const start = source.indexOf("item.sourceUrl || item.attachments.length > 0");
+    const end = source.indexOf("mt-10 pt-6 border-t", start);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const block = source.slice(start, end);
+    const borderTCount = (block.match(/border-t/g) ?? []).length;
+    expect(borderTCount).toBe(1);
+    expect(block).not.toMatch(/相關附件/);
   });
 });
 

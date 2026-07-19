@@ -92,6 +92,35 @@ function formatDate(d: string | Date): string {
   return new Date(d).toLocaleDateString("zh-TW", { year: "numeric", month: "2-digit", day: "2-digit" });
 }
 
+interface NewCategorySummaryData {
+  all: boolean;
+  important: boolean;
+  competition: boolean;
+  exhibition: boolean;
+  industry: boolean;
+  industries: Record<string, boolean>;
+}
+
+// 分類側欄／手機 Select 的 NEW 判斷：一律看後端一次回傳的 getNewCategorySummary
+// 彙總結果（同樣以 firstPublishedAt 72 小時為準），不是看目前分類已載入的第一
+// 頁資料——切到別的分類時，其他分類的 NEW 狀態也要能正確顯示。
+function categoryHasNew(cat: CategoryValue, summary: NewCategorySummaryData | undefined): boolean {
+  if (!summary) return false;
+  if (cat === "all") return summary.all;
+  if (cat === "important") return summary.important;
+  if (cat === "competition") return summary.competition;
+  if (cat === "exhibition") return summary.exhibition;
+  return summary.industries[cat.slice("industry:".length)] ?? false;
+}
+
+function NewBadge({ className = "" }: { className?: string }) {
+  return (
+    <span className={`shrink-0 text-[9px] font-bold leading-none text-white bg-gradient-to-r from-orange-500 to-red-500 rounded px-1 py-0.5 ${className}`}>
+      NEW
+    </span>
+  );
+}
+
 function categoryLabel(cat: CategoryValue): string {
   if (cat === "all") return "全部最新";
   if (cat === "important") return "重要消息";
@@ -129,8 +158,8 @@ interface NewsListItemData {
   firstPublishedAt: string | Date | null;
 }
 
-// 消息列——主列表與「最近更新」共用同一種呈現：只有大標題、摘要、日期與
-// NEW，不顯示分類/產業標籤、不顯示「查看完整內容」，整列是真正的 Link。
+// 消息列：只有大標題、摘要、日期與 NEW，不顯示分類/產業標籤、不顯示
+// 「查看完整內容」，整列是真正的 Link。
 // 卡片用接近白色的半透明底（bg-white/85）跟有色背景拉開層次，不是純白厚重
 // 方塊；hover 邊框/陰影轉為橘紫色調並微幅上移，不做大幅動畫。
 function NewsListItem({ item }: { item: NewsListItemData }) {
@@ -242,6 +271,12 @@ export default function News() {
   const queryParams = useMemo(() => ({ ...categoryToQueryParams(category), offset, limit: 20 }), [category, offset]);
   const { data, isLoading, isFetching, error } = trpc.news.list.useQuery(queryParams);
 
+  // 所有分類的 NEW 徽章：單一彙總查詢，不是 15 個分類各自查一次；5 分鐘內
+  // 視為新鮮不重打，也不加輪詢——最新狀態在使用者重新整理頁面時就會拿到。
+  const { data: newSummary } = trpc.news.getNewCategorySummary.useQuery(undefined, {
+    staleTime: 5 * 60 * 1000,
+  });
+
   // 換分類時重置捲動列表與 offset，避免舊分類的資料殘留混進新分類。
   function selectCategory(next: CategoryValue) {
     setCategory(next);
@@ -262,16 +297,6 @@ export default function News() {
   const total = data?.total ?? 0;
   const hasMore = items.length < total;
   const isEmpty = !isLoading && !error && items.length === 0;
-
-  // 空分類下方的「最近更新」：只在目前分類不是「全部最新」、且目前分類確定
-  // 為空（已載入完成、不是還在轉圈）時才發查詢；用 limit=3 直接向後端要
-  // 最新 3 則，不是抓大量資料再由前端截斷。
-  const shouldFetchRecent = category !== "all" && isEmpty;
-  const { data: recentData } = trpc.news.list.useQuery(
-    { category: "all", offset: 0, limit: 3 },
-    { enabled: shouldFetchRecent },
-  );
-  const showRecent = shouldFetchRecent && (recentData?.items.length ?? 0) > 0;
 
   const categoryMeta = getCategoryMeta(category);
   const industrySectionActive = category.startsWith("industry:");
@@ -325,24 +350,31 @@ export default function News() {
         </div>
 
         <div className="container py-6 sm:py-8">
-          {/* 手機版：分類選單移到列表上方 */}
-          <div className="lg:hidden mb-4">
+          {/* 手機版：分類選單移到列表上方。原生 <select> 沒辦法在選項裡穩定塞入
+              徽章樣式的 <span>，所以清單裡的 NEW 用文字附加在選項文字後面；目前
+              選中的分類如果有新消息，另外在 Select 右側放一個小徽章。 */}
+          <div className="lg:hidden mb-4 flex items-center gap-2">
             <Select
               value={category}
               onValueChange={(v) => selectCategory(v as CategoryValue)}
             >
-              <SelectTrigger className="w-full border-purple-200/60 bg-white/70">
+              <SelectTrigger className="flex-1 min-w-0 border-purple-200/60 bg-white/70">
                 <SelectValue>{categoryLabel(category)}</SelectValue>
               </SelectTrigger>
               <SelectContent>
                 {FIXED_CATEGORIES.map(c => (
-                  <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>
+                  <SelectItem key={c.value} value={c.value}>
+                    {c.label}{categoryHasNew(c.value, newSummary) ? " NEW" : ""}
+                  </SelectItem>
                 ))}
                 {INDUSTRIES.map(ind => (
-                  <SelectItem key={ind.name} value={`industry:${ind.name}`}>產業消息：{ind.name}</SelectItem>
+                  <SelectItem key={ind.name} value={`industry:${ind.name}`}>
+                    產業消息：{ind.name}{categoryHasNew(`industry:${ind.name}`, newSummary) ? " NEW" : ""}
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>
+            {categoryHasNew(category, newSummary) && <NewBadge className="px-1.5 py-1" />}
           </div>
 
           <div className="flex gap-8">
@@ -363,7 +395,8 @@ export default function News() {
                         <span className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-full bg-gradient-to-b from-orange-400 to-purple-500" aria-hidden="true" />
                       )}
                       <Icon className={sidebarIconClass(active)} />
-                      {c.label}
+                      <span className="flex-1 min-w-0 truncate text-left">{c.label}</span>
+                      {categoryHasNew(c.value, newSummary) && <NewBadge />}
                     </button>
                   );
                 })}
@@ -371,14 +404,16 @@ export default function News() {
                 {/* 「產業消息」是分類區段標題，不是可展開/收合的按鈕——下方產業清單
                     永遠展開顯示，不需要互動就能看到全部產業。選中任一產業時文字／
                     icon 同步變成深紫，回到其他分類時只是恢復一般文字色，清單本身
-                    不會收起。 */}
+                    不會收起。父層的 NEW 只要「任一產業」有新消息就顯示，跟個別
+                    產業項目自己的 NEW 是獨立判斷、可以同時出現。 */}
                 <div
                   className={`w-full flex items-center gap-2.5 px-3 py-2.5 text-sm font-medium ${
                     industrySectionActive ? "text-purple-700" : "text-foreground/75"
                   }`}
                 >
                   <Factory className={`w-4 h-4 shrink-0 ${industrySectionActive ? "" : "text-violet-400/70"}`} />
-                  產業消息
+                  <span className="flex-1 min-w-0 truncate">產業消息</span>
+                  {newSummary?.industry && <NewBadge />}
                 </div>
                 <div className="relative pl-4 space-y-1 ml-4">
                   {/* 產業清單左側垂直線：橘→紫細漸層，從第一個產業連續延伸到最後一個，
@@ -399,7 +434,8 @@ export default function News() {
                         className={`${sidebarItemClass(active)} px-3 py-2 ${active ? "font-medium" : ""}`}
                       >
                         <Icon className={sidebarIconClass(active)} />
-                        {ind.name}
+                        <span className="flex-1 min-w-0 truncate text-left">{ind.name}</span>
+                        {categoryHasNew(`industry:${ind.name}`, newSummary) && <NewBadge />}
                       </button>
                     );
                   })}
@@ -437,32 +473,15 @@ export default function News() {
                   </CardContent>
                 </Card>
               ) : isEmpty ? (
-                <>
-                  <Card className="border-purple-100/60 bg-gradient-to-br from-orange-50/60 via-white to-purple-50/60">
-                    <CardContent className="flex flex-col items-center justify-center text-center py-8 min-h-[160px] sm:min-h-[180px]">
-                      <FileText className="w-8 h-8 mb-2.5 text-purple-300" />
-                      <p className="font-semibold text-foreground">{getEmptyTitle(category)}</p>
-                      <p className="text-sm text-muted-foreground mt-1 max-w-sm">
-                        OXM 將持續整理最新產業動態，有新消息時也會通知相關產業會員。
-                      </p>
-                    </CardContent>
-                  </Card>
-
-                  {showRecent && (
-                    <div className="mt-8">
-                      <div className="flex items-center gap-2">
-                        <span className="w-1.5 h-1.5 rounded-full bg-gradient-to-br from-orange-400 to-purple-500" aria-hidden="true" />
-                        <h3 className="text-base font-semibold">最近更新</h3>
-                      </div>
-                      <p className="text-sm text-muted-foreground mt-0.5 mb-3">以下是 OXM 近期整理的其他消息</p>
-                      <div className="space-y-3">
-                        {recentData!.items.map(item => (
-                          <NewsListItem key={item.id} item={item} />
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </>
+                <Card className="border-purple-100/60 bg-gradient-to-br from-orange-50/60 via-white to-purple-50/60">
+                  <CardContent className="flex flex-col items-center justify-center text-center py-8 min-h-[160px] sm:min-h-[180px]">
+                    <FileText className="w-8 h-8 mb-2.5 text-purple-300" />
+                    <p className="font-semibold text-foreground">{getEmptyTitle(category)}</p>
+                    <p className="text-sm text-muted-foreground mt-1 max-w-sm">
+                      OXM 將持續整理最新產業動態，有新消息時也會通知相關產業會員。
+                    </p>
+                  </CardContent>
+                </Card>
               ) : (
                 <>
                   <div className="space-y-3">

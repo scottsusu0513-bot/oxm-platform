@@ -1,4 +1,4 @@
-import { eq, and, like, desc, asc, sql, inArray, or, isNull, gt, isNotNull, lte, ne, getTableColumns } from "drizzle-orm";
+import { eq, and, like, desc, asc, sql, inArray, or, isNull, gt, gte, isNotNull, lte, ne, getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
 import { createHash, randomUUID } from "crypto";
@@ -2163,6 +2163,54 @@ export async function getAdminNewsList(limit = 100): Promise<News[]> {
   const db = await getDb();
   if (!db) return [];
   return db.select().from(news).orderBy(desc(news.updatedAt)).limit(limit);
+}
+
+export interface NewCategorySummary {
+  all: boolean;
+  important: boolean;
+  competition: boolean;
+  exhibition: boolean;
+  industry: boolean;
+  industries: Record<string, boolean>;
+}
+
+/**
+ * 各分類「NEW」徽章判斷：只看 firstPublishedAt（第一次正式發布，永久不變），
+ * 不看 publishedAt／updatedAt——下架重發不會再次寫入 firstPublishedAt，單純編輯
+ * 標題/內文也不會動到它，所以都不會誤判成新消息。固定用兩次查詢（近 72 小時
+ * 的已發布消息本身、以及這些消息對應的產業標籤）算出所有分類的 NEW 狀態，
+ * 不是每個分類各發一次查詢，也不是靠前端目前載入的第一頁資料判斷。
+ */
+export async function getNewCategorySummary(): Promise<NewCategorySummary> {
+  const db = await getDb();
+  const empty: NewCategorySummary = { all: false, important: false, competition: false, exhibition: false, industry: false, industries: {} };
+  if (!db) return empty;
+
+  const cutoff = new Date(Date.now() - 72 * 60 * 60 * 1000);
+  const recent = await db.select({
+    id: news.id,
+    isImportant: news.isImportant,
+    isCompetition: news.isCompetition,
+    isExhibition: news.isExhibition,
+  }).from(news).where(and(eq(news.status, "published"), gte(news.firstPublishedAt, cutoff)));
+
+  if (recent.length === 0) return empty;
+
+  const industryRows = await db.selectDistinct({ industryName: newsIndustries.industryName })
+    .from(newsIndustries)
+    .where(inArray(newsIndustries.newsId, recent.map(r => r.id)));
+
+  const industries: Record<string, boolean> = {};
+  for (const row of industryRows) industries[row.industryName] = true;
+
+  return {
+    all: true,
+    important: recent.some(r => r.isImportant),
+    competition: recent.some(r => r.isCompetition),
+    exhibition: recent.some(r => r.isExhibition),
+    industry: industryRows.length > 0,
+    industries,
+  };
 }
 
 export interface CreateNewsInput {

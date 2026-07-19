@@ -3970,6 +3970,11 @@ export const appRouter = router({
       ]);
       return { ...item, industryNames, attachments };
     }),
+    // 分類清單側欄／手機版 Select 的 NEW 徽章：一次回傳所有分類的 NEW 狀態，
+    // 前端不需要為每個分類各自發一次查詢，也不能只看目前已載入的第一頁資料。
+    getNewCategorySummary: publicProcedure.query(async () => {
+      return db.getNewCategorySummary();
+    }),
 
     // ---- 管理員後台 ----
     adminList: adminProcedure.query(async () => {
