@@ -12,7 +12,11 @@ export function setupSecurityHeaders(app: Express) {
         defaultSrc: ["'self'"],
         scriptSrc: ["'self'", "'unsafe-inline'", "cdn.jsdelivr.net", "cdn.tailwindcss.com"],
         styleSrc: ["'self'", "'unsafe-inline'", "cdn.tailwindcss.com", "fonts.googleapis.com"],
-        imgSrc: ["'self'", "data:", "https:"],
+        // blob: 用於瀏覽器端 URL.createObjectURL()——找消息後台選擇封面圖片後、
+        // 儲存草稿真正上傳前的本機預覽（見 AdminNews.tsx 的 stagedCoverPreviewUrl），
+        // 檔案來源是使用者自己選的本機檔案，不是外部網址，允許 blob: 不會擴大
+        // 任何跨站資源注入風險。
+        imgSrc: ["'self'", "data:", "https:", "blob:"],
         connectSrc: ["'self'", "https:"],
         fontSrc: ["'self'", "data:", "https:", "fonts.gstatic.com"],
         mediaSrc: ["'self'"],

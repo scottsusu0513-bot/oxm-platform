@@ -989,8 +989,8 @@ describe("PDF 附件前端 UI：NewsDetail／AdminNews 行為（原始碼內容�
 
   it("AdminNews：PDF 上傳走 createPdfUploadSession → 直傳 S3 → finalizePdfUpload，不是把整份 PDF 塞進 base64 tRPC payload", () => {
     const source = fs.readFileSync(path.resolve(__dirname, "..", "client", "src", "pages", "AdminNews.tsx"), "utf-8");
-    const start = source.indexOf("const handlePdfFileSelected");
-    const end = source.indexOf("const handleDeleteAttachment");
+    const start = source.indexOf("const uploadPdfNow = async");
+    const end = source.indexOf("const uploadPdfImmediately");
     const block = source.slice(start, end);
     expect(block).toMatch(/createPdfUploadSessionMut\.mutateAsync/);
     expect(block).toMatch(/fetch\(session\.uploadUrl/);

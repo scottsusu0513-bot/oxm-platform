@@ -12,7 +12,7 @@ import { trpc } from "@/lib/trpc";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { format } from "date-fns";
-import { Plus, Pencil, Newspaper, Star, Trophy, Building2, Send, ArchiveRestore, Archive, RefreshCw, Image as ImageIcon, FileText as FileTextIcon, Trash2, Eye } from "lucide-react";
+import { Plus, Pencil, Newspaper, Star, Trophy, Building2, Send, ArchiveRestore, Archive, RefreshCw, Image as ImageIcon, FileText as FileTextIcon, Trash2, Eye, ChevronDown, Copy } from "lucide-react";
 import { FloatingBackButton } from "@/components/FloatingBackButton";
 import MarkdownContent, { toMarkdownPreviewText } from "@/components/MarkdownContent";
 import { MarkdownToolbar, insertAtCursor } from "@/components/MarkdownToolbar";
@@ -25,6 +25,8 @@ const COVER_MIME_TYPES = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_PDF_BYTES = 25 * 1024 * 1024;
 const MAX_ATTACHMENTS = 5;
+/** slug 手動輸入時的即時格式檢查，跟後端 isValidNewsSlug 同一套規則。 */
+const SLUG_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
 type AttachmentExpirationType = "after_publish_30d" | "custom" | "never";
 
@@ -46,6 +48,19 @@ function combineDateTimeToISO(dateStr: string, timeStr: string): string {
   return new Date(year, (month || 1) - 1, day || 1, hour || 0, minute || 0, 0, 0).toISOString();
 }
 
+/** 跟後端 isValidNewsSourceUrl 同一套規則的前端即時檢查：只接受完整 http(s) 網址。 */
+function isValidSourceUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+type StagedFile = { localId: string; file: File };
+type FailedFile = { localId: string; file: File; error: string };
+
 type FormState = {
   slug: string;
   title: string;
@@ -56,11 +71,14 @@ type FormState = {
   isExhibition: boolean;
   industryNames: string[];
   coverImageUrl: string | null;
+  sourceName: string;
+  sourceUrl: string;
 };
 const DEFAULT_FORM: FormState = {
   slug: "", title: "", summary: "", content: "",
   isImportant: false, isCompetition: false, isExhibition: false, industryNames: [],
   coverImageUrl: null,
+  sourceName: "", sourceUrl: "",
 };
 
 const STATUS_CONFIG: Record<string, { label: string; className: string }> = {
@@ -69,16 +87,6 @@ const STATUS_CONFIG: Record<string, { label: string; className: string }> = {
   withdrawn: { label: "已下架", className: "bg-amber-100 text-amber-700 border-amber-200" },
 };
 
-/** 標題轉建議 slug：僅供輸入 slug 欄位時的預設值，管理員可自行覆蓋。 */
-function slugify(title: string): string {
-  return title
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9一-鿿]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 100);
-}
-
 function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -86,6 +94,10 @@ function fileToBase64(file: File): Promise<string> {
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
+}
+
+function newLocalId(file: File): string {
+  return `${file.name}-${file.size}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 export default function AdminNews() {
@@ -99,7 +111,9 @@ function AdminNewsContent() {
   const [form, setForm] = useState<FormState>(DEFAULT_FORM);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [showForm, setShowForm] = useState(false);
-  const [slugTouched, setSlugTouched] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [savedSlugPreview, setSavedSlugPreview] = useState<string | null>(null);
+  const [savingProgress, setSavingProgress] = useState<string | null>(null);
   const [coverUploading, setCoverUploading] = useState(false);
   const [contentImageUploading, setContentImageUploading] = useState(false);
   const [pdfUploading, setPdfUploading] = useState(false);
@@ -111,6 +125,15 @@ function AdminNewsContent() {
   const [rowExpirationType, setRowExpirationType] = useState<AttachmentExpirationType>("after_publish_30d");
   const [rowCustomDate, setRowCustomDate] = useState("");
   const [rowCustomTime, setRowCustomTime] = useState("23:59");
+
+  // 尚未儲存草稿（沒有 newsId）時，選擇的封面/PDF 只暫存在前端記憶體，不會
+  // 提前上傳；第一次「儲存草稿」成功拿到 newsId 後才依序自動上傳，見
+  // uploadStagedFilesAfterCreate。已經有 newsId 時選檔則沿用既有的立即上傳。
+  const [stagedCoverFile, setStagedCoverFile] = useState<File | null>(null);
+  const [stagedCoverPreviewUrl, setStagedCoverPreviewUrl] = useState<string | null>(null);
+  const [stagedPdfFiles, setStagedPdfFiles] = useState<StagedFile[]>([]);
+  const [failedPdfFiles, setFailedPdfFiles] = useState<FailedFile[]>([]);
+
   const contentRef = useRef<HTMLTextAreaElement>(null);
   const coverInputRef = useRef<HTMLInputElement>(null);
   const contentImageInputRef = useRef<HTMLInputElement>(null);
@@ -122,6 +145,10 @@ function AdminNewsContent() {
     { newsId: editingId ?? 0 },
     { enabled: !!editingId },
   );
+  const editingItem = items.find(i => i.id === editingId);
+  // 一旦發布過，slug 就已經可能流通出去，後端 updateNews 會直接拒絕修改
+  // （見 server/db.ts）；前端這裡只是提早把欄位鎖起來，不是唯一防線。
+  const slugLocked = !!editingItem?.firstPublishedAt;
 
   const willNotify = form.isImportant || form.industryNames.length > 0;
   const { data: estimate } = trpc.news.estimateRecipients.useQuery(
@@ -154,19 +181,27 @@ function AdminNewsContent() {
   const getPdfDownloadUrlMut = trpc.news.getPdfDownloadUrl.useMutation();
 
   const resetForm = () => {
+    if (stagedCoverPreviewUrl) URL.revokeObjectURL(stagedCoverPreviewUrl);
     setForm(DEFAULT_FORM);
     setEditingId(null);
     setShowForm(false);
-    setSlugTouched(false);
+    setAdvancedOpen(false);
+    setSavedSlugPreview(null);
+    setSavingProgress(null);
     setPdfExpirationType("after_publish_30d");
     setPdfCustomDate("");
     setPdfCustomTime("23:59");
     setEditingExpirationId(null);
+    setStagedCoverFile(null);
+    setStagedCoverPreviewUrl(null);
+    setStagedPdfFiles([]);
+    setFailedPdfFiles([]);
   };
 
   const setContent = (next: string) => setForm(p => ({ ...p, content: next }));
 
   const handleEdit = (item: (typeof items)[number]) => {
+    if (stagedCoverPreviewUrl) URL.revokeObjectURL(stagedCoverPreviewUrl);
     setForm({
       slug: item.slug,
       title: item.title,
@@ -177,9 +212,15 @@ function AdminNewsContent() {
       isExhibition: item.isExhibition,
       industryNames: item.industryNames,
       coverImageUrl: item.coverImageUrl ?? null,
+      sourceName: item.sourceName ?? "",
+      sourceUrl: item.sourceUrl ?? "",
     });
     setEditingId(item.id);
-    setSlugTouched(true);
+    setSavedSlugPreview(item.slug);
+    setStagedCoverFile(null);
+    setStagedCoverPreviewUrl(null);
+    setStagedPdfFiles([]);
+    setFailedPdfFiles([]);
     setShowForm(true);
   };
 
@@ -197,7 +238,7 @@ function AdminNewsContent() {
   };
 
   const buildPayload = () => ({
-    slug: form.slug.trim(),
+    slug: form.slug.trim() || undefined,
     title: form.title.trim(),
     summary: form.summary.trim(),
     content: form.content,
@@ -205,57 +246,28 @@ function AdminNewsContent() {
     isCompetition: form.isCompetition,
     isExhibition: form.isExhibition,
     industryNames: form.industryNames,
+    sourceName: form.sourceName.trim() || null,
+    sourceUrl: form.sourceUrl.trim() || null,
   });
 
   const validateRequired = () => {
-    if (!form.slug.trim() || !form.title.trim() || !form.summary.trim() || !form.content.trim()) {
-      toast.error("請填寫網址代稱、標題、摘要與內容");
+    if (!form.title.trim() || !form.summary.trim() || !form.content.trim()) {
+      toast.error("請填寫標題、摘要與內容");
+      return false;
+    }
+    if (form.slug.trim() && !SLUG_PATTERN.test(form.slug.trim())) {
+      toast.error("網址代稱只能是小寫英文、數字與連字號");
+      return false;
+    }
+    if (form.sourceName.trim() && !form.sourceUrl.trim()) {
+      toast.error("請填寫原始消息網址");
+      return false;
+    }
+    if (form.sourceUrl.trim() && !isValidSourceUrl(form.sourceUrl.trim())) {
+      toast.error("原始消息網址格式不正確，僅接受 http(s) 開頭的完整網址");
       return false;
     }
     return true;
-  };
-
-  // 草稿儲存不重置表單、不關閉編輯區——第一次儲存拿到 newsId 後，封面／內文
-  // 圖片／PDF 附件的上傳區塊才會解鎖，讓管理員能接著在同一個畫面繼續操作，
-  // 不必重新打開編輯。發布則視為完成編輯，照舊收合表單、回到列表。
-  const handleSaveDraft = () => {
-    if (!validateRequired()) return;
-    if (editingId) {
-      updateMut.mutate({ id: editingId, ...buildPayload(), status: "draft" }, {
-        onSuccess: () => toast.success("草稿已更新"),
-      });
-    } else {
-      createMut.mutate({ ...buildPayload(), status: "draft" }, {
-        onSuccess: (result) => {
-          setEditingId(result.id);
-          toast.success("草稿已儲存，現在可以上傳封面圖片與 PDF 附件");
-        },
-      });
-    }
-  };
-
-  const handlePublish = () => {
-    if (!validateRequired()) return;
-    if (!confirm(confirmPublishMessage())) return;
-    if (editingId) {
-      updateMut.mutate({ id: editingId, ...buildPayload(), status: "published" }, {
-        onSuccess: () => { toast.success("消息已發布"); resetForm(); },
-      });
-    } else {
-      createMut.mutate({ ...buildPayload(), status: "published" }, {
-        onSuccess: () => { toast.success("消息已發布"); resetForm(); },
-      });
-    }
-  };
-
-  const handleWithdraw = (id: number) => {
-    if (!confirm("確定要下架這則消息嗎？下架後不會在網站上顯示，重新發布不會再次寄送通知。")) return;
-    updateMut.mutate({ id, status: "withdrawn" });
-  };
-
-  const handleRepublish = (id: number) => {
-    if (!confirm("確定要重新發布這則消息嗎？（此消息已發布過，重新發布不會再次寄送 Email／推播通知）")) return;
-    updateMut.mutate({ id, status: "published" });
   };
 
   const validateImageFile = (file: File): string | null => {
@@ -264,26 +276,51 @@ function AdminNewsContent() {
     return null;
   };
 
-  const handleCoverFileSelected = async (file: File | undefined) => {
-    if (!file || !editingId) return;
-    const err = validateImageFile(file);
-    if (err) { toast.error(err); return; }
+  const validatePdfFile = (file: File): string | null => {
+    if (file.type !== "application/pdf") return "僅支援 PDF 格式";
+    if (file.size > MAX_PDF_BYTES) return "PDF 大小不得超過 25MB";
+    return null;
+  };
+
+  /** 真正呼叫後端上傳封面（base64 in、URL out），editingId 一定已存在才會呼叫這個函式。 */
+  const uploadCoverNow = async (newsId: number, file: File): Promise<boolean> => {
     setCoverUploading(true);
     try {
       const base64 = await fileToBase64(file);
-      const result = await uploadCoverMut.mutateAsync({ newsId: editingId, base64, mimeType: file.type });
+      const result = await uploadCoverMut.mutateAsync({ newsId, base64, mimeType: file.type });
       setForm(p => ({ ...p, coverImageUrl: result.url }));
       utils.news.adminList.invalidate();
-      toast.success("封面已上傳");
+      return true;
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "封面上傳失敗");
+      return false;
     } finally {
       setCoverUploading(false);
-      if (coverInputRef.current) coverInputRef.current.value = "";
     }
   };
 
+  const handleCoverFileSelected = (file: File | undefined) => {
+    if (coverInputRef.current) coverInputRef.current.value = "";
+    if (!file) return;
+    const err = validateImageFile(file);
+    if (err) { toast.error(err); return; }
+    if (!editingId) {
+      // 尚未儲存草稿：只暫存在前端記憶體＋顯示本機預覽，不提前上傳。
+      if (stagedCoverPreviewUrl) URL.revokeObjectURL(stagedCoverPreviewUrl);
+      setStagedCoverFile(file);
+      setStagedCoverPreviewUrl(URL.createObjectURL(file));
+      return;
+    }
+    void uploadCoverNow(editingId, file);
+  };
+
   const handleRemoveCover = async () => {
+    if (stagedCoverFile) {
+      if (stagedCoverPreviewUrl) URL.revokeObjectURL(stagedCoverPreviewUrl);
+      setStagedCoverFile(null);
+      setStagedCoverPreviewUrl(null);
+      return;
+    }
     if (!editingId) return;
     setCoverUploading(true);
     try {
@@ -321,30 +358,15 @@ function AdminNewsContent() {
     }
   };
 
-  const validatePdfFile = (file: File): string | null => {
-    if (file.type !== "application/pdf") return "僅支援 PDF 格式";
-    if (file.size > MAX_PDF_BYTES) return "PDF 大小不得超過 25MB";
-    return null;
-  };
-
-  // 上傳流程：先跟後端要一次性 presigned PUT 網址（storageKey 由後端產生，
-  // 前端只能寫入那一個 key），直傳私有 S3，成功後才呼叫 finalize 做二次驗證
-  // 並建立附件 metadata——後端會重新檢查檔案大小／型別／PDF magic bytes，
-  // 不信任這裡宣稱的 file.type／file.size。
-  const handlePdfFileSelected = async (file: File | undefined) => {
-    if (!file || !editingId) return;
-    const err = validatePdfFile(file);
-    if (err) { toast.error(err); return; }
-    if (attachments.length >= MAX_ATTACHMENTS) { toast.error(`每篇消息最多只能有 ${MAX_ATTACHMENTS} 份附件`); return; }
-    if (pdfExpirationType === "custom" && !pdfCustomDate) { toast.error("請選擇自訂到期日期"); return; }
-
-    setPdfUploading(true);
+  /**
+   * 真正呼叫後端上傳一份 PDF（presigned 直傳 S3 → finalize 二次驗證），
+   * editingId 一定已存在才會呼叫。回傳結果、不丟出例外，方便呼叫端決定要
+   * 立即 toast 還是放進待重試佇列。
+   */
+  const uploadPdfNow = async (newsId: number, file: File): Promise<{ ok: true } | { ok: false; error: string }> => {
     try {
       const session = await createPdfUploadSessionMut.mutateAsync({
-        newsId: editingId,
-        fileName: file.name,
-        declaredMimeType: file.type,
-        declaredSizeBytes: file.size,
+        newsId, fileName: file.name, declaredMimeType: file.type, declaredSizeBytes: file.size,
       });
       const putRes = await fetch(session.uploadUrl, {
         method: "PUT",
@@ -354,24 +376,212 @@ function AdminNewsContent() {
       if (!putRes.ok) throw new Error("檔案上傳失敗，請重試");
 
       await finalizePdfUploadMut.mutateAsync({
-        newsId: editingId,
+        newsId,
         storageKey: session.storageKey,
         displayName: file.name.replace(/\.pdf$/i, "") || file.name,
         originalFileName: file.name,
         expirationType: pdfExpirationType,
         customDownloadExpiresAt: pdfExpirationType === "custom" ? combineDateTimeToISO(pdfCustomDate, pdfCustomTime) : undefined,
       });
-      utils.news.getAdminAttachments.invalidate({ newsId: editingId });
-      toast.success("PDF 附件已上傳");
-      setPdfExpirationType("after_publish_30d");
-      setPdfCustomDate("");
-      setPdfCustomTime("23:59");
+      return { ok: true };
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "PDF 上傳失敗");
-    } finally {
-      setPdfUploading(false);
-      if (pdfInputRef.current) pdfInputRef.current.value = "";
+      return { ok: false, error: e instanceof Error ? e.message : "PDF 上傳失敗" };
     }
+  };
+
+  const uploadPdfImmediately = async (newsId: number, file: File) => {
+    setPdfUploading(true);
+    const result = await uploadPdfNow(newsId, file);
+    setPdfUploading(false);
+    if (result.ok) {
+      utils.news.getAdminAttachments.invalidate({ newsId });
+      toast.success(`${file.name} 已上傳`);
+    } else {
+      // 保留失敗檔案讓管理員重試，不是提示完就把檔案丟掉。
+      setFailedPdfFiles(prev => [...prev, { localId: newLocalId(file), file, error: result.error }]);
+      toast.error(`${file.name}：${result.error}`);
+    }
+  };
+
+  const handlePdfFilesSelected = (fileList: FileList | null) => {
+    const resetInput = () => { if (pdfInputRef.current) pdfInputRef.current.value = ""; };
+    if (!fileList || fileList.length === 0) { resetInput(); return; }
+    const files = Array.from(fileList);
+
+    const currentCount = attachments.length + stagedPdfFiles.length + failedPdfFiles.length;
+    const room = MAX_ATTACHMENTS - currentCount;
+    if (room <= 0) {
+      toast.error(`每篇消息最多只能有 ${MAX_ATTACHMENTS} 份附件`);
+      resetInput();
+      return;
+    }
+    if (pdfExpirationType === "custom" && !pdfCustomDate && editingId) {
+      toast.error("請先選擇自訂到期日期，再選擇 PDF 檔案");
+      resetInput();
+      return;
+    }
+
+    const accepted = files.slice(0, room);
+    if (files.length > accepted.length) {
+      toast.error(`最多還能選 ${room} 份，已自動只加入前 ${accepted.length} 份`);
+    }
+
+    for (const file of accepted) {
+      const err = validatePdfFile(file);
+      if (err) { toast.error(`${file.name}：${err}`); continue; }
+      if (!editingId) {
+        // 尚未儲存草稿：先暫存檔名/大小，等第一次「儲存草稿」成功後才依序上傳。
+        setStagedPdfFiles(prev => [...prev, { localId: newLocalId(file), file }]);
+      } else {
+        void uploadPdfImmediately(editingId, file);
+      }
+    }
+    resetInput();
+  };
+
+  const removeStagedPdf = (localId: string) => setStagedPdfFiles(prev => prev.filter(f => f.localId !== localId));
+  const removeFailedPdf = (localId: string) => setFailedPdfFiles(prev => prev.filter(f => f.localId !== localId));
+
+  const retryFailedPdf = async (localId: string) => {
+    if (!editingId) return;
+    const target = failedPdfFiles.find(f => f.localId === localId);
+    if (!target) return;
+    setPdfUploading(true);
+    const result = await uploadPdfNow(editingId, target.file);
+    setPdfUploading(false);
+    if (result.ok) {
+      setFailedPdfFiles(prev => prev.filter(f => f.localId !== localId));
+      utils.news.getAdminAttachments.invalidate({ newsId: editingId });
+      toast.success(`${target.file.name} 已上傳`);
+    } else {
+      setFailedPdfFiles(prev => prev.map(f => (f.localId === localId ? { ...f, error: result.error } : f)));
+      toast.error(`${target.file.name}：${result.error}`);
+    }
+  };
+
+  /**
+   * 第一次「儲存草稿」拿到 newsId 後（或既有草稿還留有上次沒上傳完的暫存
+   * 檔案時），依序自動上傳已選的封面／PDF。成功一份就從待上傳佇列移除，
+   * 不會因為重試整個流程而重複建立附件；失敗的檔案移到 failedPdfFiles
+   * 讓管理員可以個別重試，不影響已經成功的檔案，也不會讓草稿被視為建立失敗。
+   */
+  const uploadStagedFilesAfterCreate = async (newsId: number): Promise<{ coverFailed: boolean; pdfFailedCount: number; pdfTotal: number }> => {
+    let coverFailed = false;
+    if (stagedCoverFile) {
+      setSavingProgress("正在上傳封面圖片…");
+      const ok = await uploadCoverNow(newsId, stagedCoverFile);
+      if (ok) {
+        if (stagedCoverPreviewUrl) URL.revokeObjectURL(stagedCoverPreviewUrl);
+        setStagedCoverFile(null);
+        setStagedCoverPreviewUrl(null);
+      } else {
+        coverFailed = true;
+      }
+    }
+
+    const queue = stagedPdfFiles;
+    let pdfFailedCount = 0;
+    for (let i = 0; i < queue.length; i++) {
+      setSavingProgress(`正在上傳 PDF（${i + 1}/${queue.length}）…`);
+      const result = await uploadPdfNow(newsId, queue[i].file);
+      if (result.ok) {
+        setStagedPdfFiles(prev => prev.filter(f => f.localId !== queue[i].localId));
+      } else {
+        pdfFailedCount++;
+        setStagedPdfFiles(prev => prev.filter(f => f.localId !== queue[i].localId));
+        setFailedPdfFiles(prev => [...prev, { ...queue[i], error: result.error }]);
+      }
+    }
+    if (queue.length > 0) {
+      utils.news.getAdminAttachments.invalidate({ newsId });
+    }
+    setSavingProgress(null);
+    return { coverFailed, pdfFailedCount, pdfTotal: queue.length };
+  };
+
+  const reportUploadOutcome = (baseMessage: string, coverFailed: boolean, pdfFailedCount: number, pdfTotal: number) => {
+    if (pdfTotal > 0 && pdfFailedCount > 0) {
+      toast.error(`${baseMessage}，但有 ${pdfFailedCount}/${pdfTotal} 份 PDF 上傳失敗，請重試`);
+    } else if (coverFailed) {
+      toast.error(`${baseMessage}，但封面圖片上傳失敗，請重試`);
+    } else {
+      toast.success(baseMessage);
+    }
+  };
+
+  // 草稿儲存不重置表單、不關閉編輯區——第一次儲存拿到 newsId 後，會自動依序
+  // 上傳已選的封面／PDF（見 uploadStagedFilesAfterCreate），管理員能接著在
+  // 同一個畫面繼續操作，不必重新打開編輯。
+  const handleSaveDraft = () => {
+    if (!validateRequired()) return;
+    if (editingId) {
+      setSavingProgress("儲存草稿中…");
+      updateMut.mutate({ id: editingId, ...buildPayload(), status: "draft" }, {
+        onSuccess: async () => {
+          setSavedSlugPreview(form.slug.trim() || editingItem?.slug || savedSlugPreview);
+          const { coverFailed, pdfFailedCount, pdfTotal } = await uploadStagedFilesAfterCreate(editingId);
+          reportUploadOutcome("草稿已更新", coverFailed, pdfFailedCount, pdfTotal);
+        },
+        onError: () => setSavingProgress(null),
+      });
+    } else {
+      setSavingProgress("建立草稿中…");
+      createMut.mutate({ ...buildPayload(), status: "draft" }, {
+        onSuccess: async (result) => {
+          setEditingId(result.id);
+          setSavedSlugPreview(result.slug || null);
+          const { coverFailed, pdfFailedCount, pdfTotal } = await uploadStagedFilesAfterCreate(result.id);
+          reportUploadOutcome("草稿已儲存", coverFailed, pdfFailedCount, pdfTotal);
+        },
+        onError: () => setSavingProgress(null),
+      });
+    }
+  };
+
+  const handlePublish = () => {
+    if (!validateRequired()) return;
+    if (!confirm(confirmPublishMessage())) return;
+    if (editingId) {
+      setSavingProgress("發布中…");
+      updateMut.mutate({ id: editingId, ...buildPayload(), status: "published" }, {
+        onSuccess: async () => {
+          const { coverFailed, pdfFailedCount, pdfTotal } = await uploadStagedFilesAfterCreate(editingId);
+          if (pdfFailedCount > 0 || coverFailed) {
+            reportUploadOutcome("消息已發布", coverFailed, pdfFailedCount, pdfTotal);
+          } else {
+            toast.success("消息已發布");
+            resetForm();
+          }
+        },
+        onError: () => setSavingProgress(null),
+      });
+    } else {
+      setSavingProgress("發布中…");
+      createMut.mutate({ ...buildPayload(), status: "published" }, {
+        onSuccess: async (result) => {
+          setEditingId(result.id);
+          setSavedSlugPreview(result.slug || null);
+          const { coverFailed, pdfFailedCount, pdfTotal } = await uploadStagedFilesAfterCreate(result.id);
+          if (pdfFailedCount > 0 || coverFailed) {
+            reportUploadOutcome("消息已發布", coverFailed, pdfFailedCount, pdfTotal);
+          } else {
+            toast.success("消息已發布");
+            resetForm();
+          }
+        },
+        onError: () => setSavingProgress(null),
+      });
+    }
+  };
+
+  const handleWithdraw = (id: number) => {
+    if (!confirm("確定要下架這則消息嗎？下架後不會在網站上顯示，重新發布不會再次寄送通知。")) return;
+    updateMut.mutate({ id, status: "withdrawn" });
+  };
+
+  const handleRepublish = (id: number) => {
+    if (!confirm("確定要重新發布這則消息嗎？（此消息已發布過，重新發布不會再次寄送 Email／推播通知）")) return;
+    updateMut.mutate({ id, status: "published" });
   };
 
   const handleDeleteAttachment = (id: number) => {
@@ -432,7 +642,18 @@ function AdminNewsContent() {
     });
   };
 
-  const isPending = createMut.isPending || updateMut.isPending;
+  const handleCopySlugUrl = () => {
+    if (!savedSlugPreview) return;
+    const url = `${window.location.origin}/news/${savedSlugPreview}`;
+    navigator.clipboard.writeText(url).then(
+      () => toast.success("已複製網址"),
+      () => toast.error("複製失敗，請手動複製"),
+    );
+  };
+
+  const isBusy = createMut.isPending || updateMut.isPending || savingProgress !== null;
+  const coverPreviewSrc = stagedCoverPreviewUrl ?? form.coverImageUrl;
+  const totalPdfCount = attachments.length + stagedPdfFiles.length + failedPdfFiles.length;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-indigo-50 to-blue-50 px-4 pb-4 md:px-8 md:pb-8 admin-page-top">
@@ -456,31 +677,65 @@ function AdminNewsContent() {
               <CardTitle className="text-lg">{editingId ? "編輯消息" : "新增消息"}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              {/* 1. 標題與 slug */}
-              <div className="grid sm:grid-cols-2 gap-4">
-                <div>
-                  <Label>標題 *</Label>
-                  <Input
-                    value={form.title}
-                    onChange={e => {
-                      const title = e.target.value;
-                      setForm(p => ({ ...p, title, slug: slugTouched ? p.slug : slugify(title) }));
-                    }}
-                    placeholder="消息標題"
-                    className="mt-1"
-                  />
-                </div>
-                <div>
-                  <Label>網址代稱（slug）*</Label>
-                  <Input
-                    value={form.slug}
-                    onChange={e => { setSlugTouched(true); setForm(p => ({ ...p, slug: e.target.value })); }}
-                    placeholder="例如：2026-metal-expo"
-                    className="mt-1"
-                  />
-                  <p className="text-xs text-muted-foreground mt-1">只能是小寫英數字與連字號，發布後請避免再修改以免舊連結失效。</p>
-                </div>
+              {/* 1. 標題 */}
+              <div>
+                <Label>標題 *</Label>
+                <Input
+                  value={form.title}
+                  onChange={e => setForm(p => ({ ...p, title: e.target.value }))}
+                  placeholder="消息標題"
+                  className="mt-1"
+                />
               </div>
+
+              {/* 進階設定：網址代稱（slug）。預設由後端自動產生，管理員可在第一次
+                  發布前自訂；發布後後端一律拒絕修改，這裡的 disabled 只是提早
+                  給出視覺提示。 */}
+              <div className="border rounded-md">
+                <button
+                  type="button"
+                  onClick={() => setAdvancedOpen(v => !v)}
+                  className="w-full flex items-center justify-between px-3 py-2 text-sm font-medium text-muted-foreground hover:text-foreground"
+                  aria-expanded={advancedOpen}
+                >
+                  進階設定
+                  <ChevronDown className={`w-4 h-4 transition-transform ${advancedOpen ? "rotate-180" : ""}`} />
+                </button>
+                {advancedOpen && (
+                  <div className="px-3 pb-3 pt-0.5 border-t">
+                    <Label className="text-xs">網址代稱（slug）</Label>
+                    {slugLocked ? (
+                      <>
+                        <Input value={form.slug} disabled className="mt-1 bg-muted/50" />
+                        <p className="text-xs text-muted-foreground mt-1">此消息已發布過，網址代稱無法修改。</p>
+                      </>
+                    ) : (
+                      <>
+                        <Input
+                          value={form.slug}
+                          onChange={e => setForm(p => ({ ...p, slug: e.target.value }))}
+                          placeholder="系統將自動產生網址"
+                          className="mt-1"
+                        />
+                        <p className="text-xs text-muted-foreground mt-1">
+                          留空由系統自動產生；只能是小寫英文、數字與連字號，第一次發布後將無法再修改。
+                        </p>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* 儲存草稿後的網址預覽＋複製按鈕 */}
+              {savedSlugPreview && (
+                <div className="flex items-center gap-2 text-xs bg-muted/50 border rounded-md px-3 py-2">
+                  <span className="text-muted-foreground shrink-0">網址：</span>
+                  <code className="flex-1 truncate">{`${window.location.origin}/news/${savedSlugPreview}`}</code>
+                  <Button type="button" size="sm" variant="ghost" className="h-6 px-2 shrink-0" onClick={handleCopySlugUrl} aria-label="複製網址">
+                    <Copy className="w-3.5 h-3.5" />
+                  </Button>
+                </div>
+              )}
 
               {/* 2. 摘要 */}
               <div>
@@ -534,48 +789,46 @@ function AdminNewsContent() {
                   : "此設定（純競賽／純展覽，未勾選重要消息或任何產業）只會顯示在網站上，不會寄送 Email 或 App 推播通知。"}
               </div>
 
-              {/* 4. 封面圖片 */}
+              {/* 4. 封面圖片：獨立於下方檔案附件區塊的另一組上傳元件 */}
               <div>
                 <Label>封面圖片（選填）</Label>
-                {!editingId ? (
-                  <p className="text-xs text-muted-foreground mt-1 rounded-md border border-dashed px-3 py-4 text-center">
-                    請先儲存草稿，即可上傳圖片與 PDF 附件
-                  </p>
-                ) : (
-                  <div className="mt-1.5">
-                    <div className="relative w-full aspect-video rounded-lg border overflow-hidden bg-muted/30">
-                      {form.coverImageUrl ? (
-                        <img src={form.coverImageUrl} alt="封面預覽" className="w-full h-full object-cover" />
-                      ) : (
-                        <div className="w-full h-full flex flex-col items-center justify-center text-muted-foreground">
-                          <ImageIcon className="w-8 h-8 mb-1.5 opacity-40" />
-                          <p className="text-xs">尚未上傳封面圖片</p>
-                        </div>
-                      )}
-                    </div>
-                    <input
-                      ref={coverInputRef}
-                      type="file"
-                      accept="image/jpeg,image/png,image/webp"
-                      className="hidden"
-                      onChange={e => handleCoverFileSelected(e.target.files?.[0])}
-                    />
-                    <div className="flex gap-2 mt-2">
-                      <Button
-                        type="button" size="sm" variant="outline" disabled={coverUploading}
-                        onClick={() => coverInputRef.current?.click()}
-                      >
-                        {coverUploading ? "處理中..." : form.coverImageUrl ? "更換" : "上傳"}
-                      </Button>
-                      {form.coverImageUrl && (
-                        <Button type="button" size="sm" variant="outline" disabled={coverUploading} className="text-red-500 hover:bg-red-50" onClick={handleRemoveCover}>
-                          移除
-                        </Button>
-                      )}
-                    </div>
-                    <p className="text-xs text-muted-foreground mt-1">支援 JPG／PNG／WebP，最大 10MB，建議比例 16:9</p>
+                <div className="mt-1.5">
+                  <div className="relative w-full aspect-video rounded-lg border overflow-hidden bg-muted/30">
+                    {coverPreviewSrc ? (
+                      <img src={coverPreviewSrc} alt="封面預覽" className="w-full h-full object-cover" />
+                    ) : (
+                      <div className="w-full h-full flex flex-col items-center justify-center text-muted-foreground">
+                        <ImageIcon className="w-8 h-8 mb-1.5 opacity-40" />
+                        <p className="text-xs">尚未選擇圖片</p>
+                      </div>
+                    )}
                   </div>
-                )}
+                  <input
+                    ref={coverInputRef}
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    className="hidden"
+                    onChange={e => handleCoverFileSelected(e.target.files?.[0])}
+                  />
+                  <div className="flex gap-2 mt-2">
+                    <Button
+                      type="button" size="sm" variant="outline" disabled={coverUploading}
+                      aria-label="從電腦選擇圖片"
+                      onClick={() => coverInputRef.current?.click()}
+                    >
+                      {coverUploading ? "處理中..." : "從電腦選擇圖片"}
+                    </Button>
+                    {(coverPreviewSrc) && (
+                      <Button type="button" size="sm" variant="outline" disabled={coverUploading} className="text-red-500 hover:bg-red-50" onClick={handleRemoveCover}>
+                        移除
+                      </Button>
+                    )}
+                  </div>
+                  {stagedCoverFile && (
+                    <p className="text-xs text-indigo-600 mt-1">尚未儲存草稿，儲存後會自動上傳這張圖片。</p>
+                  )}
+                  <p className="text-xs text-muted-foreground mt-1">支援 JPG／PNG／WebP，最大 10MB，建議比例 16:9</p>
+                </div>
               </div>
 
               {/* 5+6. Markdown 工具列與內容 */}
@@ -630,160 +883,221 @@ function AdminNewsContent() {
                 </div>
               </div>
 
-              {/* 8. PDF 附件 */}
+              {/* 原始消息來源（選填） */}
               <div>
-                <Label>PDF 附件（選填，最多 {MAX_ATTACHMENTS} 份，單檔最大 25MB）</Label>
-                {!editingId ? (
-                  <p className="text-xs text-muted-foreground mt-1 rounded-md border border-dashed px-3 py-4 text-center">
-                    請先儲存草稿，即可上傳圖片與 PDF 附件
-                  </p>
-                ) : (
-                  <div className="mt-1.5 space-y-2.5">
-                    {attachments.map(att => (
-                      <div key={att.id} className="rounded-md border px-3 py-2.5 text-sm">
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="flex items-center gap-2 min-w-0">
-                            <FileTextIcon className="w-4 h-4 shrink-0 text-muted-foreground" />
-                            <span className="truncate font-medium">{att.displayName}</span>
-                            <span className="text-xs text-muted-foreground shrink-0">{formatFileSize(att.sizeBytes)}</span>
-                          </div>
-                          <div className="flex items-center gap-1 shrink-0">
-                            {!att.isStorageDeleted && (
-                              <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => startEditExpiration(att)}>
-                                <Pencil className="w-3.5 h-3.5" />
-                              </Button>
-                            )}
-                            <Button size="sm" variant="ghost" className="h-7 px-2 text-red-500 hover:bg-red-50" onClick={() => handleDeleteAttachment(att.id)}>
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </Button>
-                          </div>
-                        </div>
-
-                        {att.isStorageDeleted ? (
-                          <p className="text-xs text-amber-600 mt-1.5">檔案已從儲存空間刪除，如需重新提供，請重新上傳。</p>
-                        ) : editingExpirationId === att.id ? (
-                          <div className="mt-2 rounded-md bg-muted/30 p-2.5 space-y-2">
-                            <RadioGroup value={rowExpirationType} onValueChange={v => setRowExpirationType(v as AttachmentExpirationType)} className="gap-1.5">
-                              <label className="flex items-start gap-2 text-xs">
-                                <RadioGroupItem value="after_publish_30d" className="mt-0.5" />
-                                <span>發布後 30 天</span>
-                              </label>
-                              <label className="flex items-start gap-2 text-xs">
-                                <RadioGroupItem value="custom" className="mt-0.5" />
-                                <span>自訂到期時間</span>
-                              </label>
-                              <label className="flex items-start gap-2 text-xs">
-                                <RadioGroupItem value="never" className="mt-0.5" />
-                                <span>永久有效</span>
-                              </label>
-                            </RadioGroup>
-                            {rowExpirationType === "custom" && (
-                              <div className="flex gap-2">
-                                <OrderDatePicker value={rowCustomDate} onChange={setRowCustomDate} minDate={formatLocalDate(new Date())} className="flex-1" />
-                                <input
-                                  type="time"
-                                  value={rowCustomTime}
-                                  onChange={e => setRowCustomTime(e.target.value)}
-                                  className="border rounded-md px-2 text-sm bg-background"
-                                />
-                              </div>
-                            )}
-                            <div className="flex gap-2">
-                              <Button size="sm" disabled={updateAttachmentExpirationMut.isPending} onClick={() => handleApplyExpiration(att.id)}>
-                                套用
-                              </Button>
-                              <Button size="sm" variant="ghost" onClick={() => setEditingExpirationId(null)}>取消</Button>
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="mt-1">
-                            <p className="text-xs text-muted-foreground">
-                              {att.expirationType === "never" && "永久有效，自動清理排程不會刪除這份檔案"}
-                              {att.expirationType === "after_publish_30d" && !att.downloadExpiresAt && "發布後 30 天到期（尚未發布，發布後才開始計算）"}
-                              {att.downloadExpiresAt && (
-                                <span className={att.isExpired ? "text-red-500" : undefined}>
-                                  {att.isExpired ? "已於 " : "下載期限："}
-                                  {format(new Date(att.downloadExpiresAt), "yyyy/MM/dd HH:mm")}
-                                  {att.isExpired && " 到期"}
-                                </span>
-                              )}
-                            </p>
-                            {/* 管理員預覽：僅限「已過期但實體檔案尚未被 Cron 清除」的附件，
-                                跟公開 NewsDetail 頁面完全分開的獨立入口，不影響一般會員/
-                                公開頁的期限規則。storageDeletedAt 有值時（上面 isStorageDeleted
-                                分支）已經整個不會走到這裡，連管理員也拿不到預覽按鈕。 */}
-                            {att.isExpired && (
-                              <Button
-                                size="sm" variant="outline" className="mt-1.5 h-7 text-xs gap-1"
-                                disabled={previewingId === att.id}
-                                onClick={() => handleAdminPreview(att.id)}
-                              >
-                                <Eye className="w-3.5 h-3.5" />
-                                {previewingId === att.id ? "取得連結中..." : "管理員預覽（5 分鐘有效）"}
-                              </Button>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    ))}
-
-                    {attachments.length < MAX_ATTACHMENTS && (
-                      <div className="rounded-md border border-dashed px-3 py-3.5 bg-muted/10">
-                        <Label className="text-xs">下載期限</Label>
-                        <RadioGroup value={pdfExpirationType} onValueChange={v => setPdfExpirationType(v as AttachmentExpirationType)} className="mt-1.5 gap-1.5">
-                          <label className="flex items-start gap-2 text-xs">
-                            <RadioGroupItem value="after_publish_30d" className="mt-0.5" />
-                            <span>發布後 30 天（草稿階段上傳的話，從這篇消息第一次正式發布當下開始算 30 天；若消息已經發布過才補上傳，則從上傳完成時間起算 30 天）</span>
-                          </label>
-                          <label className="flex items-start gap-2 text-xs">
-                            <RadioGroupItem value="custom" className="mt-0.5" />
-                            <span>自訂到期時間（時間顯示為台灣時間；到了指定時間立即停止下載，跟消息本身是否發布無關）</span>
-                          </label>
-                          <label className="flex items-start gap-2 text-xs">
-                            <RadioGroupItem value="never" className="mt-0.5" />
-                            <span>永久有效（自動清理排程不會刪除這份檔案）</span>
-                          </label>
-                        </RadioGroup>
-                        {pdfExpirationType === "custom" && (
-                          <div className="flex gap-2 mt-2">
-                            <OrderDatePicker value={pdfCustomDate} onChange={setPdfCustomDate} minDate={formatLocalDate(new Date())} className="flex-1" />
-                            <input
-                              type="time"
-                              value={pdfCustomTime}
-                              onChange={e => setPdfCustomTime(e.target.value)}
-                              className="border rounded-md px-2 text-sm bg-background"
-                            />
-                          </div>
-                        )}
-                        <input
-                          ref={pdfInputRef}
-                          type="file"
-                          accept="application/pdf"
-                          className="hidden"
-                          onChange={e => handlePdfFileSelected(e.target.files?.[0])}
-                        />
-                        <Button
-                          type="button" size="sm" variant="outline" className="mt-2.5" disabled={pdfUploading}
-                          onClick={() => pdfInputRef.current?.click()}
-                        >
-                          {pdfUploading ? "上傳中..." : "上傳 PDF"}
-                        </Button>
-                      </div>
+                <Label className="text-sm font-medium">原始消息來源（選填）</Label>
+                <div className="grid sm:grid-cols-2 gap-4 mt-2">
+                  <div>
+                    <Label className="text-xs text-muted-foreground">來源單位</Label>
+                    <Input
+                      value={form.sourceName}
+                      onChange={e => setForm(p => ({ ...p, sourceName: e.target.value }))}
+                      placeholder="例如：經濟部中小及新創企業署"
+                      className="mt-1"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs text-muted-foreground">原始消息網址</Label>
+                    <Input
+                      value={form.sourceUrl}
+                      onChange={e => setForm(p => ({ ...p, sourceUrl: e.target.value }))}
+                      placeholder="https://www.example.gov.tw/..."
+                      className="mt-1"
+                    />
+                    {form.sourceName.trim() && !form.sourceUrl.trim() && (
+                      <p className="text-xs text-red-500 mt-1">請填寫原始消息網址</p>
                     )}
                   </div>
-                )}
+                </div>
+              </div>
+
+              {/* 8. PDF 附件：跟封面完全獨立的區塊 */}
+              <div>
+                <Label>PDF 附件（選填，最多 {MAX_ATTACHMENTS} 份，單檔最大 25MB）</Label>
+                <div className="mt-1.5 space-y-2.5">
+                  {attachments.map(att => (
+                    <div key={att.id} className="rounded-md border px-3 py-2.5 text-sm">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <FileTextIcon className="w-4 h-4 shrink-0 text-muted-foreground" />
+                          <span className="truncate font-medium">{att.displayName}</span>
+                          <span className="text-xs text-muted-foreground shrink-0">{formatFileSize(att.sizeBytes)}</span>
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          {!att.isStorageDeleted && (
+                            <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => startEditExpiration(att)}>
+                              <Pencil className="w-3.5 h-3.5" />
+                            </Button>
+                          )}
+                          <Button size="sm" variant="ghost" className="h-7 px-2 text-red-500 hover:bg-red-50" onClick={() => handleDeleteAttachment(att.id)}>
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </Button>
+                        </div>
+                      </div>
+
+                      {att.isStorageDeleted ? (
+                        <p className="text-xs text-amber-600 mt-1.5">檔案已從儲存空間刪除，如需重新提供，請重新上傳。</p>
+                      ) : editingExpirationId === att.id ? (
+                        <div className="mt-2 rounded-md bg-muted/30 p-2.5 space-y-2">
+                          <RadioGroup value={rowExpirationType} onValueChange={v => setRowExpirationType(v as AttachmentExpirationType)} className="gap-1.5">
+                            <label className="flex items-start gap-2 text-xs">
+                              <RadioGroupItem value="after_publish_30d" className="mt-0.5" />
+                              <span>發布後 30 天</span>
+                            </label>
+                            <label className="flex items-start gap-2 text-xs">
+                              <RadioGroupItem value="custom" className="mt-0.5" />
+                              <span>自訂到期時間</span>
+                            </label>
+                            <label className="flex items-start gap-2 text-xs">
+                              <RadioGroupItem value="never" className="mt-0.5" />
+                              <span>永久有效</span>
+                            </label>
+                          </RadioGroup>
+                          {rowExpirationType === "custom" && (
+                            <div className="flex gap-2">
+                              <OrderDatePicker value={rowCustomDate} onChange={setRowCustomDate} minDate={formatLocalDate(new Date())} className="flex-1" />
+                              <input
+                                type="time"
+                                value={rowCustomTime}
+                                onChange={e => setRowCustomTime(e.target.value)}
+                                className="border rounded-md px-2 text-sm bg-background"
+                              />
+                            </div>
+                          )}
+                          <div className="flex gap-2">
+                            <Button size="sm" disabled={updateAttachmentExpirationMut.isPending} onClick={() => handleApplyExpiration(att.id)}>
+                              套用
+                            </Button>
+                            <Button size="sm" variant="ghost" onClick={() => setEditingExpirationId(null)}>取消</Button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="mt-1">
+                          <p className="text-xs text-muted-foreground">
+                            {att.expirationType === "never" && "永久有效，自動清理排程不會刪除這份檔案"}
+                            {att.expirationType === "after_publish_30d" && !att.downloadExpiresAt && "發布後 30 天到期（尚未發布，發布後才開始計算）"}
+                            {att.downloadExpiresAt && (
+                              <span className={att.isExpired ? "text-red-500" : undefined}>
+                                {att.isExpired ? "已於 " : "下載期限："}
+                                {format(new Date(att.downloadExpiresAt), "yyyy/MM/dd HH:mm")}
+                                {att.isExpired && " 到期"}
+                              </span>
+                            )}
+                          </p>
+                          {/* 管理員預覽：僅限「已過期但實體檔案尚未被 Cron 清除」的附件，
+                              跟公開 NewsDetail 頁面完全分開的獨立入口，不影響一般會員/
+                              公開頁的期限規則。storageDeletedAt 有值時（上面 isStorageDeleted
+                              分支）已經整個不會走到這裡，連管理員也拿不到預覽按鈕。 */}
+                          {att.isExpired && (
+                            <Button
+                              size="sm" variant="outline" className="mt-1.5 h-7 text-xs gap-1"
+                              disabled={previewingId === att.id}
+                              onClick={() => handleAdminPreview(att.id)}
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                              {previewingId === att.id ? "取得連結中..." : "管理員預覽（5 分鐘有效）"}
+                            </Button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+
+                  {/* 尚未儲存草稿前選的檔案：只在本機記憶體暫存，還沒真的上傳 */}
+                  {stagedPdfFiles.map(sf => (
+                    <div key={sf.localId} className="rounded-md border border-dashed px-3 py-2.5 text-sm flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <FileTextIcon className="w-4 h-4 shrink-0 text-muted-foreground" />
+                        <span className="truncate">{sf.file.name}</span>
+                        <span className="text-xs text-muted-foreground shrink-0">{formatFileSize(sf.file.size)}</span>
+                        <Badge variant="outline" className="text-[10px] shrink-0 whitespace-nowrap">待儲存草稿後上傳</Badge>
+                      </div>
+                      <Button size="sm" variant="ghost" className="h-7 px-2 text-red-500 hover:bg-red-50 shrink-0" onClick={() => removeStagedPdf(sf.localId)} aria-label={`移除 ${sf.file.name}`}>
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </Button>
+                    </div>
+                  ))}
+
+                  {/* 上傳失敗、保留讓管理員重試的檔案 */}
+                  {failedPdfFiles.map(ff => (
+                    <div key={ff.localId} className="rounded-md border border-red-200 bg-red-50/50 px-3 py-2.5 text-sm">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <FileTextIcon className="w-4 h-4 shrink-0 text-red-500" />
+                          <span className="truncate">{ff.file.name}</span>
+                          <span className="text-xs text-muted-foreground shrink-0">{formatFileSize(ff.file.size)}</span>
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <Button size="sm" variant="outline" className="h-7 text-xs" disabled={pdfUploading || !editingId} onClick={() => retryFailedPdf(ff.localId)}>
+                            重試
+                          </Button>
+                          <Button size="sm" variant="ghost" className="h-7 px-2 text-red-500 hover:bg-red-50" onClick={() => removeFailedPdf(ff.localId)} aria-label={`移除 ${ff.file.name}`}>
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </Button>
+                        </div>
+                      </div>
+                      <p className="text-xs text-red-500 mt-1">{ff.error}</p>
+                    </div>
+                  ))}
+
+                  {totalPdfCount < MAX_ATTACHMENTS && (
+                    <div className="rounded-md border border-dashed px-3 py-3.5 bg-muted/10">
+                      <Label className="text-xs">下載期限</Label>
+                      <RadioGroup value={pdfExpirationType} onValueChange={v => setPdfExpirationType(v as AttachmentExpirationType)} className="mt-1.5 gap-1.5">
+                        <label className="flex items-start gap-2 text-xs">
+                          <RadioGroupItem value="after_publish_30d" className="mt-0.5" />
+                          <span>發布後 30 天（草稿階段上傳的話，從這篇消息第一次正式發布當下開始算 30 天；若消息已經發布過才補上傳，則從上傳完成時間起算 30 天）</span>
+                        </label>
+                        <label className="flex items-start gap-2 text-xs">
+                          <RadioGroupItem value="custom" className="mt-0.5" />
+                          <span>自訂到期時間（時間顯示為台灣時間；到了指定時間立即停止下載，跟消息本身是否發布無關）</span>
+                        </label>
+                        <label className="flex items-start gap-2 text-xs">
+                          <RadioGroupItem value="never" className="mt-0.5" />
+                          <span>永久有效（自動清理排程不會刪除這份檔案）</span>
+                        </label>
+                      </RadioGroup>
+                      {pdfExpirationType === "custom" && (
+                        <div className="flex gap-2 mt-2">
+                          <OrderDatePicker value={pdfCustomDate} onChange={setPdfCustomDate} minDate={formatLocalDate(new Date())} className="flex-1" />
+                          <input
+                            type="time"
+                            value={pdfCustomTime}
+                            onChange={e => setPdfCustomTime(e.target.value)}
+                            className="border rounded-md px-2 text-sm bg-background"
+                          />
+                        </div>
+                      )}
+                      <input
+                        ref={pdfInputRef}
+                        type="file"
+                        accept=".pdf,application/pdf"
+                        multiple
+                        className="hidden"
+                        onChange={e => handlePdfFilesSelected(e.target.files)}
+                      />
+                      <Button
+                        type="button" size="sm" variant="outline" className="mt-2.5" disabled={pdfUploading}
+                        aria-label="從電腦選擇 PDF"
+                        onClick={() => pdfInputRef.current?.click()}
+                      >
+                        {pdfUploading ? "上傳中..." : "從電腦選擇 PDF"}
+                      </Button>
+                    </div>
+                  )}
+                </div>
               </div>
 
               {/* 9. 儲存草稿／發布／取消 */}
-              <div className="flex flex-wrap gap-3">
-                <Button onClick={handleSaveDraft} disabled={isPending} variant="outline">
-                  {isPending ? "儲存中..." : "儲存草稿"}
+              <div className="flex flex-wrap items-center gap-3">
+                <Button onClick={handleSaveDraft} disabled={isBusy} variant="outline">
+                  {isBusy && savingProgress ? savingProgress : "儲存草稿"}
                 </Button>
-                <Button onClick={handlePublish} disabled={isPending} className="gap-1.5 bg-indigo-500 hover:bg-indigo-600 text-white border-0">
+                <Button onClick={handlePublish} disabled={isBusy} className="gap-1.5 bg-indigo-500 hover:bg-indigo-600 text-white border-0">
                   <Send className="w-3.5 h-3.5" />
-                  {isPending ? "處理中..." : "發布"}
+                  {isBusy && savingProgress ? savingProgress : "發布"}
                 </Button>
-                <Button variant="ghost" onClick={resetForm}>取消</Button>
+                <Button variant="ghost" onClick={resetForm} disabled={isBusy}>取消</Button>
               </div>
             </CardContent>
           </Card>

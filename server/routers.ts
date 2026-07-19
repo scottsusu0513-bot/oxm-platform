@@ -3992,7 +3992,9 @@ export const appRouter = router({
       return { count: recipients.length };
     }),
     create: adminProcedure.input(z.object({
-      slug: z.string().min(1).max(200),
+      // 不填（或空字串）→ 後端自動產生 news-YYYYMMDD-xxxxxxxx 格式的 slug，
+      // 見 server/db.ts 的 createNews／generateUniqueNewsSlug。
+      slug: z.string().max(200).optional(),
       title: z.string().min(1).max(200),
       summary: z.string().min(1).max(500),
       content: z.string().min(1),
@@ -4001,24 +4003,30 @@ export const appRouter = router({
       isCompetition: z.boolean().default(false),
       isExhibition: z.boolean().default(false),
       industryNames: z.array(z.string().max(50)).max(20).default([]),
+      sourceName: z.string().max(200).nullable().optional(),
+      sourceUrl: z.string().max(1000).nullable().optional(),
     })).mutation(async ({ input, ctx }) => {
       let result: { id: number; shouldNotify: boolean };
       try {
-        result = await db.createNews({ ...input, createdBy: ctx.user!.id });
+        result = await db.createNews({ ...input, slug: input.slug || undefined, createdBy: ctx.user!.id });
       } catch (err) {
         throw new TRPCError({ code: "BAD_REQUEST", message: err instanceof Error ? err.message : "建立消息失敗" });
       }
+      // slug 可能是後端自動產生的，input.slug 不一定等於最終值，一律重新讀一次
+      // 拿確定正確的 slug——通知連結需要，前端「儲存草稿後顯示網址預覽」也
+      // 需要，所以不只在 shouldNotify 分支才查。
+      const created = await db.getNewsById(result.id);
       if (result.shouldNotify) {
         void dispatchNewsNotifications({
           newsId: result.id,
           title: input.title,
           summary: input.summary,
-          slug: input.slug,
+          slug: created?.slug ?? input.slug ?? "",
           isImportant: input.isImportant,
           industryNames: input.industryNames,
         });
       }
-      return { success: true, id: result.id };
+      return { success: true, id: result.id, slug: created?.slug ?? input.slug ?? "" };
     }),
     update: adminProcedure.input(z.object({
       id: z.number(),
@@ -4031,6 +4039,8 @@ export const appRouter = router({
       isCompetition: z.boolean().optional(),
       isExhibition: z.boolean().optional(),
       industryNames: z.array(z.string().max(50)).max(20).optional(),
+      sourceName: z.string().max(200).nullable().optional(),
+      sourceUrl: z.string().max(1000).nullable().optional(),
     })).mutation(async ({ input }) => {
       const { id, ...data } = input;
       let result: { shouldNotify: boolean };

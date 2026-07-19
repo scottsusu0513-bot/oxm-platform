@@ -404,6 +404,13 @@ export const news = mysqlTable("news", {
   coverImageKey: varchar("coverImageKey", { length: 300 }),
   coverImageUrl: varchar("coverImageUrl", { length: 1000 }),
   coverImageAlt: varchar("coverImageAlt", { length: 200 }),
+  // 原始消息來源：選填，標示這則消息轉載/整理自哪個外部單位。sourceUrl 只
+  // 允許完整 http(s) 網址（見 server/db.ts 的 isValidNewsSourceUrl），
+  // sourceName 有值但 sourceUrl 沒填會被後端拒絕（不允許「有名稱點不了」）。
+  // 公開頁只在 sourceUrl 存在時才顯示「查看原始消息」按鈕，一律開新分頁、
+  // 不影響 OXM 自己的 Email/Push/列表連結（那些永遠連到 /news/:slug）。
+  sourceName: varchar("sourceName", { length: 200 }),
+  sourceUrl: varchar("sourceUrl", { length: 1000 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 }, (t) => ({

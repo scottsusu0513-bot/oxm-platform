@@ -1,7 +1,7 @@
 import { eq, and, like, desc, asc, sql, inArray, or, isNull, gt, isNotNull, lte, ne, getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
-import { createHash } from "crypto";
+import { createHash, randomUUID } from "crypto";
 import type { EventEmitter } from "events";
 import {
   InsertUser, users, factories, products, productCategories,
@@ -2001,6 +2001,69 @@ export function isValidNewsSlug(slug: string): boolean {
   return slug.length > 0 && slug.length <= 200 && /^[a-z0-9]+(-[a-z0-9]+)*$/.test(slug);
 }
 
+/**
+ * 自動產生 slug 候選值：news-YYYYMMDD-xxxxxxxx，後綴取
+ * crypto.randomUUID() 拿掉連字號後的前 8 碼（小寫十六進位），不只用時間戳
+ * （同一天建立多筆消息也不會碰撞）。日期用伺服器當地時間，純粹是網址裡的
+ * 可讀片段，不影響任何到期/發布時間邏輯。
+ */
+function generateNewsSlugCandidate(): string {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const d = String(now.getDate()).padStart(2, "0");
+  const suffix = randomUUID().replace(/-/g, "").slice(0, 8);
+  return `news-${y}${m}${d}-${suffix}`;
+}
+
+/**
+ * 用 UUID 衍生後綴，同一天內撞號的機率極低（8 碼十六進位＝1/42 億），但
+ * 這裡仍然先做存在性檢查、最多重試 5 次；真正的最後防線是 news.slug 的
+ * UNIQUE 索引——createNews 在真的 INSERT 撞到唯一鍵時還會再重試一次，
+ * 這裡的檢查只是提早攔截、減少無謂的 INSERT 失敗。
+ */
+async function generateUniqueNewsSlug(db: Awaited<ReturnType<typeof getDb>>): Promise<string> {
+  if (!db) throw new Error("DB not available");
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const candidate = generateNewsSlugCandidate();
+    const existing = await db.select({ id: news.id }).from(news).where(eq(news.slug, candidate)).limit(1);
+    if (existing.length === 0) return candidate;
+  }
+  throw new Error("無法產生唯一的網址代稱，請稍後再試");
+}
+
+/** 原始消息來源網址：只接受完整的 http(s) 網址，拒絕 javascript:/data:/相對路徑/控制字元與 CRLF。 */
+export function isValidNewsSourceUrl(url: string): boolean {
+  // eslint-disable-next-line no-control-regex
+  if (/[\r\n\x00-\x08\x0b\x0c\x0e-\x1f]/.test(url)) return false;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 來源單位／來源網址的交叉驗證：網址格式不對就拒絕；只填了單位、沒填網址
+ * 會變成「有名稱但點不了」，前後端都要擋。回傳 trim 過、空字串正規化成
+ * null 的乾淨值，呼叫端直接拿去寫入 DB。
+ */
+export function validateNewsSource(
+  sourceName: string | null | undefined,
+  sourceUrl: string | null | undefined,
+): { sourceName: string | null; sourceUrl: string | null } {
+  const name = sourceName?.trim() || null;
+  const url = sourceUrl?.trim() || null;
+  if (url && !isValidNewsSourceUrl(url)) {
+    throw new Error("原始消息網址格式不正確，僅接受 http(s) 開頭的完整網址");
+  }
+  if (name && !url) {
+    throw new Error("請填寫原始消息網址");
+  }
+  return { sourceName: name, sourceUrl: url };
+}
+
 /** 後端一律用 shared/constants.ts 的 INDUSTRY_OPTIONS 驗證，不信任前端傳來的產業名稱字串。 */
 export function validateNewsIndustryNames(names: string[]): void {
   const invalid = names.filter(n => !(INDUSTRY_OPTIONS as readonly string[]).includes(n));
@@ -2103,7 +2166,8 @@ export async function getAdminNewsList(limit = 100): Promise<News[]> {
 }
 
 export interface CreateNewsInput {
-  slug: string;
+  /** 不填或空字串 → 後端自動產生 news-YYYYMMDD-xxxxxxxx 格式的 slug。 */
+  slug?: string;
   title: string;
   summary: string;
   content: string;
@@ -2112,43 +2176,71 @@ export interface CreateNewsInput {
   isCompetition?: boolean;
   isExhibition?: boolean;
   industryNames?: string[];
+  sourceName?: string | null;
+  sourceUrl?: string | null;
   createdBy: number;
 }
 
 export async function createNews(data: CreateNewsInput): Promise<{ id: number; shouldNotify: boolean }> {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
-  if (!isValidNewsSlug(data.slug)) throw new Error(`無效的網址代稱：${data.slug}`);
+
+  const autoSlug = !data.slug;
+  if (!autoSlug) {
+    if (!isValidNewsSlug(data.slug!)) throw new Error(`無效的網址代稱：${data.slug}`);
+    const existing = await db.select({ id: news.id }).from(news).where(eq(news.slug, data.slug!)).limit(1);
+    if (existing.length > 0) throw new Error(`此網址代稱已被使用：${data.slug}`);
+  }
+
   const industryNames = Array.from(new Set(data.industryNames ?? []));
   validateNewsIndustryNames(industryNames);
-
-  const existing = await db.select({ id: news.id }).from(news).where(eq(news.slug, data.slug)).limit(1);
-  if (existing.length > 0) throw new Error(`此網址代稱已被使用：${data.slug}`);
+  const { sourceName, sourceUrl } = validateNewsSource(data.sourceName, data.sourceUrl);
 
   const publishNow = data.status === "published";
   const now = new Date();
-  const result = await db.insert(news).values({
-    slug: data.slug,
-    title: data.title,
-    summary: data.summary,
-    content: data.content,
-    status: data.status,
-    isImportant: data.isImportant ?? false,
-    isCompetition: data.isCompetition ?? false,
-    isExhibition: data.isExhibition ?? false,
-    publishedAt: publishNow ? now : null,
-    firstPublishedAt: publishNow ? now : null,
-    createdBy: data.createdBy,
-  });
-  const id = result[0].insertId;
+
+  let id: number | undefined;
+  let lastErr: unknown;
+  const maxAttempts = autoSlug ? 5 : 1;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const slug = autoSlug ? generateNewsSlugCandidate() : data.slug!;
+    try {
+      const result = await db.insert(news).values({
+        slug,
+        title: data.title,
+        summary: data.summary,
+        content: data.content,
+        status: data.status,
+        isImportant: data.isImportant ?? false,
+        isCompetition: data.isCompetition ?? false,
+        isExhibition: data.isExhibition ?? false,
+        sourceName,
+        sourceUrl,
+        publishedAt: publishNow ? now : null,
+        firstPublishedAt: publishNow ? now : null,
+        createdBy: data.createdBy,
+      });
+      id = result[0].insertId;
+      break;
+    } catch (err) {
+      lastErr = err;
+      // 自動產生的 slug 真的撞到唯一鍵（機率極低）才重試；手動填的 slug
+      // 撞到就直接視為錯誤丟出去，不擅自幫使用者改掉他填的值。
+      const isDup = (err as { code?: string })?.code === "ER_DUP_ENTRY";
+      if (!autoSlug || !isDup) throw err;
+    }
+  }
+  if (id === undefined) throw lastErr instanceof Error ? lastErr : new Error("建立消息失敗，請稍後再試");
+
   if (industryNames.length > 0) {
-    await db.insert(newsIndustries).values(industryNames.map(industryName => ({ newsId: id, industryName })));
+    await db.insert(newsIndustries).values(industryNames.map(industryName => ({ newsId: id!, industryName })));
   }
   // 建立當下就是 published，等同「第一次從草稿轉為已發布」，需要觸發分眾通知。
   return { id, shouldNotify: publishNow };
 }
 
 export interface UpdateNewsInput {
+  /** 一旦這則消息 firstPublishedAt 已經有值，後端一律拒絕修改 slug（不管前端有沒有 disable）。 */
   slug?: string;
   title?: string;
   summary?: string;
@@ -2158,6 +2250,9 @@ export interface UpdateNewsInput {
   isCompetition?: boolean;
   isExhibition?: boolean;
   industryNames?: string[];
+  /** 來源單位／來源網址要嘛都不傳、要嘛一起傳，方便做「有名稱必須有網址」的交叉驗證。 */
+  sourceName?: string | null;
+  sourceUrl?: string | null;
 }
 
 /**
@@ -2172,11 +2267,11 @@ export async function updateNews(id: number, data: UpdateNewsInput): Promise<{ s
   const db = await getDb();
   if (!db) throw new Error("DB not available");
 
-  if (data.slug !== undefined) {
-    if (!isValidNewsSlug(data.slug)) throw new Error(`無效的網址代稱：${data.slug}`);
-    const existing = await db.select({ id: news.id }).from(news).where(eq(news.slug, data.slug)).limit(1);
-    if (existing.length > 0 && existing[0].id !== id) throw new Error(`此網址代稱已被使用：${data.slug}`);
+  if (data.slug !== undefined && !isValidNewsSlug(data.slug)) {
+    throw new Error(`無效的網址代稱：${data.slug}`);
   }
+  const sourceProvided = data.sourceName !== undefined || data.sourceUrl !== undefined;
+  const validatedSource = sourceProvided ? validateNewsSource(data.sourceName, data.sourceUrl) : null;
 
   if (data.industryNames !== undefined) {
     await setNewsIndustries(id, data.industryNames);
@@ -2193,13 +2288,29 @@ export async function updateNews(id: number, data: UpdateNewsInput): Promise<{ s
     if (!current) throw new Error("找不到此則消息");
 
     const setData: Partial<InsertNews> = {};
-    if (data.slug !== undefined) setData.slug = data.slug;
+    if (data.slug !== undefined && data.slug !== current.slug) {
+      // 一旦發布過（不論現在是 published 還是被下架的 withdrawn），slug 就
+      // 已經可能流通出去（分享連結、SEO 收錄、Email/Push 裡的網址），後端
+      // 一律拒絕修改，不能只靠前端把輸入框 disable 掉。
+      if (current.firstPublishedAt != null) {
+        throw new Error("已發布過的消息無法修改網址代稱");
+      }
+      const existing = await tx.select({ id: news.id }).from(news).where(eq(news.slug, data.slug)).limit(1);
+      if (existing.length > 0 && existing[0].id !== id) throw new Error(`此網址代稱已被使用：${data.slug}`);
+      setData.slug = data.slug;
+    }
     if (data.title !== undefined) setData.title = data.title;
     if (data.summary !== undefined) setData.summary = data.summary;
     if (data.content !== undefined) setData.content = data.content;
     if (data.isImportant !== undefined) setData.isImportant = data.isImportant;
     if (data.isCompetition !== undefined) setData.isCompetition = data.isCompetition;
     if (data.isExhibition !== undefined) setData.isExhibition = data.isExhibition;
+    if (validatedSource) {
+      // 編輯來源資料（不管消息是否已發布）不影響 status／publishedAt，因此
+      // 不會觸發下面的 shouldNotify——修改來源資訊不寄送 Email／Push。
+      setData.sourceName = validatedSource.sourceName;
+      setData.sourceUrl = validatedSource.sourceUrl;
+    }
 
     let shouldNotify = false;
     if (data.status !== undefined) {

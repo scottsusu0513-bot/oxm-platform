@@ -11,7 +11,7 @@ import { openExternalUrl } from "@/lib/platform";
 import { useAuth } from "@/_core/hooks/useAuth";
 import LoginDialog from "@/components/LoginDialog";
 import { toast } from "sonner";
-import { Share2, Newspaper, FileText as FileTextIcon, Download } from "lucide-react";
+import { Share2, Newspaper, FileText as FileTextIcon, Download, ExternalLink } from "lucide-react";
 import NotFound from "./NotFound";
 import { Card, CardContent } from "@/components/ui/card";
 
@@ -174,6 +174,25 @@ export default function NewsDetail() {
             )}
 
             <MarkdownContent content={item.content} className="text-base text-foreground/90" allowImages />
+
+            {/* 消息來源：只在有 sourceUrl 時顯示（後端已經保證「有名稱必須有
+                網址」，不會出現只有名稱、按鈕卻點不了的狀態）。永遠開新分頁，
+                不把會員導離 OXM 目前這個 /news/:slug 頁面本身。 */}
+            {item.sourceUrl && (
+              <div className="mt-8 rounded-lg border bg-muted/20 px-4 py-3 flex items-center justify-between gap-3">
+                <p className="text-sm text-muted-foreground truncate">
+                  <span className="text-xs">來源：</span>
+                  {item.sourceName || "原始消息來源"}
+                </p>
+                <Button
+                  variant="outline" size="sm" className="gap-1.5 shrink-0"
+                  onClick={() => openExternalUrl(item.sourceUrl!)}
+                >
+                  查看原始消息
+                  <ExternalLink className="w-3.5 h-3.5" />
+                </Button>
+              </div>
+            )}
 
             {/* 相關附件：沒有附件時整個區塊完全不渲染，不留空白 */}
             {item.attachments.length > 0 && (
