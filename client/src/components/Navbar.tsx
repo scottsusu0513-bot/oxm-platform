@@ -116,13 +116,17 @@ const HUB_ITEMS: HubItem[] = [
   },
   {
     key: "news",
-    label: "傳產知識與情報中心", short: "找消息", soon: true,
-    Icon: BookOpen, iconCls: "text-indigo-400/60",
-    card: "bg-gradient-to-br from-indigo-600/8 to-purple-700/8 border-indigo-300/20 text-indigo-900/30",
-    cardHover: "",
-    mCard: "from-indigo-600/8 to-purple-700/8 border-indigo-300/20", mText: "text-indigo-600/40",
+    label: "傳產知識與情報中心", short: "找消息", soon: false,
+    // 桌面版 dropdown 觸發鈕的樣式是獨立硬編碼（見下方 hub.key === "news" 分支），
+    // 不讀 card／cardHover 欄位，故調整那裡不會影響桌面版；這裡的 iconCls／mCard／
+    // mText 只用於手機版 Accordion 橫條。找消息已正式開放，改用清楚可辨識的靛紫色，
+    // 避免跟找人才／找形象等仍在「即將開放」的低透明度 muted 樣式混淆。
+    Icon: BookOpen, iconCls: "text-indigo-600",
+    card: "bg-gradient-to-br from-indigo-600/10 to-purple-600/10 border-indigo-300/40 text-indigo-700",
+    cardHover: "hover:from-indigo-600/20 hover:to-purple-600/20 hover:border-indigo-400/60 hover:shadow-sm hover:shadow-indigo-500/10 hover:-translate-y-px",
+    mCard: "from-indigo-500/15 to-purple-600/15 border-indigo-300/50", mText: "text-indigo-700",
     dropdown: [
-      { title: "產業消息與情報", description: "即將開放", disabled: true, Icon: BookOpen },
+      { title: "產業情報中心", description: "整合產業動態、競賽資訊、展覽活動與重要消息", href: "/news", Icon: BookOpen },
     ],
   },
   {
@@ -188,12 +192,51 @@ export default function Navbar() {
     };
   }, [resourceDropOpen]);
 
+  // 桌面版「找消息」下拉選單：跟「找資源」同一種點擊/外部點擊/Escape 收合模式，
+  // 另外加上滑鼠 hover 開啟／延遲收合（找資源本身沒有 hover，這裡依規格額外補上）。
+  const [newsDropOpen, setNewsDropOpen] = useState(false);
+  const newsDropRef = useRef<HTMLDivElement | null>(null);
+  const newsDropTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const openNewsDrop = () => {
+    if (newsDropTimer.current) { clearTimeout(newsDropTimer.current); newsDropTimer.current = null; }
+    setBrandMenuOpen(false);
+    setResourceDropOpen(false);
+    setSearchDropOpen(false);
+    setNewsDropOpen(true);
+  };
+  const closeNewsDropDelayed = () => {
+    newsDropTimer.current = setTimeout(() => setNewsDropOpen(false), 150);
+  };
+
+  useEffect(() => {
+    if (!newsDropOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (newsDropRef.current && !newsDropRef.current.contains(e.target as Node)) {
+        setNewsDropOpen(false);
+      }
+    };
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setNewsDropOpen(false);
+        (newsDropRef.current?.querySelector("button") as HTMLButtonElement | null)?.focus();
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("keydown", handleEscape);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, [newsDropOpen]);
+
   // 路由切換後自動關閉下拉選單／手機主選單。手機選單內每個會導頁的連結本來就會
   // 自行呼叫 setMobileOpen(false)，這裡是防禦性保險（例如瀏覽器上一頁/下一頁），
   // 確保任何情況下路由一變就不會殘留 body scroll lock。
   useEffect(() => {
     setBrandMenuOpen(false);
     setResourceDropOpen(false);
+    setNewsDropOpen(false);
     setMobileOpenHub(null);
     setMobileOpen(false);
   }, [location]);
@@ -412,6 +455,54 @@ export default function Navbar() {
                         <Link key={item.href} href={item.href!} onClick={() => setResourceDropOpen(false)}>
                           <div className="flex items-start gap-2.5 px-3.5 py-2.5 hover:bg-orange-50 transition-colors cursor-pointer">
                             <item.Icon className="w-4 h-4 mt-0.5 shrink-0 text-blue-500" />
+                            <div className="min-w-0">
+                              <p className="text-sm font-semibold text-foreground">{item.title}</p>
+                              <p className="text-xs text-muted-foreground mt-0.5 leading-snug">{item.description}</p>
+                            </div>
+                          </div>
+                        </Link>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            }
+
+            if (hub.key === "news") {
+              return (
+                <div
+                  key={hub.label}
+                  className="relative"
+                  ref={newsDropRef}
+                  onMouseEnter={openNewsDrop}
+                  onMouseLeave={closeNewsDropDelayed}
+                >
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBrandMenuOpen(false);
+                      setSearchDropOpen(false);
+                      setResourceDropOpen(false);
+                      setNewsDropOpen(v => !v);
+                    }}
+                    aria-haspopup="menu"
+                    aria-expanded={newsDropOpen}
+                    className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg border text-[11px] font-semibold transition-all duration-150 whitespace-nowrap cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 bg-gradient-to-br from-indigo-600/10 to-purple-600/10 border-indigo-300/40 text-indigo-700 hover:from-indigo-600/20 hover:to-purple-600/20 hover:border-indigo-400/60 hover:shadow-sm hover:shadow-indigo-500/10 hover:-translate-y-px"
+                  >
+                    <hub.Icon className="w-3.5 h-3.5 shrink-0 text-indigo-500" />
+                    {hub.short}
+                    <ChevronDown className={`w-2.5 h-2.5 opacity-60 transition-transform duration-150 ${newsDropOpen ? "rotate-180" : ""}`} />
+                  </button>
+                  {newsDropOpen && (
+                    <div
+                      className="absolute top-full left-0 mt-1.5 w-72 bg-white border border-border rounded-xl shadow-lg z-[200] py-1.5 overflow-hidden"
+                      onMouseEnter={openNewsDrop}
+                      onMouseLeave={closeNewsDropDelayed}
+                    >
+                      {hub.dropdown.filter((item) => item.href && !item.disabled).map((item) => (
+                        <Link key={item.href} href={item.href!} onClick={() => setNewsDropOpen(false)}>
+                          <div className="flex items-start gap-2.5 px-3.5 py-2.5 hover:bg-orange-50 transition-colors cursor-pointer focus-visible:outline-none focus-visible:bg-orange-50">
+                            <item.Icon className="w-4 h-4 mt-0.5 shrink-0 text-indigo-500" />
                             <div className="min-w-0">
                               <p className="text-sm font-semibold text-foreground">{item.title}</p>
                               <p className="text-xs text-muted-foreground mt-0.5 leading-snug">{item.description}</p>

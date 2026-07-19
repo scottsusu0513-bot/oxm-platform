@@ -336,6 +336,10 @@ export default function News() {
         <div className="relative bg-gradient-to-br from-orange-50 via-background to-purple-50 overflow-hidden">
           <div className="container py-8 sm:py-10 flex items-center gap-6">
             <div className="flex-1 min-w-0">
+              {/* Eyebrow／小標籤：純文字識別，不取代主要標題，橘紫漸層沿用 OXM 品牌色 */}
+              <p className="text-xs sm:text-sm font-bold tracking-wide bg-gradient-to-r from-orange-500 to-purple-500 bg-clip-text text-transparent mb-1.5">
+                產業情報中心
+              </p>
               <div className="flex items-center gap-3 mb-2">
                 <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-orange-500 to-purple-500 flex items-center justify-center shadow shrink-0">
                   <Newspaper className="w-5 h-5 text-white" />

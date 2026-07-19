@@ -477,16 +477,78 @@ describe("news router：權限一律用 adminProcedure／publicProcedure，不�
   });
 });
 
-describe("Navbar「找消息」入口：本次任務不解除鎖定（規格更正）", () => {
-  it("HUB_ITEMS 的 news 項目仍是 soon: true，且沒有新增其他導向 /news 的公開入口", () => {
-    const navbarSource = fs.readFileSync(path.resolve(__dirname, "..", "client", "src", "components", "Navbar.tsx"), "utf-8");
+describe("Navbar「找消息」入口：第五輪正式開放（下拉選單模式，跟找資源同一種結構）", () => {
+  function readNavbarSource(): string {
+    return fs.readFileSync(path.resolve(__dirname, "..", "client", "src", "components", "Navbar.tsx"), "utf-8");
+  }
+
+  it("HUB_ITEMS 的 news 項目 soon 改為 false（解除鎖定）", () => {
+    const navbarSource = readNavbarSource();
     const newsItemMatch = navbarSource.match(/key: "news",\s*\n\s*label: "[^"]*", short: "[^"]*", soon: (true|false)/);
     expect(newsItemMatch).not.toBeNull();
-    expect(newsItemMatch![1]).toBe("true");
+    expect(newsItemMatch![1]).toBe("false");
+  });
 
+  it("news 的 dropdown 只有一個項目「產業情報中心」，href 指向 /news，不是 disabled", () => {
+    const navbarSource = readNavbarSource();
+    const start = navbarSource.indexOf('key: "news"');
+    const end = navbarSource.indexOf('key: "discussion"');
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const block = navbarSource.slice(start, end);
+    expect(block).toMatch(/title: "產業情報中心".*href: "\/news"/s);
+    expect(block).not.toMatch(/disabled: true/);
+  });
+
+  it("桌面版有獨立的 hub.key === \"news\" 分支，支援 click 切換、hover 開啟/延遲關閉、Escape 收合，且有 focus-visible 樣式", () => {
+    const navbarSource = readNavbarSource();
+    const start = navbarSource.indexOf('if (hub.key === "news")');
+    expect(start).toBeGreaterThan(-1);
+    const block = navbarSource.slice(start, start + 2200);
+    expect(block).toMatch(/onMouseEnter=\{openNewsDrop\}/);
+    expect(block).toMatch(/onMouseLeave=\{closeNewsDropDelayed\}/);
+    expect(block).toMatch(/setNewsDropOpen\(v => !v\)/);
+    expect(block).toMatch(/focus-visible:ring-2/);
+    expect(block).toMatch(/aria-haspopup="menu"/);
+    expect(block).toMatch(/aria-expanded=\{newsDropOpen\}/);
+  });
+
+  it("newsDropOpen 有獨立的 Escape 監聽（跟 resourceDropOpen 同一種 useEffect 模式）", () => {
+    const navbarSource = readNavbarSource();
+    const start = navbarSource.indexOf("const [newsDropOpen, setNewsDropOpen]");
+    expect(start).toBeGreaterThan(-1);
+    const block = navbarSource.slice(start, start + 1600);
+    expect(block).toMatch(/if \(e\.key === "Escape"\)/);
+    expect(block).toMatch(/document\.addEventListener\("mousedown", handleClickOutside\)/);
+  });
+
+  it("手機版 Accordion 沒有為「news」另外寫特殊分支——沿用既有的通用 hub.dropdown 渲染邏輯（href && !disabled 才是可點擊 Link）", () => {
+    const navbarSource = readNavbarSource();
+    // 手機選單渲染區塊裡不應該出現任何針對 hub.key === "news" 的特殊條件判斷。
+    const mobileStart = navbarSource.indexOf("{/* 手機主選單");
+    const mobileSection = mobileStart > -1 ? navbarSource.slice(mobileStart) : navbarSource.slice(navbarSource.indexOf("mobile-hub-panel") - 500);
+    expect(mobileSection).not.toMatch(/hub\.key === "news"/);
+  });
+
+  it("其他仍在「即將開放」的入口（找人才／找形象／找討論）維持 soon: true 不變", () => {
+    const navbarSource = readNavbarSource();
+    for (const key of ["talent", "brand", "discussion"]) {
+      const m = navbarSource.match(new RegExp(`key: "${key}",\\s*\\n\\s*label: "[^"]*", short: "[^"]*", soon: (true|false)`));
+      expect(m).not.toBeNull();
+      expect(m![1]).toBe("true");
+    }
+  });
+
+  it("首頁沒有另外新增導向 /news 的公開入口（Hub 下拉選單以外）", () => {
     const homeSource = fs.readFileSync(path.resolve(__dirname, "..", "client", "src", "pages", "Home.tsx"), "utf-8");
     expect(homeSource).not.toMatch(/href=["']\/news["']/);
     expect(homeSource).not.toMatch(/navigate\(["']\/news["']\)/);
+  });
+
+  it("/news 與 /news/:slug 路由本身沒有被改動（App.tsx 路由定義維持不變）", () => {
+    const appSource = fs.readFileSync(path.resolve(__dirname, "..", "client", "src", "App.tsx"), "utf-8");
+    expect(appSource).toMatch(/path="\/news"/);
+    expect(appSource).toMatch(/path="\/news\/:slug"/);
   });
 });
 
