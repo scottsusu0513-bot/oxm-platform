@@ -988,7 +988,10 @@ describe("News.tsx 第三輪 UI 優化：分類標題、空狀態、最近更新
 
   it("左側「產業消息」上層項目在選中任一子產業時同步變成品牌深紫高亮（第四輪配色更新為 purple-700）", () => {
     const source = readNewsPageSource();
-    const idx = source.indexOf("industrySectionActive ?");
+    // industrySectionActive 這個變數手機版（mobileActiveTab 的計算式）也會用
+    // 到，所以要從桌面側欄 <aside> 區塊開始找，不能抓到第一個出現的位置。
+    const asideStart = source.indexOf('<aside className="hidden lg:block');
+    const idx = source.indexOf("industrySectionActive ?", asideStart);
     expect(idx).toBeGreaterThan(-1);
     const around = source.slice(idx - 200, idx + 100);
     expect(around).toMatch(/text-purple-700/);
@@ -1016,8 +1019,14 @@ describe("News.tsx 第三輪 UI 微調：產業消息永遠展開、產業 icon 
     const source = readNewsPageSource();
     expect(source).not.toMatch(/industryExpanded/);
     expect(source).not.toMatch(/setIndustryExpanded/);
-    expect(source).not.toMatch(/ChevronDown|ChevronRight/);
     expect(source).not.toMatch(/aria-expanded/);
+    // ChevronDown 在手機版產業選擇器（Popover 觸發按鈕）合法使用，不代表桌面
+    // 版產業清單恢復展開/收合；這裡改成只確認桌面 <aside> 區塊本身沒有
+    // ChevronDown／ChevronRight，範圍限定桌面側欄，不是整個檔案。
+    const asideStart = source.indexOf('<aside className="hidden lg:block');
+    const asideEnd = source.indexOf("</aside>");
+    const asideBlock = source.slice(asideStart, asideEnd);
+    expect(asideBlock).not.toMatch(/ChevronDown|ChevronRight/);
   });
 
   it("「產業消息」是靜態的 div 區段標題，不是 button，沒有 onClick", () => {
@@ -1037,7 +1046,10 @@ describe("News.tsx 第三輪 UI 微調：產業消息永遠展開、產業 icon 
 
   it("產業清單一律渲染，不再包在 industryExpanded && (...) 條件式裡", () => {
     const source = readNewsPageSource();
-    const start = source.indexOf("INDUSTRIES.map(ind => {");
+    // 手機版產業選擇器（Popover 選項列表）也會用 INDUSTRIES.map(ind => { 這個
+    // 寫法，所以要從桌面側欄 <aside> 開始找桌面那個出現位置，不能抓第一個。
+    const asideStart = source.indexOf('<aside className="hidden lg:block');
+    const start = source.indexOf("INDUSTRIES.map(ind => {", asideStart);
     const context = source.slice(Math.max(0, start - 500), start);
     expect(context).not.toMatch(/industryExpanded &&/);
     // 垂直線第四輪配色更新為橘→紫漸層的獨立 <span>（取代原本單色 border-l），

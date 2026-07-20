@@ -743,7 +743,7 @@ describe("News.tsx：分類 NEW 徽章前端整合（原始碼內容斷言）", 
   it("categoryHasNew 判斷式：all/important/competition/exhibition 各自對應summary欄位，產業類別看 summary.industries[名稱]", () => {
     const source = readNewsPageSource();
     const start = source.indexOf("function categoryHasNew");
-    const end = source.indexOf("function NewBadge");
+    const end = source.indexOf("const MOBILE_TABS");
     const fn = source.slice(start, end);
     expect(fn).toMatch(/if \(cat === "all"\) return summary\.all;/);
     expect(fn).toMatch(/if \(cat === "important"\) return summary\.important;/);
@@ -752,34 +752,18 @@ describe("News.tsx：分類 NEW 徽章前端整合（原始碼內容斷言）", 
     expect(fn).toMatch(/summary\.industries\[cat\.slice\("industry:"\.length\)\] \?\? false/);
   });
 
-  it("桌面側欄：四個固定分類、產業消息父層、每個個別產業都會渲染 NewBadge", () => {
+  // 手機版分類導覽（五分頁＋產業選擇器）與全站共用 NewsNewBadge 元件的完整
+  // 結構驗證改在 server/newsMobileNav.test.ts，這裡只保留桌面側欄仍會依
+  // categoryHasNew 渲染 NEW 徽章這件事，避免兩個檔案重複維護同一份斷言。
+  it("桌面側欄：四個固定分類、產業消息父層、每個個別產業都會渲染 NewsNewBadge", () => {
     const source = readNewsPageSource();
-    const start = source.indexOf("{/* 桌面版：左側分類側欄");
+    const start = source.indexOf('<aside className="hidden lg:block');
     const end = source.indexOf("{/* 右側：分類標題區");
     const sidebar = source.slice(start, end);
 
-    expect(sidebar).toMatch(/\{categoryHasNew\(c\.value, newSummary\) && <NewBadge \/>\}/);
-    expect(sidebar).toMatch(/\{newSummary\?\.industry && <NewBadge \/>\}/);
-    expect(sidebar).toMatch(/\{categoryHasNew\(`industry:\$\{ind\.name\}`, newSummary\) && <NewBadge \/>\}/);
-  });
-
-  it("手機版 Select：選項文字後面附加 NEW 文字，選中分類旁另外顯示徽章；原生 select 不需要塞入自訂徽章 JSX", () => {
-    const source = readNewsPageSource();
-    const start = source.indexOf("{/* 手機版：分類選單");
-    const end = source.indexOf("<div className=\"flex gap-8\">");
-    const mobile = source.slice(start, end);
-
-    expect(mobile).toMatch(/\{categoryHasNew\(c\.value, newSummary\) \? " NEW" : ""\}/);
-    expect(mobile).toMatch(/\{categoryHasNew\(`industry:\$\{ind\.name\}`, newSummary\) \? " NEW" : ""\}/);
-    expect(mobile).toMatch(/\{categoryHasNew\(category, newSummary\) && <NewBadge/);
-  });
-
-  it("NewBadge 樣式使用暖橘紅漸層（跟現有列表項目 NEW 徽章同一組色，維持風格一致）", () => {
-    const source = readNewsPageSource();
-    const start = source.indexOf("function NewBadge");
-    const end = source.indexOf("function categoryLabel");
-    const fn = source.slice(start, end);
-    expect(fn).toMatch(/bg-gradient-to-r from-orange-500 to-red-500/);
+    expect(sidebar).toMatch(/\{categoryHasNew\(c\.value, newSummary\) && <NewsNewBadge \/>\}/);
+    expect(sidebar).toMatch(/\{newSummary\?\.industry && <NewsNewBadge \/>\}/);
+    expect(sidebar).toMatch(/\{categoryHasNew\(`industry:\$\{ind\.name\}`, newSummary\) && <NewsNewBadge \/>\}/);
   });
 });
 

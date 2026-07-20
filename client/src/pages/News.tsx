@@ -4,9 +4,10 @@ import { Link, useLocation } from "wouter";
 import Navbar from "@/components/Navbar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { trpc } from "@/lib/trpc";
 import { toMarkdownPreviewText } from "@/components/MarkdownContent";
+import { NewsNewBadge } from "@/components/NewsNewBadge";
 import { INDUSTRIES } from "@shared/constants";
 import { NEWS_NEW_WINDOW_MS } from "@shared/const";
 import { useAuth } from "@/_core/hooks/useAuth";
@@ -14,7 +15,7 @@ import { getGuestReadIds, isGuestNewsRead } from "@/lib/newsReadTracking";
 import LoginDialog from "@/components/LoginDialog";
 import { toast } from "sonner";
 import {
-  Newspaper, Star, Trophy, Building2, Factory, FileText, BellPlus, BellRing, Loader2,
+  Newspaper, Star, Trophy, Building2, Factory, FileText, BellPlus, BellRing, Loader2, Check, ChevronDown,
   Shirt, Hammer, Cpu, Boxes, Layers, Trees, Package, Utensils, FlaskConical, ShoppingBasket, Printer, Cog,
 } from "lucide-react";
 
@@ -131,13 +132,17 @@ function categoryHasNew(cat: CategoryValue, summary: NewCategorySummaryData | un
   return summary.industries[cat.slice("industry:".length)] ?? false;
 }
 
-function NewBadge({ className = "" }: { className?: string }) {
-  return (
-    <span className={`shrink-0 text-[9px] font-bold leading-none text-white bg-gradient-to-r from-orange-500 to-red-500 rounded px-1 py-0.5 ${className}`}>
-      NEW
-    </span>
-  );
-}
+// 手機版五個分頁：不是 CategoryValue 本身——「產業」是一個聚合分頁，實際
+// 選中的產業由 lastIndustryName（見 News() 內）另外記住，這裡只負責分頁
+// 本身的 label／icon／NEW 判斷。
+type MobileTabValue = "all" | "important" | "competition" | "exhibition" | "industry";
+const MOBILE_TABS: { value: MobileTabValue; label: string; Icon: typeof Newspaper }[] = [
+  { value: "all", label: "全部", Icon: Newspaper },
+  { value: "important", label: "重要", Icon: Star },
+  { value: "competition", label: "競賽", Icon: Trophy },
+  { value: "exhibition", label: "展覽", Icon: Building2 },
+  { value: "industry", label: "產業", Icon: Factory },
+];
 
 // 看板訂閱按鈕：boardKey 直接沿用目前選中的 category 字串（"all" / "important" /
 // "competition" / "exhibition" / `industry:${name}`），跟後端 boardKey 格式
@@ -254,9 +259,7 @@ function NewsListItem({ item, isAuthenticated }: { item: NewsListItemData; isAut
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 mb-1.5 flex-wrap">
                 <h3 className="text-base sm:text-lg font-bold truncate sm:whitespace-normal sm:line-clamp-1">{item.title}</h3>
-                {isUnreadNew(item, isAuthenticated) && (
-                  <span className="shrink-0 text-[10px] font-bold text-white bg-gradient-to-r from-orange-500 to-red-500 rounded px-1.5 py-0.5">NEW</span>
-                )}
+                {isUnreadNew(item, isAuthenticated) && <NewsNewBadge />}
               </div>
               <p className="text-sm text-muted-foreground line-clamp-2 sm:line-clamp-3">
                 {toMarkdownPreviewText(item.summary, 140)}
@@ -349,6 +352,15 @@ export default function News() {
   const [offset, setOffset] = useState(0);
   const [items, setItems] = useState<NewsListItemData[]>([]);
   const [loginDialogOpen, setLoginDialogOpen] = useState(false);
+  // 手機版「產業」分頁記住的產業：URL 一開始就是某個產業就直接沿用；否則
+  // fallback 成 INDUSTRIES 第一個，確保這個值永遠是合法產業名稱，絕對不會是
+  // undefined／空字串，之後切到「產業」分頁組出來的 query 一定完整
+  // （?category=industry&industry=<name>），不會出現 industry=undefined。
+  const [lastIndustryName, setLastIndustryName] = useState<string>(() => {
+    const initial = parseCategoryFromSearch();
+    return initial.startsWith("industry:") ? initial.slice("industry:".length) : INDUSTRIES[0].name;
+  });
+  const [industryPickerOpen, setIndustryPickerOpen] = useState(false);
 
   const queryParams = useMemo(() => ({ ...categoryToQueryParams(category), offset, limit: 20 }), [category, offset]);
   const { data, isLoading, isFetching, error } = trpc.news.list.useQuery(queryParams);
@@ -365,6 +377,7 @@ export default function News() {
   // 換分類時重置捲動列表與 offset，避免舊分類的資料殘留混進新分類。
   function selectCategory(next: CategoryValue) {
     setCategory(next);
+    if (next.startsWith("industry:")) setLastIndustryName(next.slice("industry:".length));
     setOffset(0);
     setItems([]);
     const q = categoryToQueryParams(next);
@@ -372,6 +385,18 @@ export default function News() {
     params.set("category", q.category);
     if (q.industryName) params.set("industry", q.industryName);
     navigate(`/news?${params.toString()}`, { replace: true });
+  }
+
+  // 手機版五分頁點擊：「產業」分頁本身不是一個實際看板，點下去要嘛維持
+  // 目前已經選中的產業（URL 已經是 industry:X 時不做任何事），要嘛恢復上次
+  // 選過的產業／預設第一個產業——絕對不會產生沒有 industry 的中繼狀態。
+  function selectMobileTab(tab: MobileTabValue) {
+    if (tab === "industry") {
+      if (category.startsWith("industry:")) return;
+      selectCategory(`industry:${lastIndustryName}`);
+      return;
+    }
+    selectCategory(tab);
   }
 
   useEffect(() => {
@@ -385,6 +410,8 @@ export default function News() {
 
   const categoryMeta = getCategoryMeta(category);
   const industrySectionActive = category.startsWith("industry:");
+  const mobileActiveTab: MobileTabValue = industrySectionActive ? "industry" : (category as MobileTabValue);
+  const currentIndustryName = industrySectionActive ? category.slice("industry:".length) : lastIndustryName;
 
   return (
     <div className="min-h-screen relative overflow-x-hidden bg-gradient-to-b from-orange-50/50 via-background to-purple-50/40 animate-page-enter">
@@ -439,31 +466,85 @@ export default function News() {
         </div>
 
         <div className="container py-6 sm:py-8">
-          {/* 手機版：分類選單移到列表上方。原生 <select> 沒辦法在選項裡穩定塞入
-              徽章樣式的 <span>，所以清單裡的 NEW 用文字附加在選項文字後面；目前
-              選中的分類如果有新消息，另外在 Select 右側放一個小徽章。 */}
-          <div className="lg:hidden mb-4 flex items-center gap-2">
-            <Select
-              value={category}
-              onValueChange={(v) => selectCategory(v as CategoryValue)}
-            >
-              <SelectTrigger className="flex-1 min-w-0 border-purple-200/60 bg-white/70">
-                <SelectValue>{categoryLabel(category)}</SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {FIXED_CATEGORIES.map(c => (
-                  <SelectItem key={c.value} value={c.value}>
-                    {c.label}{categoryHasNew(c.value, newSummary) ? " NEW" : ""}
-                  </SelectItem>
-                ))}
-                {INDUSTRIES.map(ind => (
-                  <SelectItem key={ind.name} value={`industry:${ind.name}`}>
-                    產業消息：{ind.name}{categoryHasNew(`industry:${ind.name}`, newSummary) ? " NEW" : ""}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {categoryHasNew(category, newSummary) && <NewBadge className="px-1.5 py-1" />}
+          {/* 手機版分類導覽：兩層架構，取代原本把全部分類＋12 個產業塞進同一個
+              大型下拉選單的做法（下拉過長、NEW 只能用純文字接在 label 後面）。
+              第一層是固定 5 個分頁（全部/重要/競賽/展覽/產業），grid-cols-5
+              平分寬度，390px／430px 都不會有水平捲軸。「產業」分頁點下去才
+              在下方展開產業選擇器（第二層），不是分頁本身就要塞 12 個產業。 */}
+          <div className="lg:hidden mb-4">
+            <div role="tablist" aria-label="找消息分類" className="grid grid-cols-5 gap-1 rounded-xl border border-purple-100/60 bg-white/70 p-1">
+              {MOBILE_TABS.map(tab => {
+                const active = mobileActiveTab === tab.value;
+                const hasNew = tab.value === "industry" ? !!newSummary?.industry : categoryHasNew(tab.value, newSummary);
+                const Icon = tab.Icon;
+                return (
+                  <button
+                    key={tab.value}
+                    type="button"
+                    role="tab"
+                    aria-selected={active}
+                    onClick={() => selectMobileTab(tab.value)}
+                    className={`flex flex-col items-center justify-center gap-0.5 rounded-lg py-1.5 px-0.5 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-400 ${
+                      active ? "bg-gradient-to-r from-orange-50 to-purple-50 text-purple-700" : "text-foreground/70 hover:bg-orange-50/50"
+                    }`}
+                  >
+                    <Icon className={`w-4 h-4 ${active ? "" : "text-violet-400/70"}`} />
+                    <span className="flex items-center gap-1 leading-none">
+                      {tab.label}
+                      {hasNew && <NewsNewBadge size="compact" />}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* 第二層：只有「產業」分頁選中時才顯示，只列 12 個產業，不含
+                全部最新／重要消息／競賽消息／展覽消息。用 Popover 而不是原生
+                <select>，才能在選項裡穩定放 icon／NEW／已選中的 check icon，
+                並且天生就有點外關閉、Escape 關閉、正確 z-index（不會蓋住整個
+                APP）。max-h-[50vh] + overflow-y-auto：選單本身內容過長只在
+                選單內垂直捲動，不會延伸到頁面底部遮住底部導覽。 */}
+            {mobileActiveTab === "industry" && (
+              <div className="mt-2">
+                <Popover open={industryPickerOpen} onOpenChange={setIndustryPickerOpen}>
+                  <PopoverTrigger asChild>
+                    <button
+                      type="button"
+                      className="w-full flex items-center gap-2 rounded-lg border border-purple-200/60 bg-white/70 px-3 py-2.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-400"
+                    >
+                      {(() => {
+                        const CurrentIcon = getIndustryIcon(currentIndustryName);
+                        return <CurrentIcon className="w-4 h-4 text-violet-500 shrink-0" aria-hidden="true" />;
+                      })()}
+                      <span className="flex-1 min-w-0 truncate text-left font-medium">{currentIndustryName}</span>
+                      {categoryHasNew(category, newSummary) && <NewsNewBadge size="compact" />}
+                      <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0" aria-hidden="true" />
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent align="start" className="w-[calc(100vw-2.5rem)] max-w-[380px] p-1 max-h-[50vh] overflow-y-auto">
+                    {INDUSTRIES.map(ind => {
+                      const Icon = getIndustryIcon(ind.name);
+                      const isSelected = category === `industry:${ind.name}`;
+                      return (
+                        <button
+                          key={ind.name}
+                          type="button"
+                          onClick={() => { selectCategory(`industry:${ind.name}`); setIndustryPickerOpen(false); }}
+                          className={`w-full flex items-center gap-2 rounded-md px-3 py-2 text-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-400 ${
+                            isSelected ? "bg-gradient-to-r from-orange-50 to-purple-50 text-purple-700 font-medium" : "text-foreground/80 hover:bg-orange-50/60"
+                          }`}
+                        >
+                          <Icon className={`w-4 h-4 shrink-0 ${isSelected ? "" : "text-violet-400/70"}`} />
+                          <span className="flex-1 min-w-0 truncate">{ind.name}</span>
+                          {categoryHasNew(`industry:${ind.name}`, newSummary) && <NewsNewBadge size="compact" />}
+                          {isSelected && <Check className="w-4 h-4 shrink-0 text-purple-600" aria-hidden="true" />}
+                        </button>
+                      );
+                    })}
+                  </PopoverContent>
+                </Popover>
+              </div>
+            )}
           </div>
 
           <div className="flex gap-8">
@@ -485,7 +566,7 @@ export default function News() {
                       )}
                       <Icon className={sidebarIconClass(active)} />
                       <span className="flex-1 min-w-0 truncate text-left">{c.label}</span>
-                      {categoryHasNew(c.value, newSummary) && <NewBadge />}
+                      {categoryHasNew(c.value, newSummary) && <NewsNewBadge />}
                     </button>
                   );
                 })}
@@ -502,7 +583,7 @@ export default function News() {
                 >
                   <Factory className={`w-4 h-4 shrink-0 ${industrySectionActive ? "" : "text-violet-400/70"}`} />
                   <span className="flex-1 min-w-0 truncate">產業消息</span>
-                  {newSummary?.industry && <NewBadge />}
+                  {newSummary?.industry && <NewsNewBadge />}
                 </div>
                 <div className="relative pl-4 space-y-1 ml-4">
                   {/* 產業清單左側垂直線：橘→紫細漸層，從第一個產業連續延伸到最後一個，
@@ -524,7 +605,7 @@ export default function News() {
                       >
                         <Icon className={sidebarIconClass(active)} />
                         <span className="flex-1 min-w-0 truncate text-left">{ind.name}</span>
-                        {categoryHasNew(`industry:${ind.name}`, newSummary) && <NewBadge />}
+                        {categoryHasNew(`industry:${ind.name}`, newSummary) && <NewsNewBadge />}
                       </button>
                     );
                   })}
