@@ -16,7 +16,7 @@ import { toast } from "sonner";
 import {
   User, Heart, Clock, Star, MessageCircle, Flag, Bell, Shield, HeadphonesIcon,
   ExternalLink, Edit2, Trash2, AlertTriangle, Phone, ArrowLeft, History, FileText, ScrollText,
-  Smartphone, Mail, ClipboardList, Newspaper,
+  Smartphone, Mail, ClipboardList,
 } from "lucide-react";
 import { Link } from "wouter";
 import { StatusTimeline } from "@/components/StatusTimeline";
@@ -46,7 +46,8 @@ const DEFAULT_NOTIFICATIONS: Record<string, boolean> = {
   // 產業情報中心（找消息）：沿用 server/db.ts 既有的 news／pushNews key，跟
   // 後端「非明確 false 就允許」的預設語意一致，UI 初始值也是 true，不另外
   // 建立第二套 key。這兩個開關只控制 Email／Push 送不送達，不影響看板
-  // 訂閱本身、也不影響 OXM 站內通知中心是否建立通知（見下方區塊說明文字）。
+  // 訂閱本身、也不影響 OXM 站內通知中心是否建立通知（見 NOTIFICATION_ROWS
+  // 該列的 description 文字）。
   news: true,
   pushNews: true,
   // Push 設定
@@ -88,6 +89,12 @@ const NOTIFICATION_ROWS = [
     description: "包含系統維護、功能更新與重要平台訊息",
     emailKey: "announcement",
     pushKey: "pushAnnouncement",
+  },
+  {
+    label: "產業情報中心",
+    description: "訂閱看板有新消息時通知你，關閉後消息仍會顯示於 OXM 通知中心",
+    emailKey: "news",
+    pushKey: "pushNews",
   },
 ];
 
@@ -666,45 +673,6 @@ function NotificationsTab({ user }: { user: any }) {
               </div>
             </div>
           ))}
-        </div>
-
-        {/* ── 產業情報中心（找消息）：Email／App 推播開關，跟看板訂閱是完全獨立
-            的兩件事——這裡只控制外部送達管道，不影響看板訂閱本身，也不影響
-            OXM 站內通知中心是否建立通知（訂閱看板有新消息時，站內通知一律
-            建立，不受這兩個開關控制）。獨立成自己的區塊，不跟上面既有的
-            NOTIFICATION_ROWS 表格混在一起，避免使用者誤以為關掉這裡等於
-            取消看板訂閱。 ── */}
-        <div className="rounded-lg border p-4 space-y-3">
-          <div className="flex items-center gap-2">
-            <Newspaper className="w-4 h-4 text-muted-foreground shrink-0" />
-            <p className="text-sm font-medium">產業情報中心</p>
-          </div>
-          <div className="flex items-center justify-between gap-3 py-1">
-            <div className="min-w-0">
-              <p className="text-sm">Email 通知</p>
-              <p className="text-xs text-muted-foreground mt-0.5">訂閱看板有新消息時寄送 Email</p>
-            </div>
-            <Switch
-              checked={settings.news ?? true}
-              onCheckedChange={(v) => markChanged("news", v)}
-              className="shrink-0"
-            />
-          </div>
-          <div className="flex items-center justify-between gap-3 py-1">
-            <div className="min-w-0">
-              <p className="text-sm">App 推播通知</p>
-              <p className="text-xs text-muted-foreground mt-0.5">訂閱看板有新消息時發送手機系統推播</p>
-            </div>
-            <Switch
-              disabled={pushItemDisabled}
-              checked={settings.pushNews ?? true}
-              onCheckedChange={(v) => markChanged("pushNews", v)}
-              className={pushItemDisabled ? "opacity-40 shrink-0" : "shrink-0"}
-            />
-          </div>
-          <p className="text-xs text-muted-foreground pt-1 border-t mt-1">
-            關閉 Email 或 App 推播後，您訂閱看板的新消息仍會顯示於 OXM 通知中心。
-          </p>
         </div>
 
         <Button
