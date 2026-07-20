@@ -5,6 +5,13 @@ export const AXIOS_TIMEOUT_MS = 30_000;
 export const UNAUTHED_ERR_MSG = 'Please login (10001)';
 export const NOT_ADMIN_ERR_MSG = 'You do not have required permission (10002)';
 
+// ===== 找消息（News）NEW 徽章有效期限 =====
+// 唯一真相來源：NEW 徽章顯示＝firstPublishedAt 未滿此時數 AND 目前使用者尚未讀過。
+// 前端（列表項目／看板／產業父子層）、後端彙總查詢、邊界測試都必須讀這個常數，
+// 不得各自寫死小時數字——否則前後端或測試很容易改一邊漏一邊，造成期限不一致。
+export const NEWS_NEW_WINDOW_HOURS = 168;
+export const NEWS_NEW_WINDOW_MS = NEWS_NEW_WINDOW_HOURS * 60 * 60 * 1000;
+
 // ===== OXM 商案討論區 =====
 export type CommunityFeatureStatus = "coming_soon" | "beta" | "live" | "maintenance";
 export const COMMUNITY_FEATURE_STATUS: CommunityFeatureStatus = "beta";
@@ -27,6 +34,7 @@ export const PLATFORM_NOTIFICATION_TYPES = new Set<string>([
   "admin_announcement",
   "report_status_changed",
   "support_ticket_updated",
+  "news", // 產業情報中心（找消息）站內通知——全站功能，不受社群 beta 開關綁定
 ]);
 
 // Community/bid notifications: only visible when COMMUNITY_PUBLIC_ENTRY_ENABLED or user is admin

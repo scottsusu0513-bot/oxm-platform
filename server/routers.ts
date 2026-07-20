@@ -40,13 +40,15 @@ function requireVerifiedEmail(user: { primaryEmailVerifiedAt: Date | null }): vo
 }
 
 /**
- * 找消息分眾通知的實際寄送入口：蒐集去重後的收件人 → 各管道分別以
- * INSERT-IGNORE 語意建立 pending 紀錄（只有「這次真的新建立」的紀錄會被
- * 實際寄送）→ 逐一寄送並回寫 pending/sent/failed。Email／Push 兩個管道各自
- * fire-and-forget、互不阻塞，單一使用者寄送失敗不會中斷整批（loop 內
- * try/catch，見下方）。呼叫端只在「這次更新真的是第一次 draft→published」
- * 時才會呼叫這個函式（見 db.createNews／db.updateNews 的 shouldNotify）。
- * 一律不把 Email 位址／Push token 印進 console，只印 userId。
+ * 找消息分眾通知的實際寄送入口：蒐集去重後的收件人 → 三層分別處理：
+ *   1) 站內通知（communityNotifications）：只要看板訂閱資格符合就一律建立，
+ *      不受 news／pushNews 開關影響，同步 await 完成（單純批次 insert，很快）。
+ *   2) Email：news!==false 的人才建立 pending 紀錄並寄送。
+ *   3) Push：pushNews!==false 的人才建立 pending 紀錄並發送。
+ * Email／Push 各自 fire-and-forget、互不阻塞，單一使用者寄送失敗不會中斷
+ * 整批（loop 內 try/catch，見下方）。呼叫端只在「這次更新真的是第一次
+ * draft→published」時才會呼叫這個函式（見 db.createNews／db.updateNews 的
+ * shouldNotify）。一律不把 Email 位址／Push token 印進 console，只印 userId。
  */
 async function dispatchNewsNotifications(params: {
   newsId: number;
@@ -54,12 +56,37 @@ async function dispatchNewsNotifications(params: {
   summary: string;
   slug: string;
   isImportant: boolean;
+  isCompetition: boolean;
+  isExhibition: boolean;
   industryNames: string[];
 }): Promise<void> {
-  const recipients = await db.gatherNewsRecipients({ isImportant: params.isImportant, industryNames: params.industryNames });
+  const recipients = await db.gatherNewsRecipients({
+    isImportant: params.isImportant,
+    isCompetition: params.isCompetition,
+    isExhibition: params.isExhibition,
+    industryNames: params.industryNames,
+  });
   if (recipients.length === 0) {
     console.log(`[news] notify skipped newsId=${params.newsId}: no eligible recipients`);
     return;
+  }
+
+  // 站內通知：看板訂閱資格 = 收件資格本身，不看 news／pushNews。dedupeKey
+  // 確保同一篇消息＋同一使用者最多一筆，即便 recipients 因為 bug 出現重複
+  // 或這支函式被重試也不會建立第二筆（communityNotifications 的 dedupeKey
+  // 唯一索引擋下，createPlatformNotifications 內部撞到會 no-op）。
+  try {
+    await createPlatformNotifications(recipients.map(r => ({
+      recipientUserId: r.id,
+      eventType: "news",
+      eventGroup: "news",
+      message: "產業情報中心有新消息",
+      titleSnapshot: params.title,
+      actionUrl: `/news/${params.slug}`,
+      dedupeKey: `news:${params.newsId}:user:${r.id}`,
+    })));
+  } catch (err) {
+    console.error(`[news] in-app notification batch failed newsId=${params.newsId}`, err instanceof Error ? err.message : err);
   }
 
   const emailRecipients = recipients.filter(r => r.email);
@@ -3958,8 +3985,8 @@ export const appRouter = router({
       industryName: z.string().max(50).optional(),
       offset: z.number().int().min(0).default(0),
       limit: z.number().int().min(1).max(50).default(20),
-    })).query(async ({ input }) => {
-      return db.listPublicNews(input);
+    })).query(async ({ input, ctx }) => {
+      return db.listPublicNews({ ...input, userId: ctx.user?.id });
     }),
     getBySlug: publicProcedure.input(z.object({ slug: z.string().min(1).max(200) })).query(async ({ input }) => {
       const item = await db.getPublishedNewsBySlug(input.slug);
@@ -3972,8 +3999,47 @@ export const appRouter = router({
     }),
     // 分類清單側欄／手機版 Select 的 NEW 徽章：一次回傳所有分類的 NEW 狀態，
     // 前端不需要為每個分類各自發一次查詢，也不能只看目前已載入的第一頁資料。
-    getNewCategorySummary: publicProcedure.query(async () => {
-      return db.getNewCategorySummary();
+    // 已登入會員的已讀狀態由後端查 newsReads 表；訪客沒有 session，只能相信
+    // 前端從 localStorage 傳進來的 excludeIds（有 userId 時 excludeIds 會被忽略）。
+    getNewCategorySummary: publicProcedure.input(z.object({
+      excludeIds: z.array(z.number().int()).max(500).optional(),
+    }).optional()).query(async ({ input, ctx }) => {
+      return db.getNewCategorySummary({ userId: ctx.user?.id, excludeIds: input?.excludeIds });
+    }),
+    // 標記一篇消息為已讀（登入會員專用）——NEW 徽章「已讀就消失」的唯一寫入點。
+    // 訪客的已讀狀態純粹存在瀏覽器 localStorage，不呼叫這支 API。
+    markRead: protectedProcedure.input(z.object({ newsId: z.number().int() })).mutation(async ({ input, ctx }) => {
+      await db.markNewsAsRead(ctx.user!.id, input.newsId);
+      return { success: true };
+    }),
+
+    // 看板訂閱按鈕顯示用：回傳這個 boardKey 目前對這個使用者的有效訂閱狀態
+    // （明確覆寫優先於動態預設，跟收件人聚合共用同一套規則 db.getEffectiveBoardSubscription）。
+    // 未登入訪客固定回傳 isSubscribed=false + requiresLogin=true，前端據此開 LoginDialog，
+    // 不在後端猜測訪客的訂閱意向、也不寫入任何資料。
+    getBoardSubscriptionState: publicProcedure.input(z.object({
+      boardKey: z.string().min(1).max(100),
+    })).query(async ({ input, ctx }) => {
+      if (!db.isValidNewsBoardKey(input.boardKey)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "無效的看板" });
+      }
+      if (!ctx.user) return { boardKey: input.boardKey, isSubscribed: false, requiresLogin: true };
+      const isSubscribed = await db.getEffectiveBoardSubscription(ctx.user.id, input.boardKey);
+      return { boardKey: input.boardKey, isSubscribed, requiresLogin: false };
+    }),
+    // 使用者明確訂閱／取消訂閱一個看板。一律用 ctx.user.id，不接受前端傳
+    // userId；只影響未來新發布消息（見 db.setNewsBoardSubscription 的
+    // doc comment），這支 mutation 本身完全不觸碰 newsNotifications 或
+    // communityNotifications，不會因為訂閱操作觸發任何通知。
+    setBoardSubscription: protectedProcedure.input(z.object({
+      boardKey: z.string().min(1).max(100),
+      isSubscribed: z.boolean(),
+    })).mutation(async ({ input, ctx }) => {
+      if (!db.isValidNewsBoardKey(input.boardKey)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "無效的看板" });
+      }
+      await db.setNewsBoardSubscription(ctx.user!.id, input.boardKey, input.isSubscribed);
+      return { boardKey: input.boardKey, isSubscribed: input.isSubscribed };
     }),
 
     // ---- 管理員後台 ----
@@ -3988,13 +4054,23 @@ export const appRouter = router({
       const industryNames = await db.getNewsIndustryNames(item.id);
       return { ...item, industryNames };
     }),
-    // 發布確認彈窗用：預估這次分類設定會通知到多少去重後的會員，純讀取、不建立任何紀錄。
+    // 發布確認彈窗用：預估這次分類設定會通知到多少去重後的會員，純讀取、不
+    // 建立任何紀錄（不寫 newsNotifications、不寫 communityNotifications）。
+    // 站內通知人數＝看板訂閱資格本身，不受 news／pushNews 開關影響；
+    // Email／Push 人數則是同一份收件人清單再各自套用開關過濾後的子集。
     estimateRecipients: adminProcedure.input(z.object({
       isImportant: z.boolean(),
+      isCompetition: z.boolean().default(false),
+      isExhibition: z.boolean().default(false),
       industryNames: z.array(z.string().max(50)).max(20).default([]),
     })).query(async ({ input }) => {
       const recipients = await db.gatherNewsRecipients(input);
-      return { count: recipients.length };
+      return {
+        count: recipients.length,
+        inAppCount: recipients.length,
+        emailCount: recipients.filter(r => r.email).length,
+        pushCount: recipients.filter(r => r.pushEnabled).length,
+      };
     }),
     create: adminProcedure.input(z.object({
       // 不填（或空字串）→ 後端自動產生 news-YYYYMMDD-xxxxxxxx 格式的 slug，
@@ -4028,6 +4104,8 @@ export const appRouter = router({
           summary: input.summary,
           slug: created?.slug ?? input.slug ?? "",
           isImportant: input.isImportant,
+          isCompetition: input.isCompetition,
+          isExhibition: input.isExhibition,
           industryNames: input.industryNames,
         });
       }
@@ -4063,6 +4141,8 @@ export const appRouter = router({
             summary: item.summary,
             slug: item.slug,
             isImportant: item.isImportant,
+            isCompetition: item.isCompetition,
+            isExhibition: item.isExhibition,
             industryNames,
           });
         }

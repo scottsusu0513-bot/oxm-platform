@@ -1,6 +1,6 @@
 import { formatDistanceToNow } from "date-fns";
 import { zhTW } from "date-fns/locale";
-import { Bell, MessageSquare, Reply, AtSign, Factory, MessageCircle, CheckCircle, XCircle, Megaphone, Flag } from "lucide-react";
+import { Bell, MessageSquare, Reply, AtSign, Factory, MessageCircle, CheckCircle, XCircle, Megaphone, Flag, Newspaper } from "lucide-react";
 import { Link } from "wouter";
 import { cn } from "@/lib/utils";
 import type { CommunityNotification } from "@shared/types";
@@ -15,6 +15,7 @@ function EventIcon({ eventGroup, eventType }: { eventGroup: string; eventType: s
   if (eventType === "factory_rejected") return <XCircle className="w-3.5 h-3.5 text-red-500" />;
   if (eventType === "admin_announcement") return <Megaphone className="w-3.5 h-3.5 text-violet-500" />;
   if (eventType === "report_status_changed" || eventType === "support_ticket_updated") return <Flag className="w-3.5 h-3.5 text-amber-500" />;
+  if (eventType === "news") return <Newspaper className="w-3.5 h-3.5 text-orange-500" />;
   switch (eventGroup) {
     case "chat": return <MessageCircle className="w-3.5 h-3.5 text-blue-500" />;
     case "review": return <Reply className="w-3.5 h-3.5 text-blue-500" />;

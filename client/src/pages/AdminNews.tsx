@@ -150,11 +150,15 @@ function AdminNewsContent() {
   // （見 server/db.ts）；前端這裡只是提早把欄位鎖起來，不是唯一防線。
   const slugLocked = !!editingItem?.firstPublishedAt;
 
-  const willNotify = form.isImportant || form.industryNames.length > 0;
-  const { data: estimate } = trpc.news.estimateRecipients.useQuery(
-    { isImportant: form.isImportant, industryNames: form.industryNames },
-    { enabled: willNotify },
-  );
+  // 看板訂閱上線後，任何分類設定都可能有人明確訂閱了「全部最新」或這篇消息
+  // 對應的看板（包含純競賽／純展覽），不再有「這個分類設定保證 0 收件人」的
+  // 情況，所以一律查詢預估，不再靠 isImportant／industryNames 判斷要不要查。
+  const { data: estimate } = trpc.news.estimateRecipients.useQuery({
+    isImportant: form.isImportant,
+    isCompetition: form.isCompetition,
+    isExhibition: form.isExhibition,
+    industryNames: form.industryNames,
+  });
 
   const createMut = trpc.news.create.useMutation({
     onSuccess: () => { utils.news.adminList.invalidate(); },
@@ -232,9 +236,9 @@ function AdminNewsContent() {
   };
 
   const confirmPublishMessage = () => {
-    if (!willNotify) return "確定要發布這則消息嗎？此分類設定不會寄送 Email 或 App 推播通知，只會顯示在網站上。";
-    const count = estimate?.count;
-    return `確定要發布這則消息嗎？發布後將寄送 Email 與 App 推播通知給約 ${count ?? "…"} 位符合資格的會員（僅在第一次發布時寄送一次，之後編輯不會再次通知）。`;
+    if (!estimate) return "確定要發布這則消息嗎？";
+    if (estimate.inAppCount === 0) return "確定要發布這則消息嗎？目前沒有會員訂閱這則消息適用的看板，不會建立站內通知或寄送 Email／App 推播，只會顯示在網站上。";
+    return `確定要發布這則消息嗎？預計通知 ${estimate.inAppCount} 位會員：站內通知 ${estimate.inAppCount}、Email ${estimate.emailCount}、App 推播 ${estimate.pushCount}（僅在第一次發布時建立一次，之後編輯不會再次通知）。`;
   };
 
   const buildPayload = () => ({
@@ -784,9 +788,9 @@ function AdminNewsContent() {
               </div>
 
               <div className="text-xs rounded-md px-3 py-2 bg-muted/50 border">
-                {willNotify
-                  ? `此設定發布時將寄送 Email 與 App 推播通知，預估約 ${estimate?.count ?? "…"} 位符合資格的會員（僅第一次發布時寄送一次）。`
-                  : "此設定（純競賽／純展覽，未勾選重要消息或任何產業）只會顯示在網站上，不會寄送 Email 或 App 推播通知。"}
+                {estimate && estimate.inAppCount > 0
+                  ? `此設定發布時（僅第一次發布）預計通知 ${estimate.inAppCount} 位會員：站內通知 ${estimate.inAppCount}、Email ${estimate.emailCount}、App 推播 ${estimate.pushCount}。看板訂閱者才會收到，不是所有會員。`
+                  : "此設定目前沒有會員訂閱對應看板，發布後不會建立站內通知，也不會寄送 Email 或 App 推播（只會顯示在網站上）。"}
               </div>
 
               {/* 4. 封面圖片：獨立於下方檔案附件區塊的另一組上傳元件 */}

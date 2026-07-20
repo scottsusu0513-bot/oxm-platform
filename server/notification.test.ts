@@ -35,6 +35,7 @@ describe("PLATFORM_NOTIFICATION_TYPES", () => {
     "admin_announcement",
     "report_status_changed",
     "support_ticket_updated",
+    "news",
   ];
 
   it.each(expected)("contains '%s'", (type) => {

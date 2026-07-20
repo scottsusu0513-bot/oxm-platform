@@ -1,4 +1,4 @@
-import { useState, type ReactElement } from "react";
+import { useEffect, useRef, useState, type ReactElement } from "react";
 import { Helmet } from "react-helmet-async";
 import Navbar from "@/components/Navbar";
 import { FloatingBackButton } from "@/components/FloatingBackButton";
@@ -14,6 +14,7 @@ import { toast } from "sonner";
 import { Share2, Newspaper, FileText as FileTextIcon, Download, ExternalLink, Globe } from "lucide-react";
 import NotFound from "./NotFound";
 import { Card, CardContent } from "@/components/ui/card";
+import { markGuestNewsRead } from "@/lib/newsReadTracking";
 
 const BASE = "https://www.oxmmatch.com";
 
@@ -116,6 +117,45 @@ export default function NewsDetail() {
   );
   const { isAuthenticated } = useAuth();
   const [loginDialogOpen, setLoginDialogOpen] = useState(false);
+
+  // 進到這篇消息的完整頁＝標記已讀，是 NEW 徽章「已讀就消失」唯一的寫入點。
+  // 這個 effect 只會在 item truthy 時執行，而 item 只可能來自
+  // trpc.news.getBySlug 成功回傳的結果——getPublishedNewsBySlug 已經在 DB
+  // 層濾掉草稿／已下架／不存在（一律讓 getBySlug 丟 NOT_FOUND，item 保持
+  // undefined），所以不會有 isLoading、query 尚未完成、slug 不存在、404、
+  // 草稿／下架這幾種狀態誤觸發標記已讀的可能——不是額外加判斷式擋掉，是
+  // item 這個資料本身的型別保證。本專案的 <Link>（wouter）跟 tRPC client
+  // 都沒有設定 hover prefetch（全專案搜尋不到 prefetch 用法），所以「在列表頁
+  // hover 連結」也不會提前跑到這支 query、更不會提前標記已讀。
+  //
+  // 登入會員寫進 newsReads 資料表（跨裝置一致，實際是否建立紀錄由
+  // db.markNewsAsRead 依 status／firstPublishedAt／168 小時視窗再判斷一次，
+  // 這裡不重複做資格檢查）；訪客沒有 session，寫進 localStorage（同樣由
+  // markGuestNewsRead 內部依 firstPublishedAt 判斷是否還在視窗內）。
+  // markedIdRef 避免同一次瀏覽（例如 React 重新 render、isAuthenticated 從
+  // loading 態變成有值）對同一篇消息重複觸發。標記後讓 news.list／
+  // getNewCategorySummary 的快取失效，回到 /news 列表頁時該篇消息與相關看板
+  // 的 NEW 會立即消失，不用等 staleTime 到期、也不需要使用者手動重新整理。
+  const markReadMut = trpc.news.markRead.useMutation();
+  const utils = trpc.useUtils();
+  const markedIdRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!item || markedIdRef.current === item.id) return;
+    markedIdRef.current = item.id;
+    if (isAuthenticated) {
+      markReadMut.mutate({ newsId: item.id }, {
+        onSuccess: () => {
+          utils.news.list.invalidate();
+          utils.news.getNewCategorySummary.invalidate();
+        },
+      });
+    } else {
+      markGuestNewsRead(item.id, item.firstPublishedAt);
+      utils.news.list.invalidate();
+      utils.news.getNewCategorySummary.invalidate();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [item?.id, isAuthenticated]);
 
   // <title> 一律有非空 fallback，且 Helmet 從第一次 render（loading 階段）就
   // 掛載——不能等資料載入完成才第一次出現在樹裡。這個專案的 React 19 +

@@ -23,7 +23,7 @@ import {
   communityReactions, communityMentions, communityNotifications,
   communityBids, communityBidIndustries, communityBidReviewHistory, communityBidOffers,
   upgradeApplications, upgradeConsultants,
-  news, newsIndustries, newsNotifications, newsAttachments,
+  news, newsIndustries, newsNotifications, newsAttachments, newsReads, newsBoardSubscriptions,
   type Factory, type InsertFactory, type Product, type InsertProduct, type Favorite, type InsertFavorite,
   type CommunityPost, type CommunityComment,
   type CommunityBoardFollow, type FactoryFollow, type CommunityContentFollow,
@@ -36,7 +36,7 @@ import {
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 import { ADJACENT_REGIONS, INDUSTRY_SLUGS, INDUSTRY_OPTIONS } from "../shared/constants";
-import { COMMUNITY_FEATURE_STATUS, COMMUNITY_CROSS_INDUSTRY_SLUG } from "../shared/const";
+import { COMMUNITY_FEATURE_STATUS, COMMUNITY_CROSS_INDUSTRY_SLUG, NEWS_NEW_WINDOW_MS } from "../shared/const";
 import type { AISearchIntent } from './semantic-search';
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -2072,6 +2072,23 @@ export function validateNewsIndustryNames(names: string[]): void {
   }
 }
 
+// ===== 找消息看板訂閱：boardKey 白名單 =====
+// boardKey 是穩定識別碼，不是前端顯示文字：固定看板（all/important/
+// competition/exhibition）用字面量比對；產業看板一律要求精準比對
+// shared/constants.ts 的 INDUSTRY_OPTIONS（跟 validateNewsIndustryNames 同一份
+// 白名單），任意字串／控制字元／超長值／不存在的產業一律在這裡被拒絕，不需要
+// 額外寫 regex 過濾——不在白名單裡本來就不會通過 includes() 比對。
+export const NEWS_BOARD_FIXED_KEYS = ["all", "important", "competition", "exhibition"] as const;
+export type NewsBoardFixedKey = typeof NEWS_BOARD_FIXED_KEYS[number];
+
+export function isValidNewsBoardKey(boardKey: string): boolean {
+  if ((NEWS_BOARD_FIXED_KEYS as readonly string[]).includes(boardKey)) return true;
+  if (boardKey.startsWith("industry:")) {
+    return (INDUSTRY_OPTIONS as readonly string[]).includes(boardKey.slice("industry:".length));
+  }
+  return false;
+}
+
 async function setNewsIndustries(newsId: number, industryNames: string[]) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
@@ -2128,10 +2145,15 @@ export interface ListPublicNewsParams {
   industryName?: string;
   offset?: number;
   limit?: number;
+  /** 有登入才傳；用來在回傳的每一則消息上附加 isRead，訪客的已讀狀態存在
+   * localStorage，前端自己比對，不需要（也無法）由後端代勞。 */
+  userId?: number;
 }
 
+export type PublicNewsItem = News & { isRead: boolean };
+
 /** 只有 status === "published" 會出現；依 publishedAt DESC、id DESC 排序，避免同秒發布時排序不穩定。 */
-export async function listPublicNews(params: ListPublicNewsParams): Promise<{ items: News[]; total: number }> {
+export async function listPublicNews(params: ListPublicNewsParams): Promise<{ items: PublicNewsItem[]; total: number }> {
   const db = await getDb();
   if (!db) return { items: [], total: 0 };
   const limit = Math.min(params.limit ?? 20, 50);
@@ -2156,7 +2178,15 @@ export async function listPublicNews(params: ListPublicNewsParams): Promise<{ it
   const items = await db.select().from(news).where(where)
     .orderBy(desc(news.publishedAt), desc(news.id))
     .limit(limit).offset(offset);
-  return { items, total: Number(countResult?.count ?? 0) };
+
+  let readIds = new Set<number>();
+  if (params.userId != null && items.length > 0) {
+    const readRows = await db.select({ newsId: newsReads.newsId }).from(newsReads)
+      .where(and(eq(newsReads.userId, params.userId), inArray(newsReads.newsId, items.map(i => i.id))));
+    readIds = new Set(readRows.map(r => r.newsId));
+  }
+
+  return { items: items.map(item => ({ ...item, isRead: readIds.has(item.id) })), total: Number(countResult?.count ?? 0) };
 }
 
 export async function getAdminNewsList(limit = 100): Promise<News[]> {
@@ -2174,19 +2204,32 @@ export interface NewCategorySummary {
   industries: Record<string, boolean>;
 }
 
+export interface GetNewCategorySummaryParams {
+  /** 有登入才傳；已讀判斷改查 newsReads 表，excludeIds 會被忽略。 */
+  userId?: number;
+  /** 訪客專用：前端從 localStorage 讀出的已讀 newsId 清單，後端無法得知訪客身份，
+   * 只能相信前端傳進來的排除清單；有 userId 時這個參數不會被使用。 */
+  excludeIds?: number[];
+}
+
 /**
- * 各分類「NEW」徽章判斷：只看 firstPublishedAt（第一次正式發布，永久不變），
- * 不看 publishedAt／updatedAt——下架重發不會再次寫入 firstPublishedAt，單純編輯
- * 標題/內文也不會動到它，所以都不會誤判成新消息。固定用兩次查詢（近 72 小時
- * 的已發布消息本身、以及這些消息對應的產業標籤）算出所有分類的 NEW 狀態，
- * 不是每個分類各發一次查詢，也不是靠前端目前載入的第一頁資料判斷。
+ * 各分類「NEW」徽章判斷：firstPublishedAt 未滿 NEWS_NEW_WINDOW_HOURS（見
+ * shared/const.ts，唯一真相來源）AND 目前使用者尚未讀過，兩個條件同時成立才算
+ * NEW；只要已讀或已經超過時限，NEW 立刻消失（OR 消失邏輯）。firstPublishedAt
+ * 是第一次正式發布的時間，永久不變，不看 publishedAt／updatedAt——下架重發不會
+ * 再次寫入 firstPublishedAt，單純編輯標題/內文也不會動到它，都不會誤判成新
+ * 消息。固定用最多三次查詢（近期已發布消息本身、該使用者對這些消息的已讀紀錄、
+ * 未讀消息對應的產業標籤）算出所有分類的 NEW 狀態，不是每個分類各發一次查詢，
+ * 也不是靠前端目前載入的第一頁資料判斷。一篇消息同時掛在多個看板／產業時，
+ * 只要被讀過一次（同一個 newsId），所有位置的 NEW 會一起消失，不需要為每個
+ * 看板分別記錄已讀狀態。
  */
-export async function getNewCategorySummary(): Promise<NewCategorySummary> {
+export async function getNewCategorySummary(params: GetNewCategorySummaryParams = {}): Promise<NewCategorySummary> {
   const db = await getDb();
   const empty: NewCategorySummary = { all: false, important: false, competition: false, exhibition: false, industry: false, industries: {} };
   if (!db) return empty;
 
-  const cutoff = new Date(Date.now() - 72 * 60 * 60 * 1000);
+  const cutoff = new Date(Date.now() - NEWS_NEW_WINDOW_MS);
   const recent = await db.select({
     id: news.id,
     isImportant: news.isImportant,
@@ -2196,21 +2239,65 @@ export async function getNewCategorySummary(): Promise<NewCategorySummary> {
 
   if (recent.length === 0) return empty;
 
+  let readIds = new Set<number>();
+  if (params.userId != null) {
+    const readRows = await db.select({ newsId: newsReads.newsId }).from(newsReads)
+      .where(and(eq(newsReads.userId, params.userId), inArray(newsReads.newsId, recent.map(r => r.id))));
+    readIds = new Set(readRows.map(r => r.newsId));
+  } else if (params.excludeIds && params.excludeIds.length > 0) {
+    readIds = new Set(params.excludeIds);
+  }
+
+  const unread = recent.filter(r => !readIds.has(r.id));
+  if (unread.length === 0) return empty;
+
   const industryRows = await db.selectDistinct({ industryName: newsIndustries.industryName })
     .from(newsIndustries)
-    .where(inArray(newsIndustries.newsId, recent.map(r => r.id)));
+    .where(inArray(newsIndustries.newsId, unread.map(r => r.id)));
 
   const industries: Record<string, boolean> = {};
   for (const row of industryRows) industries[row.industryName] = true;
 
   return {
     all: true,
-    important: recent.some(r => r.isImportant),
-    competition: recent.some(r => r.isCompetition),
-    exhibition: recent.some(r => r.isExhibition),
+    important: unread.some(r => r.isImportant),
+    competition: unread.some(r => r.isCompetition),
+    exhibition: unread.some(r => r.isExhibition),
     industry: industryRows.length > 0,
     industries,
   };
+}
+
+/**
+ * 標記一篇消息為「已讀」（登入會員專用）。只有在消息真的存在、已發布、
+ * firstPublishedAt 有值、且現在仍未滿 NEWS_NEW_WINDOW_MS 視窗時才寫入——草稿、
+ * 已下架、找不到、firstPublishedAt 為 null、或早就超過 168 小時的消息，讀了
+ * 也不建立紀錄（反正這些狀態下 NEW 本來就不會顯示，寫入只是浪費一列）。這裡
+ * 是先 SELECT 判斷「這篇消息現在符不符合資格」，不是「這筆 (userId, newsId)
+ * 讀過了沒」——真正防止同一個 (userId, newsId) 重複寫入的，是下面 INSERT 撞到
+ * (newsId, userId) 唯一索引時被吞掉，這段沒有查了再插的競態問題。
+ */
+export async function markNewsAsRead(userId: number, newsId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+
+  const [row] = await db.select({
+    status: news.status,
+    firstPublishedAt: news.firstPublishedAt,
+  }).from(news).where(eq(news.id, newsId)).limit(1);
+
+  if (!row) return; // 消息不存在
+  if (row.status !== "published") return; // 草稿／已下架
+  if (row.firstPublishedAt == null) return; // 理論上 published 一定有值，這裡是防禦性檢查
+  if (Date.now() >= row.firstPublishedAt.getTime() + NEWS_NEW_WINDOW_MS) return; // 已超過 168 小時視窗
+
+  try {
+    await db.insert(newsReads).values({ userId, newsId });
+  } catch (err: any) {
+    const isDup = err?.errno === 1062 || err?.code === "ER_DUP_ENTRY"
+      || err?.cause?.errno === 1062 || err?.cause?.code === "ER_DUP_ENTRY";
+    if (!isDup) throw err;
+  }
 }
 
 export interface CreateNewsInput {
@@ -2688,43 +2775,176 @@ export async function recordNewsAttachmentDeleteFailure(id: number, reason: stri
     .where(eq(newsAttachments.id, id));
 }
 
-/** 「重要消息」的收件資格：沿用既有平台公告的通知資格規則，不另外維護一套判斷邏輯。 */
-async function getImportantNewsRecipients() {
-  return getActiveUsersForAnnouncement();
-}
-
 /**
- * 「產業消息」收件資格：擁有或共同管理「主產業符合、且審核狀態為 approved」
- * 工廠的使用者。同一使用者可能同時是不同工廠的 owner／co-manager，這裡先在
- * userId 這層用 Set 去重，回傳的清單本身就不會有重複 id。
+ * 使用者「預設訂閱」的產業清單：來自審核通過(approved)工廠的 owner／有效
+ * 共同管理者身份，取 factories.industry 陣列裡的所有產業（同一使用者可能
+ * 因多間工廠而屬於多個產業，一律合併）。這是看板訂閱「自己所屬產業」預設
+ * true 的唯一資料來源，跟 gatherNewsRecipients 判斷「這篇消息該通知誰」是
+ * 同一套資格規則，只是方向相反（那邊是「產業→使用者」，這裡是「使用者→
+ * 產業」），不另外維護第二份會員產業清單。
  */
-async function getIndustryNewsRecipients(industryNames: string[]) {
-  if (industryNames.length === 0) return [];
+export async function getUserIndustries(userId: number): Promise<string[]> {
   const db = await getDb();
   if (!db) return [];
 
-  const matchedFactories = await db.select({ id: factories.id, ownerId: factories.ownerId })
+  const owned = await db.select({ industry: factories.industry })
     .from(factories)
-    .where(and(
-      eq(factories.status, "approved"),
-      sql`JSON_OVERLAPS(${factories.industry}, ${JSON.stringify(industryNames)})`,
-    ));
-  if (matchedFactories.length === 0) return [];
+    .where(and(eq(factories.status, "approved"), eq(factories.ownerId, userId)));
 
-  const userIds = new Set<number>(matchedFactories.map(f => f.ownerId));
-  const factoryIds = matchedFactories.map(f => f.id);
-  const coMgrRows = await db.select({ userId: factoryCoManagers.userId })
+  const coManaged = await db.select({ factoryId: factoryCoManagers.factoryId })
     .from(factoryCoManagers)
-    .where(and(inArray(factoryCoManagers.factoryId, factoryIds), isNull(factoryCoManagers.removedAt)));
-  for (const r of coMgrRows) userIds.add(r.userId);
-  if (userIds.size === 0) return [];
+    .where(and(eq(factoryCoManagers.userId, userId), isNull(factoryCoManagers.removedAt)));
 
-  return db.select({
-    id: users.id,
-    email: sql<string | null>`COALESCE(${users.primaryEmail}, ${users.email})`,
-    name: users.name,
-    notificationSettings: users.notificationSettings,
-  }).from(users).where(and(inArray(users.id, Array.from(userIds)), isNull(users.deletedAt)));
+  let coManagedFactories: { industry: string[] }[] = [];
+  if (coManaged.length > 0) {
+    coManagedFactories = await db.select({ industry: factories.industry })
+      .from(factories)
+      .where(and(eq(factories.status, "approved"), inArray(factories.id, coManaged.map(r => r.factoryId))));
+  }
+
+  const industries = new Set<string>();
+  for (const f of [...owned, ...coManagedFactories]) {
+    for (const name of (f.industry ?? [])) industries.add(name);
+  }
+  return Array.from(industries);
+}
+
+/** 動態計算單一 boardKey 的系統預設訂閱狀態（沒有明確覆寫紀錄時使用）。 */
+export function computeDefaultBoardSubscription(boardKey: string, userIndustries: string[]): boolean {
+  if (boardKey === "important") return true;
+  if (boardKey.startsWith("industry:")) return userIndustries.includes(boardKey.slice("industry:".length));
+  return false; // all／competition／exhibition／其他產業預設一律未訂閱
+}
+
+/** 使用者對所有看板「明確覆寫」的原始紀錄（true=明確訂閱、false=明確取消），沒有紀錄的看板不會出現在這個 Map 裡。 */
+export async function getBoardSubscriptionOverrides(userId: number): Promise<Map<string, boolean>> {
+  const db = await getDb();
+  if (!db) return new Map();
+  const rows = await db.select({ boardKey: newsBoardSubscriptions.boardKey, isSubscribed: newsBoardSubscriptions.isSubscribed })
+    .from(newsBoardSubscriptions)
+    .where(eq(newsBoardSubscriptions.userId, userId));
+  return new Map(rows.map(r => [r.boardKey, r.isSubscribed]));
+}
+
+/**
+ * 單一 boardKey 的「有效訂閱狀態」：明確覆寫優先於動態預設，這是全站唯一的
+ * 判斷入口——news.getBoardSubscriptionState（給前端按鈕顯示）與收件人聚合
+ * （getBoardEligibleUserIds）都必須共用同一套規則，不得各自實作一份，否則
+ * 按鈕顯示的狀態可能跟實際會不會收到通知不一致。
+ */
+export async function getEffectiveBoardSubscription(userId: number, boardKey: string): Promise<boolean> {
+  const overrides = await getBoardSubscriptionOverrides(userId);
+  if (overrides.has(boardKey)) return overrides.get(boardKey)!;
+  const userIndustries = await getUserIndustries(userId);
+  return computeDefaultBoardSubscription(boardKey, userIndustries);
+}
+
+/**
+ * 寫入使用者對某個看板的明確選擇（upsert，靠 (userId, boardKey) 唯一索引
+ * 抗併發——同一使用者對同一看板連續兩次請求，不會產生兩筆紀錄或競態）。
+ * 呼叫端負責先用 isValidNewsBoardKey 驗證 boardKey，這裡不重複驗證。
+ */
+export async function setNewsBoardSubscription(userId: number, boardKey: string, isSubscribed: boolean): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.insert(newsBoardSubscriptions)
+    .values({ userId, boardKey, isSubscribed })
+    .onDuplicateKeyUpdate({ set: { isSubscribed, updatedAt: new Date() } });
+}
+
+/**
+ * 找消息分眾收件資格聚合的核心：回傳「有資格收到這篇消息」的去重 userId
+ * 集合（尚未套用 news／pushNews 這類外部通知管道開關——那是 gatherNewsRecipients
+ * 的事，這裡只回答「這個人有沒有看板訂閱資格」，站內通知三層判斷會直接用
+ * 這個結果）。適用看板固定包含 "all"，依消息分類加上
+ * important／competition／exhibition／industry:<name>。
+ *
+ * 三種來源合併去重：
+ *   1) 對任一適用看板明確訂閱（isSubscribed=true）的使用者——不論預設值。
+ *   2) isImportant 時：所有有效會員，扣掉對 "important" 明確取消的人。
+ *   3) industryNames 非空時：per-user 比對「這篇消息的產業」∩「使用者自己
+ *      所屬產業」，只要其中至少一個產業沒有被明確取消，就符合資格（不要求
+ *      使用者所有所屬產業都保留訂閱）。
+ */
+async function getBoardEligibleUserIds(opts: { isImportant: boolean; isCompetition: boolean; isExhibition: boolean; industryNames: string[] }): Promise<Set<number>> {
+  const db = await getDb();
+  if (!db) return new Set();
+
+  const boardKeys: string[] = [
+    "all",
+    ...(opts.isImportant ? ["important"] : []),
+    ...(opts.isCompetition ? ["competition"] : []),
+    ...(opts.isExhibition ? ["exhibition"] : []),
+    ...opts.industryNames.map(n => `industry:${n}`),
+  ];
+
+  const explicitTrueRows = await db.selectDistinct({ userId: newsBoardSubscriptions.userId })
+    .from(newsBoardSubscriptions)
+    .where(and(inArray(newsBoardSubscriptions.boardKey, boardKeys), eq(newsBoardSubscriptions.isSubscribed, true)));
+  const eligible = new Set<number>(explicitTrueRows.map(r => r.userId));
+
+  if (opts.isImportant) {
+    const [activeUsers, explicitFalseImportant] = await Promise.all([
+      getActiveUsersForAnnouncement(),
+      db.select({ userId: newsBoardSubscriptions.userId }).from(newsBoardSubscriptions)
+        .where(and(eq(newsBoardSubscriptions.boardKey, "important"), eq(newsBoardSubscriptions.isSubscribed, false))),
+    ]);
+    const excluded = new Set(explicitFalseImportant.map(r => r.userId));
+    for (const u of activeUsers) if (!excluded.has(u.id)) eligible.add(u.id);
+  }
+
+  if (opts.industryNames.length > 0) {
+    const matchedFactories = await db.select({ id: factories.id, ownerId: factories.ownerId, industry: factories.industry })
+      .from(factories)
+      .where(and(
+        eq(factories.status, "approved"),
+        sql`JSON_OVERLAPS(${factories.industry}, ${JSON.stringify(opts.industryNames)})`,
+      ));
+
+    if (matchedFactories.length > 0) {
+      const factoryIds = matchedFactories.map(f => f.id);
+      const coMgrRows = await db.select({ userId: factoryCoManagers.userId, factoryId: factoryCoManagers.factoryId })
+        .from(factoryCoManagers)
+        .where(and(inArray(factoryCoManagers.factoryId, factoryIds), isNull(factoryCoManagers.removedAt)));
+
+      const factoryById = new Map(matchedFactories.map(f => [f.id, f]));
+      const userMatchedIndustries = new Map<number, Set<string>>();
+      const addMatch = (userId: number, factoryIndustry: string[]) => {
+        const intersect = (factoryIndustry ?? []).filter(name => opts.industryNames.includes(name));
+        if (intersect.length === 0) return;
+        const set = userMatchedIndustries.get(userId) ?? new Set<string>();
+        for (const name of intersect) set.add(name);
+        userMatchedIndustries.set(userId, set);
+      };
+      for (const f of matchedFactories) addMatch(f.ownerId, f.industry);
+      for (const r of coMgrRows) {
+        const f = factoryById.get(r.factoryId);
+        if (f) addMatch(r.userId, f.industry);
+      }
+
+      const candidateUserIds = Array.from(userMatchedIndustries.keys());
+      if (candidateUserIds.length > 0) {
+        const industryBoardKeys = opts.industryNames.map(n => `industry:${n}`);
+        const overrideRows = await db.select({ userId: newsBoardSubscriptions.userId, boardKey: newsBoardSubscriptions.boardKey, isSubscribed: newsBoardSubscriptions.isSubscribed })
+          .from(newsBoardSubscriptions)
+          .where(and(inArray(newsBoardSubscriptions.userId, candidateUserIds), inArray(newsBoardSubscriptions.boardKey, industryBoardKeys)));
+        const falseOverrides = new Map<number, Set<string>>();
+        for (const r of overrideRows) {
+          if (r.isSubscribed) continue; // true 已經在 explicitTrueRows 涵蓋
+          const set = falseOverrides.get(r.userId) ?? new Set<string>();
+          set.add(r.boardKey.slice("industry:".length));
+          falseOverrides.set(r.userId, set);
+        }
+        for (const [userId, matchedIndustries] of Array.from(userMatchedIndustries.entries())) {
+          const excludedIndustries = falseOverrides.get(userId);
+          const hasAnyDefaultTrue = Array.from(matchedIndustries).some(name => !excludedIndustries?.has(name));
+          if (hasAnyDefaultTrue) eligible.add(userId);
+        }
+      }
+    }
+  }
+
+  return eligible;
 }
 
 export interface NewsRecipientInfo {
@@ -2735,10 +2955,9 @@ export interface NewsRecipientInfo {
 }
 
 /**
- * 找消息目前還沒有會員中心 UI 可以設定 notificationSettings.news／pushNews，
- * 所以本階段的預設值刻意是「預設允許」——未設定（undefined/null）或非 false
- * 的任何值都視為允許；只有明確設成 false 才排除。等之後補上設定 UI，使用者
- * 才有辦法主動關閉，在那之前不應該讓完全没設定過的既有會員被排除在外。
+ * 「news」／「pushNews」只控制 Email／Push 這兩個外部管道要不要送達，語意
+ * 是「預設允許，只有明確 false 才排除」；不得用來決定站內通知要不要建立
+ * ——那是看板訂閱（getBoardEligibleUserIds）的職責，兩者不得互相影響。
  */
 function isNewsEmailAllowed(settings: Record<string, boolean> | null | undefined): boolean {
   return (settings ?? {})['news'] !== false;
@@ -2748,31 +2967,35 @@ function isNewsPushAllowed(settings: Record<string, boolean> | null | undefined)
 }
 
 /**
- * 找消息分眾通知的唯一收件人聚合入口：重要消息 + 產業消息兩個來源合併、以
- * userId 去重（對應規格「蒐集 → 蒐集 → 合併 → 去重 → 才建立各管道寄送工作」）。
- * 純競賽／純展覽（isImportant=false 且沒有勾選任何產業）一律回傳空陣列，
- * 呼叫端據此完全不建立 Email／Push 工作、也不寄送。
+ * 找消息分眾通知的唯一收件人聚合入口：看板訂閱資格聚合（getBoardEligibleUserIds）
+ * → 撈使用者資料 → 套用 news／pushNews 開關算出每個人的 email／pushEnabled。
+ * 回傳陣列本身就是「有看板訂閱資格」的去重名單（不論 email／pushEnabled 欄位
+ * 結果為何都會出現一筆），呼叫端可以直接拿這個陣列的長度當作站內通知／預估
+ * 人數，不需要另外查一次資格。
  */
-export async function gatherNewsRecipients(opts: { isImportant: boolean; industryNames: string[] }): Promise<NewsRecipientInfo[]> {
-  if (!opts.isImportant && opts.industryNames.length === 0) return [];
+export async function gatherNewsRecipients(opts: { isImportant: boolean; isCompetition: boolean; isExhibition: boolean; industryNames: string[] }): Promise<NewsRecipientInfo[]> {
+  const db = await getDb();
+  if (!db) return [];
 
-  const [importantList, industryList] = await Promise.all([
-    opts.isImportant ? getImportantNewsRecipients() : Promise.resolve([] as Awaited<ReturnType<typeof getImportantNewsRecipients>>),
-    opts.industryNames.length > 0 ? getIndustryNewsRecipients(opts.industryNames) : Promise.resolve([] as Awaited<ReturnType<typeof getIndustryNewsRecipients>>),
-  ]);
+  const eligibleIds = await getBoardEligibleUserIds(opts);
+  if (eligibleIds.size === 0) return [];
 
-  const merged = new Map<number, NewsRecipientInfo>();
-  for (const u of [...importantList, ...industryList]) {
-    if (merged.has(u.id)) continue;
+  const rows = await db.select({
+    id: users.id,
+    email: sql<string | null>`COALESCE(${users.primaryEmail}, ${users.email})`,
+    name: users.name,
+    notificationSettings: users.notificationSettings,
+  }).from(users).where(and(inArray(users.id, Array.from(eligibleIds)), isNull(users.deletedAt)));
+
+  return rows.map(u => {
     const s = (u.notificationSettings as Record<string, boolean> | null) ?? {};
-    merged.set(u.id, {
+    return {
       id: u.id,
       email: (u.email && isNewsEmailAllowed(s)) ? u.email : null,
       name: u.name,
       pushEnabled: isNewsPushAllowed(s),
-    });
-  }
-  return Array.from(merged.values());
+    };
+  });
 }
 
 /**

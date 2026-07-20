@@ -321,9 +321,58 @@ describe("listPublicNews：分類查詢、多分類單一列、排序", () => {
 });
 
 describe("gatherNewsRecipients：分眾通知收件人聚合與去重", () => {
-  it("純競賽／純展覽（未勾重要消息、未選產業）完全不聚合收件人", async () => {
-    const recipients = await db.gatherNewsRecipients({ isImportant: false, industryNames: [] });
-    expect(recipients).toEqual([]);
+  // 看板訂閱功能上線後，純競賽／純展覽消息不再保證「一定 0 收件人」——
+  // 明確訂閱 competition／exhibition 看板的會員會收到。這裡改成隔離出一個
+  // 全新測試使用者，驗證「沒有明確訂閱任何看板的一般使用者」不會被純競賽／
+  // 純展覽消息納入，不對整個資料庫的收件人數量做全域斷言（真實共用資料庫上
+  // 其他使用者是否訂閱過 competition/exhibition/all 不受這個測試控制）。
+  it("純競賽／純展覽消息：沒有明確訂閱任何看板的一般使用者不會被納入", async () => {
+    let bystander: number | undefined;
+    try {
+      bystander = await createTestUser();
+      const competitionRecipients = await db.gatherNewsRecipients({ isImportant: false, isCompetition: true, isExhibition: false, industryNames: [] });
+      const exhibitionRecipients = await db.gatherNewsRecipients({ isImportant: false, isCompetition: false, isExhibition: true, industryNames: [] });
+      expect(competitionRecipients.map(r => r.id)).not.toContain(bystander);
+      expect(exhibitionRecipients.map(r => r.id)).not.toContain(bystander);
+    } finally {
+      await deleteTestUser(bystander);
+    }
+  });
+
+  it("純競賽消息：明確訂閱 competition 看板的使用者會被納入", async () => {
+    let subscriber: number | undefined;
+    try {
+      subscriber = await createTestUser();
+      await db.setNewsBoardSubscription(subscriber, "competition", true);
+      const recipients = await db.gatherNewsRecipients({ isImportant: false, isCompetition: true, isExhibition: false, industryNames: [] });
+      expect(recipients.map(r => r.id)).toContain(subscriber);
+    } finally {
+      await deleteTestUser(subscriber);
+    }
+  });
+
+  it("純展覽消息：明確訂閱 exhibition 看板的使用者會被納入", async () => {
+    let subscriber: number | undefined;
+    try {
+      subscriber = await createTestUser();
+      await db.setNewsBoardSubscription(subscriber, "exhibition", true);
+      const recipients = await db.gatherNewsRecipients({ isImportant: false, isCompetition: false, isExhibition: true, industryNames: [] });
+      expect(recipients.map(r => r.id)).toContain(subscriber);
+    } finally {
+      await deleteTestUser(subscriber);
+    }
+  });
+
+  it("訂閱「全部最新」的使用者，任何分類的消息都會被納入", async () => {
+    let subscriber: number | undefined;
+    try {
+      subscriber = await createTestUser();
+      await db.setNewsBoardSubscription(subscriber, "all", true);
+      const recipients = await db.gatherNewsRecipients({ isImportant: false, isCompetition: true, isExhibition: false, industryNames: [] });
+      expect(recipients.map(r => r.id)).toContain(subscriber);
+    } finally {
+      await deleteTestUser(subscriber);
+    }
   });
 
   it("產業消息：approved 工廠的 owner 會被納入；draft 工廠不會", async () => {
@@ -337,7 +386,7 @@ describe("gatherNewsRecipients：分眾通知收件人聚合與去重", () => {
       factoryId = await createTestFactory(owner, ["金屬加工"], "approved");
       draftFactoryId = await createTestFactory(draftOwner, ["金屬加工"], "draft");
 
-      const recipients = await db.gatherNewsRecipients({ isImportant: false, industryNames: ["金屬加工"] });
+      const recipients = await db.gatherNewsRecipients({ isImportant: false, isCompetition: false, isExhibition: false, industryNames: ["金屬加工"] });
       const ids = recipients.map(r => r.id);
       expect(ids).toContain(owner);
       expect(ids).not.toContain(draftOwner);
@@ -362,7 +411,7 @@ describe("gatherNewsRecipients：分眾通知收件人聚合與去重", () => {
       factoryB = await createTestFactory(otherOwner, ["電子零件"], "approved");
       await addCoManager(factoryB, owner, otherOwner);
 
-      const recipients = await db.gatherNewsRecipients({ isImportant: false, industryNames: ["電子零件"] });
+      const recipients = await db.gatherNewsRecipients({ isImportant: false, isCompetition: false, isExhibition: false, industryNames: ["電子零件"] });
       const matches = recipients.filter(r => r.id === owner);
       expect(matches.length).toBe(1);
 
@@ -381,12 +430,40 @@ describe("gatherNewsRecipients：分眾通知收件人聚合與去重", () => {
       owner = await createTestUser();
       factoryId = await createTestFactory(owner, ["紡織"], "approved");
 
-      const recipients = await db.gatherNewsRecipients({ isImportant: true, industryNames: ["紡織"] });
+      const recipients = await db.gatherNewsRecipients({ isImportant: true, isCompetition: false, isExhibition: false, industryNames: ["紡織"] });
       const matches = recipients.filter(r => r.id === owner);
       expect(matches.length).toBe(1);
     } finally {
       await deleteTestFactory(factoryId);
       await deleteTestUser(owner);
+    }
+  });
+
+  it("取消自己所屬產業訂閱後，該產業消息不會納入該使用者（明確覆寫優先於預設）", async () => {
+    let owner: number | undefined;
+    let factoryId: number | undefined;
+    try {
+      owner = await createTestUser();
+      factoryId = await createTestFactory(owner, ["木工"], "approved");
+      await db.setNewsBoardSubscription(owner, "industry:木工", false);
+
+      const recipients = await db.gatherNewsRecipients({ isImportant: false, isCompetition: false, isExhibition: false, industryNames: ["木工"] });
+      expect(recipients.map(r => r.id)).not.toContain(owner);
+    } finally {
+      await deleteTestFactory(factoryId);
+      await deleteTestUser(owner);
+    }
+  });
+
+  it("取消重要消息訂閱後，重要消息不會納入該使用者", async () => {
+    let user: number | undefined;
+    try {
+      user = await createTestUser();
+      await db.setNewsBoardSubscription(user, "important", false);
+      const recipients = await db.gatherNewsRecipients({ isImportant: true, isCompetition: false, isExhibition: false, industryNames: [] });
+      expect(recipients.map(r => r.id)).not.toContain(user);
+    } finally {
+      await deleteTestUser(user);
     }
   });
 });

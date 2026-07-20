@@ -499,6 +499,59 @@ export const newsNotifications = mysqlTable("newsNotifications", {
 
 export type NewsNotification = typeof newsNotifications.$inferSelect;
 
+// 找消息已讀紀錄：只給登入會員用（訪客的已讀狀態存在瀏覽器 localStorage，見
+// client/src/lib/newsReadTracking.ts，不寫進這張表）。一篇消息可能同時出現在
+// 重要消息／競賽消息／多個產業分類，讀一次、寫入一筆 (newsId, userId)，所有
+// 出現位置的 NEW 自然一起消失，不需要為每個看板各自記錄。
+//
+// 兩個索引各對應不同查詢，不是重複：
+//   news_read_uq (newsId, userId) UNIQUE
+//     結構性防重複——保證同一使用者對同一篇消息最多只有一筆紀錄，
+//     markNewsAsRead 靠這個唯一鍵做「insert 失敗就當作已讀過」的冪等寫入，
+//     不需要先查再插；newsId 排在最前面，同時滿足 newsId 這個外鍵的索引要求。
+//   news_read_user_lookup_idx (userId, newsId)
+//     實際查詢方向是「WHERE userId = ? AND newsId IN (...)」（getNewCategorySummary
+//     依登入者 id 過濾已讀、listPublicNews 幫每則消息算 isRead），userId 在前
+//     才能讓 MySQL 用索引直接鎖定該使用者的已讀範圍再比對 newsId 清單；同時
+//     滿足 userId 這個外鍵的索引要求。目前沒有任何查詢會用到 readAt 做排序
+//     或清理，所以不建立 (userId, readAt) 這個目前用不到的索引。
+export const newsReads = mysqlTable("newsReads", {
+  id: int("id").autoincrement().primaryKey(),
+  newsId: int("newsId").notNull().references(() => news.id, { onDelete: "cascade" }),
+  userId: int("userId").notNull().references(() => users.id, { onDelete: "cascade" }),
+  readAt: timestamp("readAt").defaultNow().notNull(),
+}, (t) => ({
+  newsReadUq: uniqueIndex("news_read_uq").on(t.newsId, t.userId),
+  userLookupIdx: index("news_read_user_lookup_idx").on(t.userId, t.newsId),
+}));
+
+export type NewsRead = typeof newsReads.$inferSelect;
+
+// 找消息看板訂閱：只存使用者「明確覆寫」的選擇，不存動態預設值——沒有這篇
+// 消息的紀錄就代表「沿用系統預設」（重要消息／自己所屬產業預設 true，其餘
+// 預設 false），由 server/db.ts 的 computeEffectiveBoardSubscription 統一計算，
+// 這張表本身完全不做預設值判斷，避免前端/API/通知聚合三處各自硬寫一份預設
+// 邏輯而彼此不同步。boardKey 是穩定識別碼（all／important／competition／
+// exhibition／industry:<產業名稱>），不是前端顯示文字，產業名稱一律驗證於
+// shared/constants.ts 的 INDUSTRY_OPTIONS 白名單，見 validateNewsBoardKey。
+export const newsBoardSubscriptions = mysqlTable("newsBoardSubscriptions", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull().references(() => users.id, { onDelete: "cascade" }),
+  boardKey: varchar("boardKey", { length: 100 }).notNull(),
+  isSubscribed: boolean("isSubscribed").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (t) => ({
+  // upsert（setBoardSubscription）與收件人聚合都靠這個唯一鍵做「一個使用者對
+  // 同一個看板最多一筆覆寫紀錄」的冪等寫入，userId 排在最前面同時滿足外鍵索引。
+  userBoardUq: uniqueIndex("news_board_sub_user_board_uq").on(t.userId, t.boardKey),
+  // 收件人聚合查「這個使用者對這些 boardKey 的明確覆寫」、後台預估也是同樣
+  // 查詢方向，userId 在前才能讓 MySQL 直接鎖定該使用者的覆寫範圍。
+  userSubIdx: index("news_board_sub_user_idx").on(t.userId, t.isSubscribed),
+}));
+
+export type NewsBoardSubscription = typeof newsBoardSubscriptions.$inferSelect;
+
 // ===== 登入彈窗（綁定既有「平台消息」公告的登入曝光入口，不是獨立公告系統）=====
 export const loginPopups = mysqlTable("loginPopups", {
   id: int("id").autoincrement().primaryKey(),

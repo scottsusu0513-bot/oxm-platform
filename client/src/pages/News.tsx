@@ -8,8 +8,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { trpc } from "@/lib/trpc";
 import { toMarkdownPreviewText } from "@/components/MarkdownContent";
 import { INDUSTRIES } from "@shared/constants";
+import { NEWS_NEW_WINDOW_MS } from "@shared/const";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { getGuestReadIds, isGuestNewsRead } from "@/lib/newsReadTracking";
+import LoginDialog from "@/components/LoginDialog";
+import { toast } from "sonner";
 import {
-  Newspaper, Star, Trophy, Building2, Factory, FileText,
+  Newspaper, Star, Trophy, Building2, Factory, FileText, BellPlus, BellRing, Loader2,
   Shirt, Hammer, Cpu, Boxes, Layers, Trees, Package, Utensils, FlaskConical, ShoppingBasket, Printer, Cog,
 } from "lucide-react";
 
@@ -79,13 +84,25 @@ function categoryToQueryParams(cat: CategoryValue): { category: ApiCategory; ind
   return { category: cat as Exclude<CategoryValue, `industry:${string}`> };
 }
 
-// NEW 徽章一律看 firstPublishedAt（第一次正式發布的時間，永久不變），不能用
-// publishedAt（每次下架重發都會更新）或 updatedAt（編輯標題/摘要/內文就會變）
-// ——否則舊消息下架後重新發布、或單純編輯錯字，都會被誤判成「三天內新消息」。
+// NEW 徽章的時間條件一律看 firstPublishedAt（第一次正式發布的時間，永久不變），
+// 不能用 publishedAt（每次下架重發都會更新）或 updatedAt（編輯標題/摘要/內文
+// 就會變）——否則舊消息下架後重新發布、或單純編輯錯字，都會被誤判成新消息。
+// 有效期限固定讀 shared/const.ts 的 NEWS_NEW_WINDOW_MS，不得在這裡另外寫死
+// 小時數字，否則前後端很容易改一邊漏一邊、造成期限不一致。
 function isNew(firstPublishedAt: string | Date | null): boolean {
   if (!firstPublishedAt) return false;
   const ms = new Date(firstPublishedAt).getTime();
-  return Date.now() - ms < 72 * 60 * 60 * 1000;
+  return Date.now() - ms < NEWS_NEW_WINDOW_MS;
+}
+
+// NEW 顯示＝時間未過期 AND 尚未讀過，兩者是 AND；只要任一條件不成立（已讀
+// 或已過期）NEW 就消失，是 OR 消失邏輯。登入會員的已讀狀態來自後端
+// news.list 回傳的 item.isRead（查 newsReads 表）；訪客沒有 session，改查
+// 瀏覽器 localStorage（見 @/lib/newsReadTracking）。
+function isUnreadNew(item: { firstPublishedAt: string | Date | null; id: number; isRead: boolean }, isAuthenticated: boolean): boolean {
+  if (!isNew(item.firstPublishedAt)) return false;
+  if (isAuthenticated) return !item.isRead;
+  return !isGuestNewsRead(item.id);
 }
 
 function formatDate(d: string | Date): string {
@@ -102,8 +119,9 @@ interface NewCategorySummaryData {
 }
 
 // 分類側欄／手機 Select 的 NEW 判斷：一律看後端一次回傳的 getNewCategorySummary
-// 彙總結果（同樣以 firstPublishedAt 72 小時為準），不是看目前分類已載入的第一
-// 頁資料——切到別的分類時，其他分類的 NEW 狀態也要能正確顯示。
+// 彙總結果（同樣以 firstPublishedAt + NEWS_NEW_WINDOW_MS 為準，且已經排除該
+// 使用者讀過的消息），不是看目前分類已載入的第一頁資料——切到別的分類時，
+// 其他分類的 NEW 狀態也要能正確顯示。
 function categoryHasNew(cat: CategoryValue, summary: NewCategorySummaryData | undefined): boolean {
   if (!summary) return false;
   if (cat === "all") return summary.all;
@@ -118,6 +136,66 @@ function NewBadge({ className = "" }: { className?: string }) {
     <span className={`shrink-0 text-[9px] font-bold leading-none text-white bg-gradient-to-r from-orange-500 to-red-500 rounded px-1 py-0.5 ${className}`}>
       NEW
     </span>
+  );
+}
+
+// 看板訂閱按鈕：boardKey 直接沿用目前選中的 category 字串（"all" / "important" /
+// "competition" / "exhibition" / `industry:${name}`），跟後端 boardKey 格式
+// 完全一致，不需要另外轉換。有效訂閱狀態一律由後端 news.getBoardSubscriptionState
+// 計算（明確覆寫優先於動態預設），前端不自行猜測預設值。未登入訪客永遠顯示
+// 「訂閱」（isSubscribed 一律 false），點擊只開現有 LoginDialog，不寫入任何
+// localStorage 假裝已訂閱。
+function SubscribeButton({ boardKey, isAuthenticated, onRequireLogin }: {
+  boardKey: CategoryValue;
+  isAuthenticated: boolean;
+  onRequireLogin: () => void;
+}) {
+  const utils = trpc.useUtils();
+  const { data } = trpc.news.getBoardSubscriptionState.useQuery({ boardKey });
+  const mutation = trpc.news.setBoardSubscription.useMutation({
+    onSuccess: () => {
+      utils.news.getBoardSubscriptionState.invalidate({ boardKey });
+    },
+    onError: (e) => {
+      // mutation 失敗：不做樂觀更新，畫面本來就還是 invalidate 前的狀態，這裡
+      // 重新查一次只是保險（例如伺服器端狀態其實有變但這次請求失敗的情境）。
+      utils.news.getBoardSubscriptionState.invalidate({ boardKey });
+      toast.error(e.message || "訂閱設定失敗，請稍後再試");
+    },
+  });
+
+  const isSubscribed = data?.isSubscribed ?? false;
+  const pending = mutation.isPending;
+
+  const handleClick = () => {
+    if (pending) return; // 防連點：mutation 進行中直接忽略，不送出第二次請求
+    if (!isAuthenticated) { onRequireLogin(); return; }
+    mutation.mutate({ boardKey, isSubscribed: !isSubscribed });
+  };
+
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant={isSubscribed ? "default" : "outline"}
+      aria-pressed={isSubscribed}
+      disabled={pending}
+      onClick={handleClick}
+      className={
+        isSubscribed
+          ? "gap-1.5 border-0 bg-gradient-to-r from-orange-500/90 to-purple-500/90 text-white shadow-sm hover:from-orange-500 hover:to-purple-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-400 disabled:opacity-70"
+          : "gap-1.5 border-purple-200 text-foreground/80 bg-white/70 hover:bg-orange-50/60 hover:border-orange-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-400 disabled:opacity-70"
+      }
+    >
+      {pending ? (
+        <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+      ) : isSubscribed ? (
+        <BellRing className="w-3.5 h-3.5" aria-hidden="true" />
+      ) : (
+        <BellPlus className="w-3.5 h-3.5" aria-hidden="true" />
+      )}
+      {isSubscribed ? "已訂閱" : "訂閱"}
+    </Button>
   );
 }
 
@@ -156,13 +234,15 @@ interface NewsListItemData {
   summary: string;
   publishedAt: string | Date | null;
   firstPublishedAt: string | Date | null;
+  /** 登入會員才由後端計算（查 newsReads 表）；訪客一律是 false，實際已讀狀態由呼叫端另外查 localStorage。 */
+  isRead: boolean;
 }
 
 // 消息列：只有大標題、摘要、日期與 NEW，不顯示分類/產業標籤、不顯示
 // 「查看完整內容」，整列是真正的 Link。
 // 卡片用接近白色的半透明底（bg-white/85）跟有色背景拉開層次，不是純白厚重
 // 方塊；hover 邊框/陰影轉為橘紫色調並微幅上移，不做大幅動畫。
-function NewsListItem({ item }: { item: NewsListItemData }) {
+function NewsListItem({ item, isAuthenticated }: { item: NewsListItemData; isAuthenticated: boolean }) {
   return (
     <Link
       href={`/news/${item.slug}`}
@@ -174,7 +254,7 @@ function NewsListItem({ item }: { item: NewsListItemData }) {
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 mb-1.5 flex-wrap">
                 <h3 className="text-base sm:text-lg font-bold truncate sm:whitespace-normal sm:line-clamp-1">{item.title}</h3>
-                {isNew(item.firstPublishedAt) && (
+                {isUnreadNew(item, isAuthenticated) && (
                   <span className="shrink-0 text-[10px] font-bold text-white bg-gradient-to-r from-orange-500 to-red-500 rounded px-1.5 py-0.5">NEW</span>
                 )}
               </div>
@@ -264,18 +344,23 @@ function NewsHeroArt() {
 
 export default function News() {
   const [, navigate] = useLocation();
+  const { isAuthenticated } = useAuth();
   const [category, setCategory] = useState<CategoryValue>(() => parseCategoryFromSearch());
   const [offset, setOffset] = useState(0);
   const [items, setItems] = useState<NewsListItemData[]>([]);
+  const [loginDialogOpen, setLoginDialogOpen] = useState(false);
 
   const queryParams = useMemo(() => ({ ...categoryToQueryParams(category), offset, limit: 20 }), [category, offset]);
   const { data, isLoading, isFetching, error } = trpc.news.list.useQuery(queryParams);
 
   // 所有分類的 NEW 徽章：單一彙總查詢，不是 15 個分類各自查一次；5 分鐘內
   // 視為新鮮不重打，也不加輪詢——最新狀態在使用者重新整理頁面時就會拿到。
-  const { data: newSummary } = trpc.news.getNewCategorySummary.useQuery(undefined, {
-    staleTime: 5 * 60 * 1000,
-  });
+  // 已讀排除：登入會員由後端查 newsReads 表（不需要前端傳任何東西）；訪客
+  // 沒有 session，只能把 localStorage 裡的已讀清單當 excludeIds 傳給後端。
+  const { data: newSummary } = trpc.news.getNewCategorySummary.useQuery(
+    { excludeIds: isAuthenticated ? undefined : getGuestReadIds() },
+    { staleTime: 5 * 60 * 1000 },
+  );
 
   // 換分類時重置捲動列表與 offset，避免舊分類的資料殘留混進新分類。
   function selectCategory(next: CategoryValue) {
@@ -449,19 +534,36 @@ export default function News() {
 
             {/* 右側：分類標題區＋目前分類的消息列表 */}
             <div className="flex-1 min-w-0">
-              <div className="mb-5 pb-4 border-b border-purple-100/60 flex items-end justify-between gap-4 flex-wrap">
-                <div className="flex items-start gap-3">
-                  <span className="mt-1.5 w-1 h-6 sm:h-7 rounded-full bg-gradient-to-b from-orange-400 to-purple-500 shrink-0" aria-hidden="true" />
-                  <div>
-                    <h2 className="text-xl sm:text-2xl font-bold">{categoryMeta.title}</h2>
-                    <p className="text-sm text-muted-foreground mt-1">{categoryMeta.description}</p>
+              {/* 訂閱按鈕＋消息數量：桌面版跟標題同一列靠右（按鈕在數量左側）；
+                  手機版另起一行放在標題／說明下方，避免跟標題擠在同一行造成
+                  換行或水平溢出。row 本身不加 overflow，兩個子元素都是
+                  shrink-0 的固定寬度小元件，不會撐出水平捲軸。 */}
+              <div className="mb-5 pb-4 border-b border-purple-100/60">
+                <div className="flex items-start justify-between gap-4 flex-wrap">
+                  <div className="flex items-start gap-3">
+                    <span className="mt-1.5 w-1 h-6 sm:h-7 rounded-full bg-gradient-to-b from-orange-400 to-purple-500 shrink-0" aria-hidden="true" />
+                    <div>
+                      <h2 className="text-xl sm:text-2xl font-bold">{categoryMeta.title}</h2>
+                      <p className="text-sm text-muted-foreground mt-1">{categoryMeta.description}</p>
+                    </div>
+                  </div>
+                  <div className="hidden sm:flex items-center gap-2 shrink-0">
+                    <SubscribeButton boardKey={category} isAuthenticated={isAuthenticated} onRequireLogin={() => setLoginDialogOpen(true)} />
+                    {data && (
+                      <span className="shrink-0 text-xs font-medium text-purple-700 bg-gradient-to-r from-orange-50 to-purple-50 border border-purple-100/70 rounded-full px-3 py-1">
+                        共 {total} 則消息
+                      </span>
+                    )}
                   </div>
                 </div>
-                {data && (
-                  <span className="shrink-0 text-xs font-medium text-purple-700 bg-gradient-to-r from-orange-50 to-purple-50 border border-purple-100/70 rounded-full px-3 py-1">
-                    共 {total} 則消息
-                  </span>
-                )}
+                <div className="flex sm:hidden items-center gap-2 mt-3">
+                  <SubscribeButton boardKey={category} isAuthenticated={isAuthenticated} onRequireLogin={() => setLoginDialogOpen(true)} />
+                  {data && (
+                    <span className="shrink-0 text-xs font-medium text-purple-700 bg-gradient-to-r from-orange-50 to-purple-50 border border-purple-100/70 rounded-full px-3 py-1">
+                      共 {total} 則消息
+                    </span>
+                  )}
+                </div>
               </div>
 
               {isLoading && offset === 0 ? (
@@ -490,7 +592,7 @@ export default function News() {
                 <>
                   <div className="space-y-3">
                     {items.map(item => (
-                      <NewsListItem key={item.id} item={item} />
+                      <NewsListItem key={item.id} item={item} isAuthenticated={isAuthenticated} />
                     ))}
                   </div>
 
@@ -511,6 +613,7 @@ export default function News() {
           </div>
         </div>
       </div>
+      <LoginDialog open={loginDialogOpen} onOpenChange={setLoginDialogOpen} />
     </div>
   );
 }
