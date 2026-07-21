@@ -297,3 +297,64 @@ describe("Navbar.tsx: 桌面版六大入口共用 hover dropdown 互動邏輯", 
     expect(soonBranchMatch![0]).toMatch(/cursor-not-allowed/);
   });
 });
+
+describe("Navbar.tsx: 品牌「首頁 OXM」下拉選單 portal 到 document.body，逃離 header 的 stacking context", () => {
+  const source = fs.readFileSync(NAVBAR_PATH, "utf-8");
+
+  it("手機 overlay 的實際範圍仍從 header 下方開始，維持上一輪的幾何範圍修正（不是 fixed inset-0）", () => {
+    expect(source).toMatch(/className="lg:hidden fixed inset-x-0 bottom-0 z-\[60\]"/);
+    expect(source).not.toMatch(/fixed inset-0 z-\[60\]/);
+    expect(source).toMatch(/top: "calc\(4rem \+ env\(safe-area-inset-top, 0px\)\)"/);
+  });
+
+  it("品牌下拉選單 content 透過 createPortal 掛到 document.body，不再是 header 內部 absolute 定位的子元素", () => {
+    const portalMatch = source.match(
+      /\{brandMenuOpen && brandMenuPos && createPortal\(\s*\n\s*<div\s*\n\s*ref=\{brandMenuContentRef\}\s*\n\s*className="([^"]*)"/
+    );
+    expect(portalMatch, "找不到品牌下拉選單的 createPortal 區塊").not.toBeNull();
+    const [, className] = portalMatch!;
+    // 不再是 absolute 相對父層定位，而是 fixed + 手動算好的座標
+    expect(className).not.toMatch(/\babsolute\b/);
+    expect(className).toMatch(/\bfixed\b/);
+    const portalEnd = source.indexOf("document.body", source.indexOf("brandMenuOpen && brandMenuPos && createPortal("));
+    expect(portalEnd).toBeGreaterThan(-1);
+  });
+
+  it("品牌下拉選單 content 的 z-index（z-[70]）高於手機選單 overlay（z-[60]），這樣手機選單開啟時仍能蓋在它上面", () => {
+    const portalMatch = source.match(
+      /\{brandMenuOpen && brandMenuPos && createPortal\(\s*\n\s*<div\s*\n\s*ref=\{brandMenuContentRef\}\s*\n\s*className="([^"]*)"/
+    );
+    expect(portalMatch).not.toBeNull();
+    const [, className] = portalMatch!;
+    expect(className).toMatch(/z-\[70\]/);
+    // 70 > 60：手機選單 overlay 用的是 z-[60]
+    const overlayZ = 60;
+    const brandZ = 70;
+    expect(brandZ).toBeGreaterThan(overlayZ);
+  });
+
+  it("<header> 本身沒有被提高到不合理的層級——維持 z-50，沒有為了顯示下拉選單而整個 header 蓋過其他 modal/dialog", () => {
+    expect(source).toMatch(/<header className="sticky top-0 z-50 /);
+  });
+
+  it("開啟時用 getBoundingClientRect 量測觸發鈕位置換算 fixed 座標，而不是繼續用 absolute + top-full 相對父層定位", () => {
+    expect(source).toMatch(/const rect = brandMenuRef\.current\.getBoundingClientRect\(\);/);
+    expect(source).toMatch(/setBrandMenuPos\(\{ top: rect\.bottom \+ 6, left: rect\.left \}\);/);
+  });
+
+  it("外部點擊判斷同時檢查觸發鈕與 portal 後的 content 兩個 ref，點選單內項目不會被誤判成點外部而立刻關閉", () => {
+    const effectMatch = source.match(
+      /useEffect\(\(\) => \{\s*\n\s*if \(!brandMenuOpen\) return;[\s\S]*?\}, \[brandMenuOpen\]\);/
+    );
+    expect(effectMatch, "找不到 brandMenuOpen 的外部點擊 useEffect").not.toBeNull();
+    const effect = effectMatch![0];
+    expect(effect).toMatch(/brandMenuRef\.current\?\.contains\(target\)/);
+    expect(effect).toMatch(/brandMenuContentRef\.current\?\.contains\(target\)/);
+  });
+
+  it("手機版 header 上的 X／通知／信件仍是可互動元素，沒有被本次品牌下拉修正誤動到", () => {
+    expect(source).toMatch(/onClick=\{\(\) => setMobileOpen\(!mobileOpen\)\}/);
+    expect(source).toMatch(/<Link href="\/messages">/);
+    expect(source).toMatch(/<Link href="\/notifications">/);
+  });
+});

@@ -180,14 +180,26 @@ export default function Navbar() {
   const [menuClosing, setMenuClosing] = useState(false);
   const [loginDialogOpen, setLoginDialogOpen] = useState(false);
 
-  // OXM 品牌區下拉選單（左上角）：目前僅「首頁」一個項目
+  // OXM 品牌區下拉選單（左上角）：目前僅「首頁」一個項目。
+  // Content 透過 createPortal 掛到 document.body、用 position:fixed + 手動算好的
+  // 座標定位（brandMenuPos），而不是原本「absolute 相對 brandMenuRef 父層」的寫法：
+  // <header> 本身是 position:sticky + z-50，會建立自己的 stacking context，裡面的
+  // 子元素無論 z-index 開多高都只在這個 context 內部比較，出不去、贏不了手機選單
+  // Portal（掛在 document.body、z-[60]）。所以手機選單開著時點「首頁 OXM」，這個
+  // 下拉選單即使有 z-[200] 也還是會被手機選單蓋住。改成也 portal 到 document.body
+  // 之後，才是跟手機選單在同一層比較 z-index，z-[70] 才真的贏得過 z-[60]。
   const [brandMenuOpen, setBrandMenuOpen] = useState(false);
+  const [brandMenuPos, setBrandMenuPos] = useState<{ top: number; left: number } | null>(null);
   const brandMenuRef = useRef<HTMLDivElement | null>(null);
+  const brandMenuContentRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!brandMenuOpen) return;
     const handleClickOutside = (e: MouseEvent) => {
-      if (brandMenuRef.current && !brandMenuRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      const insideTrigger = !!brandMenuRef.current?.contains(target);
+      const insideContent = !!brandMenuContentRef.current?.contains(target);
+      if (!insideTrigger && !insideContent) {
         setBrandMenuOpen(false);
       }
     };
@@ -421,7 +433,12 @@ export default function Navbar() {
             onClick={() => {
               closeHub();
               setMobileOpenHub(null);
-              setBrandMenuOpen(v => !v);
+              const next = !brandMenuOpen;
+              if (next && brandMenuRef.current) {
+                const rect = brandMenuRef.current.getBoundingClientRect();
+                setBrandMenuPos({ top: rect.bottom + 6, left: rect.left });
+              }
+              setBrandMenuOpen(next);
             }}
             aria-haspopup="true"
             aria-expanded={brandMenuOpen}
@@ -430,17 +447,26 @@ export default function Navbar() {
             <span className="bg-gradient-to-r from-orange-500 to-amber-500 bg-clip-text text-transparent text-2xl tracking-tight">OXM</span>
             <ChevronDown className={`w-4 h-4 text-muted-foreground/70 transition-transform duration-150 ${brandMenuOpen ? "rotate-180" : ""}`} />
           </button>
-
-          {brandMenuOpen && (
-            <div className="absolute top-full left-0 mt-1.5 w-[160px] bg-white border border-border rounded-xl shadow-lg z-[200] py-1.5 overflow-hidden">
-              <Link href="/" onClick={() => setBrandMenuOpen(false)}>
-                <div className="px-3.5 py-2 text-sm font-medium text-foreground hover:bg-orange-50 hover:text-orange-700 transition-colors cursor-pointer">
-                  首頁
-                </div>
-              </Link>
-            </div>
-          )}
         </div>
+
+        {/* 品牌下拉選單 content：portal 到 document.body，逃離 <header> 的 sticky+z-50
+            stacking context，這樣 z-[70] 才會真的跟手機選單 Portal（z-[60]）在同一層
+            比較、贏得過它。用 brandMenuPos（開啟當下量測 brandMenuRef 的位置）換算
+            fixed 座標，視覺位置與原本 absolute 版本完全相同。 */}
+        {brandMenuOpen && brandMenuPos && createPortal(
+          <div
+            ref={brandMenuContentRef}
+            className="fixed w-[160px] bg-white border border-border rounded-xl shadow-lg z-[70] py-1.5 overflow-hidden"
+            style={{ top: brandMenuPos.top, left: brandMenuPos.left }}
+          >
+            <Link href="/" onClick={() => setBrandMenuOpen(false)}>
+              <div className="px-3.5 py-2 text-sm font-medium text-foreground hover:bg-orange-50 hover:text-orange-700 transition-colors cursor-pointer">
+                首頁
+              </div>
+            </Link>
+          </div>,
+          document.body
+        )}
 
         {/* ── Desktop: 六大方向入口（lg: 1024px+） ── */}
         <nav className="hidden lg:flex items-center gap-3 flex-1 justify-center min-w-0 mx-2">

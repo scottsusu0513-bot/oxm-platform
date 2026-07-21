@@ -629,9 +629,14 @@ export default function MyMessages() {
       <FloatingBackButton fallbackHref="/" />
       <div className="container py-6 max-w-3xl">
 
-        <h1 className="text-2xl font-bold flex items-center gap-2 mb-4">
-          <MessageCircle className="w-6 h-6" />
-          我的訊息
+        {/* 手機版只顯示「我的訊息」文字本身、用 text-center 讓文字獨立置中——不是
+            「圖示+文字」整組置中（那樣文字會被圖示往右推，不是文字本身的正中心），
+            避免被左上角浮動返回鍵（FloatingBackButton，fixed left-3）擋住／擠壓；
+            不用 pl-*／ml-* 之類的左側留白硬推開文字。桌面版維持原本圖示+文字左對齊
+            排版不變（MessageCircle 只在 lg: 以上顯示）。 */}
+        <h1 className="mb-4 text-2xl font-bold text-center lg:flex lg:items-center lg:justify-start lg:gap-2 lg:text-left">
+          <MessageCircle className="hidden h-6 w-6 lg:block" />
+          <span>我的訊息</span>
         </h1>
 
         {/* ── 主分頁 ── */}
