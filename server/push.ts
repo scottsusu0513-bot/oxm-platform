@@ -176,3 +176,50 @@ export function toPlainPushSummary(text: string, maxLen = 100): string {
   if (plain.length <= maxLen) return plain;
   return plain.slice(0, maxLen - 1).trimEnd() + "…";
 }
+
+const DEFAULT_NOTIFICATION_TITLE = "OXM 產業情報中心有新消息";
+
+/**
+ * 通知「標題」共用清理函式：Email 主旨、Push 標題、站內通知（communityNotifications）
+ * 的 titleSnapshot 都必須呼叫這支，不得各自處理——APP 系統推播與站內通知中心
+ * 都不會解析 Markdown，`**粗體**`／`### 標題` 這類格式符號如果直接送出去，
+ * 使用者看到的就是原始符號本身。這裡只清理「拿去當通知標題用的純文字版本」，
+ * 不會、也不應該修改 news.title 這個原始欄位——網站消息頁面／管理後台仍然
+ * 顯示原始 Markdown 標題，兩者是同一份資料的兩種呈現方式，不是兩份資料。
+ *
+ * 清理範圍（依序套用）：
+ *   1) HTML 標籤：整個標籤直接移除（不留下尖括號本身）。
+ *   2) Markdown 連結／圖片 [文字](網址)：只留下「文字」，網址不會出現在標題裡。
+ *   3) Markdown 標題符號 #／##／###（僅限行首，避免誤刪句子中間合理出現的
+ *      # 字元，例如「工廠 #1」不會被動到）。
+ *   4) 粗體 **文字**／__文字__、斜體 *文字*／_文字_、行內程式碼反引號、
+ *      刪除線 ~~文字~~：這些格式符號（*／_／`／~）不分成雙字元或單字元
+ *      分別處理，直接整體移除——跟本檔案既有的 toPlainPushSummary 用同一種
+ *      「移除格式符號本身、保留被包住的文字」策略，不是重新發明一套規則。
+ *   5) 控制字元（含換行、tab、其他不可見控制碼）先轉成空白，再把連續空白
+ *      收斂成單一空白、裁掉前後空白——保證輸出裡不會出現換行或原始控制碼。
+ *
+ * 不刪除中文標點、括號、全形／半形斜線、連字號、百分比或數字，只移除上述
+ * Markdown／HTML／控制字元。
+ *
+ * 防呆：
+ *   - 清理後若變成空字串（例如整個標題只有 Markdown 符號組成的極端情況），
+ *     fallback 成固定安全標題，不會送出空白通知。
+ *   - 輸出長度限制在 maxLen（預設 80）以內；因為截斷前已經把所有 Markdown
+ *     符號都清乾淨了，slice 的截斷點不可能落在殘留符號上、留下半個符號。
+ */
+export function toPlainNotificationText(value: string, maxLen = 80): string {
+  const plain = value
+    .replace(/<[^>]*>/g, "")
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/^[ \t]*#{1,6}[ \t]*/gm, "")
+    .replace(/[*_`~]/g, "")
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\x00-\x1F\x7F]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const safe = plain.length > 0 ? plain : DEFAULT_NOTIFICATION_TITLE;
+  if (safe.length <= maxLen) return safe;
+  return `${safe.slice(0, maxLen - 1).trimEnd()}…`;
+}

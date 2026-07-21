@@ -111,19 +111,21 @@ describe("News.tsx：手機版兩層架構——五分頁 + 只在「產業」�
     expect(block).toMatch(/setIndustryPickerOpen\(false\)/);
   });
 
-  it("selectMobileTab：點「產業」分頁時，若目前已經是某個產業則不做事；否則恢復 lastIndustryName（不會產生 industry=undefined）", () => {
+  it("selectMobileTab：點「產業」分頁時，若目前已經是某個產業或跨產業資訊則不做事；否則恢復上次選擇（不會產生 industry=undefined）", () => {
     const start = newsSource.indexOf("function selectMobileTab");
     const end = newsSource.indexOf("\n  }", start);
     const block = newsSource.slice(start, end);
     expect(block).toMatch(/category\.startsWith\("industry:"\)/);
-    expect(block).toMatch(/selectCategory\(`industry:\$\{lastIndustryName\}`\)/);
+    expect(block).toMatch(/category === "cross-industry"/);
+    expect(block).toMatch(/selectCategory\(industrySelectionToCategory\(lastIndustrySelection\)\)/);
   });
 
-  it("lastIndustryName 初始值必定是合法產業名稱：URL 已有產業就沿用，否則 fallback 成 INDUSTRIES[0].name，不可能是 undefined", () => {
-    const start = newsSource.indexOf("const [lastIndustryName");
+  it("lastIndustrySelection 初始值必定合法：URL 已有產業／跨產業資訊就沿用，否則 fallback 成 INDUSTRIES[0].name，不可能是 undefined", () => {
+    const start = newsSource.indexOf("const [lastIndustrySelection");
     const end = newsSource.indexOf("});", start);
     const block = newsSource.slice(start, end);
     expect(block).toMatch(/INDUSTRIES\[0\]\.name/);
+    expect(block).toMatch(/initial === "cross-industry"/);
   });
 });
 
@@ -160,9 +162,9 @@ describe("全站找消息 NEW 徽章統一改用共用的 NewsNewBadge 元件", 
     expect(newsSource).not.toMatch(/function NewBadge/);
   });
 
-  it("News.tsx 恰好 7 處 JSX 呼叫 <NewsNewBadge：卡片(1)、桌面固定分類迴圈(1，實際渲染 4 次)、桌面產業父層(1)、桌面產業子項迴圈(1，實際渲染 12 次)、手機分頁迴圈(1，實際渲染 5 次)、手機產業選擇器觸發列(1)、手機產業選項迴圈(1，實際渲染 12 次)——涵蓋規格要求的全部 11 個顯示位置", () => {
+  it("News.tsx 恰好 9 處 JSX 呼叫 <NewsNewBadge：卡片(1)、桌面固定分類迴圈(1，實際渲染 4 次)、桌面跨產業資訊按鈕(1)、桌面產業父層(1)、桌面產業子項迴圈(1，實際渲染 12 次)、手機分頁迴圈(1，實際渲染 5 次)、手機產業選擇器觸發列(1)、手機跨產業資訊選項(1)、手機產業選項迴圈(1，實際渲染 12 次)——涵蓋規格要求的全部顯示位置", () => {
     const count = (newsSource.match(/<NewsNewBadge/g) ?? []).length;
-    expect(count).toBe(7);
+    expect(count).toBe(9);
   });
 
   it("手機分頁與產業選擇器使用 compact 尺寸（跟一般消息卡片的 default 尺寸區分，但共用同一元件）", () => {

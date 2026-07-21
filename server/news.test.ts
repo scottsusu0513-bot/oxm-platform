@@ -1050,12 +1050,14 @@ describe("News.tsx 第三輪 UI 微調：產業消息永遠展開、產業 icon 
     // 寫法，所以要從桌面側欄 <aside> 開始找桌面那個出現位置，不能抓第一個。
     const asideStart = source.indexOf('<aside className="hidden lg:block');
     const start = source.indexOf("INDUSTRIES.map(ind => {", asideStart);
-    const context = source.slice(Math.max(0, start - 500), start);
+    const context = source.slice(Math.max(0, start - 1300), start);
     expect(context).not.toMatch(/industryExpanded &&/);
     // 垂直線第四輪配色更新為橘→紫漸層的獨立 <span>（取代原本單色 border-l），
     // 仍保留 pl-4／ml-4 縮排層級，且線條本身用 absolute + w-[2px]，不會因為
     // 選中底色而被蓋住或中斷（不是靠某個按鈕自己的 border，是容器層級的獨立元素）。
-    const industryListBlock = source.slice(start - 500, start + 50);
+    // 1300 字元窗口：跨產業資訊固定按鈕插入在垂直線與 INDUSTRIES.map 之間，
+    // 比原本 500 字元寬得多，窗口要放大才能同時涵蓋到垂直線本身。
+    const industryListBlock = source.slice(start - 1300, start + 50);
     expect(industryListBlock).toMatch(/pl-4/);
     expect(industryListBlock).toMatch(/ml-4/);
     expect(industryListBlock).toMatch(/absolute left-0 top-0 bottom-0 w-\[2px\]/);

@@ -15,7 +15,7 @@ import { getGuestReadIds, isGuestNewsRead } from "@/lib/newsReadTracking";
 import LoginDialog from "@/components/LoginDialog";
 import { toast } from "sonner";
 import {
-  Newspaper, Star, Trophy, Building2, Factory, FileText, BellPlus, BellRing, Loader2, Check, ChevronDown,
+  Newspaper, Star, Trophy, Building2, Globe, Factory, FileText, BellPlus, BellRing, Loader2, Check, ChevronDown,
   Shirt, Hammer, Cpu, Boxes, Layers, Trees, Package, Utensils, FlaskConical, ShoppingBasket, Printer, Cog,
 } from "lucide-react";
 
@@ -23,7 +23,12 @@ const BASE = "https://www.oxmmatch.com";
 const pageTitle = "找消息｜OXM 傳產知識與情報中心";
 const pageDesc = "整合產業動態、競賽資訊、展覽活動與重要消息，讓台灣傳產更快掌握市場機會。";
 
-type CategoryValue = "all" | "important" | "competition" | "exhibition" | `industry:${string}`;
+// 「跨產業資訊」是獨立固定看板（boardKey="cross-industry"，跟 important／
+// competition／exhibition 同一層級），不是 `industry:${string}` 這個由
+// shared/constants.ts INDUSTRIES 動態產生的真實產業命名空間——它刻意不放進
+// INDUSTRIES，不能成為工廠註冊時可選的產業，見 drizzle/schema.ts 的
+// news.isCrossIndustry 欄位註解。
+type CategoryValue = "all" | "important" | "competition" | "exhibition" | "cross-industry" | `industry:${string}`;
 
 const FIXED_CATEGORIES: { value: "all" | "important" | "competition" | "exhibition"; label: string; Icon: typeof Newspaper }[] = [
   { value: "all", label: "全部最新", Icon: Newspaper },
@@ -56,6 +61,20 @@ function getIndustryIcon(name: string): typeof Factory {
   return INDUSTRY_ICON_MAP[name] ?? Factory;
 }
 
+// 手機版「產業」分頁記住的選擇，除了 12 個真實產業名稱，也可能是特殊值
+// "cross-industry"（跨產業資訊）。這三個 helper 把「選擇值 → 顯示文字／icon／
+// 對應的 CategoryValue」的轉換邏輯集中在一處，避免桌面／手機兩處各自寫一份
+// 容易不同步的 if-else。
+function industrySelectionLabel(selection: string): string {
+  return selection === "cross-industry" ? "跨產業資訊" : selection;
+}
+function industrySelectionIcon(selection: string): typeof Factory {
+  return selection === "cross-industry" ? Globe : getIndustryIcon(selection);
+}
+function industrySelectionToCategory(selection: string): CategoryValue {
+  return selection === "cross-industry" ? "cross-industry" : `industry:${selection}`;
+}
+
 // 左側分類項目共用的樣式：選中＝橘→紫淡漸層底＋深紫文字；未選中＝中性深灰
 // 文字＋低飽和紫灰 icon，hover 才稍微加深，不讓整片側欄一次全部變紫。
 function sidebarItemClass(active: boolean): string {
@@ -74,11 +93,12 @@ function parseCategoryFromSearch(): CategoryValue {
   const category = params.get("category");
   const industry = params.get("industry");
   if (category === "industry" && industry) return `industry:${industry}`;
+  if (category === "cross-industry") return "cross-industry";
   if (category === "important" || category === "competition" || category === "exhibition") return category;
   return "all";
 }
 
-type ApiCategory = "all" | "important" | "competition" | "exhibition" | "industry";
+type ApiCategory = "all" | "important" | "competition" | "exhibition" | "cross-industry" | "industry";
 
 function categoryToQueryParams(cat: CategoryValue): { category: ApiCategory; industryName?: string } {
   if (cat.startsWith("industry:")) return { category: "industry", industryName: cat.slice("industry:".length) };
@@ -115,6 +135,7 @@ interface NewCategorySummaryData {
   important: boolean;
   competition: boolean;
   exhibition: boolean;
+  crossIndustry: boolean;
   industry: boolean;
   industries: Record<string, boolean>;
 }
@@ -129,6 +150,7 @@ function categoryHasNew(cat: CategoryValue, summary: NewCategorySummaryData | un
   if (cat === "important") return summary.important;
   if (cat === "competition") return summary.competition;
   if (cat === "exhibition") return summary.exhibition;
+  if (cat === "cross-industry") return summary.crossIndustry;
   return summary.industries[cat.slice("industry:".length)] ?? false;
 }
 
@@ -204,11 +226,15 @@ function SubscribeButton({ boardKey, isAuthenticated, onRequireLogin }: {
   );
 }
 
+// "cross-industry" 本身不是 `industry:${string}` 格式（沒有 "industry:" 前綴），
+// 所以必須在「未命中固定分類」的 fallback（cat.slice("industry:".length)）
+// 之前明確攔截，否則會被錯誤地當成 industry: 前綴字串去 slice，得到殘缺字串。
 function categoryLabel(cat: CategoryValue): string {
   if (cat === "all") return "全部最新";
   if (cat === "important") return "重要消息";
   if (cat === "competition") return "競賽消息";
   if (cat === "exhibition") return "展覽消息";
+  if (cat === "cross-industry") return "跨產業資訊";
   return cat.slice("industry:".length);
 }
 
@@ -218,6 +244,7 @@ function getCategoryMeta(cat: CategoryValue): { title: string; description: stri
   if (cat === "important") return { title: "重要消息", description: "OXM 為傳產會員整理的重要政策與產業資訊" };
   if (cat === "competition") return { title: "競賽消息", description: "掌握適合企業與產業參與的創新競賽資訊" };
   if (cat === "exhibition") return { title: "展覽消息", description: "掌握國內外產業展覽、活動與參展機會" };
+  if (cat === "cross-industry") return { title: "跨產業資訊", description: "適用所有產業的通用消息，例如政府補助方案與跨產業課程" };
   const name = cat.slice("industry:".length);
   return { title: `${name}消息`, description: `掌握${name}產業的市場動態、競賽及展覽資訊` };
 }
@@ -352,12 +379,15 @@ export default function News() {
   const [offset, setOffset] = useState(0);
   const [items, setItems] = useState<NewsListItemData[]>([]);
   const [loginDialogOpen, setLoginDialogOpen] = useState(false);
-  // 手機版「產業」分頁記住的產業：URL 一開始就是某個產業就直接沿用；否則
-  // fallback 成 INDUSTRIES 第一個，確保這個值永遠是合法產業名稱，絕對不會是
+  // 手機版「產業」分頁記住的選擇：可能是某個真實產業名稱，也可能是特殊值
+  // "cross-industry"（跨產業資訊）。URL 一開始就是某個產業或跨產業資訊就直接
+  // 沿用；否則 fallback 成 INDUSTRIES 第一個，確保這個值永遠合法，絕對不會是
   // undefined／空字串，之後切到「產業」分頁組出來的 query 一定完整
-  // （?category=industry&industry=<name>），不會出現 industry=undefined。
-  const [lastIndustryName, setLastIndustryName] = useState<string>(() => {
+  // （?category=industry&industry=<name> 或 ?category=cross-industry），
+  // 不會出現 industry=undefined。
+  const [lastIndustrySelection, setLastIndustrySelection] = useState<string>(() => {
     const initial = parseCategoryFromSearch();
+    if (initial === "cross-industry") return "cross-industry";
     return initial.startsWith("industry:") ? initial.slice("industry:".length) : INDUSTRIES[0].name;
   });
   const [industryPickerOpen, setIndustryPickerOpen] = useState(false);
@@ -377,7 +407,8 @@ export default function News() {
   // 換分類時重置捲動列表與 offset，避免舊分類的資料殘留混進新分類。
   function selectCategory(next: CategoryValue) {
     setCategory(next);
-    if (next.startsWith("industry:")) setLastIndustryName(next.slice("industry:".length));
+    if (next === "cross-industry") setLastIndustrySelection("cross-industry");
+    else if (next.startsWith("industry:")) setLastIndustrySelection(next.slice("industry:".length));
     setOffset(0);
     setItems([]);
     const q = categoryToQueryParams(next);
@@ -388,12 +419,12 @@ export default function News() {
   }
 
   // 手機版五分頁點擊：「產業」分頁本身不是一個實際看板，點下去要嘛維持
-  // 目前已經選中的產業（URL 已經是 industry:X 時不做任何事），要嘛恢復上次
-  // 選過的產業／預設第一個產業——絕對不會產生沒有 industry 的中繼狀態。
+  // 目前已經選中的產業／跨產業資訊（URL 已經是其中之一時不做任何事），要嘛
+  // 恢復上次選過的選擇／預設第一個產業——絕對不會產生沒有 industry 的中繼狀態。
   function selectMobileTab(tab: MobileTabValue) {
     if (tab === "industry") {
-      if (category.startsWith("industry:")) return;
-      selectCategory(`industry:${lastIndustryName}`);
+      if (category.startsWith("industry:") || category === "cross-industry") return;
+      selectCategory(industrySelectionToCategory(lastIndustrySelection));
       return;
     }
     selectCategory(tab);
@@ -409,9 +440,13 @@ export default function News() {
   const isEmpty = !isLoading && !error && items.length === 0;
 
   const categoryMeta = getCategoryMeta(category);
-  const industrySectionActive = category.startsWith("industry:");
+  const industrySectionActive = category.startsWith("industry:") || category === "cross-industry";
   const mobileActiveTab: MobileTabValue = industrySectionActive ? "industry" : (category as MobileTabValue);
-  const currentIndustryName = industrySectionActive ? category.slice("industry:".length) : lastIndustryName;
+  const currentIndustrySelection = category === "cross-industry"
+    ? "cross-industry"
+    : category.startsWith("industry:")
+      ? category.slice("industry:".length)
+      : lastIndustrySelection;
 
   return (
     <div className="min-h-screen relative overflow-x-hidden bg-gradient-to-b from-orange-50/50 via-background to-purple-50/40 animate-page-enter">
@@ -513,15 +548,29 @@ export default function News() {
                       className="w-full flex items-center gap-2 rounded-lg border border-purple-200/60 bg-white/70 px-3 py-2.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-400"
                     >
                       {(() => {
-                        const CurrentIcon = getIndustryIcon(currentIndustryName);
+                        const CurrentIcon = industrySelectionIcon(currentIndustrySelection);
                         return <CurrentIcon className="w-4 h-4 text-violet-500 shrink-0" aria-hidden="true" />;
                       })()}
-                      <span className="flex-1 min-w-0 truncate text-left font-medium">{currentIndustryName}</span>
+                      <span className="flex-1 min-w-0 truncate text-left font-medium">{industrySelectionLabel(currentIndustrySelection)}</span>
                       {categoryHasNew(category, newSummary) && <NewsNewBadge size="compact" />}
                       <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0" aria-hidden="true" />
                     </button>
                   </PopoverTrigger>
                   <PopoverContent align="start" className="w-[calc(100vw-2.5rem)] max-w-[380px] p-1 max-h-[50vh] overflow-y-auto">
+                    {/* 跨產業資訊固定排在第一個選項，不是 INDUSTRIES.map 的一部分
+                        ——它不是真實產業，見 industrySelectionToCategory 的說明。 */}
+                    <button
+                      type="button"
+                      onClick={() => { selectCategory("cross-industry"); setIndustryPickerOpen(false); }}
+                      className={`w-full flex items-center gap-2 rounded-md px-3 py-2 text-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-400 ${
+                        category === "cross-industry" ? "bg-gradient-to-r from-orange-50 to-purple-50 text-purple-700 font-medium" : "text-foreground/80 hover:bg-orange-50/60"
+                      }`}
+                    >
+                      <Globe className={`w-4 h-4 shrink-0 ${category === "cross-industry" ? "" : "text-violet-400/70"}`} />
+                      <span className="flex-1 min-w-0 truncate">跨產業資訊</span>
+                      {categoryHasNew("cross-industry", newSummary) && <NewsNewBadge size="compact" />}
+                      {category === "cross-industry" && <Check className="w-4 h-4 shrink-0 text-purple-600" aria-hidden="true" />}
+                    </button>
                     {INDUSTRIES.map(ind => {
                       const Icon = getIndustryIcon(ind.name);
                       const isSelected = category === `industry:${ind.name}`;
@@ -587,12 +636,23 @@ export default function News() {
                 </div>
                 <div className="relative pl-4 space-y-1 ml-4">
                   {/* 產業清單左側垂直線：橘→紫細漸層，從第一個產業連續延伸到最後一個，
-                      獨立於各按鈕背景之外，選中底色不會覆蓋或切斷它。 */}
+                      獨立於各按鈕背景之外，選中底色不會覆蓋或切斷它。跨產業資訊固定
+                      排在紡織上方、共用同一條垂直線與按鈕樣式，不是另外獨立的區塊
+                      ——它不是真實產業，見 industrySelectionToCategory 的說明。 */}
                   <span
                     className="absolute left-0 top-0 bottom-0 w-[2px] rounded-full opacity-60"
                     style={{ background: "linear-gradient(to bottom, #fb923c, #a855f7)" }}
                     aria-hidden="true"
                   />
+                  <button
+                    type="button"
+                    onClick={() => selectCategory("cross-industry")}
+                    className={`${sidebarItemClass(category === "cross-industry")} px-3 py-2 ${category === "cross-industry" ? "font-medium" : ""}`}
+                  >
+                    <Globe className={sidebarIconClass(category === "cross-industry")} />
+                    <span className="flex-1 min-w-0 truncate text-left">跨產業資訊</span>
+                    {categoryHasNew("cross-industry", newSummary) && <NewsNewBadge />}
+                  </button>
                   {INDUSTRIES.map(ind => {
                     const active = category === `industry:${ind.name}`;
                     const Icon = getIndustryIcon(ind.name);

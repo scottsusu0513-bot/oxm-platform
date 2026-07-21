@@ -1994,7 +1994,7 @@ export async function deleteAnnouncement(id: number) {
 // 能力：Markdown 顯示交給前端沿用既有的 MarkdownContent；Email／Push 分別呼叫
 // email.ts／push.ts 既有的底層寄送函式，不重寫一套新的寄送機制。
 
-export type NewsCategory = "all" | "important" | "competition" | "exhibition" | "industry";
+export type NewsCategory = "all" | "important" | "competition" | "exhibition" | "cross-industry" | "industry";
 
 /** slug 格式：小寫英數字，可用 "-" 分段，避免任何需要額外編碼的字元進到網址。 */
 export function isValidNewsSlug(slug: string): boolean {
@@ -2078,7 +2078,7 @@ export function validateNewsIndustryNames(names: string[]): void {
 // shared/constants.ts 的 INDUSTRY_OPTIONS（跟 validateNewsIndustryNames 同一份
 // 白名單），任意字串／控制字元／超長值／不存在的產業一律在這裡被拒絕，不需要
 // 額外寫 regex 過濾——不在白名單裡本來就不會通過 includes() 比對。
-export const NEWS_BOARD_FIXED_KEYS = ["all", "important", "competition", "exhibition"] as const;
+export const NEWS_BOARD_FIXED_KEYS = ["all", "important", "competition", "exhibition", "cross-industry"] as const;
 export type NewsBoardFixedKey = typeof NEWS_BOARD_FIXED_KEYS[number];
 
 export function isValidNewsBoardKey(boardKey: string): boolean {
@@ -2163,6 +2163,7 @@ export async function listPublicNews(params: ListPublicNewsParams): Promise<{ it
   if (params.category === "important") conditions.push(eq(news.isImportant, true));
   else if (params.category === "competition") conditions.push(eq(news.isCompetition, true));
   else if (params.category === "exhibition") conditions.push(eq(news.isExhibition, true));
+  else if (params.category === "cross-industry") conditions.push(eq(news.isCrossIndustry, true));
   else if (params.category === "industry") {
     if (!params.industryName) return { items: [], total: 0 };
     const idRows = await db.selectDistinct({ newsId: newsIndustries.newsId })
@@ -2200,6 +2201,7 @@ export interface NewCategorySummary {
   important: boolean;
   competition: boolean;
   exhibition: boolean;
+  crossIndustry: boolean;
   industry: boolean;
   industries: Record<string, boolean>;
 }
@@ -2226,7 +2228,7 @@ export interface GetNewCategorySummaryParams {
  */
 export async function getNewCategorySummary(params: GetNewCategorySummaryParams = {}): Promise<NewCategorySummary> {
   const db = await getDb();
-  const empty: NewCategorySummary = { all: false, important: false, competition: false, exhibition: false, industry: false, industries: {} };
+  const empty: NewCategorySummary = { all: false, important: false, competition: false, exhibition: false, crossIndustry: false, industry: false, industries: {} };
   if (!db) return empty;
 
   const cutoff = new Date(Date.now() - NEWS_NEW_WINDOW_MS);
@@ -2235,6 +2237,7 @@ export async function getNewCategorySummary(params: GetNewCategorySummaryParams 
     isImportant: news.isImportant,
     isCompetition: news.isCompetition,
     isExhibition: news.isExhibition,
+    isCrossIndustry: news.isCrossIndustry,
   }).from(news).where(and(eq(news.status, "published"), gte(news.firstPublishedAt, cutoff)));
 
   if (recent.length === 0) return empty;
@@ -2258,12 +2261,19 @@ export async function getNewCategorySummary(params: GetNewCategorySummaryParams 
   const industries: Record<string, boolean> = {};
   for (const row of industryRows) industries[row.industryName] = true;
 
+  const crossIndustry = unread.some(r => r.isCrossIndustry);
+
   return {
     all: true,
     important: unread.some(r => r.isImportant),
     competition: unread.some(r => r.isCompetition),
     exhibition: unread.some(r => r.isExhibition),
-    industry: industryRows.length > 0,
+    crossIndustry,
+    // 桌面「產業消息」父層／手機「產業」分頁的 NEW：任一子看板（跨產業資訊
+    // 或任一真實產業）有未讀 NEW 就顯示，兩個來源用 OR 合併，不是各自獨立
+    // 判斷——跨產業資訊雖然不是 newsIndustries 裡的一筆，但使用者體驗上仍
+    // 隸屬「產業消息」這個父層區塊，見 client/src/pages/News.tsx 的桌面側欄。
+    industry: industryRows.length > 0 || crossIndustry,
     industries,
   };
 }
@@ -2310,6 +2320,7 @@ export interface CreateNewsInput {
   isImportant?: boolean;
   isCompetition?: boolean;
   isExhibition?: boolean;
+  isCrossIndustry?: boolean;
   industryNames?: string[];
   sourceName?: string | null;
   sourceUrl?: string | null;
@@ -2349,6 +2360,7 @@ export async function createNews(data: CreateNewsInput): Promise<{ id: number; s
         isImportant: data.isImportant ?? false,
         isCompetition: data.isCompetition ?? false,
         isExhibition: data.isExhibition ?? false,
+        isCrossIndustry: data.isCrossIndustry ?? false,
         sourceName,
         sourceUrl,
         publishedAt: publishNow ? now : null,
@@ -2384,6 +2396,7 @@ export interface UpdateNewsInput {
   isImportant?: boolean;
   isCompetition?: boolean;
   isExhibition?: boolean;
+  isCrossIndustry?: boolean;
   industryNames?: string[];
   /** 來源單位／來源網址要嘛都不傳、要嘛一起傳，方便做「有名稱必須有網址」的交叉驗證。 */
   sourceName?: string | null;
@@ -2440,6 +2453,7 @@ export async function updateNews(id: number, data: UpdateNewsInput): Promise<{ s
     if (data.isImportant !== undefined) setData.isImportant = data.isImportant;
     if (data.isCompetition !== undefined) setData.isCompetition = data.isCompetition;
     if (data.isExhibition !== undefined) setData.isExhibition = data.isExhibition;
+    if (data.isCrossIndustry !== undefined) setData.isCrossIndustry = data.isCrossIndustry;
     if (validatedSource) {
       // 編輯來源資料（不管消息是否已發布）不影響 status／publishedAt，因此
       // 不會觸發下面的 shouldNotify——修改來源資訊不寄送 Email／Push。
@@ -2813,7 +2827,11 @@ export async function getUserIndustries(userId: number): Promise<string[]> {
 export function computeDefaultBoardSubscription(boardKey: string, userIndustries: string[]): boolean {
   if (boardKey === "important") return true;
   if (boardKey.startsWith("industry:")) return userIndustries.includes(boardKey.slice("industry:".length));
-  return false; // all／competition／exhibition／其他產業預設一律未訂閱
+  // all／competition／exhibition／cross-industry／其他產業預設一律未訂閱。
+  // "cross-industry" 刻意不比對 userIndustries——它不是真實產業，任何會員
+  // （不論屬於幾個產業）都不會因為這個判斷式而被視為預設訂閱，一律要主動按
+  // 訂閱才會變 true，見 server/db.ts 的 news.isCrossIndustry 欄位註解。
+  return false;
 }
 
 /** 使用者對所有看板「明確覆寫」的原始紀錄（true=明確訂閱、false=明確取消），沒有紀錄的看板不會出現在這個 Map 裡。 */
@@ -2857,7 +2875,7 @@ export async function setNewsBoardSubscription(userId: number, boardKey: string,
  * 集合（尚未套用 news／pushNews 這類外部通知管道開關——那是 gatherNewsRecipients
  * 的事，這裡只回答「這個人有沒有看板訂閱資格」，站內通知三層判斷會直接用
  * 這個結果）。適用看板固定包含 "all"，依消息分類加上
- * important／competition／exhibition／industry:<name>。
+ * important／competition／exhibition／cross-industry／industry:<name>。
  *
  * 三種來源合併去重：
  *   1) 對任一適用看板明確訂閱（isSubscribed=true）的使用者——不論預設值。
@@ -2865,8 +2883,15 @@ export async function setNewsBoardSubscription(userId: number, boardKey: string,
  *   3) industryNames 非空時：per-user 比對「這篇消息的產業」∩「使用者自己
  *      所屬產業」，只要其中至少一個產業沒有被明確取消，就符合資格（不要求
  *      使用者所有所屬產業都保留訂閱）。
+ *
+ * isCrossIndustry 刻意跟 isCompetition／isExhibition 走同一條路——只靠來源 1）
+ * 的「明確訂閱」名單，沒有對應的「自動視為符合資格」邏輯（不像 isImportant
+ * 有『所有有效會員』、industryNames 有『使用者自己所屬產業』這種自動納入）。
+ * 這是「cross-industry 任何人都不會預設訂閱，只有主動按過訂閱才收得到」這條
+ * 規則在收件人聚合這一層唯一需要的保證：不多寫一段自動納入的程式碼，天生
+ * 就不會有人被誤判為預設訂閱。
  */
-async function getBoardEligibleUserIds(opts: { isImportant: boolean; isCompetition: boolean; isExhibition: boolean; industryNames: string[] }): Promise<Set<number>> {
+async function getBoardEligibleUserIds(opts: { isImportant: boolean; isCompetition: boolean; isExhibition: boolean; isCrossIndustry: boolean; industryNames: string[] }): Promise<Set<number>> {
   const db = await getDb();
   if (!db) return new Set();
 
@@ -2875,6 +2900,7 @@ async function getBoardEligibleUserIds(opts: { isImportant: boolean; isCompetiti
     ...(opts.isImportant ? ["important"] : []),
     ...(opts.isCompetition ? ["competition"] : []),
     ...(opts.isExhibition ? ["exhibition"] : []),
+    ...(opts.isCrossIndustry ? ["cross-industry"] : []),
     ...opts.industryNames.map(n => `industry:${n}`),
   ];
 
@@ -2973,7 +2999,7 @@ function isNewsPushAllowed(settings: Record<string, boolean> | null | undefined)
  * 結果為何都會出現一筆），呼叫端可以直接拿這個陣列的長度當作站內通知／預估
  * 人數，不需要另外查一次資格。
  */
-export async function gatherNewsRecipients(opts: { isImportant: boolean; isCompetition: boolean; isExhibition: boolean; industryNames: string[] }): Promise<NewsRecipientInfo[]> {
+export async function gatherNewsRecipients(opts: { isImportant: boolean; isCompetition: boolean; isExhibition: boolean; isCrossIndustry: boolean; industryNames: string[] }): Promise<NewsRecipientInfo[]> {
   const db = await getDb();
   if (!db) return [];
 

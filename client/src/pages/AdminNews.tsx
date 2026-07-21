@@ -12,7 +12,7 @@ import { trpc } from "@/lib/trpc";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { format } from "date-fns";
-import { Plus, Pencil, Newspaper, Star, Trophy, Building2, Send, ArchiveRestore, Archive, RefreshCw, Image as ImageIcon, FileText as FileTextIcon, Trash2, Eye, ChevronDown, Copy } from "lucide-react";
+import { Plus, Pencil, Newspaper, Star, Trophy, Building2, Globe, Send, ArchiveRestore, Archive, RefreshCw, Image as ImageIcon, FileText as FileTextIcon, Trash2, Eye, ChevronDown, Copy } from "lucide-react";
 import { FloatingBackButton } from "@/components/FloatingBackButton";
 import MarkdownContent, { toMarkdownPreviewText } from "@/components/MarkdownContent";
 import { MarkdownToolbar, insertAtCursor } from "@/components/MarkdownToolbar";
@@ -69,6 +69,7 @@ type FormState = {
   isImportant: boolean;
   isCompetition: boolean;
   isExhibition: boolean;
+  isCrossIndustry: boolean;
   industryNames: string[];
   coverImageUrl: string | null;
   sourceName: string;
@@ -76,7 +77,7 @@ type FormState = {
 };
 const DEFAULT_FORM: FormState = {
   slug: "", title: "", summary: "", content: "",
-  isImportant: false, isCompetition: false, isExhibition: false, industryNames: [],
+  isImportant: false, isCompetition: false, isExhibition: false, isCrossIndustry: false, industryNames: [],
   coverImageUrl: null,
   sourceName: "", sourceUrl: "",
 };
@@ -157,6 +158,7 @@ function AdminNewsContent() {
     isImportant: form.isImportant,
     isCompetition: form.isCompetition,
     isExhibition: form.isExhibition,
+    isCrossIndustry: form.isCrossIndustry,
     industryNames: form.industryNames,
   });
 
@@ -214,6 +216,7 @@ function AdminNewsContent() {
       isImportant: item.isImportant,
       isCompetition: item.isCompetition,
       isExhibition: item.isExhibition,
+      isCrossIndustry: item.isCrossIndustry,
       industryNames: item.industryNames,
       coverImageUrl: item.coverImageUrl ?? null,
       sourceName: item.sourceName ?? "",
@@ -249,6 +252,7 @@ function AdminNewsContent() {
     isImportant: form.isImportant,
     isCompetition: form.isCompetition,
     isExhibition: form.isExhibition,
+    isCrossIndustry: form.isCrossIndustry,
     industryNames: form.industryNames,
     sourceName: form.sourceName.trim() || null,
     sourceUrl: form.sourceUrl.trim() || null,
@@ -769,6 +773,10 @@ function AdminNewsContent() {
                     <Checkbox checked={form.isExhibition} onCheckedChange={v => setForm(p => ({ ...p, isExhibition: v === true }))} />
                     <Building2 className="w-3.5 h-3.5 text-blue-500" />展覽消息
                   </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <Checkbox checked={form.isCrossIndustry} onCheckedChange={v => setForm(p => ({ ...p, isCrossIndustry: v === true }))} />
+                    <Globe className="w-3.5 h-3.5 text-teal-500" />跨產業資訊
+                  </label>
                 </div>
               </div>
 
@@ -1130,6 +1138,7 @@ function AdminNewsContent() {
                           {item.isImportant && <Badge variant="outline" className="text-xs gap-1"><Star className="w-3 h-3" />重要</Badge>}
                           {item.isCompetition && <Badge variant="outline" className="text-xs gap-1"><Trophy className="w-3 h-3" />競賽</Badge>}
                           {item.isExhibition && <Badge variant="outline" className="text-xs gap-1"><Building2 className="w-3 h-3" />展覽</Badge>}
+                          {item.isCrossIndustry && <Badge variant="outline" className="text-xs gap-1"><Globe className="w-3 h-3" />跨產業</Badge>}
                           {item.industryNames.map(n => <Badge key={n} variant="outline" className="text-xs">{n}</Badge>)}
                           <span className="text-xs text-muted-foreground">/news/{item.slug}</span>
                         </div>

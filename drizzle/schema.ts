@@ -390,6 +390,16 @@ export const news = mysqlTable("news", {
   isImportant: boolean("isImportant").default(false).notNull(),
   isCompetition: boolean("isCompetition").default(false).notNull(),
   isExhibition: boolean("isExhibition").default(false).notNull(),
+  // 跨產業資訊：適用所有工廠、但不屬於特定產業的消息（例如政府補助、跨產業
+  // 課程）。刻意用獨立布林欄位，不是塞進 newsIndustries——newsIndustries 的
+  // industryName 一律要通過 shared/constants.ts 的 INDUSTRY_OPTIONS 白名單
+  // 驗證（真實工廠產業），「跨產業資訊」不是真實產業，寫進那張表會讓
+  // validateNewsIndustryNames 與 gatherNewsRecipients 的 JSON_OVERLAPS
+  // 產業比對邏輯出現語意錯誤（沒有任何工廠會把它列為 factories.industry）。
+  // 看板訂閱／收件人聚合把它當成跟 isCompetition／isExhibition 同一層級的
+  // 固定看板（boardKey="cross-industry"，不是 "industry:跨產業資訊"），
+  // 天生就不會有任何人「因為屬於某產業」而被視為預設訂閱。
+  isCrossIndustry: boolean("isCrossIndustry").default(false).notNull(),
   // 「目前對外顯示」的發布時間——每次 draft/withdrawn -> published 都會更新，
   // 驅動列表排序與 72 小時 NEW 徽章。
   publishedAt: timestamp("publishedAt"),

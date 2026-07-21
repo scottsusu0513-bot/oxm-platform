@@ -19,7 +19,7 @@ import { nanoid } from "nanoid";
 import { factories, conversations, reviews, reports, factoryCoManagers, users, upgradeConsultants } from "../drizzle/schema";
 import { desc, eq, and, sql, isNull } from "drizzle-orm";
 import { getDb } from "./db";
-import { sendPushToUser, sendPushToRecipients, toPlainPushSummary } from "./push";
+import { sendPushToUser, sendPushToRecipients, toPlainPushSummary, toPlainNotificationText } from "./push";
 import { createPlatformNotifications } from "./notifications";
 import { notifyUser, notifyFactoryMembers, notifyAdmins } from "./notifyHelper";
 import { runCollaborationOrderOverdueEmailCheck } from "./orderOverdueCheck";
@@ -58,18 +58,27 @@ async function dispatchNewsNotifications(params: {
   isImportant: boolean;
   isCompetition: boolean;
   isExhibition: boolean;
+  isCrossIndustry: boolean;
   industryNames: string[];
 }): Promise<void> {
   const recipients = await db.gatherNewsRecipients({
     isImportant: params.isImportant,
     isCompetition: params.isCompetition,
     isExhibition: params.isExhibition,
+    isCrossIndustry: params.isCrossIndustry,
     industryNames: params.industryNames,
   });
   if (recipients.length === 0) {
     console.log(`[news] notify skipped newsId=${params.newsId}: no eligible recipients`);
     return;
   }
+
+  // 通知標題一律清成純文字再送出（Email 主旨、Push 標題、站內通知
+  // titleSnapshot 三個管道共用同一份，只算一次、不各自呼叫），避免 APP 系統
+  // 推播／站內通知中心不解析 Markdown、把 **粗體** 這類格式符號原樣顯示給
+  // 使用者。這裡刻意不修改 params.title 本身（news.title 原始資料不受影響），
+  // plainTitle 只是這次 dispatch 過程中用來產生通知內容的暫時衍生值。
+  const plainTitle = toPlainNotificationText(params.title);
 
   // 站內通知：看板訂閱資格 = 收件資格本身，不看 news／pushNews。dedupeKey
   // 確保同一篇消息＋同一使用者最多一筆，即便 recipients 因為 bug 出現重複
@@ -81,7 +90,7 @@ async function dispatchNewsNotifications(params: {
       eventType: "news",
       eventGroup: "news",
       message: "產業情報中心有新消息",
-      titleSnapshot: params.title,
+      titleSnapshot: plainTitle,
       actionUrl: `/news/${params.slug}`,
       dedupeKey: `news:${params.newsId}:user:${r.id}`,
     })));
@@ -114,7 +123,7 @@ async function dispatchNewsNotifications(params: {
       let sent = false, lastErr: unknown;
       for (let attempt = 1; attempt <= RETRY_DELAYS_MS.length + 1; attempt++) {
         try {
-          await sendNewsEmail({ toEmail: r.email, toName: r.name, newsTitle: params.title, newsSummary: params.summary, newsSlug: params.slug });
+          await sendNewsEmail({ toEmail: r.email, toName: r.name, newsTitle: plainTitle, newsSummary: params.summary, newsSlug: params.slug });
           sent = true;
           break;
         } catch (err) {
@@ -154,7 +163,7 @@ async function dispatchNewsNotifications(params: {
       if (notifId == null) continue;
       try {
         const result = await sendPushToUser(r.id, {
-          title: params.title,
+          title: plainTitle,
           body: bodyText,
           data: { type: "news", newsId: String(params.newsId), targetPath: `/news/${params.slug}` },
         });
@@ -196,6 +205,9 @@ async function retryNewsNotifications(newsId: number): Promise<{ emailRetried: n
   const retryable = await db.getRetryableNewsNotifications(newsId);
   let emailRetried = 0;
   let pushRetried = 0;
+  // 跟 dispatchNewsNotifications 用同一支 helper、同一份清理規則，重試寄送
+  // 的標題不會跟第一次寄送的標題不一致。
+  const plainTitle = toPlainNotificationText(item.title);
 
   for (const row of retryable) {
     const user = await db.getUserById(row.userId);
@@ -212,7 +224,7 @@ async function retryNewsNotifications(newsId: number): Promise<{ emailRetried: n
         continue;
       }
       try {
-        await sendNewsEmail({ toEmail: email, toName: user.name, newsTitle: item.title, newsSummary: item.summary, newsSlug: item.slug });
+        await sendNewsEmail({ toEmail: email, toName: user.name, newsTitle: plainTitle, newsSummary: item.summary, newsSlug: item.slug });
         await db.markNewsNotificationSent(row.id);
         emailRetried++;
       } catch (err) {
@@ -226,7 +238,7 @@ async function retryNewsNotifications(newsId: number): Promise<{ emailRetried: n
       }
       try {
         const result = await sendPushToUser(row.userId, {
-          title: item.title,
+          title: plainTitle,
           body: toPlainPushSummary(item.summary),
           data: { type: "news", newsId: String(newsId), targetPath: `/news/${item.slug}` },
         });
@@ -3981,7 +3993,7 @@ export const appRouter = router({
   news: router({
     // ---- 公開頁 ----
     list: publicProcedure.input(z.object({
-      category: z.enum(["all", "important", "competition", "exhibition", "industry"]).default("all"),
+      category: z.enum(["all", "important", "competition", "exhibition", "cross-industry", "industry"]).default("all"),
       industryName: z.string().max(50).optional(),
       offset: z.number().int().min(0).default(0),
       limit: z.number().int().min(1).max(50).default(20),
@@ -4062,6 +4074,7 @@ export const appRouter = router({
       isImportant: z.boolean(),
       isCompetition: z.boolean().default(false),
       isExhibition: z.boolean().default(false),
+      isCrossIndustry: z.boolean().default(false),
       industryNames: z.array(z.string().max(50)).max(20).default([]),
     })).query(async ({ input }) => {
       const recipients = await db.gatherNewsRecipients(input);
@@ -4083,6 +4096,7 @@ export const appRouter = router({
       isImportant: z.boolean().default(false),
       isCompetition: z.boolean().default(false),
       isExhibition: z.boolean().default(false),
+      isCrossIndustry: z.boolean().default(false),
       industryNames: z.array(z.string().max(50)).max(20).default([]),
       sourceName: z.string().max(200).nullable().optional(),
       sourceUrl: z.string().max(1000).nullable().optional(),
@@ -4106,6 +4120,7 @@ export const appRouter = router({
           isImportant: input.isImportant,
           isCompetition: input.isCompetition,
           isExhibition: input.isExhibition,
+          isCrossIndustry: input.isCrossIndustry,
           industryNames: input.industryNames,
         });
       }
@@ -4121,6 +4136,7 @@ export const appRouter = router({
       isImportant: z.boolean().optional(),
       isCompetition: z.boolean().optional(),
       isExhibition: z.boolean().optional(),
+      isCrossIndustry: z.boolean().optional(),
       industryNames: z.array(z.string().max(50)).max(20).optional(),
       sourceName: z.string().max(200).nullable().optional(),
       sourceUrl: z.string().max(1000).nullable().optional(),
@@ -4143,6 +4159,7 @@ export const appRouter = router({
             isImportant: item.isImportant,
             isCompetition: item.isCompetition,
             isExhibition: item.isExhibition,
+            isCrossIndustry: item.isCrossIndustry,
             industryNames,
           });
         }
