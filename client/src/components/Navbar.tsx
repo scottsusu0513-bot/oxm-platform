@@ -725,13 +725,21 @@ export default function Navbar() {
       {/* ── Mobile Menu ──
           Portal 到 document.body：脫離 <header> 自身的 stacking context，
           避免同為 z-50、但在 DOM 中排在 header 之後的頁面浮動按鈕（返回鍵、
-          聯繫工廠按鈕、公告按鈕等）視覺上蓋過手機選單。外層 fixed inset-0
-          從 header 高度往下鋪滿整個 viewport，作為背景 pointer-event 阻擋層；
-          內層才是實際可捲動的選單內容，捲動只發生在這裡，不會傳遞到背景頁面。 */}
+          聯繫工廠按鈕、公告按鈕等）視覺上蓋過手機選單。
+          外層容器的框必須從 header 底部才開始（用 `top: calc(...)`），不能用
+          `inset-0` + `paddingTop` 讓框從 y=0 就整個蓋住 viewport——那樣即使
+          padding 區塊沒有畫任何東西，這個 z-[60] 的框仍然會蓋在 z-50 的
+          <header> 正上方，把 header 自己的 X／通知／信件／品牌選單按鈕的
+          點擊全部攔截掉（視覺上看起來像按鈕有按壓效果，是因為 CSS active
+          pseudo-class 本身不需要事件真的送達；但 click 永遠不會觸發到那個
+          按鈕，因為在同一個螢幕座標上，z-index 更高的這層才是實際命中目標）。
+          改用 `top` 之後這層的框本身就從 header 下緣開始，畫面呈現完全相同，
+          但不會再遮住 header。內層才是實際可捲動的選單內容，捲動只發生在
+          這裡，不會傳遞到背景頁面。 */}
       {menuVisible && createPortal(
         <div
-          className="lg:hidden fixed inset-0 z-[60]"
-          style={{ paddingTop: "calc(4rem + env(safe-area-inset-top, 0px))" }}
+          className="lg:hidden fixed inset-x-0 bottom-0 z-[60]"
+          style={{ top: "calc(4rem + env(safe-area-inset-top, 0px))" }}
         >
         <div
           className={`h-full overflow-y-auto overscroll-contain touch-pan-y border-t border-border bg-white px-4 pt-3 ${menuClosing ? "animate-menu-exit" : "animate-menu-enter"}`}

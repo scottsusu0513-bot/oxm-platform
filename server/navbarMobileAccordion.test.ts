@@ -113,7 +113,80 @@ describe("Navbar.tsx: 手機版六入口 Accordion 使用單一 state", () => {
   it("手機選單 overlay 透過 createPortal 掛到 document.body，脫離 header 的 stacking context", () => {
     expect(source).toMatch(/import \{ createPortal \} from "react-dom";/);
     expect(source).toMatch(/menuVisible && createPortal\(/);
-    expect(source).toMatch(/fixed inset-0 z-\[60\]/);
+  });
+
+  it("overlay 外層容器的框從 header 底部才開始，不會用 inset-0 蓋住整個 viewport（避免蓋住 header 自己的按鈕）", () => {
+    // 修正前用 `fixed inset-0` + `paddingTop`：框從 y=0 就整個蓋住 viewport，
+    // z-[60] 高於 header 的 z-50，即使 padding 區塊沒畫任何東西，還是會把
+    // header 自己的 X／通知／信件／品牌選單按鈕的點擊全部攔截掉。
+    // 修正後改用 `top: calc(...)`，框本身就從 header 下緣開始，不再蓋住 header。
+    const portalMatch = source.match(/\{menuVisible && createPortal\(\s*\n\s*<div\s*\n\s*className="([^"]*)"\s*\n\s*style=\{\{ ([^}]*) \}\}/);
+    expect(portalMatch, "找不到手機選單 overlay 外層 div").not.toBeNull();
+    const [, className, style] = portalMatch!;
+    expect(className).not.toMatch(/\binset-0\b/);
+    expect(className).toMatch(/\binset-x-0\b/);
+    expect(className).toMatch(/\bbottom-0\b/);
+    expect(className).toMatch(/z-\[60\]/);
+    expect(style).not.toMatch(/paddingTop/);
+    expect(style).toMatch(/top: "calc\(4rem \+ env\(safe-area-inset-top, 0px\)\)"/);
+  });
+
+  it("overlay 外層容器與內層可捲動選單內容都沒有 stopPropagation／pointer capture／capture-phase 事件，不會攔截選單內按鈕的 click", () => {
+    const start = source.indexOf("{menuVisible && createPortal(");
+    const end = source.indexOf("document.body\n      )}", start);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const portalBlock = source.slice(start, end);
+    // stopPropagation／pointer capture／capture-phase 事件完全不該出現：這些才是
+    // 真正可能讓 click 被攔截掉的手法。
+    expect(portalBlock).not.toMatch(/stopPropagation\(\)/);
+    expect(portalBlock).not.toMatch(/setPointerCapture|releasePointerCapture|onPointerDownCapture|onTouchStartCapture|onClickCapture/);
+    // preventDefault() 本身允許出現，但只能是既有的「註冊／登入」按鈕（單純
+    // type="button"，本來就沒有預設行為要擋，無害），不能出現在 overlay 外層
+    // 容器或任何 Link／導頁按鈕上（那樣才會真的擋掉導頁）。
+    const preventDefaultLines = portalBlock.match(/^.*preventDefault\(\).*$/gm) ?? [];
+    for (const line of preventDefaultLines) {
+      expect(line).toMatch(/closeMobileMenuForDialog\(\); setLoginDialogOpen\(true\); \}\}>$/);
+    }
+  });
+
+  it("手機版 header 上的 X／漢堡切換鈕是真的 <Button>，onClick 直接切換 mobileOpen（不依賴父層事件代理）", () => {
+    const start = source.indexOf('{/* ── Mobile / Tablet（< lg）: 信件｜鈴鐺｜漢堡 ── */}');
+    const end = source.indexOf("</div>\n      </div>", start);
+    expect(start).toBeGreaterThan(-1);
+    const headerMobileBlock = source.slice(start, end);
+    expect(headerMobileBlock).toMatch(/onClick=\{\(\) => setMobileOpen\(!mobileOpen\)\}/);
+    expect(headerMobileBlock).toMatch(/\{mobileOpen \? <X className="w-5 h-5" \/> : <Menu className="w-5 h-5" \/>\}/);
+    // 這顆按鈕、以及信件／鈴鐺 Link，都是 header 自己的一部分（不在 Portal 裡），
+    // 不應該被任何 preventDefault／stopPropagation 包住。
+    expect(headerMobileBlock).not.toMatch(/preventDefault\(\)/);
+    expect(headerMobileBlock).not.toMatch(/stopPropagation\(\)/);
+  });
+
+  it("手機版 header 上的信件／鈴鐺都是真的 <Link>，不是只有 div + CSS active 的假按鈕", () => {
+    const start = source.indexOf('{/* ── Mobile / Tablet（< lg）: 信件｜鈴鐺｜漢堡 ── */}');
+    const end = source.indexOf("</div>\n      </div>", start);
+    const headerMobileBlock = source.slice(start, end);
+    expect(headerMobileBlock).toMatch(/<Link href="\/messages">/);
+    expect(headerMobileBlock).toMatch(/<Link href="\/notifications">/);
+  });
+
+  it("品牌選單「首頁」也是真的 <Link>，且點擊會先關閉品牌選單", () => {
+    const brandMatch = source.match(
+      /<Link href="\/" onClick=\{\(\) => setBrandMenuOpen\(false\)\}>/
+    );
+    expect(brandMatch, "找不到品牌選單「首頁」連結").not.toBeNull();
+  });
+
+  it("inert 只出現在手機選單自己內部的收合 accordion 子面板，不存在套用在 document.body 或整個 Portal 容器的 inert", () => {
+    // 全檔案只應該有一處 inert，且必須是 `inert={!isOpen}` 綁在
+    // `mobile-hub-panel-${hub.key}` 這個手機選單內部子面板上——不能是
+    // `document.body.inert = true` 這種全站或整個 Portal 容器等級的用法。
+    const inertOccurrences = source.match(/\binert\b/g) ?? [];
+    expect(inertOccurrences.length).toBe(1);
+    expect(source).toMatch(/id=\{`mobile-hub-panel-\$\{hub\.key\}`\}\s*\n\s*aria-hidden=\{!isOpen\}\s*\n\s*inert=\{!isOpen\}/);
+    expect(source).not.toMatch(/document\.body\.inert/);
+    expect(source).not.toMatch(/body\.inert\s*=/);
   });
 
   it("找資源手機版不再使用低透明度 disabled 視覺，找人才等未開放入口仍維持低透明度", () => {
