@@ -577,26 +577,31 @@ describe("Navbar「找消息」入口：第五輪正式開放（下拉選單模�
     expect(block).not.toMatch(/disabled: true/);
   });
 
-  it("桌面版有獨立的 hub.key === \"news\" 分支，支援 click 切換、hover 開啟/延遲關閉、Escape 收合，且有 focus-visible 樣式", () => {
+  it("桌面版找消息不再有專屬分支，改走找工廠／找資源共用的 hover dropdown 邏輯，支援 click 切換、hover 開啟/延遲關閉、Escape 收合，且有 focus-visible 樣式", () => {
+    // Navbar 互動統一重構後，找消息不再有 `if (hub.key === "news")` 這種專屬分支，
+    // 而是跟找工廠／找資源共用同一份 openHubKey state 與 openHub／scheduleCloseHub／
+    // toggleHub handler（見 server/navbarMobileAccordion.test.ts 的「共用 hover
+    // dropdown 互動邏輯」測試群組，那邊涵蓋了這裡原本逐一斷言的行為）。
     const navbarSource = readNavbarSource();
-    const start = navbarSource.indexOf('if (hub.key === "news")');
-    expect(start).toBeGreaterThan(-1);
-    const block = navbarSource.slice(start, start + 2200);
-    expect(block).toMatch(/onMouseEnter=\{openNewsDrop\}/);
-    expect(block).toMatch(/onMouseLeave=\{closeNewsDropDelayed\}/);
-    expect(block).toMatch(/setNewsDropOpen\(v => !v\)/);
-    expect(block).toMatch(/focus-visible:ring-2/);
-    expect(block).toMatch(/aria-haspopup="menu"/);
-    expect(block).toMatch(/aria-expanded=\{newsDropOpen\}/);
+    expect(navbarSource).not.toMatch(/if \(hub\.key === "news"\)/);
+    expect(navbarSource).toMatch(/onMouseEnter=\{hasDropdown \? \(\) => openHub\(hub\.key\) : undefined\}/);
+    expect(navbarSource).toMatch(/onClick=\{\(\) => toggleHub\(hub\.key\)\}/);
+    expect(navbarSource).toMatch(/focus-visible:ring-2/);
+    expect(navbarSource).toMatch(/aria-haspopup=\{hasDropdown \? "menu" : undefined\}/);
+    expect(navbarSource).toMatch(/aria-expanded=\{hasDropdown \? isOpen : undefined\}/);
   });
 
-  it("newsDropOpen 有獨立的 Escape 監聽（跟 resourceDropOpen 同一種 useEffect 模式）", () => {
+  it("找消息的下拉不再有獨立的 newsDropOpen state，改用共用的 openHubKey／Escape 監聽", () => {
     const navbarSource = readNavbarSource();
-    const start = navbarSource.indexOf("const [newsDropOpen, setNewsDropOpen]");
+    expect(navbarSource).not.toMatch(/newsDropOpen/);
+    const start = navbarSource.indexOf("const [openHubKey, setOpenHubKey]");
     expect(start).toBeGreaterThan(-1);
-    const block = navbarSource.slice(start, start + 1600);
-    expect(block).toMatch(/if \(e\.key === "Escape"\)/);
-    expect(block).toMatch(/document\.addEventListener\("mousedown", handleClickOutside\)/);
+    const escapeEffectMatch = navbarSource.match(
+      /useEffect\(\(\) => \{\s*\n\s*if \(!openHubKey\) return;[\s\S]*?\}, \[openHubKey\]\);/
+    );
+    expect(escapeEffectMatch).not.toBeNull();
+    expect(escapeEffectMatch![0]).toMatch(/if \(e\.key === "Escape"\)/);
+    expect(escapeEffectMatch![0]).toMatch(/document\.addEventListener\("mousedown", handleClickOutside\)/);
   });
 
   it("手機版 Accordion 沒有為「news」另外寫特殊分支——沿用既有的通用 hub.dropdown 渲染邏輯（href && !disabled 才是可點擊 Link）", () => {

@@ -59,10 +59,13 @@ describe("Navbar.tsx: 手機版六入口 Accordion 使用單一 state", () => {
     expect(disabledBranchMatch, "找不到未開放子項的 disabled 區塊").not.toBeNull();
   });
 
-  it("桌面版找工廠仍是 hover 展開、找資源仍是點擊 dropdown（分支未被誤合併）", () => {
-    expect(source).toMatch(/if \(hub\.key === "resource"\)/);
-    expect(source).toMatch(/if \(!hub\.soon\)/);
-    expect(source).toMatch(/商機媒合中心 — click 導向媒合首頁，hover 顯示下拉/);
+  it("桌面版不再對 resource／news／factory 個別特判分支，改由共用邏輯統一渲染", () => {
+    // 統一互動邏輯上線後，找工廠／找資源／找消息不應該再各自有專屬 if 分支——
+    // 三者都要走同一份 hubHasDropdown + renderDesktopHub 共用路徑。
+    expect(source).not.toMatch(/if \(hub\.key === "resource"\)/);
+    expect(source).not.toMatch(/if \(hub\.key === "news"\)/);
+    expect(source).not.toMatch(/if \(!hub\.soon\) \{\s*\n\s*\/\/ 商機媒合中心/);
+    expect(source).toMatch(/function hubHasDropdown\(hub: HubItem\): boolean/);
   });
 
   it("收合面板加上 inert，避免鍵盤 Tab 聚焦到不可見的子連結", () => {
@@ -115,7 +118,7 @@ describe("Navbar.tsx: 手機版六入口 Accordion 使用單一 state", () => {
 
   it("找資源手機版不再使用低透明度 disabled 視覺，找人才等未開放入口仍維持低透明度", () => {
     const resourceItemMatch = source.match(
-      /key: "resource",[\s\S]*?dropdown: \[[\s\S]*?\],\s*\n\s*\},/
+      /key: "resource",[\s\S]*?dropdownItems: \[[\s\S]*?\],\s*\n\s*\},/
     );
     expect(resourceItemMatch, "找不到找資源的 HUB_ITEMS 定義").not.toBeNull();
     const resourceItem = resourceItemMatch![0];
@@ -125,8 +128,99 @@ describe("Navbar.tsx: 手機版六入口 Accordion 使用單一 state", () => {
     expect(resourceItem).toMatch(/mText: "text-blue-700"/);
     expect(resourceItem).toMatch(/iconCls: "text-blue-600"/);
 
-    const talentItemMatch = source.match(/key: "talent",[\s\S]*?dropdown: \[[\s\S]*?\],\s*\n\s*\},/);
+    const talentItemMatch = source.match(/key: "talent",[\s\S]*?dropdownItems: \[[\s\S]*?\],\s*\n\s*\},/);
     expect(talentItemMatch, "找不到找人才的 HUB_ITEMS 定義").not.toBeNull();
     expect(talentItemMatch![0]).toMatch(/text-teal-600\/40/);
+  });
+});
+
+describe("Navbar.tsx: 桌面版六大入口共用 hover dropdown 互動邏輯", () => {
+  const source = fs.readFileSync(NAVBAR_PATH, "utf-8");
+
+  it("找工廠／找資源／找消息共用單一 openHubKey state，沒有各自獨立的 boolean state", () => {
+    expect(source).toMatch(
+      /const \[openHubKey, setOpenHubKey\] = useState<MobileHubKey \| null>\(null\);/
+    );
+    expect(source).not.toMatch(/resourceDropOpen|newsDropOpen|searchDropOpen/);
+  });
+
+  it("是否具備下拉能力由 dropdownItems 動態推導，不是手動維護的獨立欄位", () => {
+    // supportsDropdown 不是 HUB_ITEMS 裡手動設定的欄位，而是 hubHasDropdown() 依
+    // !soon && dropdownItems 是否有可導頁子項自動推導，避免未來加子項忘記同步開關。
+    expect(source).toMatch(
+      /function hubHasDropdown\(hub: HubItem\): boolean \{\s*\n\s*return !hub\.soon && hub\.dropdownItems\.some/
+    );
+    expect(source).not.toMatch(/supportsDropdown:/);
+  });
+
+  it("開放中入口的 hover 開啟／延遲關閉都呼叫共用的 openHub／scheduleCloseHub", () => {
+    expect(source).toMatch(/onMouseEnter=\{hasDropdown \? \(\) => openHub\(hub\.key\) : undefined\}/);
+    expect(source).toMatch(/onMouseLeave=\{hasDropdown \? scheduleCloseHub : undefined\}/);
+    // 子選單自己也要能重新觸發 openHub／scheduleCloseHub，滑鼠從主入口移到子選單
+    // 中途經過間隙時，關閉計時器會被子選單的 onMouseEnter 取消，不會中途關閉。
+    expect(source).toMatch(/onMouseEnter=\{\(\) => openHub\(hub\.key\)\}/);
+  });
+
+  it("關閉緩衝約 180ms，在 100～200ms 規格範圍內", () => {
+    expect(source).toMatch(
+      /hubCloseTimer\.current = setTimeout\(\(\) => setOpenHubKey\(null\), 180\);/
+    );
+  });
+
+  it("開啟一個入口時會清掉關閉計時器並收合品牌選單，確保同時間只開一個", () => {
+    const openHubMatch = source.match(/const openHub = \(key: MobileHubKey\) => \{[\s\S]*?\n  \};/);
+    expect(openHubMatch, "找不到 openHub 定義").not.toBeNull();
+    expect(openHubMatch![0]).toMatch(/clearHubCloseTimer\(\);/);
+    expect(openHubMatch![0]).toMatch(/setBrandMenuOpen\(false\);/);
+    expect(openHubMatch![0]).toMatch(/setOpenHubKey\(key\);/);
+  });
+
+  it("外部點擊與 Escape 都會關閉目前展開的入口，Escape 額外把焦點還給觸發鈕", () => {
+    const effectMatch = source.match(
+      /useEffect\(\(\) => \{\s*\n\s*if \(!openHubKey\) return;[\s\S]*?\}, \[openHubKey\]\);/
+    );
+    expect(effectMatch, "找不到 openHubKey 的外部點擊／Escape useEffect").not.toBeNull();
+    const effect = effectMatch![0];
+    expect(effect).toMatch(/handleClickOutside/);
+    expect(effect).toMatch(/e\.key === "Escape"/);
+    expect(effect).toMatch(/hubTriggerRefs\.current\[key\]\?\.focus\(\);/);
+  });
+
+  it("觸發鈕具備 aria-haspopup／aria-expanded／aria-controls，且有 focus-visible ring 樣式", () => {
+    expect(source).toMatch(/aria-haspopup=\{hasDropdown \? "menu" : undefined\}/);
+    expect(source).toMatch(/aria-expanded=\{hasDropdown \? isOpen : undefined\}/);
+    expect(source).toMatch(/aria-controls=\{hasDropdown \? contentId : undefined\}/);
+    expect(source).toMatch(/focus-visible:outline-none focus-visible:ring-2/);
+  });
+
+  it("有合法預設頁面的入口（找工廠）點擊會正常導頁，沒有的（找資源／找消息）點擊只切換選單", () => {
+    expect(source).toMatch(/href: "\/", soon: false,/); // 找工廠設了 href
+    expect(source).toMatch(/const trigger = hub\.href \? \(/);
+    expect(source).toMatch(/onClick=\{\(\) => toggleHub\(hub\.key\)\}/);
+  });
+
+  it("路由切換會重置 openHubKey（連同品牌選單、手機選單一起關閉）", () => {
+    const routeEffectMatch = source.match(
+      /useEffect\(\(\) => \{\s*\n\s*setBrandMenuOpen\(false\);\s*\n\s*setOpenHubKey\(null\);[\s\S]*?\}, \[location\]\);/
+    );
+    expect(routeEffectMatch, "找不到路由切換重置 effect").not.toBeNull();
+  });
+
+  it("桌面版下拉觸發鈕與選單容器共用同一份基礎樣式常數，展開速度／圓角／陰影／間距／z-index 一致", () => {
+    expect(source).toMatch(/const HUB_TRIGGER_BASE =/);
+    expect(source).toMatch(/const HUB_MENU_PANEL =/);
+    expect(source).toMatch(/const HUB_MENU_ITEM =/);
+    // 品牌顏色（card／cardHover／ring／triggerIconCls）可以各自不同，但容器結構
+    // 一定要套用共用常數，不能任何一個入口另外硬編碼一份看起來很像但不同步的樣式。
+    expect(source).toMatch(/const triggerClassName = `\$\{HUB_TRIGGER_BASE\} \$\{hub\.ring\} \$\{hub\.card\} \$\{hub\.cardHover\}`;/);
+    expect(source).toMatch(/className=\{HUB_MENU_PANEL\}/);
+    expect(source).toMatch(/className=\{HUB_MENU_ITEM\}/);
+  });
+
+  it("鎖定入口（soon: true）沒有下拉選單分支，不會渲染空白選單", () => {
+    const soonBranchMatch = source.match(/if \(hub\.soon\) \{[\s\S]*?\n            \}/);
+    expect(soonBranchMatch, "找不到鎖定入口分支").not.toBeNull();
+    expect(soonBranchMatch![0]).not.toMatch(/dropdownItems/);
+    expect(soonBranchMatch![0]).toMatch(/cursor-not-allowed/);
   });
 });

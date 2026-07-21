@@ -36,13 +36,26 @@ interface HubDropdownItem {
 }
 
 interface HubItem {
-  /** 手機版 Accordion 展開狀態用的穩定識別（見 mobileOpenHub） */
+  /** 手機版 Accordion 展開狀態用的穩定識別（見 mobileOpenHub），也是桌面版共用
+   *  下拉選單狀態（openHubKey）的識別鍵，兩者共用同一個 key 空間。 */
   key: MobileHubKey;
   label: string;
   short: string;
+  /**
+   * 主入口本身合法的預設頁面。有值時點擊主入口一律正常導頁（例如找工廠 → "/"）；
+   * 不設定時代表這個入口只是選單父層，點擊只切換下拉選單開關（例如找資源／找消息）。
+   * 桌面版共用 hover dropdown（見 renderDesktopHub）依此欄位分流，不必逐一入口
+   * 另外判斷。
+   */
+  href?: string;
   soon: boolean;
   Icon: NavIcon;
+  /** 手機版 Accordion 橫條圖示顏色；鎖定入口的桌面 pill 圖示也讀這個 */
   iconCls: string;
+  /** 桌面版下拉觸發鈕與選單項目圖示顏色（僅開放中入口使用，鎖定入口不會用到） */
+  triggerIconCls: string;
+  /** 桌面版下拉觸發鈕 focus-visible 的 ring 顏色 */
+  ring: string;
   /** Desktop pill card: bg + border + text */
   card: string;
   /** Desktop pill card hover classes (active items only) */
@@ -52,38 +65,56 @@ interface HubItem {
   /** Mobile card text color */
   mText: string;
   /**
-   * 桌面版「找資源」下拉選單的子項內容，也是手機版 Accordion 展開內容的唯一
-   * 資料來源（title／description／href／disabled／Icon），桌面與手機共用同一份，
-   * 不在手機 JSX 另外硬編碼六份文案。
+   * 桌面版下拉選單的子項內容，也是手機版 Accordion 展開內容的唯一資料來源
+   * （title／description／href／disabled／Icon），桌面與手機共用同一份，不在手機
+   * JSX 另外硬編碼六份文案。是否具備下拉能力（supportsDropdown）不用額外欄位
+   * 手動維護，而是由 `!soon && dropdownItems 內有至少一個可導頁的項目` 直接推導
+   * （見 hubHasDropdown），避免未來新增子項目時忘記同步切一個開關欄位。
    */
-  dropdown: HubDropdownItem[];
+  dropdownItems: HubDropdownItem[];
 }
+
+/** 是否具備下拉選單能力：soon 入口一律沒有，開放中入口則看 dropdownItems 是否
+ *  至少有一個可導頁且未停用的子項。未來人才／形象／討論解鎖時，只要把 soon 改
+ *  false 並補上真正的 dropdownItems，這裡會自動判定為 true，桌面版就會自動套用
+ *  跟找工廠／找資源／找消息完全相同的共用 hover dropdown 邏輯，不必再改互動程式。 */
+function hubHasDropdown(hub: HubItem): boolean {
+  return !hub.soon && hub.dropdownItems.some((item) => item.href && !item.disabled);
+}
+
+/** 桌面版下拉觸發鈕的共用基礎樣式：所有開放中入口（找工廠／找資源／找消息，
+ *  以及未來解鎖的入口）都吃這一份，只有 hub.card／hub.cardHover／hub.ring 的
+ *  品牌配色不同，展開速度／圓角／邊框／陰影／間距／z-index 等容器結構一律一致。 */
+const HUB_TRIGGER_BASE =
+  "flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg border text-[11px] font-semibold transition-all duration-150 whitespace-nowrap cursor-pointer focus-visible:outline-none focus-visible:ring-2";
+const HUB_MENU_PANEL =
+  "absolute top-full left-0 mt-1.5 w-72 bg-white border border-border rounded-xl shadow-lg z-[200] py-1.5 overflow-hidden";
+const HUB_MENU_ITEM =
+  "flex items-start gap-2.5 px-3.5 py-2.5 hover:bg-orange-50 transition-colors cursor-pointer focus-visible:outline-none focus-visible:bg-orange-50";
 
 const HUB_ITEMS: HubItem[] = [
   {
     key: "factory",
-    label: "商機媒合中心", short: "找工廠", soon: false,
-    Icon: Search, iconCls: "text-orange-500",
+    label: "商機媒合中心", short: "找工廠", href: "/", soon: false,
+    Icon: Search, iconCls: "text-orange-500", triggerIconCls: "text-orange-500", ring: "focus-visible:ring-orange-400",
     card: "bg-gradient-to-br from-orange-500/10 to-purple-600/10 border-orange-300/40 text-orange-700",
     cardHover: "hover:from-orange-500/20 hover:to-purple-600/20 hover:border-orange-400/60 hover:shadow-sm hover:shadow-orange-500/10 hover:-translate-y-px",
     mCard: "from-orange-500/10 to-purple-600/10 border-orange-300/40", mText: "text-orange-700",
-    dropdown: [
+    dropdownItems: [
       { title: "搜尋工廠", description: "瀏覽台灣工廠與代工資源", href: "/search", Icon: Search },
     ],
   },
   {
     key: "resource",
     label: "企業升級中心", short: "找資源", soon: false,
-    // iconCls／mCard／mText 用於手機版 Accordion 橫條與桌面「找工廠」分支；
-    // 找資源桌面版 dropdown 觸發鈕的樣式是獨立硬編碼（見下方 hub.key === "resource"
-    // 分支），不讀這幾個欄位，故調整這裡不會影響桌面版。找資源已是正式開放入口，
-    // 這裡改用清楚可辨識的藍紫色，避免跟找人才／找形象等「即將開放」的低透明度
-    // muted 樣式混淆。
-    Icon: Rocket, iconCls: "text-blue-600",
-    card: "bg-gradient-to-br from-blue-600/8 to-violet-600/8 border-blue-300/20 text-blue-900/30",
-    cardHover: "",
+    // 找資源已是正式開放入口，桌面版下拉觸發鈕與找消息共用同一套 renderDesktopHub，
+    // 讀 card／cardHover／ring／triggerIconCls，這裡改用清楚可辨識的藍紫色，避免跟
+    // 找人才／找形象等「即將開放」的低透明度 muted 樣式混淆。
+    Icon: Rocket, iconCls: "text-blue-600", triggerIconCls: "text-blue-500", ring: "focus-visible:ring-blue-400",
+    card: "bg-gradient-to-br from-blue-600/10 to-violet-600/10 border-blue-300/40 text-blue-700",
+    cardHover: "hover:from-blue-600/20 hover:to-violet-600/20 hover:border-blue-400/60 hover:shadow-sm hover:shadow-blue-500/10 hover:-translate-y-px",
     mCard: "from-blue-500/15 to-violet-600/15 border-blue-300/50", mText: "text-blue-700",
-    dropdown: [
+    dropdownItems: [
       {
         title: "政府補助專區",
         description: "SBIR、CITD、SIIR 等企業補助媒合",
@@ -95,48 +126,47 @@ const HUB_ITEMS: HubItem[] = [
   {
     key: "talent",
     label: "人才與技術中心", short: "找人才", soon: true,
-    Icon: Users, iconCls: "text-teal-400/60",
+    Icon: Users, iconCls: "text-teal-400/60", triggerIconCls: "text-teal-500", ring: "focus-visible:ring-teal-400",
     card: "bg-gradient-to-br from-teal-500/8 to-cyan-600/8 border-teal-300/20 text-teal-900/30",
     cardHover: "",
     mCard: "from-teal-500/8 to-cyan-600/8 border-teal-300/20", mText: "text-teal-600/40",
-    dropdown: [
+    dropdownItems: [
       { title: "人才與技術媒合", description: "即將開放", disabled: true, Icon: Users },
     ],
   },
   {
     key: "brand",
     label: "產業採購與資源中心", short: "找形象", soon: true,
-    Icon: Package, iconCls: "text-amber-400/60",
+    Icon: Package, iconCls: "text-amber-400/60", triggerIconCls: "text-amber-500", ring: "focus-visible:ring-amber-400",
     card: "bg-gradient-to-br from-amber-500/8 to-orange-600/8 border-amber-300/20 text-amber-900/30",
     cardHover: "",
     mCard: "from-amber-500/8 to-orange-600/8 border-amber-300/20", mText: "text-amber-600/40",
-    dropdown: [
+    dropdownItems: [
       { title: "品牌與形象升級", description: "即將開放", disabled: true, Icon: Package },
     ],
   },
   {
     key: "news",
     label: "傳產知識與情報中心", short: "找消息", soon: false,
-    // 桌面版 dropdown 觸發鈕的樣式是獨立硬編碼（見下方 hub.key === "news" 分支），
-    // 不讀 card／cardHover 欄位，故調整那裡不會影響桌面版；這裡的 iconCls／mCard／
-    // mText 只用於手機版 Accordion 橫條。找消息已正式開放，改用清楚可辨識的靛紫色，
-    // 避免跟找人才／找形象等仍在「即將開放」的低透明度 muted 樣式混淆。
-    Icon: BookOpen, iconCls: "text-indigo-600",
+    // 找消息已正式開放，桌面版下拉觸發鈕與找資源共用同一套 renderDesktopHub，讀
+    // card／cardHover／ring／triggerIconCls，改用清楚可辨識的靛紫色，避免跟找人才／
+    // 找形象等仍在「即將開放」的低透明度 muted 樣式混淆。
+    Icon: BookOpen, iconCls: "text-indigo-600", triggerIconCls: "text-indigo-500", ring: "focus-visible:ring-indigo-400",
     card: "bg-gradient-to-br from-indigo-600/10 to-purple-600/10 border-indigo-300/40 text-indigo-700",
     cardHover: "hover:from-indigo-600/20 hover:to-purple-600/20 hover:border-indigo-400/60 hover:shadow-sm hover:shadow-indigo-500/10 hover:-translate-y-px",
     mCard: "from-indigo-500/15 to-purple-600/15 border-indigo-300/50", mText: "text-indigo-700",
-    dropdown: [
+    dropdownItems: [
       { title: "產業情報中心", description: "整合產業動態、競賽資訊、展覽活動與重要消息", href: "/news", Icon: BookOpen },
     ],
   },
   {
     key: "discussion",
     label: "產業討論區", short: "找討論", soon: true,
-    Icon: MessageSquare, iconCls: "text-rose-400/60",
+    Icon: MessageSquare, iconCls: "text-rose-400/60", triggerIconCls: "text-rose-500", ring: "focus-visible:ring-rose-400",
     card: "bg-gradient-to-br from-rose-500/8 to-pink-600/8 border-rose-300/20 text-rose-900/30",
     cardHover: "",
     mCard: "from-rose-500/8 to-pink-600/8 border-rose-300/20", mText: "text-rose-600/40",
-    dropdown: [
+    dropdownItems: [
       { title: "產業討論區", description: "即將開放", disabled: true, Icon: MessageSquare },
     ],
   },
@@ -149,8 +179,6 @@ export default function Navbar() {
   const [menuVisible, setMenuVisible] = useState(false);
   const [menuClosing, setMenuClosing] = useState(false);
   const [loginDialogOpen, setLoginDialogOpen] = useState(false);
-  const [searchDropOpen, setSearchDropOpen] = useState(false);
-  const searchDropTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // OXM 品牌區下拉選單（左上角）：目前僅「首頁」一個項目
   const [brandMenuOpen, setBrandMenuOpen] = useState(false);
@@ -167,59 +195,57 @@ export default function Navbar() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [brandMenuOpen]);
 
-  // 桌面版「找資源」下拉選單：點擊觸發、點擊外部或 Escape 收合
-  const [resourceDropOpen, setResourceDropOpen] = useState(false);
-  const resourceDropRef = useRef<HTMLDivElement | null>(null);
+  // 桌面版六大入口共用下拉選單邏輯：找工廠／找資源／找消息目前都吃這一套（見
+  // hubHasDropdown、renderDesktopHub），未來人才／形象／討論解鎖後沿用同一份
+  // state／handler，不必再各自重做互動。單一 openHubKey 保證同時間只會有一個
+  // 展開；hover 進入立即開啟、離開後帶 180ms 緩衝關閉（滑鼠移動到子選單途中經過
+  // 間隙不會中途關閉，因為子選單自己的 onMouseEnter 也會呼叫 openHub 取消計時器）；
+  // 外部點擊／Escape／路由切換都會關閉；Escape 額外把焦點還給觸發鈕。
+  const [openHubKey, setOpenHubKey] = useState<MobileHubKey | null>(null);
+  const hubCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hubTriggerRefs = useRef<Partial<Record<MobileHubKey, HTMLButtonElement | null>>>({});
+  const hubContainerRefs = useRef<Partial<Record<MobileHubKey, HTMLDivElement | null>>>({});
   // 手機版六大入口 Accordion：單一 state 記錄目前展開的入口 key，一次最多展開一個；
   // 點其他入口時原本展開的自動收合，再次點擊目前展開的入口則收合。
   const [mobileOpenHub, setMobileOpenHub] = useState<MobileHubKey | null>(null);
 
-  useEffect(() => {
-    if (!resourceDropOpen) return;
-    const handleClickOutside = (e: MouseEvent) => {
-      if (resourceDropRef.current && !resourceDropRef.current.contains(e.target as Node)) {
-        setResourceDropOpen(false);
-      }
-    };
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setResourceDropOpen(false);
-    };
-    document.addEventListener("mousedown", handleClickOutside);
-    document.addEventListener("keydown", handleEscape);
-    return () => {
-      document.removeEventListener("mousedown", handleClickOutside);
-      document.removeEventListener("keydown", handleEscape);
-    };
-  }, [resourceDropOpen]);
-
-  // 桌面版「找消息」下拉選單：跟「找資源」同一種點擊/外部點擊/Escape 收合模式，
-  // 另外加上滑鼠 hover 開啟／延遲收合（找資源本身沒有 hover，這裡依規格額外補上）。
-  const [newsDropOpen, setNewsDropOpen] = useState(false);
-  const newsDropRef = useRef<HTMLDivElement | null>(null);
-  const newsDropTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const openNewsDrop = () => {
-    if (newsDropTimer.current) { clearTimeout(newsDropTimer.current); newsDropTimer.current = null; }
+  const clearHubCloseTimer = () => {
+    if (hubCloseTimer.current) { clearTimeout(hubCloseTimer.current); hubCloseTimer.current = null; }
+  };
+  const openHub = (key: MobileHubKey) => {
+    clearHubCloseTimer();
     setBrandMenuOpen(false);
-    setResourceDropOpen(false);
-    setSearchDropOpen(false);
-    setNewsDropOpen(true);
+    setOpenHubKey(key);
   };
-  const closeNewsDropDelayed = () => {
-    newsDropTimer.current = setTimeout(() => setNewsDropOpen(false), 150);
+  const scheduleCloseHub = () => {
+    clearHubCloseTimer();
+    hubCloseTimer.current = setTimeout(() => setOpenHubKey(null), 180);
+  };
+  const toggleHub = (key: MobileHubKey) => {
+    clearHubCloseTimer();
+    setBrandMenuOpen(false);
+    setOpenHubKey((current) => (current === key ? null : key));
+  };
+  const closeHub = () => {
+    clearHubCloseTimer();
+    setOpenHubKey(null);
   };
 
+  useEffect(() => clearHubCloseTimer, []);
+
   useEffect(() => {
-    if (!newsDropOpen) return;
+    if (!openHubKey) return;
+    const key = openHubKey;
     const handleClickOutside = (e: MouseEvent) => {
-      if (newsDropRef.current && !newsDropRef.current.contains(e.target as Node)) {
-        setNewsDropOpen(false);
+      const container = hubContainerRefs.current[key];
+      if (container && !container.contains(e.target as Node)) {
+        setOpenHubKey(null);
       }
     };
     const handleEscape = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        setNewsDropOpen(false);
-        (newsDropRef.current?.querySelector("button") as HTMLButtonElement | null)?.focus();
+        setOpenHubKey(null);
+        hubTriggerRefs.current[key]?.focus();
       }
     };
     document.addEventListener("mousedown", handleClickOutside);
@@ -228,15 +254,14 @@ export default function Navbar() {
       document.removeEventListener("mousedown", handleClickOutside);
       document.removeEventListener("keydown", handleEscape);
     };
-  }, [newsDropOpen]);
+  }, [openHubKey]);
 
   // 路由切換後自動關閉下拉選單／手機主選單。手機選單內每個會導頁的連結本來就會
   // 自行呼叫 setMobileOpen(false)，這裡是防禦性保險（例如瀏覽器上一頁/下一頁），
   // 確保任何情況下路由一變就不會殘留 body scroll lock。
   useEffect(() => {
     setBrandMenuOpen(false);
-    setResourceDropOpen(false);
-    setNewsDropOpen(false);
+    setOpenHubKey(null);
     setMobileOpenHub(null);
     setMobileOpen(false);
   }, [location]);
@@ -303,16 +328,6 @@ export default function Navbar() {
     setMenuClosing(false);
     setMenuVisible(false);
     setMobileOpenHub(null);
-  };
-
-  const openSearchDrop = () => {
-    if (searchDropTimer.current) clearTimeout(searchDropTimer.current);
-    setBrandMenuOpen(false);
-    setResourceDropOpen(false);
-    setSearchDropOpen(true);
-  };
-  const closeSearchDropDelayed = () => {
-    searchDropTimer.current = setTimeout(() => setSearchDropOpen(false), 200);
   };
 
   const unreadQuery = trpc.chat.unreadCount.useQuery(undefined, { enabled: isAuthenticated, refetchInterval: 30000 });
@@ -404,8 +419,7 @@ export default function Navbar() {
           <button
             type="button"
             onClick={() => {
-              setSearchDropOpen(false);
-              setResourceDropOpen(false);
+              closeHub();
               setMobileOpenHub(null);
               setBrandMenuOpen(v => !v);
             }}
@@ -431,143 +445,104 @@ export default function Navbar() {
         {/* ── Desktop: 六大方向入口（lg: 1024px+） ── */}
         <nav className="hidden lg:flex items-center gap-3 flex-1 justify-center min-w-0 mx-2">
           {HUB_ITEMS.map((hub) => {
-            if (hub.key === "resource") {
+            if (hub.soon) {
+              // 即將開放 — 不可互動，不顯示任何下拉選單（既有「即將開放」提示維持原樣）
               return (
-                <div key={hub.label} className="relative" ref={resourceDropRef}>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setBrandMenuOpen(false);
-                      setSearchDropOpen(false);
-                      setResourceDropOpen(v => !v);
-                    }}
-                    aria-haspopup="menu"
-                    aria-expanded={resourceDropOpen}
-                    className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg border text-[11px] font-semibold transition-all duration-150 whitespace-nowrap cursor-pointer bg-gradient-to-br from-blue-600/10 to-violet-600/10 border-blue-300/40 text-blue-700 hover:from-blue-600/20 hover:to-violet-600/20 hover:border-blue-400/60 hover:shadow-sm hover:shadow-blue-500/10 hover:-translate-y-px"
-                  >
-                    <hub.Icon className="w-3.5 h-3.5 shrink-0 text-blue-500" />
-                    {hub.short}
-                    <ChevronDown className={`w-2.5 h-2.5 opacity-60 transition-transform duration-150 ${resourceDropOpen ? "rotate-180" : ""}`} />
-                  </button>
-                  {resourceDropOpen && (
-                    <div className="absolute top-full left-0 mt-1.5 w-72 bg-white border border-border rounded-xl shadow-lg z-[200] py-1.5 overflow-hidden">
-                      {hub.dropdown.filter((item) => item.href && !item.disabled).map((item) => (
-                        <Link key={item.href} href={item.href!} onClick={() => setResourceDropOpen(false)}>
-                          <div className="flex items-start gap-2.5 px-3.5 py-2.5 hover:bg-orange-50 transition-colors cursor-pointer">
-                            <item.Icon className="w-4 h-4 mt-0.5 shrink-0 text-blue-500" />
-                            <div className="min-w-0">
-                              <p className="text-sm font-semibold text-foreground">{item.title}</p>
-                              <p className="text-xs text-muted-foreground mt-0.5 leading-snug">{item.description}</p>
-                            </div>
-                          </div>
-                        </Link>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                <span
+                  key={hub.key}
+                  aria-disabled="true"
+                  aria-label={`${hub.label}（即將開放）`}
+                  title="即將開放"
+                  className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg border text-[11px] font-semibold whitespace-nowrap cursor-not-allowed select-none ${hub.card}`}
+                >
+                  <hub.Icon className={`w-3.5 h-3.5 shrink-0 ${hub.iconCls}`} />
+                  {hub.short}
+                  <Lock className="w-2.5 h-2.5 shrink-0 opacity-40" />
+                </span>
               );
             }
 
-            if (hub.key === "news") {
-              return (
-                <div
-                  key={hub.label}
-                  className="relative"
-                  ref={newsDropRef}
-                  onMouseEnter={openNewsDrop}
-                  onMouseLeave={closeNewsDropDelayed}
-                >
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setBrandMenuOpen(false);
-                      setSearchDropOpen(false);
-                      setResourceDropOpen(false);
-                      setNewsDropOpen(v => !v);
-                    }}
-                    aria-haspopup="menu"
-                    aria-expanded={newsDropOpen}
-                    className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg border text-[11px] font-semibold transition-all duration-150 whitespace-nowrap cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 bg-gradient-to-br from-indigo-600/10 to-purple-600/10 border-indigo-300/40 text-indigo-700 hover:from-indigo-600/20 hover:to-purple-600/20 hover:border-indigo-400/60 hover:shadow-sm hover:shadow-indigo-500/10 hover:-translate-y-px"
-                  >
-                    <hub.Icon className="w-3.5 h-3.5 shrink-0 text-indigo-500" />
-                    {hub.short}
-                    <ChevronDown className={`w-2.5 h-2.5 opacity-60 transition-transform duration-150 ${newsDropOpen ? "rotate-180" : ""}`} />
-                  </button>
-                  {newsDropOpen && (
-                    <div
-                      className="absolute top-full left-0 mt-1.5 w-72 bg-white border border-border rounded-xl shadow-lg z-[200] py-1.5 overflow-hidden"
-                      onMouseEnter={openNewsDrop}
-                      onMouseLeave={closeNewsDropDelayed}
-                    >
-                      {hub.dropdown.filter((item) => item.href && !item.disabled).map((item) => (
-                        <Link key={item.href} href={item.href!} onClick={() => setNewsDropOpen(false)}>
-                          <div className="flex items-start gap-2.5 px-3.5 py-2.5 hover:bg-orange-50 transition-colors cursor-pointer focus-visible:outline-none focus-visible:bg-orange-50">
-                            <item.Icon className="w-4 h-4 mt-0.5 shrink-0 text-indigo-500" />
-                            <div className="min-w-0">
-                              <p className="text-sm font-semibold text-foreground">{item.title}</p>
-                              <p className="text-xs text-muted-foreground mt-0.5 leading-snug">{item.description}</p>
-                            </div>
-                          </div>
-                        </Link>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              );
-            }
+            // 開放中入口共用同一套 hover dropdown 互動邏輯：找工廠／找資源／找消息
+            // 目前都走這裡，未來人才／形象／討論解鎖後（soon 改 false、補上真正的
+            // dropdownItems）也會自動走到這裡，不必再修改互動程式。
+            const items = hub.dropdownItems.filter((item) => item.href && !item.disabled);
+            const hasDropdown = items.length > 0;
+            const isOpen = hasDropdown && openHubKey === hub.key;
+            const contentId = `hub-dropdown-${hub.key}`;
+            const triggerClassName = `${HUB_TRIGGER_BASE} ${hub.ring} ${hub.card} ${hub.cardHover}`;
 
-            if (!hub.soon) {
-              // 商機媒合中心 — click 導向媒合首頁，hover 顯示下拉
-              return (
-                <div
-                  key={hub.label}
-                  className="relative"
-                  onMouseEnter={openSearchDrop}
-                  onMouseLeave={closeSearchDropDelayed}
+            const triggerInner = (
+              <>
+                <hub.Icon className={`w-3.5 h-3.5 shrink-0 ${hub.triggerIconCls}`} />
+                {hub.short}
+                {hasDropdown && (
+                  <ChevronDown className={`w-2.5 h-2.5 opacity-60 transition-transform duration-150 ${isOpen ? "rotate-180" : ""}`} />
+                )}
+              </>
+            );
+
+            const trigger = hub.href ? (
+              // 有合法預設頁面：整顆 pill 用 Link 包住，點擊一律正常導頁；hover 仍可
+              // 額外開啟下拉選單（例如找工廠：點擊導向首頁，hover 顯示「搜尋工廠」）。
+              <Link href={hub.href}>
+                <button
+                  type="button"
+                  ref={(el) => { hubTriggerRefs.current[hub.key] = el; }}
+                  aria-haspopup={hasDropdown ? "menu" : undefined}
+                  aria-expanded={hasDropdown ? isOpen : undefined}
+                  aria-controls={hasDropdown ? contentId : undefined}
+                  onClick={() => setBrandMenuOpen(false)}
+                  className={triggerClassName}
                 >
-                  <Link href="/">
-                    <button
-                      type="button"
-                      aria-label={hub.label}
-                      title={hub.label}
-                      className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg border text-[11px] font-semibold transition-all duration-150 whitespace-nowrap cursor-pointer ${hub.card} ${hub.cardHover}`}
-                    >
-                      <hub.Icon className={`w-3.5 h-3.5 shrink-0 ${hub.iconCls}`} />
-                      {hub.short}
-                      <ChevronDown className={`w-2.5 h-2.5 opacity-50 transition-transform duration-150 ${searchDropOpen ? "rotate-180" : ""}`} />
-                    </button>
-                  </Link>
-                  {searchDropOpen && (
-                    <div
-                      className="absolute top-full left-0 mt-1.5 bg-white border border-border rounded-xl shadow-lg z-[200] min-w-[140px] py-1.5 overflow-hidden"
-                      onMouseEnter={openSearchDrop}
-                      onMouseLeave={closeSearchDropDelayed}
-                    >
-                      <Link href="/search" onClick={() => setSearchDropOpen(false)}>
-                        <div className="flex items-center gap-2.5 px-3 py-2 text-sm font-medium hover:bg-orange-50 hover:text-orange-700 transition-colors cursor-pointer whitespace-nowrap">
-                          <Search className="w-3.5 h-3.5 text-orange-500" />
-                          搜尋工廠
+                  {triggerInner}
+                </button>
+              </Link>
+            ) : (
+              // 只是選單父層，沒有自己的頁面：點擊切換下拉選單開關
+              <button
+                type="button"
+                ref={(el) => { hubTriggerRefs.current[hub.key] = el; }}
+                aria-haspopup="menu"
+                aria-expanded={isOpen}
+                aria-controls={contentId}
+                onClick={() => toggleHub(hub.key)}
+                className={triggerClassName}
+              >
+                {triggerInner}
+              </button>
+            );
+
+            return (
+              <div
+                key={hub.key}
+                className="relative"
+                ref={(el) => { hubContainerRefs.current[hub.key] = el; }}
+                onMouseEnter={hasDropdown ? () => openHub(hub.key) : undefined}
+                onMouseLeave={hasDropdown ? scheduleCloseHub : undefined}
+              >
+                {trigger}
+                {hasDropdown && isOpen && (
+                  <div
+                    id={contentId}
+                    role="menu"
+                    className={HUB_MENU_PANEL}
+                    onMouseEnter={() => openHub(hub.key)}
+                    onMouseLeave={scheduleCloseHub}
+                  >
+                    {items.map((item) => (
+                      <Link key={item.href} href={item.href!} onClick={closeHub}>
+                        <div role="menuitem" className={HUB_MENU_ITEM}>
+                          <item.Icon className={`w-4 h-4 mt-0.5 shrink-0 ${hub.triggerIconCls}`} />
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold text-foreground">{item.title}</p>
+                            <p className="text-xs text-muted-foreground mt-0.5 leading-snug">{item.description}</p>
+                          </div>
                         </div>
                       </Link>
-                    </div>
-                  )}
-                </div>
-              );
-            }
-
-            // 即將開放 — 不可互動
-            return (
-              <span
-                key={hub.label}
-                aria-disabled="true"
-                aria-label={`${hub.label}（即將開放）`}
-                title="即將開放"
-                className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg border text-[11px] font-semibold whitespace-nowrap cursor-not-allowed select-none ${hub.card}`}
-              >
-                <hub.Icon className={`w-3.5 h-3.5 shrink-0 ${hub.iconCls}`} />
-                {hub.short}
-                <Lock className="w-2.5 h-2.5 shrink-0 opacity-40" />
-              </span>
+                    ))}
+                  </div>
+                )}
+              </div>
             );
           })}
         </nav>
@@ -803,7 +778,7 @@ export default function Navbar() {
                   >
                     <div className="overflow-hidden">
                       <div className="mt-1.5 mb-0.5 mx-1 space-y-1">
-                        {hub.dropdown.map((item) =>
+                        {hub.dropdownItems.map((item) =>
                           item.href && !item.disabled ? (
                             <Link
                               key={item.title}
