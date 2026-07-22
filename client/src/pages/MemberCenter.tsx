@@ -25,6 +25,7 @@ import { initPushNotifications } from "@/lib/pushNotifications";
 import { usePullToRefresh } from "@/hooks/usePullToRefresh";
 import { NativePullToRefreshLayout } from "@/components/NativePullToRefreshLayout";
 import { FloatingBackButton } from "@/components/FloatingBackButton";
+import { FavoriteFactoriesPanel } from "@/components/FavoriteFactoriesPanel";
 
 const STATUS_LABELS: Record<string, { label: string; color: string }> = {
   pending:    { label: "已寄出",  color: "bg-gray-100 text-gray-700" },
@@ -144,7 +145,7 @@ export default function MemberCenter() {
           </TabsList>
 
           <TabsContent value="profile"><ProfileTab user={user} /></TabsContent>
-          <TabsContent value="favorites"><RedirectTab icon={<Heart className="w-5 h-5 text-red-500" />} title="我的收藏" description="查看所有收藏的工廠" href="/favorites" /></TabsContent>
+          <TabsContent value="favorites"><FavoriteFactoriesPanel /></TabsContent>
           <TabsContent value="recent"><RedirectTab icon={<Clock className="w-5 h-5 text-blue-500" />} title="近期瀏覽" description="查看最近瀏覽過的工廠" href="/favorites" /></TabsContent>
           <TabsContent value="orders"><PersonalOrdersTab /></TabsContent>
           <TabsContent value="messages"><RedirectTab icon={<MessageCircle className="w-5 h-5 text-green-500" />} title="詢價/對話紀錄" description="查看所有與工廠的對話" href="/messages" /></TabsContent>
