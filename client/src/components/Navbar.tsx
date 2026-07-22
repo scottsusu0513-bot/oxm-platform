@@ -3,7 +3,7 @@ import { trpc } from "@/lib/trpc";
 import { Link, useLocation } from "wouter";
 import {
   Factory, Mail, User, LogOut, LayoutDashboard, Menu, X,
-  UserPlus, Search, Settings, Heart, UserCircle, ChevronDown,
+  UserPlus, Search, Settings, UserCircle, ChevronDown,
   FileText, ScrollText, Bell, Briefcase, Lock,
   Rocket, Users, Package, BookOpen, MessageSquare, Lightbulb,
 } from "lucide-react";
@@ -628,12 +628,6 @@ export default function Navbar() {
                     會員中心
                   </Link>
                 </DropdownMenuItem>
-                <DropdownMenuItem asChild>
-                  <Link href="/favorites" className="flex items-center gap-2 cursor-pointer">
-                    <Heart className="w-4 h-4" />
-                    我的收藏
-                  </Link>
-                </DropdownMenuItem>
                 {showDashboardBtn ? (
                   <DropdownMenuItem asChild>
                     <Link href="/dashboard" className="flex items-center gap-2 cursor-pointer">
@@ -893,13 +887,6 @@ export default function Navbar() {
                   </Button>
                 </Link>
               )}
-
-              <Link href="/favorites" onClick={() => setMobileOpen(false)}>
-                <Button variant="ghost" className="w-full justify-start">
-                  <Heart className="w-4 h-4 mr-2" />
-                  我的收藏
-                </Button>
-              </Link>
 
               <Link href="/member" onClick={() => setMobileOpen(false)}>
                 <Button variant="ghost" className="w-full justify-start">
