@@ -16,7 +16,7 @@ import { storagePut, storagePresignedUrl, storageDelete } from "./storage";
 import { validateImageUpload } from "./_core/security";
 import { INDUSTRY_OPTIONS, TAIWAN_REGIONS, CAPITAL_OPTIONS, INDUSTRY_SLUGS } from "../shared/constants";
 import { nanoid } from "nanoid";
-import { factories, conversations, reviews, reports, factoryCoManagers, users, upgradeConsultants } from "../drizzle/schema";
+import { factories, conversations, reviews, reports, factoryCoManagers, users, upgradeConsultants, type Factory } from "../drizzle/schema";
 import { desc, eq, and, sql, isNull } from "drizzle-orm";
 import { getDb } from "./db";
 import { sendPushToUser, sendPushToRecipients, toPlainPushSummary, toPlainNotificationText } from "./push";
@@ -37,6 +37,120 @@ function requireVerifiedEmail(user: { primaryEmailVerifiedAt: Date | null }): vo
   if (!user.primaryEmailVerifiedAt) {
     throw new TRPCError({ code: "FORBIDDEN", message: "UNVERIFIED_EMAIL" });
   }
+}
+
+// ── chat.send 與「首次送出」原子 mutation 共用的通知邏輯 ─────────────────
+// 抽出來讓 chat.send（買家傳給已存在對話）與新的 chat.sendFirstMessage
+// （買家開新對話時的原子首次送出）共用同一套「首次聯繫 Email 對象判斷」與
+// 「通知工廠端」邏輯，避免兩套程式碼各自維護、日後行為漂移。
+type FirstContactEntry = { email: string; name: string | null };
+
+async function collectUserToFactoryFirstContactEmails(
+  senderUserId: number,
+  senderEmail: string | null | undefined,
+  factory: Factory,
+): Promise<FirstContactEntry[]> {
+  const entries: FirstContactEntry[] = [];
+  const [owner, coMgrs] = await Promise.all([
+    db.getUserById(factory.ownerId),
+    db.getFactoryCoManagersFullProfile(factory.id),
+  ]);
+  if (owner) {
+    const alreadyContacted = await db.hasContactBetweenUsers(senderUserId, factory.ownerId);
+    if (!alreadyContacted) {
+      const s = (owner.notificationSettings as Record<string, boolean> | null) ?? {};
+      const emailDest = factory.contactEmail || owner.email;
+      if (emailDest && s.newMessage !== false) {
+        entries.push({ email: emailDest, name: owner.name });
+      }
+    }
+  }
+  for (const cm of coMgrs) {
+    if (!cm.email || cm.email === senderEmail) continue;
+    const alreadyContacted = await db.hasContactBetweenUsers(senderUserId, cm.userId);
+    if (!alreadyContacted) {
+      const s = (cm.notificationSettings as Record<string, boolean> | null) ?? {};
+      if (s.newMessage !== false) {
+        entries.push({ email: cm.email, name: cm.name ?? null });
+      }
+    }
+  }
+  return entries;
+}
+
+// 副作用（管理員監控信、推播、站內通知）一律在呼叫端確認 DB 寫入（transaction
+// commit）成功之後才呼叫，避免 rollback 後仍誤發通知。函式內部全部是
+// fire-and-forget，本身不 throw、不需要呼叫端 await。
+function notifyFactoryOfNewUserMessage(params: {
+  senderUserId: number;
+  senderName: string | null | undefined;
+  senderEmail: string | null | undefined;
+  factory: Factory;
+  conversationId: number;
+  content: string;
+  isAdvisorConv: boolean;
+  productName?: string | null;
+}): void {
+  const { senderUserId, senderName, senderEmail, factory, conversationId, content, isAdvisorConv, productName } = params;
+
+  notifyOwner({
+    title: `[OXM] 新客戶詢問 - ${factory.name ?? "工廠"}`,
+    content: [
+      `工廠名稱：${factory.name}`,
+      factory.contactEmail ? `工廠信箱：${factory.contactEmail}` : null,
+      productName ? `詢問產品：${productName}` : null,
+      `客戶名稱：${senderName ?? "匿名"}`,
+      `客戶信箱：${senderEmail ?? "未提供"}`,
+      ``,
+      `訊息內容：`,
+      `「${content.substring(0, 500)}」`,
+      ``,
+      `請登入 OXM 平台回覆客戶。`,
+    ].filter(Boolean).join("\n"),
+  }).catch((e) => { console.warn("[chat] notifyOwner 失敗（非嚴重）", e); });
+
+  Promise.all([
+    db.getUserById(factory.ownerId),
+    db.getFactoryCoManagerUserIdsWithPreferences(factory.id),
+  ]).then(([owner, coMgrs]) => {
+    const pushIds: number[] = [];
+    const ownerSettings = (owner?.notificationSettings as Record<string, boolean> | null) ?? {};
+    if (owner && ownerSettings.pushNewMessage !== false) pushIds.push(factory.ownerId);
+    for (const { userId, notificationSettings } of coMgrs) {
+      const s = (notificationSettings as Record<string, boolean> | null) ?? {};
+      if (s.pushNewMessage !== false) pushIds.push(userId);
+    }
+    console.log(`[Push:chat] user→factory convId=${conversationId} pushIds=[${pushIds.join(",")}] excludeSenderId=${senderUserId} ownerPushNewMessage=${ownerSettings.pushNewMessage ?? "unset(default:send)"}`);
+    return sendPushToRecipients({
+      userIds: pushIds,
+      excludeUserId: senderUserId,
+      title: "OXM 有新的詢問訊息",
+      body: `${isAdvisorConv ? ADVISOR_DISPLAY_NAME : (senderName ?? "客戶")} 傳來一則新訊息`,
+      data: {
+        type: "chat_message",
+        conversationId: String(conversationId),
+        targetPath: `/chat/${conversationId}`,
+      },
+    });
+  }).catch((e) => { console.warn("[Push] chat.send factory push error", e); });
+
+  Promise.all([
+    Promise.resolve(factory.ownerId),
+    db.getActiveCoManagerUserIds(factory.id),
+  ]).then(([ownerId, coMgrIds]) => {
+    const recipientIds = Array.from(new Set([ownerId, ...coMgrIds])).filter(id => id !== senderUserId);
+    if (recipientIds.length === 0) return;
+    return createPlatformNotifications(recipientIds.map(uid => ({
+      recipientUserId: uid,
+      actorUserId: senderUserId,
+      actorName: isAdvisorConv ? ADVISOR_DISPLAY_NAME : (senderName ?? senderEmail ?? ""),
+      eventType: "chat_message",
+      eventGroup: "chat",
+      message: `${isAdvisorConv ? ADVISOR_DISPLAY_NAME : (senderName ?? "客戶")} 傳了一則新詢問訊息`,
+      actionUrl: `/chat/${conversationId}`,
+      dedupeKey: `chat_message:conv:${conversationId}:r:${uid}:ts:${Date.now()}`,
+    })));
+  }).catch(() => {});
 }
 
 /**
@@ -996,20 +1110,18 @@ export const appRouter = router({
       const count = await db.getActiveCoManagerCount(factory.id);
       if (count >= 6) throw new Error("次管理者已達 6 人上限");
 
-      const conv = await db.getOrCreateConversation(invitee.id, factory.id);
-
+      // conversation 建立/取得、邀請紀錄、邀請訊息三步驟包在同一個 DB
+      // transaction 內（見 db.createCoManagerInvitationWithMessage），避免
+      // 中途失敗留下「有邀請但無訊息」或「有訊息但無邀請」的不一致狀態。
       const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-      const invitationId = await db.createCoManagerInvitation({
+      const content = `您好，我是【${factory.name}】的主管理者 ${ctx.user.name ?? ctx.user.email}，誠摯邀請您成為本工廠的次管理者，共同管理工廠後台。\n\n邀請有效期限：7 天\n\n請點選下方按鈕確認是否接受。`;
+      const { conversation: conv, invitationId } = await db.createCoManagerInvitationWithMessage({
         factoryId: factory.id,
         inviterUserId: ctx.user.id,
         inviteeUserId: invitee.id,
-        conversationId: conv.id,
         expiresAt,
+        messageContent: content,
       });
-
-      const content = `您好，我是【${factory.name}】的主管理者 ${ctx.user.name ?? ctx.user.email}，誠摯邀請您成為本工廠的次管理者，共同管理工廠後台。\n\n邀請有效期限：7 天\n\n請點選下方按鈕確認是否接受。`;
-      const messageId = await db.sendCoManagerInviteMessage(conv.id, ctx.user.id, content);
-      await db.linkInvitationToMessage(invitationId, messageId);
 
       // 站內通知：通知被邀請人
       createPlatformNotifications([{
@@ -1472,7 +1584,6 @@ export const appRouter = router({
       // ── 首次聯繫判斷（必須在 saveMessage 前完成，避免新訊息被誤判為歷史紀錄）
       // 判斷邏輯：以 senderUserId / recipientUserId 為核心，與角色、factoryId、conversationId 無關
       const senderUserId = ctx.user.id;
-      type FirstContactEntry = { email: string; name: string | null };
       const firstContactEntries: FirstContactEntry[] = [];
 
       // 預先取得買家資料（factory→buyer 路徑複用，避免重複查詢）
@@ -1487,30 +1598,7 @@ export const appRouter = router({
           }
         }
       } else if (senderRole === "user" && factory) {
-        const [owner, coMgrs] = await Promise.all([
-          db.getUserById(factory.ownerId),
-          db.getFactoryCoManagersFullProfile(factory.id),
-        ]);
-        if (owner) {
-          const alreadyContacted = await db.hasContactBetweenUsers(senderUserId, factory.ownerId);
-          if (!alreadyContacted) {
-            const s = (owner.notificationSettings as Record<string, boolean> | null) ?? {};
-            const emailDest = factory.contactEmail || owner.email;
-            if (emailDest && s.newMessage !== false) {
-              firstContactEntries.push({ email: emailDest, name: owner.name });
-            }
-          }
-        }
-        for (const cm of coMgrs) {
-          if (!cm.email || cm.email === ctx.user.email) continue;
-          const alreadyContacted = await db.hasContactBetweenUsers(senderUserId, cm.userId);
-          if (!alreadyContacted) {
-            const s = (cm.notificationSettings as Record<string, boolean> | null) ?? {};
-            if (s.newMessage !== false) {
-              firstContactEntries.push({ email: cm.email, name: cm.name ?? null });
-            }
-          }
-        }
+        firstContactEntries.push(...await collectUserToFactoryFirstContactEmails(senderUserId, ctx.user.email, factory));
       }
 
       await db.saveMessage(input.conversationId, ctx.user.id, senderRole, input.content);
@@ -1552,76 +1640,70 @@ export const appRouter = router({
         }]).catch(() => {});
       }
 
-      if (senderRole === "user") {
+      if (senderRole === "user" && factory) {
         const productInfo = conv.productId ? await db.getProductById(conv.productId) : null;
-
-        // notifyOwner 獨立 fire-and-forget（管理員監控用，不影響 Email）
-        notifyOwner({
-          title: `[OXM] 新客戶詢問 - ${factory?.name ?? "工廠"}`,
-          content: [
-            `工廠名稱：${factory?.name}`,
-            factory?.contactEmail ? `工廠信箱：${factory.contactEmail}` : null,
-            productInfo ? `詢問產品：${productInfo.name}` : null,
-            `客戶名稱：${ctx.user.name ?? "匿名"}`,
-            `客戶信箱：${ctx.user.email ?? "未提供"}`,
-            ``,
-            `訊息內容：`,
-            `「${input.content.substring(0, 500)}」`,
-            ``,
-            `請登入 OXM 平台回覆客戶。`,
-          ].filter(Boolean).join("\n"),
-        }).catch((e) => { console.warn("[chat.send] notifyOwner 失敗（非嚴重）", e); });
-
-        // 手機推播：通知工廠端（buyer 傳訊時）
-        if (factory) {
-          Promise.all([
-            db.getUserById(factory.ownerId),
-            db.getFactoryCoManagerUserIdsWithPreferences(factory.id),
-          ]).then(([owner, coMgrs]) => {
-            const pushIds: number[] = [];
-            const ownerSettings = (owner?.notificationSettings as Record<string, boolean> | null) ?? {};
-            if (owner && ownerSettings.pushNewMessage !== false) pushIds.push(factory.ownerId);
-            for (const { userId, notificationSettings } of coMgrs) {
-              const s = (notificationSettings as Record<string, boolean> | null) ?? {};
-              if (s.pushNewMessage !== false) pushIds.push(userId);
-            }
-            console.log(`[Push:chat] user→factory convId=${input.conversationId} pushIds=[${pushIds.join(",")}] excludeSenderId=${ctx.user.id} ownerPushNewMessage=${ownerSettings.pushNewMessage ?? "unset(default:send)"}`);
-            return sendPushToRecipients({
-              userIds: pushIds,
-              excludeUserId: ctx.user.id,
-              title: "OXM 有新的詢問訊息",
-              body: `${isAdvisorConv ? ADVISOR_DISPLAY_NAME : (ctx.user.name ?? "客戶")} 傳來一則新訊息`,
-              data: {
-                type: "chat_message",
-                conversationId: String(input.conversationId),
-                targetPath: `/chat/${input.conversationId}`,
-              },
-            });
-          }).catch((e) => { console.warn("[Push] chat.send factory push error", e); });
-        }
-
-        // 站內通知：通知工廠端（owner + co-managers）
-        if (factory) {
-          Promise.all([
-            Promise.resolve(factory.ownerId),
-            db.getActiveCoManagerUserIds(factory.id),
-          ]).then(([ownerId, coMgrIds]) => {
-            const recipientIds = Array.from(new Set([ownerId, ...coMgrIds])).filter(id => id !== ctx.user.id);
-            if (recipientIds.length === 0) return;
-            return createPlatformNotifications(recipientIds.map(uid => ({
-              recipientUserId: uid,
-              actorUserId: ctx.user.id,
-              actorName: isAdvisorConv ? ADVISOR_DISPLAY_NAME : (ctx.user.name ?? ctx.user.email ?? ""),
-              eventType: "chat_message",
-              eventGroup: "chat",
-              message: `${isAdvisorConv ? ADVISOR_DISPLAY_NAME : (ctx.user.name ?? "客戶")} 傳了一則新詢問訊息`,
-              actionUrl: `/chat/${input.conversationId}`,
-              dedupeKey: `chat_message:conv:${input.conversationId}:r:${uid}:ts:${Date.now()}`,
-            })));
-          }).catch(() => {});
-        }
+        notifyFactoryOfNewUserMessage({
+          senderUserId: ctx.user.id,
+          senderName: ctx.user.name,
+          senderEmail: ctx.user.email,
+          factory,
+          conversationId: input.conversationId,
+          content: input.content,
+          isAdvisorConv,
+          productName: productInfo?.name ?? null,
+        });
       }
       return { success: true };
+    }),
+
+    // 原子化「開新對話 + 送出第一則訊息」：conversation 建立/取得、message
+    // 儲存、lastMessageAt 更新皆包在同一個 DB transaction 內（見
+    // db.createConversationAndSendFirstMessage），任一步失敗即整體 rollback，
+    // 不會留下 messages=0 的新 conversation。前端 ChatPage 開新對話（/chat/new）
+    // 第一次送出時只呼叫這支 mutation，不再由前端依序呼叫 getOrCreate + send。
+    // 若當下已存在對話（例如使用者剛好在 getExisting 查詢完成前送出），會直接
+    // 沿用既有 conversation 並附加這則訊息，不會建立重複列。
+    sendFirstMessage: protectedProcedure.input(z.object({
+      factoryId: z.number(),
+      productId: z.number().optional(),
+      content: z.string().min(1).max(2000),
+    })).mutation(async ({ ctx, input }) => {
+      requireVerifiedEmail(ctx.user);
+      const factory = await db.getFactoryById(input.factoryId);
+      if (!factory) throw new TRPCError({ code: "NOT_FOUND", message: "工廠不存在" });
+
+      const senderUserId = ctx.user.id;
+      // 必須在寫入訊息前完成（否則這則訊息本身會讓 hasContactBetweenUsers 誤判為已聯繫過）
+      const firstContactEntries = await collectUserToFactoryFirstContactEmails(senderUserId, ctx.user.email, factory);
+
+      const { conversation, isNewConversation } = await db.createConversationAndSendFirstMessage(
+        senderUserId,
+        input.factoryId,
+        input.content,
+        input.productId,
+      );
+
+      for (const { email, name } of firstContactEntries) {
+        sendFirstContactEmail({ toEmail: email, toName: name, conversationId: conversation.id }).catch(() => {});
+      }
+
+      const [isAdvisorConv, productInfo] = await Promise.all([
+        db.isAdvisorConversation(senderUserId, input.factoryId),
+        input.productId ? db.getProductById(input.productId) : Promise.resolve(null),
+      ]);
+
+      notifyFactoryOfNewUserMessage({
+        senderUserId,
+        senderName: ctx.user.name,
+        senderEmail: ctx.user.email,
+        factory,
+        conversationId: conversation.id,
+        content: input.content,
+        isAdvisorConv,
+        productName: productInfo?.name ?? null,
+      });
+
+      return { conversationId: conversation.id, isNewConversation };
     }),
 
     // 查詢工廠可傳送的商品（工廠 owner 或 co-manager 可呼叫）
@@ -4515,9 +4597,12 @@ export const appRouter = router({
         const factoryId = uniqueIds[i];
         const factory = factoryList[i]!;
         try {
-          const conv = await db.getOrCreateConversation(ctx.user.id, factoryId);
-          await db.saveMessage(conv.id, ctx.user.id, "user", input.message);
-          await db.createInquiryBatchItem(batchId, factoryId, conv.id);
+          // conversation 建立/取得、message 儲存、批次項目紀錄三步驟包在
+          // 同一個 DB transaction 內（見 db.createConversationSendMessageAndBatchItem），
+          // 任一步失敗即整體 rollback，不會留下零訊息的 conversation。
+          const { conversation: conv } = await db.createConversationSendMessageAndBatchItem(
+            ctx.user.id, factoryId, input.message, batchId,
+          );
           successCount++;
 
           // 手機推播：通知工廠端

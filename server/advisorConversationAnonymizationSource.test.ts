@@ -64,17 +64,59 @@ describe("server/routers.ts: chat.send 對工廠端的推播／站內通知同�
     expect(getFn()).toMatch(/const isAdvisorConv = senderRole === "user" && await db\.isAdvisorConversation\(conv\.userId, conv\.factoryId\)/);
   });
 
+  // 推播／站內通知／管理員監控信的實際邏輯已抽到共用函式
+  // notifyFactoryOfNewUserMessage（讓 chat.send 與 chat.sendFirstMessage 共用同一套
+  // 行為，不各自維護一份），這裡改為驗證 chat.send 確實把 isAdvisorConv 轉交給它。
+  it("chat.send 呼叫共用的 notifyFactoryOfNewUserMessage 並傳入 isAdvisorConv", () => {
+    const fn = getFn();
+    expect(fn).toMatch(/notifyFactoryOfNewUserMessage\(\{/);
+    expect(fn).toMatch(/isAdvisorConv,/);
+  });
+});
+
+describe("server/routers.ts: notifyFactoryOfNewUserMessage（chat.send 與 chat.sendFirstMessage 共用）", () => {
+  function getFn() {
+    // 參數是多行 object type（... }): void { ...），非貪婪 \n\} 會在參數型別
+    // 結尾就誤判為函式結束；用 negative lookahead 排除「} 後面直接接 ):」的
+    // 情況，才會對應到函式真正的結尾。
+    const fnMatch = routersSource.match(/function notifyFactoryOfNewUserMessage\([\s\S]*?\n\}(?!\):)/);
+    expect(fnMatch, "找不到 notifyFactoryOfNewUserMessage 函式").not.toBeNull();
+    return fnMatch![0];
+  }
+
   it("推播通知 body 在顧問對話時改用 ADVISOR_DISPLAY_NAME，不洩漏顧問真實姓名", () => {
-    expect(getFn()).toMatch(/body: `\$\{isAdvisorConv \? ADVISOR_DISPLAY_NAME : \(ctx\.user\.name \?\? "客戶"\)\} 傳來一則新訊息`/);
+    expect(getFn()).toMatch(/body: `\$\{isAdvisorConv \? ADVISOR_DISPLAY_NAME : \(senderName \?\? "客戶"\)\} 傳來一則新訊息`/);
   });
 
   it("站內通知 actorName／message 在顧問對話時改用 ADVISOR_DISPLAY_NAME，不洩漏顧問真實姓名", () => {
     const fn = getFn();
-    expect(fn).toMatch(/actorName: isAdvisorConv \? ADVISOR_DISPLAY_NAME : \(ctx\.user\.name \?\? ctx\.user\.email \?\? ""\)/);
-    expect(fn).toMatch(/message: `\$\{isAdvisorConv \? ADVISOR_DISPLAY_NAME : \(ctx\.user\.name \?\? "客戶"\)\} 傳了一則新詢問訊息`/);
+    expect(fn).toMatch(/actorName: isAdvisorConv \? ADVISOR_DISPLAY_NAME : \(senderName \?\? senderEmail \?\? ""\)/);
+    expect(fn).toMatch(/message: `\$\{isAdvisorConv \? ADVISOR_DISPLAY_NAME : \(senderName \?\? "客戶"\)\} 傳了一則新詢問訊息`/);
   });
 
   it("管理員監控信（notifyOwner）不受影響，仍寫入客戶（顧問）真實姓名供內部稽核", () => {
-    expect(getFn()).toMatch(/客戶名稱：\$\{ctx\.user\.name \?\? "匿名"\}/);
+    expect(getFn()).toMatch(/客戶名稱：\$\{senderName \?\? "匿名"\}/);
+  });
+});
+
+describe("server/routers.ts: chat.sendFirstMessage 首次送出原子 mutation 共用同一套通知邏輯", () => {
+  function getFn() {
+    const fnMatch = routersSource.match(/sendFirstMessage: protectedProcedure\.input\(z\.object\(\{[\s\S]*?\n    \}\),/);
+    expect(fnMatch, "找不到 chat.sendFirstMessage procedure").not.toBeNull();
+    return fnMatch![0];
+  }
+
+  it("送出前用 db.isAdvisorConversation 動態判斷，並傳給共用的 notifyFactoryOfNewUserMessage", () => {
+    const fn = getFn();
+    expect(fn).toMatch(/db\.isAdvisorConversation\(senderUserId, input\.factoryId\)/);
+    expect(fn).toMatch(/notifyFactoryOfNewUserMessage\(\{/);
+    expect(fn).toMatch(/isAdvisorConv,/);
+  });
+
+  it("只呼叫原子的 db.createConversationAndSendFirstMessage，不依序呼叫 getOrCreate 再另外存訊息", () => {
+    const fn = getFn();
+    expect(fn).toMatch(/db\.createConversationAndSendFirstMessage\(/);
+    expect(fn).not.toMatch(/db\.getOrCreateConversation\(/);
+    expect(fn).not.toMatch(/db\.saveMessage\(/);
   });
 });

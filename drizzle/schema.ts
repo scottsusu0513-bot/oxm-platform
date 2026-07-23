@@ -106,7 +106,14 @@ export const conversations = mysqlTable("conversations", {
   productId: int("productId").references(() => products.id, { onDelete: "set null" }),           // 可選，針對特定產品的詢問
   lastMessageAt: timestamp("lastMessageAt").defaultNow().notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-});
+}, (table) => ({
+  // 同一 userId 對同一 factoryId 永遠只有一筆 conversation（忽略 productId，
+  // 同買家詢問同工廠不同商品仍沿用同一筆）。尚未執行對應 migration
+  // 0064_conversations_unique_user_factory.sql，schema 先反映目標狀態，
+  // 供之後 db:push/generate 比對；db:push 執行前需先跑 migration 檔內附的
+  // 重複資料預檢。
+  uqUserFactory: uniqueIndex("uq_conversation_user_factory").on(table.userId, table.factoryId),
+}));
 
 export type Conversation = typeof conversations.$inferSelect;
 

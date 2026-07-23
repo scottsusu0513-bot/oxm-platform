@@ -25,6 +25,7 @@ import {
   upgradeApplications, upgradeConsultants,
   news, newsIndustries, newsNotifications, newsAttachments, newsReads, newsBoardSubscriptions,
   type Factory, type InsertFactory, type Product, type InsertProduct, type Favorite, type InsertFavorite,
+  type Conversation,
   type CommunityPost, type CommunityComment,
   type CommunityBoardFollow, type FactoryFollow, type CommunityContentFollow,
   type CommunityReaction, type CommunityMention, type CommunityNotification,
@@ -506,6 +507,146 @@ export async function getOrCreateConversation(userId: number, factoryId: number,
   const result = await db.insert(conversations).values({ userId, factoryId, productId: productId ?? null });
   const newConv = await db.select().from(conversations).where(eq(conversations.id, result[0].insertId)).limit(1);
   return newConv[0];
+}
+
+// ── 首次送出原子化 helpers ───────────────────────────────────────────────
+//
+// 「建立/取得 conversation + 存第一則 message + 更新 lastMessageAt」在下面
+// 三個函式裡都包在同一個 db.transaction 中，任一步失敗就整體 rollback，
+// 不會留下 messages=0 的新 conversation（正式站既有的兩筆歷史零訊息對話不受
+// 影響，也不會被這裡的邏輯刪除或回填）。
+//
+// Race 防護：transaction 內先對 (userId, factoryId) 做 SELECT ... FOR UPDATE，
+// InnoDB 在可重複讀（預設）隔離層級下，即使查無資料也會對該索引範圍上
+// gap lock，讓併發的第二個請求等到第一個 commit 後才能繼續，因而只會看到
+// 第一個請求剛建立的那筆 conversation、不會插入重複列。這是不需要新增
+// migration 就能達成的最小方案；真正的資料庫層保證仍建議加上
+// UNIQUE(userId, factoryId)，已於 drizzle/0064_conversations_unique_user_factory.sql
+// 準備好對應 migration（尚未執行，依指示不可執行 migration/db:push）。
+
+export async function createConversationAndSendFirstMessage(
+  userId: number,
+  factoryId: number,
+  content: string,
+  productId?: number,
+): Promise<{ conversation: Conversation; messageId: number; isNewConversation: boolean }> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  return db.transaction(async (tx) => {
+    const existing = await tx.select().from(conversations)
+      .where(and(eq(conversations.userId, userId), eq(conversations.factoryId, factoryId)))
+      .limit(1)
+      .for("update");
+
+    let conversation: Conversation;
+    let isNewConversation: boolean;
+    if (existing.length > 0) {
+      conversation = existing[0];
+      isNewConversation = false;
+    } else {
+      const inserted = await tx.insert(conversations).values({ userId, factoryId, productId: productId ?? null });
+      const [created] = await tx.select().from(conversations).where(eq(conversations.id, inserted[0].insertId)).limit(1);
+      conversation = created;
+      isNewConversation = true;
+    }
+
+    const msgResult = await tx.insert(messages).values({
+      conversationId: conversation.id,
+      senderId: userId,
+      senderRole: "user",
+      content,
+    });
+    await tx.update(conversations).set({ lastMessageAt: new Date() }).where(eq(conversations.id, conversation.id));
+
+    return { conversation, messageId: msgResult[0].insertId as number, isNewConversation };
+  });
+}
+
+export async function createCoManagerInvitationWithMessage(data: {
+  factoryId: number;
+  inviterUserId: number;
+  inviteeUserId: number;
+  expiresAt: Date;
+  messageContent: string;
+}): Promise<{ conversation: Conversation; invitationId: number; messageId: number }> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  return db.transaction(async (tx) => {
+    const existing = await tx.select().from(conversations)
+      .where(and(eq(conversations.userId, data.inviteeUserId), eq(conversations.factoryId, data.factoryId)))
+      .limit(1)
+      .for("update");
+
+    let conversation: Conversation;
+    if (existing.length > 0) {
+      conversation = existing[0];
+    } else {
+      const inserted = await tx.insert(conversations).values({ userId: data.inviteeUserId, factoryId: data.factoryId });
+      const [created] = await tx.select().from(conversations).where(eq(conversations.id, inserted[0].insertId)).limit(1);
+      conversation = created;
+    }
+
+    const invResult = await tx.insert(factoryCoManagerInvitations).values({
+      factoryId: data.factoryId,
+      inviterUserId: data.inviterUserId,
+      inviteeUserId: data.inviteeUserId,
+      conversationId: conversation.id,
+      expiresAt: data.expiresAt,
+      status: "pending",
+    });
+    const invitationId = invResult[0].insertId as number;
+
+    const msgResult = await tx.insert(messages).values({
+      conversationId: conversation.id,
+      senderId: data.inviterUserId,
+      senderRole: "factory",
+      content: data.messageContent,
+      type: "co_manager_invite",
+      isRead: false,
+      invitationId,
+    });
+    const messageId = msgResult[0].insertId as number;
+
+    await tx.update(conversations).set({ lastMessageAt: new Date() }).where(eq(conversations.id, conversation.id));
+
+    return { conversation, invitationId, messageId };
+  });
+}
+
+export async function createConversationSendMessageAndBatchItem(
+  userId: number,
+  factoryId: number,
+  content: string,
+  batchId: number,
+): Promise<{ conversation: Conversation; messageId: number }> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  return db.transaction(async (tx) => {
+    const existing = await tx.select().from(conversations)
+      .where(and(eq(conversations.userId, userId), eq(conversations.factoryId, factoryId)))
+      .limit(1)
+      .for("update");
+
+    let conversation: Conversation;
+    if (existing.length > 0) {
+      conversation = existing[0];
+    } else {
+      const inserted = await tx.insert(conversations).values({ userId, factoryId });
+      const [created] = await tx.select().from(conversations).where(eq(conversations.id, inserted[0].insertId)).limit(1);
+      conversation = created;
+    }
+
+    const msgResult = await tx.insert(messages).values({
+      conversationId: conversation.id,
+      senderId: userId,
+      senderRole: "user",
+      content,
+    });
+    await tx.update(conversations).set({ lastMessageAt: new Date() }).where(eq(conversations.id, conversation.id));
+    await tx.insert(inquiryBatchItems).values({ batchId, factoryId, conversationId: conversation.id });
+
+    return { conversation, messageId: msgResult[0].insertId as number };
+  });
 }
 
 // ===== 政府補助顧問對話：判定 =====
@@ -1334,24 +1475,30 @@ export async function getAdminProducts(page = 1, pageSize = 20, search?: string,
 export async function getAdminConversations(page = 1, pageSize = 20, search?: string, factoryId?: number) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
-  
+
   // 構建查詢條件
-  const conditions: any[] = [];
-  
+  const conditions: any[] = [
+    // 只顯示至少有一則 message 的對話：歷史上曾因「先建 conversation 再存
+    // message」流程於中途失敗而留下的零訊息 conversation，不應出現在管理員
+    // 列表。不刪除／回填這些既有資料，只在讀取時排除，total 與 items 套用
+    // 完全相同的條件，兩者保持一致。
+    sql`EXISTS (SELECT 1 FROM messages m WHERE m.conversationId = ${conversations.id})`,
+  ];
+
   if (factoryId) {
     conditions.push(eq(conversations.factoryId, factoryId));
   }
-  
+
   if (search) {
     // 搜尋工廠名稱或使用者名稱
     const matchingFactories = await db.select({ id: factories.id }).from(factories)
       .where(like(factories.name, `%${search}%`));
     const matchingUsers = await db.select({ id: users.id }).from(users)
       .where(like(users.name, `%${search}%`));
-    
+
     const factoryIds = matchingFactories.map(f => f.id);
     const userIds = matchingUsers.map(u => u.id);
-    
+
     if (factoryIds.length > 0 || userIds.length > 0) {
       const searchConditions = [];
       if (factoryIds.length > 0) searchConditions.push(inArray(conversations.factoryId, factoryIds));
@@ -1361,34 +1508,37 @@ export async function getAdminConversations(page = 1, pageSize = 20, search?: st
       return { items: [], total: 0, page, pageSize };
     }
   }
-  
+
+  const whereClause = and(...conditions);
+
   // 計算總數
-  let countQuery = db.select({ count: sql<number>`COUNT(*)` }).from(conversations);
-  if (conditions.length > 0) {
-    countQuery = countQuery.where(and(...conditions)) as any;
-  }
-  const [countResult] = await countQuery;
+  const [countResult] = await db.select({ count: sql<number>`COUNT(*)` }).from(conversations).where(whereClause);
   const total = Number(countResult?.count ?? 0);
-  
-  // 獲取分頁數據（帶上工廠和使用者資訊）
+
+  // 獲取分頁數據（帶上工廠和使用者資訊）—— 與計算總數套用完全相同的 where 條件
   let items: any[] = [];
   try {
-    const result = await db.execute(sql`
-      SELECT 
-        c.id, c.userId, c.factoryId, c.createdAt, c.lastMessageAt,
-        u.name as userName,
-        f.name as factoryName
-      FROM conversations c
-      LEFT JOIN users u ON c.userId = u.id
-      LEFT JOIN factories f ON c.factoryId = f.id
-      ORDER BY c.lastMessageAt DESC
-      LIMIT ${pageSize} OFFSET ${(page - 1) * pageSize}
-    `);
-    items = (result as any)[0];
+    items = await db
+      .select({
+        id: conversations.id,
+        userId: conversations.userId,
+        factoryId: conversations.factoryId,
+        createdAt: conversations.createdAt,
+        lastMessageAt: conversations.lastMessageAt,
+        userName: users.name,
+        factoryName: factories.name,
+      })
+      .from(conversations)
+      .leftJoin(users, eq(conversations.userId, users.id))
+      .leftJoin(factories, eq(conversations.factoryId, factories.id))
+      .where(whereClause)
+      .orderBy(desc(conversations.lastMessageAt))
+      .limit(pageSize)
+      .offset((page - 1) * pageSize);
   } catch (e) {
     console.error('[AdminConversations] query error:', e);
   }
-  
+
   return { items, total, page, pageSize };
 }
 // ===== 批次查詢對話列表（解決 N+1）=====
@@ -1466,19 +1616,24 @@ export async function getConversationsByUserWithDetails(userId: number) {
     }
   }
 
-  return convs.map(conv => {
-    const lastMsg = lastMsgMap.get(conv.id);
-    return {
-      ...conv,
-      factoryName: factoryMap.get(conv.factoryId)?.name ?? '未知工廠',
-      factoryAvatarUrl: factoryMap.get(conv.factoryId)?.avatarUrl ?? null,
-      factoryBusinessType: factoryMap.get(conv.factoryId)?.businessType ?? 'factory',
-      productName: conv.productId ? (productMap.get(conv.productId)?.name ?? null) : null,
-      unreadCount: unreadMap.get(conv.id) ?? 0,
-      lastMessage: lastMsg ? lastMsg.content.substring(0, 60) : null,
-      lastSenderRole: lastMsg?.senderRole ?? null,
-    };
-  });
+  // 只顯示至少有一則 message 的對話：零訊息的舊 conversation（含歷史上因流程
+  // 中途失敗留下的紀錄）不在會員／顧問端列表出現，但一旦送出訊息會自然重新
+  // 出現（因為屆時 lastMsgMap 就會有紀錄）。不刪除任何既有資料，只在讀取時過濾。
+  return convs
+    .filter(conv => lastMsgMap.has(conv.id))
+    .map(conv => {
+      const lastMsg = lastMsgMap.get(conv.id);
+      return {
+        ...conv,
+        factoryName: factoryMap.get(conv.factoryId)?.name ?? '未知工廠',
+        factoryAvatarUrl: factoryMap.get(conv.factoryId)?.avatarUrl ?? null,
+        factoryBusinessType: factoryMap.get(conv.factoryId)?.businessType ?? 'factory',
+        productName: conv.productId ? (productMap.get(conv.productId)?.name ?? null) : null,
+        unreadCount: unreadMap.get(conv.id) ?? 0,
+        lastMessage: lastMsg ? lastMsg.content.substring(0, 60) : null,
+        lastSenderRole: lastMsg?.senderRole ?? null,
+      };
+    });
 }
 
 export async function getConversationsByFactoryWithDetails(factoryId: number, readerId: number) {
@@ -1559,19 +1714,22 @@ export async function getConversationsByFactoryWithDetails(factoryId: number, re
     }
   }
 
-  return convs.map(conv => {
-    const lastMsg = lastMsgMap.get(conv.id);
-    const isAdvisor = advisorUserIds.has(conv.userId);
-    return {
-      ...conv,
-      userName: isAdvisor ? ADVISOR_DISPLAY_NAME : (userMap.get(conv.userId)?.name ?? '匿名使用者'),
-      productName: conv.productId ? (productMap.get(conv.productId)?.name ?? null) : null,
-      unreadCount: unreadMap.get(conv.id) ?? 0,
-      lastMessage: lastMsg ? lastMsg.content.substring(0, 60) : null,
-      lastSenderRole: lastMsg?.senderRole ?? null,
-      buyerAffiliation: isAdvisor ? null : (affiliationMap.get(conv.userId) ?? null),
-    };
-  });
+  // 只顯示至少有一則 message 的對話（理由同 getConversationsByUserWithDetails）。
+  return convs
+    .filter(conv => lastMsgMap.has(conv.id))
+    .map(conv => {
+      const lastMsg = lastMsgMap.get(conv.id);
+      const isAdvisor = advisorUserIds.has(conv.userId);
+      return {
+        ...conv,
+        userName: isAdvisor ? ADVISOR_DISPLAY_NAME : (userMap.get(conv.userId)?.name ?? '匿名使用者'),
+        productName: conv.productId ? (productMap.get(conv.productId)?.name ?? null) : null,
+        unreadCount: unreadMap.get(conv.id) ?? 0,
+        lastMessage: lastMsg ? lastMsg.content.substring(0, 60) : null,
+        lastSenderRole: lastMsg?.senderRole ?? null,
+        buyerAffiliation: isAdvisor ? null : (affiliationMap.get(conv.userId) ?? null),
+      };
+    });
 }
 // ===== 批次查詢收藏狀態 =====
 export async function getFavoritedFactoryIds(userId: number, factoryIds: number[]): Promise<Set<number>> {

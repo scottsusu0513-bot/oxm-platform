@@ -1,0 +1,24 @@
+-- 對話唯一性 constraint（尚未執行 —— 僅建立 migration 檔，依作業指示不可執行
+-- migration/db:push；正式上線前需另外排程執行）。
+--
+-- 業務規則：同一位使用者（userId）對同一間工廠（factoryId）永遠只會有一筆
+-- conversation（getOrCreateConversation / createConversationAndSendFirstMessage
+-- / createCoManagerInvitationWithMessage / createConversationSendMessageAndBatchItem
+-- 皆以 userId+factoryId 判斷是否已存在，忽略 productId —— 同一買家詢問同工廠
+-- 不同商品仍沿用同一個 conversation）。目前 server 端已用「transaction 內
+-- SELECT ... FOR UPDATE」做 InnoDB gap lock 作為第一層防護，但那只在同一台
+-- DB、同一個 InnoDB 隔離層級設定下可靠；真正杜絕併發重複 insert 的保證仍是
+-- 這裡的 UNIQUE INDEX。
+--
+-- 執行前必須先做的預檢（應為 0 rows，若有重複列須先人工決定合併或保留哪一筆，
+-- 這裡不提供自動合併腳本，避免在不清楚業務脈絡下誤刪對話歷史紀錄）：
+--   SELECT userId, factoryId, COUNT(*) n
+--   FROM conversations
+--   GROUP BY userId, factoryId
+--   HAVING n > 1;
+--
+-- 正式站目前已知有兩筆歷史零訊息對話（政府補助顧問案件），這兩筆本身
+-- userId+factoryId 各自唯一，不會與這個 UNIQUE INDEX 衝突；本次修改也
+-- 明確不刪除、不回填、不修改這兩筆既有資料。
+
+ALTER TABLE `conversations` ADD UNIQUE INDEX `uq_conversation_user_factory` (`userId`, `factoryId`);

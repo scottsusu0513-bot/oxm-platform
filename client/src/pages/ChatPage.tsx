@@ -1136,8 +1136,8 @@ export default function ChatPage() {
   }, [conversationId, isAuthenticated, msgs]);
 
   useEffect(() => {
-    if (existingConv) navigate(`/chat/${existingConv.id}`, { replace: true });
-  }, [existingConv, navigate]);
+    if (existingConv) navigate(`/chat/${existingConv.id}`, { replace: true, state: { from: backPath } });
+  }, [existingConv, navigate, backPath]);
 
   useEffect(() => {
     if (isNewChat && factoryData && !existingConv) {
@@ -1162,7 +1162,10 @@ export default function ChatPage() {
     return () => document.removeEventListener("mousedown", handler);
   }, [attachMenuOpen]);
 
-  const getOrCreateMut = trpc.chat.getOrCreate.useMutation();
+  // 開新對話的第一次送出：conversation 建立/取得 + 第一則 message 是後端同一個
+  // 原子 transaction（見 server 端 chat.sendFirstMessage / db.createConversationAndSendFirstMessage），
+  // 前端不再依序呼叫 getOrCreate 再 send，避免第一步成功、第二步失敗留下空 conversation。
+  const sendFirstMessageMut = trpc.chat.sendFirstMessage.useMutation();
   const sendMut = trpc.chat.send.useMutation({
     onSuccess: () => {
       setMessage("");
@@ -1218,11 +1221,11 @@ export default function ChatPage() {
     setIsSending(true);
     try {
       if (isNewChat && factoryId) {
-        const conv = await getOrCreateMut.mutateAsync({ factoryId, productId });
-        await sendMut.mutateAsync({ conversationId: conv.id, content: message.trim() });
+        const result = await sendFirstMessageMut.mutateAsync({ factoryId, productId, content: message.trim() });
+        setMessage("");
         utils.chat.myConversations.invalidate();
         utils.chat.unreadCount.invalidate();
-        navigate(`/chat/${conv.id}`, { replace: true });
+        navigate(`/chat/${result.conversationId}`, { replace: true, state: { from: backPath } });
       } else if (conversationId) {
         sendMut.mutate({ conversationId, content: message.trim() });
       }

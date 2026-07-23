@@ -415,12 +415,14 @@ function CaseCard({ item, defaultExpanded }: { item: Case; defaultExpanded?: boo
     onError: (e) => toast.error(e.message || "金額儲存失敗"),
   });
 
-  const chatMut = trpc.chat.getOrCreate.useMutation({
-    onSuccess: (conv) => navigate(`/chat/${conv.id}`, { state: { from: `/upgrade-consultant/cases?caseId=${item.id}` } }),
-    onError: (e) => toast.error(e.message || "無法開啟對話"),
-  });
-
   const busy = acknowledgeMut.isPending || statusMut.isPending || notesMut.isPending || amountsMut.isPending;
+
+  const openChatDraft = () => {
+    if (!canChat) return;
+    navigate(`/chat/new?factoryId=${item.factoryId}`, {
+      state: { from: `/upgrade-consultant/cases?caseId=${item.id}` },
+    });
+  };
 
   // ── 動作處理 ────────────────────────────────────────────────────────────────
 
@@ -977,11 +979,11 @@ function CaseCard({ item, defaultExpanded }: { item: Case; defaultExpanded?: boo
               size="sm"
               variant="outline"
               className={`h-8 text-xs ml-auto ${!canChat ? "opacity-40 cursor-not-allowed" : ""}`}
-              disabled={busy || !canChat || chatMut.isPending}
+              disabled={busy || !canChat}
               title={!item.factoryId ? "此申請未關聯 OXM 工廠，無法私訊" : "開啟與廠商的對話"}
-              onClick={() => { if (canChat) chatMut.mutate({ factoryId: item.factoryId! }); }}
+              onClick={openChatDraft}
             >
-              {chatMut.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <MessageCircle className="w-3.5 h-3.5 mr-1" />}
+              <MessageCircle className="w-3.5 h-3.5 mr-1" />
               私訊廠商
             </Button>
           )}
