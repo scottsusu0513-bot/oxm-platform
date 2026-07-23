@@ -36,7 +36,7 @@ import {
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 import { ADJACENT_REGIONS, INDUSTRY_SLUGS, INDUSTRY_OPTIONS } from "../shared/constants";
-import { COMMUNITY_FEATURE_STATUS, COMMUNITY_CROSS_INDUSTRY_SLUG, NEWS_NEW_WINDOW_MS } from "../shared/const";
+import { COMMUNITY_FEATURE_STATUS, COMMUNITY_CROSS_INDUSTRY_SLUG, NEWS_NEW_WINDOW_MS, ADVISOR_DISPLAY_NAME } from "../shared/const";
 import type { AISearchIntent } from './semantic-search';
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -506,6 +506,42 @@ export async function getOrCreateConversation(userId: number, factoryId: number,
   const result = await db.insert(conversations).values({ userId, factoryId, productId: productId ?? null });
   const newConv = await db.select().from(conversations).where(eq(conversations.id, result[0].insertId)).limit(1);
   return newConv[0];
+}
+
+// ===== 政府補助顧問對話：判定 =====
+// 一段對話屬於「政府補助顧問案件對話」，若且唯若：conversations.userId 對應到一位
+// 顧問帳號（upgradeConsultants.userId），且該顧問名下存在一筆 upgradeApplications
+// 指派給同一間 conversations.factoryId。純粹用既有欄位運算，不需額外欄位／migration，
+// 對既有（migration 之前建立）的對話也立即生效。
+export async function isAdvisorConversation(userId: number, factoryId: number): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const [row] = await db
+    .select({ id: upgradeApplications.id })
+    .from(upgradeApplications)
+    .innerJoin(upgradeConsultants, eq(upgradeApplications.assignedConsultantId, upgradeConsultants.id))
+    .where(and(
+      eq(upgradeConsultants.userId, userId),
+      eq(upgradeApplications.factoryId, factoryId),
+    ))
+    .limit(1);
+  return !!row;
+}
+
+// 批次版本，供對話列表使用（避免每筆對話各查一次）：
+// 回傳 userIds 之中，符合「該 factoryId 的政府補助顧問」條件的 userId 集合。
+export async function getAdvisorUserIdsForFactory(factoryId: number, userIds: number[]): Promise<Set<number>> {
+  const db = await getDb();
+  if (!db || userIds.length === 0) return new Set();
+  const rows = await db
+    .select({ userId: upgradeConsultants.userId })
+    .from(upgradeApplications)
+    .innerJoin(upgradeConsultants, eq(upgradeApplications.assignedConsultantId, upgradeConsultants.id))
+    .where(and(
+      eq(upgradeApplications.factoryId, factoryId),
+      inArray(upgradeConsultants.userId, userIds),
+    ));
+  return new Set(rows.map(r => r.userId).filter((id): id is number => id != null));
 }
 
 export async function getConversationsByUser(userId: number) {
@@ -1479,6 +1515,10 @@ export async function getConversationsByFactoryWithDetails(factoryId: number, re
   // 批次查買家工廠身分（與 userMap 同一批 userIds，不產生 N+1）
   const affiliationMap = await getActiveFactoryAffiliationsByUserIds(userIds);
 
+  // 批次查出哪些 userId 是「此工廠」的政府補助顧問案件承辦人 —— 這些對話在工廠端
+  // （案件申請人）看到的對方名稱一律匿名化為 OXM政府補助顧問，不顯示顧問真實姓名。
+  const advisorUserIds = await getAdvisorUserIdsForFactory(factoryId, userIds);
+
   const convIds = convs.map(c => c.id);
 
   // 批次查未讀（工廠角度：讀者是工廠owner，所以排除 factory 自己送的）
@@ -1521,14 +1561,15 @@ export async function getConversationsByFactoryWithDetails(factoryId: number, re
 
   return convs.map(conv => {
     const lastMsg = lastMsgMap.get(conv.id);
+    const isAdvisor = advisorUserIds.has(conv.userId);
     return {
       ...conv,
-      userName: userMap.get(conv.userId)?.name ?? '匿名使用者',
+      userName: isAdvisor ? ADVISOR_DISPLAY_NAME : (userMap.get(conv.userId)?.name ?? '匿名使用者'),
       productName: conv.productId ? (productMap.get(conv.productId)?.name ?? null) : null,
       unreadCount: unreadMap.get(conv.id) ?? 0,
       lastMessage: lastMsg ? lastMsg.content.substring(0, 60) : null,
       lastSenderRole: lastMsg?.senderRole ?? null,
-      buyerAffiliation: affiliationMap.get(conv.userId) ?? null,
+      buyerAffiliation: isAdvisor ? null : (affiliationMap.get(conv.userId) ?? null),
     };
   });
 }

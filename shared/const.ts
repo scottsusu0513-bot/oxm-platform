@@ -12,6 +12,12 @@ export const NOT_ADMIN_ERR_MSG = 'You do not have required permission (10002)';
 export const NEWS_NEW_WINDOW_HOURS = 168;
 export const NEWS_NEW_WINDOW_MS = NEWS_NEW_WINDOW_HOURS * 60 * 60 * 1000;
 
+// ===== 政府補助顧問對話：客戶端顯示的匿名顧問身分 =====
+// 由「顧問管理中心／聯繫客戶」建立或進入的顧問對話，案件申請人（工廠端）看到的
+// 對話身分一律顯示此名稱，不顯示實際顧問的個人姓名。判斷邏輯見 server/db.ts 的
+// isAdvisorConversation()／getAdvisorUserIdsForFactory()。
+export const ADVISOR_DISPLAY_NAME = "OXM政府補助顧問";
+
 // ===== OXM 商案討論區 =====
 export type CommunityFeatureStatus = "coming_soon" | "beta" | "live" | "maintenance";
 export const COMMUNITY_FEATURE_STATUS: CommunityFeatureStatus = "beta";

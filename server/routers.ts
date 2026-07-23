@@ -1,4 +1,4 @@
-import { COOKIE_NAME, THIRTY_DAYS_MS, COMMUNITY_FEATURE_STATUS, PLATFORM_NOTIFICATION_TYPES, COMMUNITY_PUBLIC_ENTRY_ENABLED } from "@shared/const";
+import { COOKIE_NAME, THIRTY_DAYS_MS, COMMUNITY_FEATURE_STATUS, PLATFORM_NOTIFICATION_TYPES, COMMUNITY_PUBLIC_ENTRY_ENABLED, ADVISOR_DISPLAY_NAME } from "@shared/const";
 import { validateOrderDateChain } from "@shared/orderDateChain";
 import { COLLABORATION_ORDER_STAGE_LABELS, isStageTransitionEarly } from "@shared/collaborationOrderStage";
 import { sdk } from "./_core/sdk";
@@ -1430,10 +1430,14 @@ export const appRouter = router({
       const isCoMgr = !isConvUser && !isFactoryOwner && !!factory && await db.isActiveCoManager(factory.id, ctx.user.id);
       if (!isConvUser && !isFactoryOwner && !isCoMgr && ctx.user.role !== 'admin') return null;
       // 取得買家姓名與工廠身分（供工廠端顯示詢問者身分用）
-      const [buyer, buyerAffiliation] = await Promise.all([
+      const [buyer, buyerAffiliation, isAdvisorConv] = await Promise.all([
         db.getUserById(conv.userId),
         db.getActiveFactoryAffiliationDetail(conv.userId),
+        db.isAdvisorConversation(conv.userId, conv.factoryId),
       ]);
+      // 政府補助顧問案件對話：工廠端（案件申請人）看到的對方身分一律匿名化為
+      // OXM政府補助顧問，不顯示顧問真實姓名；顧問本人與管理員仍看得到真實資料。
+      const anonymizeForViewer = isAdvisorConv && (isFactoryOwner || isCoMgr);
       return {
         factoryName: factory?.name ?? "未知工廠",
         productName: product?.name ?? null,
@@ -1442,10 +1446,10 @@ export const appRouter = router({
         userId: conv.userId,
         factoryOwnerId: factory?.ownerId ?? null,
         isCoMgr,
-        buyerName: buyer?.name ?? null,
-        buyerAffiliation: buyerAffiliation
+        buyerName: anonymizeForViewer ? ADVISOR_DISPLAY_NAME : (buyer?.name ?? null),
+        buyerAffiliation: anonymizeForViewer ? null : (buyerAffiliation
           ? { factoryId: buyerAffiliation.factoryId, factoryName: buyerAffiliation.factoryName, factoryStatus: buyerAffiliation.factoryStatus, role: buyerAffiliation.role }
-          : null,
+          : null),
       };
     }),
 
@@ -1462,6 +1466,8 @@ export const appRouter = router({
       const isUser = conv.userId === ctx.user.id;
       if (!isFactoryOwner && !isCoMgr && !isUser) throw new Error("無權限");
       const senderRole = (isFactoryOwner || isCoMgr) ? "factory" as const : "user" as const;
+      // 政府補助顧問案件對話：往工廠端（案件申請人）的通知一律隱藏顧問真實姓名
+      const isAdvisorConv = senderRole === "user" && await db.isAdvisorConversation(conv.userId, conv.factoryId);
 
       // ── 首次聯繫判斷（必須在 saveMessage 前完成，避免新訊息被誤判為歷史紀錄）
       // 判斷邏輯：以 senderUserId / recipientUserId 為核心，與角色、factoryId、conversationId 無關
@@ -1584,7 +1590,7 @@ export const appRouter = router({
               userIds: pushIds,
               excludeUserId: ctx.user.id,
               title: "OXM 有新的詢問訊息",
-              body: `${ctx.user.name ?? "客戶"} 傳來一則新訊息`,
+              body: `${isAdvisorConv ? ADVISOR_DISPLAY_NAME : (ctx.user.name ?? "客戶")} 傳來一則新訊息`,
               data: {
                 type: "chat_message",
                 conversationId: String(input.conversationId),
@@ -1605,10 +1611,10 @@ export const appRouter = router({
             return createPlatformNotifications(recipientIds.map(uid => ({
               recipientUserId: uid,
               actorUserId: ctx.user.id,
-              actorName: ctx.user.name ?? ctx.user.email ?? "",
+              actorName: isAdvisorConv ? ADVISOR_DISPLAY_NAME : (ctx.user.name ?? ctx.user.email ?? ""),
               eventType: "chat_message",
               eventGroup: "chat",
-              message: `${ctx.user.name ?? "客戶"} 傳了一則新詢問訊息`,
+              message: `${isAdvisorConv ? ADVISOR_DISPLAY_NAME : (ctx.user.name ?? "客戶")} 傳了一則新詢問訊息`,
               actionUrl: `/chat/${input.conversationId}`,
               dedupeKey: `chat_message:conv:${input.conversationId}:r:${uid}:ts:${Date.now()}`,
             })));
