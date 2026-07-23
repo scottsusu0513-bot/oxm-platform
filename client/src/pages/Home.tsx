@@ -298,16 +298,31 @@ const INDUSTRY_COLORS: Record<string, string> = {
   "印刷": "from-fuchsia-500 to-pink-400", "工業設備／機械": "from-gray-600 to-slate-500",
 };
 
-function MultiSelect({ options, value, onChange, placeholder, disabled, withClear }: {
+const REGION_GROUPS = [
+  { label: "北部", options: ["基隆市", "台北市", "新北市", "桃園市", "新竹市", "新竹縣"] },
+  { label: "中部", options: ["苗栗縣", "台中市", "彰化縣", "南投縣"] },
+  { label: "南部", options: ["雲林縣", "嘉義市", "嘉義縣", "台南市", "高雄市", "屏東縣"] },
+] as const;
+
+function MultiSelect({ options, value, onChange, placeholder, disabled, withClear, groups }: {
   options: readonly string[];
   value: string[];
   onChange: (val: string[]) => void;
   placeholder: string;
   disabled?: boolean;
   withClear?: boolean;
+  groups?: readonly { label: string; options: readonly string[] }[];
 }) {
   const toggle = (opt: string) =>
     onChange(value.includes(opt) ? value.filter(v => v !== opt) : [...value, opt]);
+  const toggleGroup = (groupOptions: readonly string[]) => {
+    const allSelected = groupOptions.every(o => value.includes(o));
+    onChange(
+      allSelected
+        ? value.filter(v => !groupOptions.includes(v))
+        : Array.from(new Set([...value, ...groupOptions]))
+    );
+  };
   const label = value.length === 0 ? placeholder : value.join("、");
   return (
     <Popover>
@@ -324,6 +339,23 @@ function MultiSelect({ options, value, onChange, placeholder, disabled, withClea
               <Checkbox checked={value.length === 0} onCheckedChange={() => onChange([])} />
               不限
             </label>
+          )}
+          {groups && groups.length > 0 && (
+            <>
+              <div className="px-2 pt-1 pb-0.5 text-xs font-medium text-muted-foreground">快速選取</div>
+              {groups.map(g => {
+                const selectedCount = g.options.filter(o => value.includes(o)).length;
+                const checkedState: boolean | "indeterminate" =
+                  selectedCount === 0 ? false : selectedCount === g.options.length ? true : "indeterminate";
+                return (
+                  <label key={g.label} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted cursor-pointer text-sm">
+                    <Checkbox checked={checkedState} onCheckedChange={() => toggleGroup(g.options)} />
+                    {g.label}
+                  </label>
+                );
+              })}
+              <div className="my-1 border-t border-border" />
+            </>
           )}
           {options.map(opt => (
             <label key={opt} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted cursor-pointer text-sm">
@@ -567,6 +599,7 @@ export default function Home() {
                     onChange={setRegion}
                     placeholder="選擇地區"
                     withClear
+                    groups={REGION_GROUPS}
                   />
                 </div>
 
