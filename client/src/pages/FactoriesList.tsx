@@ -7,9 +7,11 @@ import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ArrowLeft, Search, MapPin, Building2, Phone, Globe, Star, Shield, ShieldCheck, Clock, User, Users } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { ArrowLeft, Search, MapPin, Building2, Phone, Globe, Star, Shield, ShieldCheck, Clock, User, Users, X } from "lucide-react";
 import { FloatingBackButton } from "@/components/FloatingBackButton";
 import { toast } from "sonner";
+import { TAIWAN_REGIONS, INDUSTRY_OPTIONS } from "@shared/constants";
 
 export default function FactoriesList() {
   const { user, loading: authLoading } = useAuth();
@@ -18,11 +20,21 @@ export default function FactoriesList() {
   const debouncedSearchTerm = useDebounce(searchTerm, 400);
   const [page, setPage] = useState(1);
   const [status, setStatus] = useState<'all' | 'approved' | 'pending' | 'rejected'>('all');
+  const [region, setRegion] = useState<string>('all');
+  const [industry, setIndustry] = useState<string>('all');
 
   const isAdmin = user?.role === 'admin';
   const utils = trpc.useUtils();
+  const hasLocationFilter = region !== 'all' || industry !== 'all';
   const factoriesQuery = trpc.admin.getFactories.useQuery(
-    { page, pageSize: 10, search: debouncedSearchTerm, status: status === 'all' ? undefined : status },
+    {
+      page,
+      pageSize: 10,
+      search: debouncedSearchTerm,
+      status: status === 'all' ? undefined : status,
+      region: region === 'all' ? undefined : region,
+      industry: industry === 'all' ? undefined : industry,
+    },
     { enabled: isAdmin }
   );
   const setCertifiedMutation = trpc.admin.setCertified.useMutation({
@@ -72,7 +84,7 @@ export default function FactoriesList() {
         </div>
 
         {/* 狀態篩選 */}
-        <div className="mb-6 flex gap-2">
+        <div className="mb-6 flex flex-wrap gap-2">
           {(["all", "approved", "pending", "rejected"] as const).map((s) => (
             <Button
               key={s}
@@ -86,7 +98,7 @@ export default function FactoriesList() {
 
         {/* 搜尋框 */}
         <Card className="mb-6">
-          <CardContent className="pt-6">
+          <CardContent className="pt-6 space-y-3">
             <div className="relative">
               <Search className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
               <Input
@@ -96,6 +108,36 @@ export default function FactoriesList() {
                 className="pl-10"
               />
             </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <Select value={region} onValueChange={(v) => { setRegion(v); setPage(1); }}>
+                <SelectTrigger><SelectValue placeholder="地區" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">全部地區</SelectItem>
+                  {TAIWAN_REGIONS.map((r) => (
+                    <SelectItem key={r} value={r}>{r}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select value={industry} onValueChange={(v) => { setIndustry(v); setPage(1); }}>
+                <SelectTrigger><SelectValue placeholder="產業" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">全部產業</SelectItem>
+                  {INDUSTRY_OPTIONS.map((i) => (
+                    <SelectItem key={i} value={i}>{i}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            {hasLocationFilter && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-gray-500"
+                onClick={() => { setRegion('all'); setIndustry('all'); setPage(1); }}
+              >
+                <X className="w-3.5 h-3.5 mr-1" />清除地區／產業篩選
+              </Button>
+            )}
           </CardContent>
         </Card>
 

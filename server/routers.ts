@@ -3136,8 +3136,10 @@ export const appRouter = router({
       pageSize: z.number().int().min(1).max(100).default(20),
       search: z.string().optional(),
       status: z.enum(['approved', 'pending', 'rejected']).optional(),
+      region: z.string().trim().min(1).optional(),
+      industry: z.string().trim().min(1).optional(),
     })).query(async ({ input }) => {
-      return db.getAdminFactories(input.page, input.pageSize, input.search, input.status);
+      return db.getAdminFactories(input.page, input.pageSize, input.search, input.status, input.region, input.industry);
     }),
 
     getUsers: adminProcedure.input(z.object({

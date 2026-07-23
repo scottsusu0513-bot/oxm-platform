@@ -1101,7 +1101,7 @@ export async function getAdminStats() {
   };
 }
 
-export async function getAdminFactories(page = 1, pageSize = 20, search?: string, status?: 'approved' | 'pending' | 'rejected') {
+export async function getAdminFactories(page = 1, pageSize = 20, search?: string, status?: 'approved' | 'pending' | 'rejected', region?: string, industry?: string) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
 
@@ -1117,6 +1117,12 @@ export async function getAdminFactories(page = 1, pageSize = 20, search?: string
   }
   if (status) {
     conditions.push(eq(factories.status, status));
+  }
+  if (region) {
+    conditions.push(eq(factories.region, region));
+  }
+  if (industry) {
+    conditions.push(sql`JSON_CONTAINS(${factories.industry}, ${JSON.stringify([industry])})`);
   }
 
   const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
