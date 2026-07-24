@@ -4,7 +4,7 @@ import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { AlertCircle, BarChart3, Users, Factory, Zap, MessageSquare, Star, ArrowLeft, ShieldCheck, Shield, HeadphonesIcon, Megaphone, Newspaper, Eye, Send, CheckCircle, XCircle, TrendingUp } from "lucide-react";
+import { AlertCircle, BarChart3, Users, Factory, Zap, MessageSquare, Star, ArrowLeft, HeadphonesIcon, Megaphone, Newspaper, Eye, Send, CheckCircle, XCircle, TrendingUp } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
@@ -15,6 +15,45 @@ import { toast } from "sonner";
 import { usePullToRefresh } from "@/hooks/usePullToRefresh";
 import { NativePullToRefreshLayout } from "@/components/NativePullToRefreshLayout";
 import { useState, useCallback } from "react";
+import { CERTIFICATION_BADGE_MAP, sortBadgeIds, type CertificationEvidenceEntry } from "@shared/badges";
+
+// 修改申請 diff 用：徽章 id 陣列 → 中文名稱清單
+function BadgeNameList({ badgeIds }: { badgeIds: string[] }) {
+  const sorted = sortBadgeIds(badgeIds);
+  if (sorted.length === 0) return <>（空）</>;
+  return <>{sorted.map(id => CERTIFICATION_BADGE_MAP[id]?.name ?? id).join('、')}</>;
+}
+
+// 修改申請 diff 用：徽章證明資料（工廠說明＋圖片）摘要，供管理員審核判斷
+function EvidenceSummary({ evidence }: { evidence: CertificationEvidenceEntry[] }) {
+  if (!Array.isArray(evidence) || evidence.length === 0) return <>（空）</>;
+  return (
+    <div className="space-y-1.5">
+      {evidence.map(e => (
+        <div key={e.badgeId}>
+          <p className="font-medium">{CERTIFICATION_BADGE_MAP[e.badgeId]?.name ?? e.badgeId}</p>
+          {e.description && <p className="text-xs opacity-80">{e.description}</p>}
+          {e.imageUrls?.length > 0 && (
+            <div className="flex gap-1 mt-0.5 flex-wrap">
+              {e.imageUrls.map(url => (
+                <a
+                  key={url}
+                  href={url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title="點擊開啟原圖"
+                  aria-label={`開啟${CERTIFICATION_BADGE_MAP[e.badgeId]?.name ?? e.badgeId}證明原圖`}
+                >
+                  <img src={url} alt="證明圖片" className="w-10 h-10 rounded object-cover border hover:opacity-80 transition-opacity" />
+                </a>
+              ))}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
 
 export default function AdminDashboard() {
   const { user, loading: authLoading } = useAuth();
@@ -77,7 +116,6 @@ function AdminDashboardContent() {
 
   const approveMutation = trpc.admin.approveFactory.useMutation();
   const rejectMutation = trpc.admin.rejectFactory.useMutation();
-  const setCertifiedMutation = trpc.admin.setCertified.useMutation();
   const approveRevisionMutation = trpc.admin.approveRevision.useMutation();
   const rejectRevisionMutation = trpc.admin.rejectRevision.useMutation();
   const utils = trpc.useUtils();
@@ -473,17 +511,23 @@ function AdminDashboardContent() {
                                   const oldVal = original[field];
                                   const newVal = proposed[field];
                                   const isAvatar = field === 'avatarUrl';
+                                  const isBadges = field === 'certificationBadges';
+                                  const isEvidence = field === 'certificationEvidence';
                                   const isArray = Array.isArray(oldVal) || Array.isArray(newVal);
                                   return (
                                     <div key={field} className="grid grid-cols-[auto_1fr_1fr] gap-2 text-sm border-l-2 border-orange-300 pl-3">
                                       <span className="text-xs text-gray-400 pt-0.5 w-24 shrink-0">{field}</span>
                                       <div className="bg-red-50 rounded px-2 py-1 text-red-700 min-h-[28px]">
                                         {isAvatar && oldVal ? <img src={oldVal} alt="舊" className="w-12 h-12 rounded object-cover" /> :
+                                         isBadges ? <BadgeNameList badgeIds={oldVal as string[] ?? []} /> :
+                                         isEvidence ? <EvidenceSummary evidence={oldVal as any[] ?? []} /> :
                                          isArray ? (oldVal as string[] ?? []).join('、') || '（空）' :
                                          String(oldVal ?? '（空）')}
                                       </div>
                                       <div className="bg-green-50 rounded px-2 py-1 text-green-700 min-h-[28px]">
                                         {isAvatar && newVal ? <img src={newVal} alt="新" className="w-12 h-12 rounded object-cover" /> :
+                                         isBadges ? <BadgeNameList badgeIds={newVal as string[] ?? []} /> :
+                                         isEvidence ? <EvidenceSummary evidence={newVal as any[] ?? []} /> :
                                          isArray ? (newVal as string[] ?? []).join('、') || '（空）' :
                                          String(newVal ?? '（空）')}
                                       </div>
@@ -550,37 +594,9 @@ function AdminDashboardContent() {
                         <div className="flex-1 cursor-pointer hover:bg-gray-50 p-2 rounded" onClick={() => setLocation(`/admin/factory-review?id=${factory.id}`)}>
                           <div className="flex items-center gap-2">
                             <h3 className="font-semibold">{factory.name}</h3>
-                            {(factory as any).certified && (
-                              <span className="inline-flex items-center gap-1 text-xs text-blue-700 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded-full">
-                                ✓ 認證工廠
-                              </span>
-                            )}
                           </div>
                           <p className="text-sm text-gray-600">{((factory as any).industry as string[] | null)?.join("、") ?? ""} - {factory.region}</p>
                         </div>
-                        <Button
-                          size="sm"
-                          variant={(factory as any).certified ? "default" : "outline"}
-                          className={(factory as any).certified ? "bg-blue-600 hover:bg-blue-700 text-white" : ""}
-                          onClick={() => {
-                            const newVal = !(factory as any).certified;
-                            setCertifiedMutation.mutate(
-                              { factoryId: factory.id, certified: newVal },
-                              {
-                                onSuccess: () => {
-                                  toast.success(newVal ? "已設為認證工廠" : "已取消認證");
-                                  utils.admin.getApprovedFactories.invalidate();
-                                },
-                                onError: () => toast.error("操作失敗"),
-                              }
-                            );
-                          }}
-                          disabled={setCertifiedMutation.isPending}
-                        >
-                          {(factory as any).certified
-                            ? <><ShieldCheck className="w-4 h-4 mr-1" />已認證</>
-                            : <><Shield className="w-4 h-4 mr-1" />授予認證</>}
-                        </Button>
                       </div>
                     ))}
                   </div>

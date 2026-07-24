@@ -10,11 +10,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Checkbox } from "@/components/ui/checkbox";
-import { ArrowLeft, Building2, MapPin, AlertCircle, Image, Package, User, ChevronDown, Pencil, Users } from "lucide-react";
+import { ArrowLeft, Building2, MapPin, AlertCircle, Image, Package, User, ChevronDown, Pencil, Users, Award } from "lucide-react";
 import { FloatingBackButton } from "@/components/FloatingBackButton";
 import { useState } from "react";
 import { toast } from "sonner";
 import { INDUSTRY_OPTIONS } from "@shared/constants";
+import { CERTIFICATION_BADGE_MAP, sortBadgeIds } from "@shared/badges";
+import { BadgeIcon } from "@/components/badges/BadgeIcon";
 
 export default function FactoryReviewDetail() {
   const { user, loading: authLoading } = useAuth();
@@ -107,8 +109,8 @@ export default function FactoryReviewDetail() {
         </div>
 
         <Tabs defaultValue="basic">
-          <TabsList className="mb-4">
-            <TabsTrigger value="basic" className="gap-2">
+          <TabsList className="mb-4 w-full sm:w-fit max-w-full overflow-x-auto justify-start">
+            <TabsTrigger value="basic" className="gap-2 shrink-0">
               <Building2 className="h-4 w-4" />基本資料
             </TabsTrigger>
             <TabsTrigger value="photos" className="gap-2">
@@ -121,6 +123,12 @@ export default function FactoryReviewDetail() {
               <Package className="h-4 w-4" />產品
               {products && products.length > 0 && (
                 <Badge variant="secondary" className="ml-1 text-xs">{products.length}</Badge>
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="badges" className="gap-2">
+              <Award className="h-4 w-4" />徽章系統
+              {((factory as any).certificationBadges?.length ?? 0) > 0 && (
+                <Badge variant="secondary" className="ml-1 text-xs">{(factory as any).certificationBadges.length}</Badge>
               )}
             </TabsTrigger>
           </TabsList>
@@ -357,6 +365,59 @@ export default function FactoryReviewDetail() {
                     ))}
                   </div>
                 )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* 徽章系統 */}
+          <TabsContent value="badges">
+            <Card className="mb-6">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Award className="h-5 w-5" />徽章系統
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                {(() => {
+                  const badgeIds = sortBadgeIds((factory as any).certificationBadges ?? []);
+                  const evidence = ((factory as any).certificationEvidence ?? []) as Array<{ badgeId: string; description: string; imageUrls: string[] }>;
+                  if (badgeIds.length === 0) {
+                    return <p className="text-muted-foreground text-center py-8">工廠尚未選擇任何徽章</p>;
+                  }
+                  return (
+                    <div className="space-y-4">
+                      {badgeIds.map(id => {
+                        const def = CERTIFICATION_BADGE_MAP[id];
+                        const ev = evidence.find(e => e.badgeId === id);
+                        return (
+                          <div key={id} className="border rounded-lg p-3">
+                            <div className="flex items-center gap-2">
+                              <BadgeIcon badgeId={id} size={32} />
+                              <p className="font-medium">{def?.name ?? id}</p>
+                            </div>
+                            {ev?.description && <p className="text-sm text-muted-foreground mt-2">{ev.description}</p>}
+                            {ev?.imageUrls && ev.imageUrls.length > 0 && (
+                              <div className="flex gap-2 mt-2 flex-wrap">
+                                {ev.imageUrls.map(url => (
+                                  <a
+                                    key={url}
+                                    href={url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    title="點擊開啟原圖"
+                                    aria-label={`開啟${def?.name ?? id}證明原圖`}
+                                  >
+                                    <img src={url} alt="證明圖片" className="w-16 h-16 object-cover rounded border hover:opacity-80 transition-opacity" loading="lazy" />
+                                  </a>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
               </CardContent>
             </Card>
           </TabsContent>

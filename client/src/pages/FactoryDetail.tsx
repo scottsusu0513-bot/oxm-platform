@@ -22,6 +22,8 @@ import { shareContent } from "@/lib/share";
 import { usePullToRefresh } from "@/hooks/usePullToRefresh";
 import { NativePullToRefreshLayout } from "@/components/NativePullToRefreshLayout";
 import LoginDialog from "@/components/LoginDialog";
+import { sortBadgeIds, CERTIFICATION_BADGE_MAP } from "@shared/badges";
+import { BadgeIcon } from "@/components/badges/BadgeIcon";
 
 function normalizeDescription(text: string): string {
   return text.replace(/\n{3,}/g, "\n\n");
@@ -358,8 +360,11 @@ export default function FactoryDetail() {
     toAbsoluteImageUrl(firstProductImage) ||
     `${window.location.origin}/og-image.png`;
 
+  const factoryBadgeIds = sortBadgeIds(((factory as any).certificationBadges ?? []) as string[]);
+
   const tocItems = [
     { id: "section-basic", label: "基本資料" },
+    ...(factoryBadgeIds.length > 0 ? [{ id: "section-badges", label: "徽章與認證" }] : []),
     { id: "section-contact", label: "聯絡資訊" },
     ...(photos.length > 0 ? [{ id: "section-photos", label: "工廠照片" }] : []),
     { id: "section-products", label: "商品 / 服務" },
@@ -430,11 +435,6 @@ export default function FactoryDetail() {
           <div className="flex-1 min-w-0 sm:pt-1">
             <div className="flex items-center gap-2 flex-wrap mb-2">
               <h1 className="text-xl md:text-2xl font-bold leading-tight">{factory.name}</h1>
-              {(factory as any).certified && (
-                <span className="inline-flex items-center gap-1 text-xs text-blue-700 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded-full font-medium">
-                  ✓ 認證工廠
-                </span>
-              )}
             </div>
             {factory.description && (
               <p className="text-sm text-muted-foreground whitespace-pre-line leading-relaxed">
@@ -597,6 +597,32 @@ export default function FactoryDetail() {
                 </CardContent>
               </Card>
             </section>
+
+            {/* ── 徽章與認證：只顯示公開徽章清單與通用說明，絕不顯示工廠私密證明資料 ── */}
+            {factoryBadgeIds.length > 0 && (
+              <section id="section-badges" className="scroll-mt-20">
+                <Card>
+                  <CardHeader className="pb-1">
+                    <CardTitle className="text-base">徽章與認證</CardTitle>
+                  </CardHeader>
+                  <CardContent className="grid sm:grid-cols-2 gap-3 pt-2">
+                    {factoryBadgeIds.map(id => {
+                      const def = CERTIFICATION_BADGE_MAP[id];
+                      if (!def) return null;
+                      return (
+                        <div key={id} className="flex items-start gap-3 p-3 rounded-lg border">
+                          <BadgeIcon badgeId={id} size={36} />
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium">{def.name}</p>
+                            <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">{def.description}</p>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </CardContent>
+                </Card>
+              </section>
+            )}
 
             {/* ── 聯絡資訊 ── */}
             <section id="section-contact" className="scroll-mt-20">

@@ -54,6 +54,11 @@ export const factories = mysqlTable("factories", {
   operationStatus: mysqlEnum("operationStatus", ["normal", "busy", "full"]).default("normal").notNull(),
   certified: boolean("certified").default(false).notNull(),
   subIndustry: json("subIndustry").$type<string[]>().default([]),
+  // 徽章系統：公開 badge id 清單（BNI 永遠第一，其餘依 shared/badges.ts 排序）
+  certificationBadges: json("certificationBadges").$type<string[]>().default([]),
+  // 徽章系統：私密證明資料（工廠說明文字＋證明圖片 URL），只供 owner／共管者／admin 審核使用，
+  // 公開頁面與搜尋結果絕不可回傳此欄位
+  certificationEvidence: json("certificationEvidence").$type<Array<{ badgeId: string; description: string; imageUrls: string[] }>>().default([]),
   avgResponseHours: decimal("avgResponseHours", { precision: 8, scale: 2 }),
   weekdayHours: varchar("weekdayHours", { length: 50 }),
   weekendHours: varchar("weekendHours", { length: 50 }),

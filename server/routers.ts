@@ -15,6 +15,7 @@ import { notifyOwner } from "./_core/notification";
 import { storagePut, storagePresignedUrl, storageDelete } from "./storage";
 import { validateImageUpload } from "./_core/security";
 import { INDUSTRY_OPTIONS, TAIWAN_REGIONS, CAPITAL_OPTIONS, INDUSTRY_SLUGS } from "../shared/constants";
+import { stripCertificationEvidence, sanitizeBadgeAssignment } from "../shared/badges";
 import { nanoid } from "nanoid";
 import { factories, conversations, reviews, reports, factoryCoManagers, users, upgradeConsultants, type Factory } from "../drizzle/schema";
 import { desc, eq, and, sql, isNull } from "drizzle-orm";
@@ -413,6 +414,12 @@ const FactoryBasicDataSchema = z.object({
   weekendHours: z.string().nullable(),
   businessNote: z.string().nullable(),
   avatarUrl: z.string().nullable(),
+  certificationBadges: z.array(z.string()).max(30),
+  certificationEvidence: z.array(z.object({
+    badgeId: z.string(),
+    description: z.string().max(500),
+    imageUrls: z.array(z.string()).max(5),
+  })).max(30),
 }).partial();
 
 // ===== 商案討論區 helpers =====
@@ -711,7 +718,8 @@ export const appRouter = router({
         db.getProductsByFactoryId(input.id),
         isAuthorized && input.includeRevision ? db.getLatestRevisionByFactory(input.id) : Promise.resolve(null),
       ]);
-      return { ...factory, products: prods, latestRevision: latestRevision ?? null };
+      const publicSafeFactory = isAuthorized ? factory : stripCertificationEvidence(factory);
+      return { ...publicSafeFactory, products: prods, latestRevision: latestRevision ?? null };
     }),
 
     getMine: protectedProcedure.query(async ({ ctx }) => {
@@ -785,6 +793,12 @@ export const appRouter = router({
       weekdayHours: z.string().max(50).optional(),
       weekendHours: z.string().max(50).optional(),
       businessNote: z.string().max(500).optional(),
+      certificationBadges: z.array(z.string().max(50)).max(30).optional(),
+      certificationEvidence: z.array(z.object({
+        badgeId: z.string().max(50),
+        description: z.string().max(500).optional().default(""),
+        imageUrls: z.array(z.string().max(1000)).max(5).optional().default([]),
+      })).max(30).optional(),
     })).mutation(async ({ ctx, input }) => {
       requireVerifiedEmail(ctx.user);
       const { id, ...data } = input;
@@ -858,6 +872,16 @@ export const appRouter = router({
       const typeCheck = FactoryBasicDataSchema.safeParse(proposedData);
       if (!typeCheck.success) {
         throw new TRPCError({ code: 'BAD_REQUEST', message: '修改申請包含無效欄位值，請重新整理頁面後再試' });
+      }
+
+      // 徽章系統：白名單清洗必須在寫入 factoryRevisions 之前就完成，不能只靠
+      // approve 時的 defense-in-depth —— 否則有人可以直接呼叫這支 API，把未知
+      // badge id 或任意遠端圖片 URL 寫進 pending revision，在管理員審核畫面上
+      // 顯示未經清洗的內容。
+      if ("certificationBadges" in proposedData || "certificationEvidence" in proposedData) {
+        const sanitized = sanitizeBadgeAssignment(proposedData.certificationBadges, proposedData.certificationEvidence);
+        proposedData.certificationBadges = sanitized.certificationBadges;
+        proposedData.certificationEvidence = sanitized.certificationEvidence;
       }
 
       let revisionId: number;
@@ -934,7 +958,12 @@ export const appRouter = router({
   }
 
   // 廣告資料一起回傳，前端不需要再打一支 ad.getActive
-  return { ...result, ads };
+  // 公開搜尋結果一律不含 certificationEvidence（工廠私密證明資料）
+  return {
+    ...result,
+    items: result.items.map(stripCertificationEvidence),
+    ads: ads.map(ad => ad.factory ? { ...ad, factory: stripCertificationEvidence(ad.factory) } : ad),
+  };
 }),
 
     delete: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
@@ -1012,6 +1041,30 @@ export const appRouter = router({
       const key = `factory-covers/${factory.id}/${nanoid()}.jpg`;
       const { url } = await storagePut(key, buffer, "image/jpeg");
       await db.updateFactory(factory.id, isAdmin ? -1 : factory.ownerId, { coverImageUrl: url });
+      return { url };
+    }),
+
+    uploadBadgeEvidence: protectedProcedure.input(z.object({
+      base64: z.string().max(10 * 1024 * 1024),
+      mimeType: z.enum(["image/jpeg", "image/png", "image/webp"]).default("image/jpeg"),
+      factoryId: z.number(),
+    })).mutation(async ({ ctx, input }) => {
+      const factory = await db.getFactoryById(input.factoryId);
+      if (!factory) throw new TRPCError({ code: 'NOT_FOUND', message: '找不到工廠' });
+      const isOwner = factory.ownerId === ctx.user.id;
+      const isCoMgr = !isOwner && await db.isActiveCoManager(factory.id, ctx.user.id);
+      if (!isOwner && !isCoMgr) throw new TRPCError({ code: 'FORBIDDEN', message: '無權限上傳此工廠的徽章證明圖片' });
+      if (factory.status === 'pending') throw new TRPCError({ code: 'BAD_REQUEST', message: '審核期間無法上傳徽章證明圖片' });
+      const base64Data = input.base64.includes(",") ? input.base64.split(",")[1] : input.base64;
+      const buffer = Buffer.from(base64Data, "base64");
+      const validation = await validateImageUpload(buffer);
+      if (!validation.valid) throw new Error(validation.error ?? "圖片格式不正確");
+      const ext = input.mimeType.includes("png") ? "png" : input.mimeType.includes("webp") ? "webp" : "jpg";
+      // approved 工廠：證明圖片先上傳到暫存前綴，URL 隨修改申請一起提交，
+      // 核准後才寫入 factories.certificationEvidence（與 avatarUrl 的 staging 邏輯一致）。
+      const prefix = factory.status === 'approved' ? 'factory-badge-evidence-temp' : 'factory-badge-evidence';
+      const key = `${prefix}/${factory.id}/${nanoid()}.${ext}`;
+      const { url } = await storagePut(key, buffer, input.mimeType);
       return { url };
     }),
 
@@ -3103,7 +3156,10 @@ export const appRouter = router({
     page: z.number().int().min(1).default(1),
     pageSize: z.number().int().min(1).max(100).default(20),
   })).query(async ({ ctx, input }) => {
-    return db.getFavoritesByUser(ctx.user.id, input.page, input.pageSize);
+    const result = await db.getFavoritesByUser(ctx.user.id, input.page, input.pageSize);
+    // 收藏清單裡的工廠對這位使用者來說只是一般會員視角，不是 owner／共管者／admin，
+    // 一律不得看到 certificationEvidence。
+    return { ...result, items: result.items.map(stripCertificationEvidence) };
   }),
 }),
 
@@ -3385,14 +3441,6 @@ export const appRouter = router({
       pageSize: z.number().int().min(1).max(100).default(20),
     })).query(async ({ input }) => {
       return db.getAdminRejectedFactories(input.page, input.pageSize);
-    }),
-
-    setCertified: adminProcedure.input(z.object({
-      factoryId: z.number(),
-      certified: z.boolean(),
-    })).mutation(async ({ input }) => {
-      await db.updateFactory(input.factoryId, -1, { certified: input.certified });
-      return { success: true };
     }),
 
     updateFactoryIndustry: adminProcedure.input(z.object({
@@ -3894,7 +3942,7 @@ export const appRouter = router({
       region: z.string().optional(),
     })).query(async ({ input }) => {
       const ads = await db.getActiveAds(input);
-      return ads.slice(0, 5);
+      return ads.slice(0, 5).map(ad => ad.factory ? { ...ad, factory: stripCertificationEvidence(ad.factory) } : ad);
     }),
 
     create: adminProcedure.input(z.object({

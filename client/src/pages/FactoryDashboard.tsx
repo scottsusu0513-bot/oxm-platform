@@ -21,13 +21,17 @@ import { toast } from "sonner";
 import { usePullToRefresh } from "@/hooks/usePullToRefresh";
 import { NativePullToRefreshLayout } from "@/components/NativePullToRefreshLayout";
 import {
-  Factory, Package, MessageCircle, Settings, Plus, Pencil, Trash2, Save, Star, AlertTriangle, ImagePlus, X, ArrowLeft, Camera, Send, CheckCircle, Clock, XCircle, Wrench, Images, ChevronDown, Megaphone, Users, UserMinus, ClipboardList, ArrowRightCircle
+  Factory, Package, MessageCircle, Settings, Plus, Pencil, Trash2, Save, Star, AlertTriangle, ImagePlus, X, ArrowLeft, Camera, Send, CheckCircle, Clock, XCircle, Wrench, Images, ChevronDown, Megaphone, Users, UserMinus, ClipboardList, ArrowRightCircle, Eye
 } from "lucide-react";
 import { OrderTimelineBar } from "@/components/OrderTimelineBar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { COLLABORATION_ORDER_NEXT_STAGE, COLLABORATION_ORDER_STAGE_LABELS, COLLABORATION_ORDER_STAGE_TRANSITION_DATE_FIELD, type CollaborationOrderStage } from "@shared/collaborationOrderStage";
+import { sortBadgeIds, type CertificationEvidenceEntry } from "@shared/badges";
+import { BadgePicker } from "@/components/badges/BadgePicker";
+import { BadgeEvidenceEditor } from "@/components/badges/BadgeEvidenceEditor";
+import { FactoryCard } from "@/components/FactoryResultCard";
 
 // 千分位格式化
 function formatNumber(val: string): string {
@@ -330,11 +334,6 @@ export default function FactoryDashboard() {
                     <Factory className="w-3 h-3" />工廠
                   </span>
                 )}
-                {(factory as any).certified && (
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-50 border border-blue-200 text-blue-700 text-sm font-medium">
-                    ✓ 認證工廠
-                  </span>
-                )}
               </h1>
               <p className="text-sm text-muted-foreground mt-0.5">工廠管理後台</p>
               <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -494,6 +493,16 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
   const [weekdayHours, setWeekdayHours] = useState((factory as any).weekdayHours ?? "");
   const [weekendHours, setWeekendHours] = useState((factory as any).weekendHours ?? "");
   const [businessNote, setBusinessNote] = useState((factory as any).businessNote ?? "");
+  const [certificationBadges, setCertificationBadges] = useState<string[]>(sortBadgeIds((factory as any).certificationBadges ?? []));
+  const [certificationEvidence, setCertificationEvidence] = useState<CertificationEvidenceEntry[]>((factory as any).certificationEvidence ?? []);
+  const [previewCardOpen, setPreviewCardOpen] = useState(false);
+  const [previewIsMobile, setPreviewIsMobile] = useState(() => typeof window !== "undefined" && window.matchMedia("(max-width: 768px)").matches);
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 768px)");
+    const handler = (e: MediaQueryListEvent) => setPreviewIsMobile(e.matches);
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, []);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(factory.avatarUrl ?? null);
   const [avatarUrl, setAvatarUrl] = useState<string | null>(factory.avatarUrl ?? null);
   const [avatarUploading, setAvatarUploading] = useState(false);
@@ -530,10 +539,19 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
     weekendHours: ((factory as any).weekendHours ?? "") as string,
     businessNote: ((factory as any).businessNote ?? "") as string,
     avatarUrl: (factory.avatarUrl ?? null) as string | null,
+    certificationBadges: sortBadgeIds((factory as any).certificationBadges ?? []) as string[],
+    certificationEvidence: ((factory as any).certificationEvidence ?? []) as CertificationEvidenceEntry[],
   });
 
   const arrEq = (a: string[], b: string[]) =>
     a.length === b.length && [...a].sort().join("\0") === [...b].sort().join("\0");
+
+  const evidenceSignature = (list: CertificationEvidenceEntry[]) =>
+    JSON.stringify(
+      [...list]
+        .sort((a, b) => a.badgeId.localeCompare(b.badgeId))
+        .map(e => [e.badgeId, e.description, [...e.imageUrls].sort()])
+    );
 
   const isDirty =
     name !== initialForm.current.name ||
@@ -554,7 +572,9 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
     weekdayHours !== initialForm.current.weekdayHours ||
     weekendHours !== initialForm.current.weekendHours ||
     businessNote !== initialForm.current.businessNote ||
-    (avatarUrl ?? null) !== (initialForm.current.avatarUrl ?? null);
+    (avatarUrl ?? null) !== (initialForm.current.avatarUrl ?? null) ||
+    !arrEq(certificationBadges, initialForm.current.certificationBadges) ||
+    evidenceSignature(certificationEvidence) !== evidenceSignature(initialForm.current.certificationEvidence);
 
   useEffect(() => { onDirtyChange?.(isDirty); }, [isDirty, onDirtyChange]);
 
@@ -567,6 +587,12 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
   });
   const uploadAvatarMut = trpc.factory.uploadAvatar.useMutation();
   const uploadCoverImageMut = trpc.factory.uploadCoverImage.useMutation();
+  const uploadBadgeEvidenceMut = trpc.factory.uploadBadgeEvidence.useMutation();
+  const handleUploadBadgeEvidenceImage = async (file: File): Promise<string> => {
+    const base64 = await compressImage(file);
+    const result = await uploadBadgeEvidenceMut.mutateAsync({ base64, mimeType: "image/jpeg", factoryId: factory.id });
+    return result.url;
+  };
   const submitForReviewMut = trpc.factory.submitForReview.useMutation({
     onSuccess: () => { toast.success("已送出審核！請等待管理員審核"); utils.factory.getMine.invalidate(); },
     onError: (err) => toast.error(err.message),
@@ -595,6 +621,13 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
   const toggleMode = (mode: string) => {
     if (isBasicDataLocked) return;
     setMfgModes(prev => prev.includes(mode) ? prev.filter(m => m !== mode) : [...prev, mode]);
+  };
+
+  // 取消勾選徽章時，立刻一併移除該徽章的 evidence（說明＋圖片），
+  // 避免之後重新勾選同一徽章時舊資料復活，也避免 state 與最終送出的資料不一致。
+  const handleBadgesChange = (nextBadges: string[]) => {
+    setCertificationBadges(nextBadges);
+    setCertificationEvidence(prev => prev.filter(e => nextBadges.includes(e.badgeId)));
   };
 
   const handleYearChange = (val: string) => {
@@ -680,6 +713,8 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
     weekendHours: weekendHours || null,
     businessNote: businessNote || null,
     avatarUrl: avatarUrl || factory.avatarUrl || null,
+    certificationBadges,
+    certificationEvidence,
   });
 
   const handleSave = () => {
@@ -699,6 +734,8 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
       region, description, capitalLevel, foundedYear, ownerName, contactPersonName, phone, website, contactEmail,
       address, operationStatus, weekdayHours, weekendHours, businessNote,
       avatarUrl: avatarUrl ?? null,
+      certificationBadges: sortBadgeIds(certificationBadges),
+      certificationEvidence: [...certificationEvidence],
     };
     updateFactory.mutate({
       id: factory.id, name,
@@ -715,6 +752,8 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
       phone: phone || undefined,
       website: website || undefined, contactEmail: contactEmail || undefined,
       avatarUrl: avatarUrl || factory.avatarUrl || undefined,
+      certificationBadges,
+      certificationEvidence,
     }, {
       onSuccess: () => {
         toast.success("資料已更新");
@@ -723,6 +762,30 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
         utils.factory.getById.invalidate({ id: factory.id });
       },
     });
+  };
+
+  // 預覽搜尋卡片：用目前表單「尚未儲存／送審」的值組出卡片資料，其餘欄位
+  // （id、評分、業務類型等）補齊自現有工廠資料，讓工廠主在送出前先看到卡片實際呈現效果。
+  const previewFactory = {
+    id: factory.id,
+    name,
+    avatarUrl: avatarPreview ?? null,
+    businessType: factory.businessType,
+    operationStatus,
+    region,
+    address,
+    description,
+    foundedYear: foundedYear ? parseInt(foundedYear) : null,
+    ownerName,
+    contactPersonName,
+    phone,
+    website,
+    weekdayHours,
+    weekendHours,
+    mfgModes,
+    avgRating: factory.avgRating,
+    reviewCount: factory.reviewCount,
+    certificationBadges,
   };
 
   const handleSubmitRevision = () => {
@@ -779,6 +842,31 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
               {submitRevisionMut.isPending ? "送出中..." : "確認送出申請"}
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── 預覽搜尋卡片 Dialog：與正式搜尋結果使用完全相同的 FactoryCard 元件 ── */}
+      <Dialog open={previewCardOpen} onOpenChange={setPreviewCardOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>預覽搜尋卡片</DialogTitle>
+            <DialogDescription>
+              以下為目前表單內容（尚未儲存／送審的值）在搜尋結果中的實際呈現效果，預覽模式下所有互動按鈕皆為停用。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-2">
+            <FactoryCard
+              factory={previewFactory}
+              getFavState={() => false}
+              handleFavToggle={() => {}}
+              cartHas={() => false}
+              cartAdd={() => {}}
+              cartRemove={() => {}}
+              setCartOpen={() => {}}
+              isMobile={previewIsMobile}
+              previewMode
+            />
+          </div>
         </DialogContent>
       </Dialog>
 
@@ -1161,9 +1249,31 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
           </div>
         </div>
 
+        {/* ── 徽章系統 ── */}
+        <div className="py-6 space-y-4">
+          <div>
+            <p className="text-sm font-semibold text-foreground">徽章系統</p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              選擇工廠具備的認證／標章，並可為每個徽章補充說明與證明圖片（僅供審核使用，不會公開顯示）。
+              徽章與證明資料會隨基本資料一起送審／提交修改申請。
+            </p>
+          </div>
+          <BadgePicker selected={certificationBadges} onChange={handleBadgesChange} disabled={isLocked} />
+          <BadgeEvidenceEditor
+            badgeIds={certificationBadges}
+            evidence={certificationEvidence}
+            onEvidenceChange={setCertificationEvidence}
+            onUploadImage={handleUploadBadgeEvidenceImage}
+            disabled={isLocked}
+          />
+        </div>
+
         {/* ── 儲存按鈕 ── */}
         {!isLocked && (
           <div className="pt-6 pb-2 flex items-center justify-end gap-3">
+            <Button type="button" variant="outline" onClick={() => setPreviewCardOpen(true)}>
+              <Eye className="w-4 h-4 mr-1" />預覽搜尋卡片
+            </Button>
             {isOwner && (factory.status === 'draft' || factory.status === 'rejected') && (
               <AlertDialog>
                 <AlertDialogTrigger asChild>

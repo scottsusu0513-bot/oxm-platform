@@ -1,0 +1,169 @@
+<svg xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <defs>
+    <linearGradient id="quality" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2563EB"/>
+      <stop offset="1" stop-color="#1E3A8A"/>
+    </linearGradient>
+    <linearGradient id="sustainability" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#10B981"/>
+      <stop offset="1" stop-color="#065F46"/>
+    </linearGradient>
+    <linearGradient id="safety" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#F59E0B"/>
+      <stop offset="1" stop-color="#92400E"/>
+    </linearGradient>
+    <linearGradient id="food" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#EAB308"/>
+      <stop offset="1" stop-color="#854D0E"/>
+    </linearGradient>
+    <linearGradient id="textile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#A855F7"/>
+      <stop offset="1" stop-color="#581C87"/>
+    </linearGradient>
+    <linearGradient id="product" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7C3AED"/>
+      <stop offset="1" stop-color="#312E81"/>
+    </linearGradient>
+    <linearGradient id="network" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#EF4444"/>
+      <stop offset="1" stop-color="#7F1D1D"/>
+    </linearGradient>
+
+    <path id="shield" d="M32 2.5 58 12v19.3c0 14.5-9.7 24.8-26 30.2C15.7 56.1 6 45.8 6 31.3V12L32 2.5Z"/>
+    <path id="shield-inner" d="M32 7.5 53 15v16.1c0 11.3-7.5 19.7-21 24.7-13.5-5-21-13.4-21-24.7V15l21-7.5Z" fill="none" stroke="#fff" stroke-opacity=".52" stroke-width="1.5"/>
+    <g id="oxm-mark">
+      <circle cx="32" cy="49" r="5.2" fill="#F97316" stroke="#fff" stroke-width="1.2"/>
+      <path d="m29.6 49 1.5 1.6 3.4-3.6" fill="none" stroke="#fff" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"/>
+    </g>
+
+    <g id="base-quality">
+      <use href="#shield" fill="url(#quality)"/>
+      <use href="#shield-inner"/>
+    </g>
+    <g id="base-sustainability">
+      <use href="#shield" fill="url(#sustainability)"/>
+      <use href="#shield-inner"/>
+    </g>
+    <g id="base-safety">
+      <use href="#shield" fill="url(#safety)"/>
+      <use href="#shield-inner"/>
+    </g>
+    <g id="base-food">
+      <use href="#shield" fill="url(#food)"/>
+      <use href="#shield-inner"/>
+    </g>
+    <g id="base-textile">
+      <use href="#shield" fill="url(#textile)"/>
+      <use href="#shield-inner"/>
+    </g>
+    <g id="base-product">
+      <use href="#shield" fill="url(#product)"/>
+      <use href="#shield-inner"/>
+    </g>
+    <g id="base-network">
+      <use href="#shield" fill="url(#network)"/>
+      <use href="#shield-inner"/>
+    </g>
+
+    <style>
+      .top { fill: #fff; font: 700 8px Arial, sans-serif; letter-spacing: .7px; text-anchor: middle; }
+      .main { fill: #fff; font: 800 13px Arial, sans-serif; letter-spacing: -.2px; text-anchor: middle; }
+      .main-sm { fill: #fff; font: 800 10.5px Arial, sans-serif; letter-spacing: -.35px; text-anchor: middle; }
+      .main-xs { fill: #fff; font: 800 8.5px Arial, sans-serif; letter-spacing: -.35px; text-anchor: middle; }
+      .sub { fill: #fff; fill-opacity: .86; font: 700 6px Arial, sans-serif; letter-spacing: .4px; text-anchor: middle; }
+    </style>
+  </defs>
+
+  <symbol id="bni" viewBox="0 0 64 64">
+    <use href="#base-network"/><text class="top" x="32" y="22">OXM</text><text class="main" x="32" y="38">BNI</text><use href="#oxm-mark"/>
+  </symbol>
+
+  <symbol id="iso-9001" viewBox="0 0 64 64">
+    <use href="#base-quality"/><text class="top" x="32" y="22">ISO</text><text class="main" x="32" y="38">9001</text><use href="#oxm-mark"/>
+  </symbol>
+  <symbol id="iso-14001" viewBox="0 0 64 64">
+    <use href="#base-sustainability"/><text class="top" x="32" y="22">ISO</text><text class="main" x="32" y="38">14001</text><use href="#oxm-mark"/>
+  </symbol>
+  <symbol id="iso-45001" viewBox="0 0 64 64">
+    <use href="#base-safety"/><text class="top" x="32" y="22">ISO</text><text class="main" x="32" y="38">45001</text><use href="#oxm-mark"/>
+  </symbol>
+  <symbol id="iso-14064-1" viewBox="0 0 64 64">
+    <use href="#base-sustainability"/><text class="top" x="32" y="22">ISO</text><text class="main-sm" x="32" y="38">14064-1</text><use href="#oxm-mark"/>
+  </symbol>
+  <symbol id="iso-50001" viewBox="0 0 64 64">
+    <use href="#base-sustainability"/><text class="top" x="32" y="22">ISO</text><text class="main" x="32" y="38">50001</text><use href="#oxm-mark"/>
+  </symbol>
+  <symbol id="iatf-16949" viewBox="0 0 64 64">
+    <use href="#base-quality"/><text class="top" x="32" y="21">IATF</text><text class="main-sm" x="32" y="37">16949</text><use href="#oxm-mark"/>
+  </symbol>
+  <symbol id="iso-13485" viewBox="0 0 64 64">
+    <use href="#base-quality"/><text class="top" x="32" y="22">ISO</text><text class="main" x="32" y="38">13485</text><use href="#oxm-mark"/>
+  </symbol>
+  <symbol id="as9100" viewBox="0 0 64 64">
+    <use href="#base-quality"/><text class="top" x="32" y="22">AERO</text><text class="main" x="32" y="38">AS9100</text><use href="#oxm-mark"/>
+  </symbol>
+  <symbol id="iso-3834" viewBox="0 0 64 64">
+    <use href="#base-quality"/><text class="top" x="32" y="22">ISO</text><text class="main" x="32" y="38">3834</text><use href="#oxm-mark"/>
+  </symbol>
+  <symbol id="haccp" viewBox="0 0 64 64">
+    <use href="#base-food"/><text class="top" x="32" y="22">FOOD</text><text class="main" x="32" y="38">HACCP</text><use href="#oxm-mark"/>
+  </symbol>
+  <symbol id="iso-22000" viewBox="0 0 64 64">
+    <use href="#base-food"/><text class="top" x="32" y="22">ISO</text><text class="main" x="32" y="38">22000</text><use href="#oxm-mark"/>
+  </symbol>
+  <symbol id="fssc-22000" viewBox="0 0 64 64">
+    <use href="#base-food"/><text class="top" x="32" y="21">FSSC</text><text class="main-sm" x="32" y="37">22000</text><use href="#oxm-mark"/>
+  </symbol>
+  <symbol id="brcgs" viewBox="0 0 64 64">
+    <use href="#base-food"/><text class="top" x="32" y="22">FOOD</text><text class="main" x="32" y="38">BRCGS</text><use href="#oxm-mark"/>
+  </symbol>
+  <symbol id="iso-22716" viewBox="0 0 64 64">
+    <use href="#base-quality"/><text class="top" x="32" y="22">ISO</text><text class="main" x="32" y="38">22716</text><use href="#oxm-mark"/>
+  </symbol>
+  <symbol id="oeko-tex" viewBox="0 0 64 64">
+    <use href="#base-textile"/><text class="top" x="32" y="21">OEKO</text><text class="main-sm" x="32" y="37">TEX</text><use href="#oxm-mark"/>
+  </symbol>
+  <symbol id="gots" viewBox="0 0 64 64">
+    <use href="#base-textile"/><text class="top" x="32" y="22">TEXTILE</text><text class="main" x="32" y="38">GOTS</text><use href="#oxm-mark"/>
+  </symbol>
+  <symbol id="grs" viewBox="0 0 64 64">
+    <use href="#base-textile"/><text class="top" x="32" y="22">RECYCLE</text><text class="main" x="32" y="38">GRS</text><use href="#oxm-mark"/>
+  </symbol>
+  <symbol id="fsc" viewBox="0 0 64 64">
+    <use href="#base-sustainability"/><text class="top" x="32" y="22">FOREST</text><text class="main" x="32" y="38">FSC</text><use href="#oxm-mark"/>
+  </symbol>
+  <symbol id="tqf" viewBox="0 0 64 64">
+    <use href="#base-food"/><text class="top" x="32" y="22">TAIWAN</text><text class="main" x="32" y="38">TQF</text><use href="#oxm-mark"/>
+  </symbol>
+  <symbol id="halal" viewBox="0 0 64 64">
+    <use href="#base-food"/><text class="top" x="32" y="22">FOOD</text><text class="main" x="32" y="38">HALAL</text><use href="#oxm-mark"/>
+  </symbol>
+  <symbol id="organic" viewBox="0 0 64 64">
+    <use href="#base-sustainability"/><text class="top" x="32" y="22">ORGANIC</text><text class="main" x="32" y="38">ORG</text><use href="#oxm-mark"/>
+  </symbol>
+
+  <symbol id="iso-14067" viewBox="0 0 64 64">
+    <use href="#base-sustainability"/><text class="top" x="32" y="22">ISO</text><text class="main" x="32" y="38">14067</text><use href="#oxm-mark"/>
+  </symbol>
+  <symbol id="product-carbon-footprint" viewBox="0 0 64 64">
+    <use href="#base-sustainability"/><text class="top" x="32" y="22">CARBON</text><text class="main" x="32" y="38">CFP</text><use href="#oxm-mark"/>
+  </symbol>
+  <symbol id="product-carbon-reduction" viewBox="0 0 64 64">
+    <use href="#base-sustainability"/><text class="top" x="32" y="22">REDUCE</text><text class="main" x="32" y="38">CFR</text><use href="#oxm-mark"/>
+  </symbol>
+  <symbol id="bsmi" viewBox="0 0 64 64">
+    <use href="#base-product"/><text class="top" x="32" y="22">TAIWAN</text><text class="main" x="32" y="38">BSMI</text><use href="#oxm-mark"/>
+  </symbol>
+  <symbol id="cns" viewBox="0 0 64 64">
+    <use href="#base-product"/><text class="top" x="32" y="22">STANDARD</text><text class="main" x="32" y="38">CNS</text><use href="#oxm-mark"/>
+  </symbol>
+  <symbol id="ce" viewBox="0 0 64 64">
+    <use href="#base-product"/><text class="top" x="32" y="22">PRODUCT</text><text class="main" x="32" y="38">CE</text><use href="#oxm-mark"/>
+  </symbol>
+  <symbol id="ul" viewBox="0 0 64 64">
+    <use href="#base-product"/><text class="top" x="32" y="22">SAFETY</text><text class="main" x="32" y="38">UL</text><use href="#oxm-mark"/>
+  </symbol>
+  <symbol id="rohs" viewBox="0 0 64 64">
+    <use href="#base-product"/><text class="top" x="32" y="22">PRODUCT</text><text class="main" x="32" y="38">RoHS</text><use href="#oxm-mark"/>
+  </symbol>
+</svg>

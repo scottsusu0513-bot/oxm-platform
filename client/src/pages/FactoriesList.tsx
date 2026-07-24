@@ -8,9 +8,8 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ArrowLeft, Search, MapPin, Building2, Phone, Globe, Star, Shield, ShieldCheck, Clock, User, Users, X } from "lucide-react";
+import { ArrowLeft, Search, MapPin, Building2, Phone, Globe, Star, Clock, User, Users, X } from "lucide-react";
 import { FloatingBackButton } from "@/components/FloatingBackButton";
-import { toast } from "sonner";
 import { TAIWAN_REGIONS, INDUSTRY_OPTIONS } from "@shared/constants";
 
 export default function FactoriesList() {
@@ -24,7 +23,6 @@ export default function FactoriesList() {
   const [industry, setIndustry] = useState<string>('all');
 
   const isAdmin = user?.role === 'admin';
-  const utils = trpc.useUtils();
   const hasLocationFilter = region !== 'all' || industry !== 'all';
   const factoriesQuery = trpc.admin.getFactories.useQuery(
     {
@@ -37,12 +35,6 @@ export default function FactoriesList() {
     },
     { enabled: isAdmin }
   );
-  const setCertifiedMutation = trpc.admin.setCertified.useMutation({
-    onSuccess: () => {
-      utils.admin.getFactories.invalidate();
-    },
-  });
-
   const factories = factoriesQuery.data?.items || [];
   const total = factoriesQuery.data?.total || 0;
   const totalPages = Math.ceil(total / 10);
@@ -163,38 +155,10 @@ export default function FactoriesList() {
                         <div className="flex items-center gap-2 flex-wrap">
                           <Building2 className="h-4 w-4 text-orange-600 shrink-0" />
                           <h3 className="font-semibold text-lg">{factory.name}</h3>
-                          {f.certified && (
-                            <span className="inline-flex items-center gap-1 text-xs text-blue-700 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded-full">
-                              <ShieldCheck className="w-3 h-3" />認證工廠
-                            </span>
-                          )}
                           {getOperationBadge(f.operationStatus)}
                         </div>
                         <div className="flex items-center gap-2 shrink-0 ml-2">
                           {getStatusBadge(factory.status)}
-                          <Button
-                            size="sm"
-                            variant={f.certified ? "default" : "outline"}
-                            className={f.certified ? "bg-blue-600 hover:bg-blue-700 text-white" : ""}
-                            disabled={setCertifiedMutation.isPending}
-                            onClick={() => {
-                              const newVal = !f.certified;
-                              setCertifiedMutation.mutate(
-                                { factoryId: factory.id, certified: newVal },
-                                {
-                                  onSuccess: () => {
-                                    toast.success(`${newVal ? "已授予認證" : "已取消認證"}：${factory.name}`);
-                                  },
-                                }
-                              );
-                            }}
-                          >
-                            {f.certified ? (
-                              <><ShieldCheck className="w-3.5 h-3.5 mr-1" />已認證</>
-                            ) : (
-                              <><Shield className="w-3.5 h-3.5 mr-1" />授予認證</>
-                            )}
-                          </Button>
                         </div>
                       </div>
 

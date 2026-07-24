@@ -38,6 +38,7 @@ import {
 import { ENV } from './_core/env';
 import { ADJACENT_REGIONS, INDUSTRY_SLUGS, INDUSTRY_OPTIONS } from "../shared/constants";
 import { COMMUNITY_FEATURE_STATUS, COMMUNITY_CROSS_INDUSTRY_SLUG, NEWS_NEW_WINDOW_MS, ADVISOR_DISPLAY_NAME } from "../shared/const";
+import { sortBadgeIds, sanitizeBadgeAssignment } from "../shared/badges";
 import type { AISearchIntent } from './semantic-search';
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -185,6 +186,17 @@ export async function updateFactory(id: number, ownerId: number, data: Partial<I
   if ("industry" in data) (normalized as any).industry = toArray((data as any).industry);
   if ("mfgModes" in data) (normalized as any).mfgModes = toArray((data as any).mfgModes);
   if ("subIndustry" in data) (normalized as any).subIndustry = Array.isArray((data as any).subIndustry) ? (data as any).subIndustry : [];
+
+  // 徽章系統：badges/evidence 一律成對送出（呼叫端固定同時帶兩個欄位），
+  // evidence 依「目前這次要儲存的 badges」做白名單清洗，避免殘留已移除徽章的證明資料。
+  if ("certificationBadges" in data || "certificationEvidence" in data) {
+    const { certificationBadges, certificationEvidence } = sanitizeBadgeAssignment(
+      (data as any).certificationBadges,
+      (data as any).certificationEvidence,
+    );
+    (normalized as any).certificationBadges = certificationBadges;
+    (normalized as any).certificationEvidence = certificationEvidence;
+  }
 
   if (ownerId === -1) {
     await db.update(factories).set(normalized).where(eq(factories.id, id));
@@ -5794,12 +5806,13 @@ export async function getEnabledPushTokensByUserId(userId: number) {
 
 // ===== 工廠基本資料修改申請 =====
 
-// 19 個基本資料欄位白名單（不含 businessType，申請後無法更改）
+// 21 個基本資料欄位白名單（不含 businessType，申請後無法更改）
 export const BASIC_DATA_FIELDS = [
   "name", "industry", "subIndustry", "mfgModes", "region", "description",
   "capitalLevel", "foundedYear", "ownerName", "contactPersonName", "phone",
   "website", "contactEmail", "address", "operationStatus",
   "weekdayHours", "weekendHours", "businessNote", "avatarUrl",
+  "certificationBadges", "certificationEvidence",
 ] as const;
 
 export type BasicDataField = typeof BASIC_DATA_FIELDS[number];
@@ -5825,6 +5838,8 @@ export function extractBasicData(factory: Factory): Record<BasicDataField, any> 
     weekendHours: factory.weekendHours ?? null,
     businessNote: factory.businessNote ?? null,
     avatarUrl: factory.avatarUrl ?? null,
+    certificationBadges: (factory as any).certificationBadges ?? [],
+    certificationEvidence: (factory as any).certificationEvidence ?? [],
   };
 }
 
@@ -5897,11 +5912,22 @@ export async function approveRevisionAtomic(revisionId: number, adminId: number)
     const allowedFields = BASIC_DATA_FIELDS as readonly string[];
     const setClauses: string[] = [];
     const setValues: any[] = [];
+    // 徽章系統：badges/evidence 一律成對清洗（evidence 只保留仍在 badges 清單中的項目），
+    // 與 updateFactory() 共用同一個 sanitizeBadgeAssignment()，避免 revision 套用時繞過白名單檢查。
+    const sanitizedBadgeAssignment = ("certificationBadges" in proposed || "certificationEvidence" in proposed)
+      ? sanitizeBadgeAssignment(proposed.certificationBadges, proposed.certificationEvidence)
+      : null;
     for (const field of allowedFields) {
       if (field in proposed) {
         const val = proposed[field];
         // JSON fields
-        if (field === "industry" || field === "subIndustry" || field === "mfgModes") {
+        if (field === "certificationBadges") {
+          setClauses.push(`\`${field}\` = ?`);
+          setValues.push(JSON.stringify(sanitizedBadgeAssignment?.certificationBadges ?? []));
+        } else if (field === "certificationEvidence") {
+          setClauses.push(`\`${field}\` = ?`);
+          setValues.push(JSON.stringify(sanitizedBadgeAssignment?.certificationEvidence ?? []));
+        } else if (field === "industry" || field === "subIndustry" || field === "mfgModes") {
           setClauses.push(`\`${field}\` = ?`);
           setValues.push(JSON.stringify(Array.isArray(val) ? val : []));
         } else if (field === "foundedYear") {
