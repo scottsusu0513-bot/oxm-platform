@@ -31,7 +31,7 @@ import { COLLABORATION_ORDER_NEXT_STAGE, COLLABORATION_ORDER_STAGE_LABELS, COLLA
 import { sortBadgeIds, type CertificationEvidenceEntry } from "@shared/badges";
 import { BadgePicker } from "@/components/badges/BadgePicker";
 import { BadgeEvidenceEditor } from "@/components/badges/BadgeEvidenceEditor";
-import { FactoryCard } from "@/components/FactoryResultCard";
+import { FactoryPreviewModal } from "@/components/FactoryPreviewModal";
 
 // 千分位格式化
 function formatNumber(val: string): string {
@@ -495,14 +495,7 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
   const [businessNote, setBusinessNote] = useState((factory as any).businessNote ?? "");
   const [certificationBadges, setCertificationBadges] = useState<string[]>(sortBadgeIds((factory as any).certificationBadges ?? []));
   const [certificationEvidence, setCertificationEvidence] = useState<CertificationEvidenceEntry[]>((factory as any).certificationEvidence ?? []);
-  const [previewCardOpen, setPreviewCardOpen] = useState(false);
-  const [previewIsMobile, setPreviewIsMobile] = useState(() => typeof window !== "undefined" && window.matchMedia("(max-width: 768px)").matches);
-  useEffect(() => {
-    const mq = window.matchMedia("(max-width: 768px)");
-    const handler = (e: MediaQueryListEvent) => setPreviewIsMobile(e.matches);
-    mq.addEventListener("change", handler);
-    return () => mq.removeEventListener("change", handler);
-  }, []);
+  const [previewOpen, setPreviewOpen] = useState(false);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(factory.avatarUrl ?? null);
   const [avatarUrl, setAvatarUrl] = useState<string | null>(factory.avatarUrl ?? null);
   const [avatarUploading, setAvatarUploading] = useState(false);
@@ -764,29 +757,43 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
     });
   };
 
-  // 預覽搜尋卡片：用目前表單「尚未儲存／送審」的值組出卡片資料，其餘欄位
-  // （id、評分、業務類型等）補齊自現有工廠資料，讓工廠主在送出前先看到卡片實際呈現效果。
+  // 預覽工廠頁面：用目前表單「尚未儲存／送審」的值組出公開頁資料，其餘欄位
+  // （id、評分、照片、商品、評價等）補齊自現有工廠資料，讓工廠主在送出前先看到
+  // 公開頁面的實際呈現效果。與 FactoryDetailView 共用同一套公開頁 UI。
   const previewFactory = {
     id: factory.id,
     name,
+    description,
     avatarUrl: avatarPreview ?? null,
+    coverImageUrl: coverPreview ?? null,
     businessType: factory.businessType,
     operationStatus,
+    industry,
+    subIndustry,
+    mfgModes,
     region,
-    address,
-    description,
-    foundedYear: foundedYear ? parseInt(foundedYear) : null,
     ownerName,
     contactPersonName,
     phone,
     website,
+    contactEmail,
+    address,
     weekdayHours,
     weekendHours,
-    mfgModes,
+    businessNote,
+    capitalLevel,
+    foundedYear: foundedYear ? parseInt(foundedYear) : null,
     avgRating: factory.avgRating,
     reviewCount: factory.reviewCount,
+    avgResponseHours: (factory as any).avgResponseHours,
     certificationBadges,
+    products: factory.products ?? [],
   };
+
+  const { user: previewUser, isAuthenticated: previewIsAuthenticated } = useAuth();
+  const { data: previewPhotos = [] } = trpc.factory.getPhotos.useQuery({ factoryId: factory.id }, { enabled: previewOpen });
+  const { data: previewCategories = [] } = trpc.category.getByFactory.useQuery({ factoryId: factory.id }, { enabled: previewOpen });
+  const { data: previewReviewData } = trpc.review.getByFactory.useQuery({ factoryId: factory.id, page: 1, pageSize: 10 }, { enabled: previewOpen });
 
   const handleSubmitRevision = () => {
     const trimmed = revisionReason.trim();
@@ -845,30 +852,20 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
         </DialogContent>
       </Dialog>
 
-      {/* ── 預覽搜尋卡片 Dialog：與正式搜尋結果使用完全相同的 FactoryCard 元件 ── */}
-      <Dialog open={previewCardOpen} onOpenChange={setPreviewCardOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>預覽搜尋卡片</DialogTitle>
-            <DialogDescription>
-              以下為目前表單內容（尚未儲存／送審的值）在搜尋結果中的實際呈現效果，預覽模式下所有互動按鈕皆為停用。
-            </DialogDescription>
-          </DialogHeader>
-          <div className="py-2">
-            <FactoryCard
-              factory={previewFactory}
-              getFavState={() => false}
-              handleFavToggle={() => {}}
-              cartHas={() => false}
-              cartAdd={() => {}}
-              cartRemove={() => {}}
-              setCartOpen={() => {}}
-              isMobile={previewIsMobile}
-              previewMode
-            />
-          </div>
-        </DialogContent>
-      </Dialog>
+      {/* ── 預覽工廠頁面：大型彈窗呈現，與正式 /factory/:id 共用 FactoryDetailView，
+          資料以目前表單「尚未儲存／送審」的值為主，其餘（照片／商品／評價）取自現有工廠資料 ── */}
+      <FactoryPreviewModal
+        open={previewOpen}
+        onClose={() => setPreviewOpen(false)}
+        factory={previewFactory}
+        photos={previewPhotos}
+        categories={previewCategories}
+        reviewData={previewReviewData}
+        myReview={null}
+        isAuthenticated={previewIsAuthenticated}
+        user={previewUser}
+        isFav={false}
+      />
 
       <Card>
       <CardHeader>
@@ -1271,8 +1268,8 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
         {/* ── 儲存按鈕 ── */}
         {!isLocked && (
           <div className="pt-6 pb-2 flex items-center justify-end gap-3">
-            <Button type="button" variant="outline" onClick={() => setPreviewCardOpen(true)}>
-              <Eye className="w-4 h-4 mr-1" />預覽搜尋卡片
+            <Button type="button" variant="outline" onClick={() => setPreviewOpen(true)}>
+              <Eye className="w-4 h-4 mr-1" />預覽工廠頁面
             </Button>
             {isOwner && (factory.status === 'draft' || factory.status === 'rejected') && (
               <AlertDialog>

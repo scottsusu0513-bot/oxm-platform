@@ -10,8 +10,8 @@ import { performLogin } from "@/const";
 import { toast } from "sonner";
 import { BadgeRow } from "@/components/badges/BadgeRow";
 
-// 這個元件是 Search.tsx 與 FactoryDashboard「預覽搜尋卡片」的唯一共用實作 ——
-// 後台預覽必須跟正式搜尋結果卡片長得完全一樣，不能各自維護第二套樣式。
+// 這個元件是搜尋結果工廠卡片的共用實作，供 Search.tsx／我的收藏／近期瀏覽等頁面使用。
+// （工廠管理後台的「預覽工廠頁面」改為使用 FactoryDetailView 呈現完整公開頁，不再用這個卡片元件。）
 
 export type CartItem = { id: number; name: string };
 
