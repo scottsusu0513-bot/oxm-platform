@@ -95,16 +95,23 @@ export function FactoryPreviewModal({
     >
       <div className="relative flex flex-col w-full h-full sm:w-[95vw] sm:h-[94vh] bg-background overflow-hidden sm:rounded-2xl sm:shadow-2xl">
         {/* 固定工具列：不設 position/z-index，靠 flex 版面固定在彈窗頂部，
-            內容區塊獨立捲動；工具列本身也不會攔在照片燈箱之上（見上方說明）。 */}
-        <div className="shrink-0 flex items-center justify-between gap-3 px-4 py-3 border-b bg-background">
-          <h2 className="text-base font-semibold">工廠頁面預覽</h2>
+            內容區塊獨立捲動；工具列本身也不會攔在照片燈箱之上（見上方說明）。
+            手機版頂部 padding 額外加上 env(safe-area-inset-top)，避開 iPhone
+            動態島／狀態列的不可互動安全區；桌面版 env() 恆為 0，sm: 起維持原本
+            py-3 間距不變（與 index.css 既有 .admin-page-top 的安全區慣例一致）。
+            工具列高度變動時，下方內容區塊透過 flex-1 自動扣除剩餘空間，
+            不需另外計算高度。 */}
+        <div className="shrink-0 flex items-center justify-between gap-3 px-4 pb-3 pt-[calc(env(safe-area-inset-top,0px)+0.75rem)] sm:pt-3 border-b bg-background">
+          <h2 className="flex-1 min-w-0 truncate text-base font-semibold">工廠頁面預覽</h2>
           <button
             type="button"
             onClick={onClose}
             aria-label="關閉預覽"
-            className="inline-flex items-center gap-1.5 rounded-full bg-orange-500 px-3 py-1.5 text-sm font-medium text-white shadow-sm transition hover:bg-orange-600 active:scale-95 shrink-0"
+            className="inline-flex items-center justify-center gap-1.5 rounded-full bg-orange-500 px-4 sm:px-3 text-sm font-medium text-white shadow-sm transition hover:bg-orange-600 active:scale-95 shrink-0 min-h-11 min-w-11 sm:min-h-0 sm:min-w-0 sm:py-1.5"
           >
-            <X className="w-4 h-4" />關閉預覽
+            <X className="w-4 h-4 shrink-0" />
+            <span className="hidden sm:inline">關閉預覽</span>
+            <span className="sm:hidden">關閉</span>
           </button>
         </div>
 
