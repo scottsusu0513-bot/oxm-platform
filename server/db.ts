@@ -38,7 +38,7 @@ import {
 import { ENV } from './_core/env';
 import { ADJACENT_REGIONS, INDUSTRY_SLUGS, INDUSTRY_OPTIONS } from "../shared/constants";
 import { COMMUNITY_FEATURE_STATUS, COMMUNITY_CROSS_INDUSTRY_SLUG, NEWS_NEW_WINDOW_MS, ADVISOR_DISPLAY_NAME } from "../shared/const";
-import { sortBadgeIds, sanitizeBadgeAssignment } from "../shared/badges";
+import { sortBadgeIds, sanitizeBadgeAssignment, appendCertificationEvidenceImage } from "../shared/badges";
 import type { AISearchIntent } from './semantic-search';
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -204,6 +204,59 @@ export async function updateFactory(id: number, ownerId: number, data: Partial<I
     await db.update(factories).set(normalized).where(and(eq(factories.id, id), eq(factories.ownerId, ownerId)));
   }
 }
+
+/**
+ * 徽章證明圖片上傳成功「當下」直接把 object key 綁進 certificationEvidence，
+ * 不經過工廠端（見 server/routers.ts 的 uploadBadgeEvidence）。用
+ * SELECT ... FOR UPDATE 鎖住該筆工廠列再讀取目前的 certificationEvidence，
+ * 確保同一工廠短時間內連續／併發上傳多張圖片時，每次附加都是基於「最新」
+ * 的陣列內容做 read-modify-write，不會因為兩個請求都讀到同一份舊資料，
+ * 其中一次寫入把另一次剛附加的 key 覆蓋掉（lost update）。
+ * 刻意不透過 updateFactory()——那支函式在 data 帶有 certificationBadges／
+ * certificationEvidence 任一欄位時，會用「目前要儲存的 badges 清單」重新
+ * 白名單過濁 evidence（sanitizeBadgeAssignment），這裡只想單純附加一張
+ * 圖片到既有陣列，不應該、也不需要一併帶入 certificationBadges。
+ */
+export async function appendFactoryCertificationEvidenceImage(
+  factoryId: number,
+  badgeId: string,
+  newKey: string,
+): Promise<import("../shared/badges").AppendEvidenceImageResult | { ok: false; reason: "NOT_FOUND" }> {
+  await getDb();
+  const pool = _pool;
+  if (!pool) throw new Error("DB not available");
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [rows]: any = await conn.execute(
+      "SELECT certificationEvidence FROM factories WHERE id = ? FOR UPDATE",
+      [factoryId],
+    );
+    if (!rows || rows.length === 0) {
+      await conn.rollback();
+      return { ok: false, reason: "NOT_FOUND" };
+    }
+    const raw = rows[0].certificationEvidence;
+    const existing = typeof raw === "string" ? JSON.parse(raw) : raw;
+    const result = appendCertificationEvidenceImage(existing, badgeId, newKey);
+    if (!result.ok) {
+      await conn.rollback();
+      return result;
+    }
+    await conn.execute(
+      "UPDATE factories SET certificationEvidence = ?, updatedAt = NOW() WHERE id = ?",
+      [JSON.stringify(result.evidence), factoryId],
+    );
+    await conn.commit();
+    return result;
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
 export async function getApprovedFactoriesForSitemap(): Promise<{ id: number; updatedAt: Date }[]> {
   const db = await getDb();
   if (!db) return [];

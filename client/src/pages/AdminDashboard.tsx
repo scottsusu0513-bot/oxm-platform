@@ -16,6 +16,7 @@ import { usePullToRefresh } from "@/hooks/usePullToRefresh";
 import { NativePullToRefreshLayout } from "@/components/NativePullToRefreshLayout";
 import { useState, useCallback } from "react";
 import { CERTIFICATION_BADGE_MAP, sortBadgeIds, type CertificationEvidenceEntry } from "@shared/badges";
+import { useCertificationEvidenceViewUrls } from "@/hooks/useCertificationEvidenceViewUrls";
 
 // 修改申請 diff 用：徽章 id 陣列 → 中文名稱清單
 function BadgeNameList({ badgeIds }: { badgeIds: string[] }) {
@@ -24,8 +25,12 @@ function BadgeNameList({ badgeIds }: { badgeIds: string[] }) {
   return <>{sorted.map(id => CERTIFICATION_BADGE_MAP[id]?.name ?? id).join('、')}</>;
 }
 
-// 修改申請 diff 用：徽章證明資料（工廠說明＋圖片）摘要，供管理員審核判斷
-function EvidenceSummary({ evidence }: { evidence: CertificationEvidenceEntry[] }) {
+// 修改申請 diff 用：徽章證明資料（工廠說明＋圖片）摘要，供管理員審核判斷。
+// 圖片只存私有 object key，這裡即時換發短效 presigned 網址才能顯示縮圖。
+function EvidenceSummary({ evidence, factoryId, revisionId }: { evidence: CertificationEvidenceEntry[]; factoryId: number; revisionId: number }) {
+  // key 一律由伺服器自己從資料庫目前存的 certificationEvidence／該筆
+  // revision 的 originalData／proposedData 讀出，這裡不傳、也不能傳 key 進去。
+  const { urls } = useCertificationEvidenceViewUrls(factoryId, revisionId);
   if (!Array.isArray(evidence) || evidence.length === 0) return <>（空）</>;
   return (
     <div className="space-y-1.5">
@@ -33,20 +38,26 @@ function EvidenceSummary({ evidence }: { evidence: CertificationEvidenceEntry[] 
         <div key={e.badgeId}>
           <p className="font-medium">{CERTIFICATION_BADGE_MAP[e.badgeId]?.name ?? e.badgeId}</p>
           {e.description && <p className="text-xs opacity-80">{e.description}</p>}
-          {e.imageUrls?.length > 0 && (
+          {e.imageKeys?.length > 0 && (
             <div className="flex gap-1 mt-0.5 flex-wrap">
-              {e.imageUrls.map(url => (
-                <a
-                  key={url}
-                  href={url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  title="點擊開啟原圖"
-                  aria-label={`開啟${CERTIFICATION_BADGE_MAP[e.badgeId]?.name ?? e.badgeId}證明原圖`}
-                >
-                  <img src={url} alt="證明圖片" className="w-10 h-10 rounded object-cover border hover:opacity-80 transition-opacity" />
-                </a>
-              ))}
+              {e.imageKeys.map(key => {
+                const viewUrl = urls[key];
+                if (!viewUrl) {
+                  return <div key={key} className="w-10 h-10 rounded border bg-muted flex items-center justify-center text-[9px] text-muted-foreground">載入中</div>;
+                }
+                return (
+                  <a
+                    key={key}
+                    href={viewUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title="點擊開啟原圖（短效連結，過期需重新整理頁面）"
+                    aria-label={`開啟${CERTIFICATION_BADGE_MAP[e.badgeId]?.name ?? e.badgeId}證明原圖`}
+                  >
+                    <img src={viewUrl} alt="證明圖片" className="w-10 h-10 rounded object-cover border hover:opacity-80 transition-opacity" />
+                  </a>
+                );
+              })}
             </div>
           )}
         </div>
@@ -520,14 +531,14 @@ function AdminDashboardContent() {
                                       <div className="bg-red-50 rounded px-2 py-1 text-red-700 min-h-[28px]">
                                         {isAvatar && oldVal ? <img src={oldVal} alt="舊" className="w-12 h-12 rounded object-cover" /> :
                                          isBadges ? <BadgeNameList badgeIds={oldVal as string[] ?? []} /> :
-                                         isEvidence ? <EvidenceSummary evidence={oldVal as any[] ?? []} /> :
+                                         isEvidence ? <EvidenceSummary evidence={oldVal as any[] ?? []} factoryId={rev.factoryId} revisionId={rev.id} /> :
                                          isArray ? (oldVal as string[] ?? []).join('、') || '（空）' :
                                          String(oldVal ?? '（空）')}
                                       </div>
                                       <div className="bg-green-50 rounded px-2 py-1 text-green-700 min-h-[28px]">
                                         {isAvatar && newVal ? <img src={newVal} alt="新" className="w-12 h-12 rounded object-cover" /> :
                                          isBadges ? <BadgeNameList badgeIds={newVal as string[] ?? []} /> :
-                                         isEvidence ? <EvidenceSummary evidence={newVal as any[] ?? []} /> :
+                                         isEvidence ? <EvidenceSummary evidence={newVal as any[] ?? []} factoryId={rev.factoryId} revisionId={rev.id} /> :
                                          isArray ? (newVal as string[] ?? []).join('、') || '（空）' :
                                          String(newVal ?? '（空）')}
                                       </div>

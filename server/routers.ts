@@ -7,7 +7,7 @@ import { sendNewInquiryEmail, sendFactoryApprovedEmail, sendFactoryRejectedEmail
 import { sha256Hex, generateRawToken } from './_core/oauthHelpers';
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
-import { publicProcedure, protectedProcedure, adminProcedure, router } from "./_core/trpc";
+import { publicProcedure, protectedProcedure, adminProcedure, badgeEvidenceUploadProcedure, router } from "./_core/trpc";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import * as db from "./db";
@@ -15,7 +15,7 @@ import { notifyOwner } from "./_core/notification";
 import { storagePut, storagePresignedUrl, storageDelete } from "./storage";
 import { validateImageUpload } from "./_core/security";
 import { INDUSTRY_OPTIONS, TAIWAN_REGIONS, CAPITAL_OPTIONS, INDUSTRY_SLUGS } from "../shared/constants";
-import { stripCertificationEvidence, sanitizeBadgeAssignment } from "../shared/badges";
+import { stripCertificationEvidence, stripCertificationEvidenceFromRevision, isValidCertificationEvidenceKey, isValidBadgeId, CERTIFICATION_EVIDENCE_KEY_PREFIX, applyCertificationEvidenceDescriptions, summarizeCertificationEvidenceForOwner, sortBadgeIds } from "../shared/badges";
 import { nanoid } from "nanoid";
 import { factories, conversations, reviews, reports, factoryCoManagers, users, upgradeConsultants, type Factory } from "../drizzle/schema";
 import { desc, eq, and, sql, isNull } from "drizzle-orm";
@@ -32,7 +32,12 @@ import {
   privateStorageDeleteObject,
   privateStorageCopyObject,
   privateStorageCreateDownloadUrl,
+  privateStoragePutObject,
+  privateStorageCreateViewUrl,
 } from "./privateStorage";
+
+// 徽章證明圖片 presigned 檢視網址有效秒數：10 分鐘，落在建議的 10～15 分鐘區間內。
+const CERTIFICATION_EVIDENCE_VIEW_URL_TTL_SECONDS = 600;
 
 function requireVerifiedEmail(user: { primaryEmailVerifiedAt: Date | null }): void {
   if (!user.primaryEmailVerifiedAt) {
@@ -415,10 +420,14 @@ const FactoryBasicDataSchema = z.object({
   businessNote: z.string().nullable(),
   avatarUrl: z.string().nullable(),
   certificationBadges: z.array(z.string()).max(30),
+  // imageKeys 刻意不在這裡開放：圖片 object key 全程只存在伺服器端（見
+  // shared/badges.ts 的 appendCertificationEvidenceImage／
+  // applyCertificationEvidenceDescriptions），工廠端只能透過 update／
+  // submitRevision 編輯每個徽章的說明文字，即使夾帶 imageKeys 也會被
+  // zod 直接忽略（object schema 預設 strip 未知欄位）。
   certificationEvidence: z.array(z.object({
     badgeId: z.string(),
     description: z.string().max(500),
-    imageUrls: z.array(z.string()).max(5),
   })).max(30),
 }).partial();
 
@@ -718,8 +727,20 @@ export const appRouter = router({
         db.getProductsByFactoryId(input.id),
         isAuthorized && input.includeRevision ? db.getLatestRevisionByFactory(input.id) : Promise.resolve(null),
       ]);
-      const publicSafeFactory = isAuthorized ? factory : stripCertificationEvidence(factory);
-      return { ...publicSafeFactory, products: prods, latestRevision: latestRevision ?? null };
+      // 徽章證明圖片的實際 object key 只供管理員審核用的專屬 API 讀取（見
+      // getCertificationEvidenceViewUrls 改成 admin-only）。factory.getById
+      // 從未是管理員審核管道（管理員審核走 admin.getFactoryDetail／
+      // admin.getPendingRevisions），即使呼叫者是工廠 owner／共管者本人，
+      // certificationEvidence 原始欄位（含 imageKeys）也一律移除；改為
+      // 只在有權限查看這筆工廠時，額外附上消毒後的 certificationEvidenceStatus
+      // 摘要（只有 badgeId／說明文字／是否已上傳／張數，不含任何 key）。
+      const publicSafeFactory = stripCertificationEvidence(factory);
+      const safeLatestRevision = latestRevision ? stripCertificationEvidenceFromRevision(latestRevision) : null;
+      const result: Record<string, any> = { ...publicSafeFactory, products: prods, latestRevision: safeLatestRevision };
+      if (isAuthorized) {
+        result.certificationEvidenceStatus = summarizeCertificationEvidenceForOwner(factory.certificationEvidence);
+      }
+      return result;
     }),
 
     getMine: protectedProcedure.query(async ({ ctx }) => {
@@ -729,7 +750,15 @@ export const appRouter = router({
         db.getProductsByFactoryId(factory.id),
         db.getLatestRevisionByFactory(factory.id),
       ]);
-      return { ...factory, products: prods, latestRevision: latestRevision ?? null };
+      // 同 factory.getById：certificationEvidence 原始欄位對工廠本人也一律
+      // 不可見，只回傳消毒後的摘要（certificationEvidenceStatus）。
+      const safeLatestRevision = latestRevision ? stripCertificationEvidenceFromRevision(latestRevision) : null;
+      return {
+        ...stripCertificationEvidence(factory),
+        products: prods,
+        latestRevision: safeLatestRevision,
+        certificationEvidenceStatus: summarizeCertificationEvidenceForOwner(factory.certificationEvidence),
+      };
     }),
 
     // Phase 3C: 取得目前登入者可代表接受訂單的工廠清單（approved + owner/active co-manager）
@@ -794,10 +823,12 @@ export const appRouter = router({
       weekendHours: z.string().max(50).optional(),
       businessNote: z.string().max(500).optional(),
       certificationBadges: z.array(z.string().max(50)).max(30).optional(),
+      // imageKeys 刻意不接受：圖片 object key 全程只存在伺服器端，工廠端
+      // 只能編輯每個徽章的說明文字（見 shared/badges.ts 的
+      // applyCertificationEvidenceDescriptions）。
       certificationEvidence: z.array(z.object({
         badgeId: z.string().max(50),
         description: z.string().max(500).optional().default(""),
-        imageUrls: z.array(z.string().max(1000)).max(5).optional().default([]),
       })).max(30).optional(),
     })).mutation(async ({ ctx, input }) => {
       requireVerifiedEmail(ctx.user);
@@ -816,9 +847,25 @@ export const appRouter = router({
         throw new TRPCError({ code: 'BAD_REQUEST', message: '已上線工廠的基本資料需透過「修改申請」流程更改，請使用提交修改申請功能' });
       }
 
+      // 徽章證明圖片的 object key 全程只存在伺服器端，工廠端送出的
+      // certificationEvidence 只可能帶 { badgeId, description }（imageKeys
+      // 已從 zod schema 移除）。這裡把工廠端的說明文字跟資料庫目前實際存的
+      // imageKeys 合併，不能直接拿工廠端送來的內容整個覆蓋，否則會把已透過
+      // uploadBadgeEvidence 綁定的圖片洗掉。
+      const mergedData: Record<string, any> = { ...data };
+      if ("certificationBadges" in data || "certificationEvidence" in data) {
+        const certificationBadges = sortBadgeIds(Array.isArray((data as any).certificationBadges) ? (data as any).certificationBadges : []);
+        mergedData.certificationBadges = certificationBadges;
+        mergedData.certificationEvidence = applyCertificationEvidenceDescriptions(
+          factory.certificationEvidence,
+          (data as any).certificationEvidence,
+          certificationBadges,
+        );
+      }
+
       // draft / rejected → allow direct update
       try {
-        await db.updateFactory(id, isOwner ? ctx.user.id : -1, data);
+        await db.updateFactory(id, isOwner ? ctx.user.id : -1, mergedData as any);
       } catch (err: any) {
         console.error('[factory.update] DB error:', err?.message);
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: '更新工廠失敗，請稍後再試' });
@@ -876,12 +923,18 @@ export const appRouter = router({
 
       // 徽章系統：白名單清洗必須在寫入 factoryRevisions 之前就完成，不能只靠
       // approve 時的 defense-in-depth —— 否則有人可以直接呼叫這支 API，把未知
-      // badge id 或任意遠端圖片 URL 寫進 pending revision，在管理員審核畫面上
-      // 顯示未經清洗的內容。
+      // badge id 寫進 pending revision，在管理員審核畫面上顯示未經清洗的內容。
+      // imageKeys 已從輸入 schema 移除，proposedData.certificationEvidence
+      // 只可能帶說明文字，必須跟目前線上工廠實際存的 imageKeys 合併，不能
+      // 直接整個覆蓋，否則會把已透過 uploadBadgeEvidence 綁定的圖片洗掉。
       if ("certificationBadges" in proposedData || "certificationEvidence" in proposedData) {
-        const sanitized = sanitizeBadgeAssignment(proposedData.certificationBadges, proposedData.certificationEvidence);
-        proposedData.certificationBadges = sanitized.certificationBadges;
-        proposedData.certificationEvidence = sanitized.certificationEvidence;
+        const certificationBadges = sortBadgeIds(Array.isArray(proposedData.certificationBadges) ? proposedData.certificationBadges : []);
+        proposedData.certificationBadges = certificationBadges;
+        proposedData.certificationEvidence = applyCertificationEvidenceDescriptions(
+          factory.certificationEvidence,
+          proposedData.certificationEvidence,
+          certificationBadges,
+        );
       }
 
       let revisionId: number;
@@ -1044,10 +1097,24 @@ export const appRouter = router({
       return { url };
     }),
 
-    uploadBadgeEvidence: protectedProcedure.input(z.object({
+    // 徽章證明圖片走私有儲存（server/privateStorage.ts），與大頭貼／封面／照片／
+    // 商品圖片使用的公開 storage.ts 完全分開——證明圖片只供管理員審核使用，
+    // 絕不對外公開，回傳值只有私有 object key，不回傳任何網址（包含短效
+    // 網址）。工廠端上傳前的縮圖預覽一律用瀏覽器本機 blob URL（見
+    // BadgeEvidenceEditor.tsx），上傳成功後即捨棄，不透過伺服器重新取得；
+    // 送出後工廠主／共管者不能再用任何 API 查看這張圖片，只有管理員能透過
+    // 下方 getCertificationEvidenceViewUrls（僅限管理員身份）換發短效網址。
+    //
+    // 限流：用 badgeEvidenceUploadProcedure（server/_core/trpc.ts），依已驗證
+    // 的 ctx.user.id 計算，每人每小時 20 次，與一般圖片上傳的 uploadLimiter
+    // （10 次/小時、以 IP 計算）完全獨立分離——不可疊加使用 protectedProcedure
+    // 讓這支 API 又被 Express 層的 uploadLimiter 攔截到（見
+    // server/_core/index.ts 的 uploadLimiter 比對規則已移除這支路徑）。
+    uploadBadgeEvidence: badgeEvidenceUploadProcedure.input(z.object({
       base64: z.string().max(10 * 1024 * 1024),
       mimeType: z.enum(["image/jpeg", "image/png", "image/webp"]).default("image/jpeg"),
       factoryId: z.number(),
+      badgeId: z.string().max(50),
     })).mutation(async ({ ctx, input }) => {
       const factory = await db.getFactoryById(input.factoryId);
       if (!factory) throw new TRPCError({ code: 'NOT_FOUND', message: '找不到工廠' });
@@ -1055,17 +1122,114 @@ export const appRouter = router({
       const isCoMgr = !isOwner && await db.isActiveCoManager(factory.id, ctx.user.id);
       if (!isOwner && !isCoMgr) throw new TRPCError({ code: 'FORBIDDEN', message: '無權限上傳此工廠的徽章證明圖片' });
       if (factory.status === 'pending') throw new TRPCError({ code: 'BAD_REQUEST', message: '審核期間無法上傳徽章證明圖片' });
+      if (!isValidBadgeId(input.badgeId)) throw new TRPCError({ code: 'BAD_REQUEST', message: '不明的認證項目' });
+      if (!isPrivateStorageConfigured()) {
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: '證明圖片私有儲存尚未設定，請聯繫管理員' });
+      }
       const base64Data = input.base64.includes(",") ? input.base64.split(",")[1] : input.base64;
       const buffer = Buffer.from(base64Data, "base64");
       const validation = await validateImageUpload(buffer);
       if (!validation.valid) throw new Error(validation.error ?? "圖片格式不正確");
       const ext = input.mimeType.includes("png") ? "png" : input.mimeType.includes("webp") ? "webp" : "jpg";
-      // approved 工廠：證明圖片先上傳到暫存前綴，URL 隨修改申請一起提交，
-      // 核准後才寫入 factories.certificationEvidence（與 avatarUrl 的 staging 邏輯一致）。
-      const prefix = factory.status === 'approved' ? 'factory-badge-evidence-temp' : 'factory-badge-evidence';
-      const key = `${prefix}/${factory.id}/${nanoid()}.${ext}`;
-      const { url } = await storagePut(key, buffer, input.mimeType);
-      return { url };
+      // key 只用 factoryId（純數字）與亂數字串組成，不使用任何徽章／認證名稱，
+      // 格式必須符合 shared/badges.ts 的 isValidCertificationEvidenceKey。
+      const key = `${CERTIFICATION_EVIDENCE_KEY_PREFIX}/${factory.id}/${nanoid()}.${ext}`;
+      // privateStoragePutObject 本身失敗（拋出例外）時，執行不會走到下面任何一行——
+      // 不會呼叫 DB 綁定，也不需要呼叫刪除（根本沒有東西寫進 S3）。
+      await privateStoragePutObject(key, buffer, input.mimeType);
+
+      // object key 從產生到綁定全程只存在伺服器端：上傳成功「當下」就直接用
+      // row lock 附加進 certificationEvidence（見 db.appendFactoryCertificationEvidenceImage），
+      // 不透過回傳值把 key 交給工廠端暫存、等到 factory.update／submitRevision
+      // 時才送回來合併——工廠端從頭到尾都拿不到、也不需要拿到這個 key。
+      //
+      // S3 已經寫入成功之後，若 DB 綁定失敗（單一徽章達 5 張／全部達 30 張、
+      // transaction 失敗、其他 DB 錯誤，或併發上傳被上限擋下），剛剛寫入的
+      // S3 物件就沒有任何 DB 紀錄引用，會變成孤兒檔案——這裡在拋出錯誤前，
+      // 一定先嘗試刪除「這一次 request 剛建立」的 key（絕不會是任何既有認證
+      // 圖片的 key，因為 key 是這行以上才剛用 nanoid() 產生的區域變數）。
+      // 清理本身若也失敗，只記錄在伺服器 log（不可把 key／網址／內部路徑透過
+      // 錯誤訊息外流給前端），且不能讓清理失敗蓋掉原本要回傳給前端的錯誤——
+      // 兩個 catch 各自吞掉自己的例外，最後一定還是拋出原本的錯誤。
+      let bindResult: Awaited<ReturnType<typeof db.appendFactoryCertificationEvidenceImage>>;
+      try {
+        bindResult = await db.appendFactoryCertificationEvidenceImage(factory.id, input.badgeId, key);
+      } catch (err: any) {
+        await privateStorageDeleteObject(key).catch((cleanupErr: any) => {
+          console.error('[factory.uploadBadgeEvidence] 清理孤兒 S3 物件失敗:', cleanupErr?.message, 'key=', key);
+        });
+        console.error('[factory.uploadBadgeEvidence] DB 綁定發生例外:', err?.message);
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: '圖片綁定失敗，請稍後再試' });
+      }
+      if (!bindResult.ok) {
+        await privateStorageDeleteObject(key).catch((cleanupErr: any) => {
+          console.error('[factory.uploadBadgeEvidence] 清理孤兒 S3 物件失敗:', cleanupErr?.message, 'key=', key);
+        });
+        const message = bindResult.reason === "PER_BADGE_LIMIT"
+          ? "此認證項目的證明圖片已達上限"
+          : bindResult.reason === "TOTAL_LIMIT"
+          ? "證明圖片總數已達上限"
+          : "圖片綁定失敗，請稍後再試";
+        throw new TRPCError({ code: 'BAD_REQUEST', message });
+      }
+
+      // DB 綁定一旦成功（走到這裡），不論之後回應傳輸是否發生問題，都不會、
+      // 也不能再刪除已成功綁定的圖片——下面只是單純回傳，沒有任何會觸發刪除
+      // 的後續邏輯。只回傳安全結果：不含 key、imageKeys、永久 URL 或 presigned URL。
+      return { uploaded: true, hasEvidence: true, imageCount: bindResult.imageCount, badgeId: input.badgeId };
+    }),
+
+    // 只有管理員能取得徽章證明圖片的短效 presigned 檢視網址。
+    // 用 protectedProcedure（而非 adminProcedure）當基底，是刻意要讓「訪客
+    // （未登入）」與「已登入但非管理員（含工廠 owner／共管者／其他一般會員）」
+    // 回傳不同的錯誤碼：訪客在 protectedProcedure 的 requireUser middleware
+    // 就會被擋下、回傳 UNAUTHORIZED；已登入但非管理員的則在下面明確拋出
+    // FORBIDDEN——單用 adminProcedure 兩種情況都只會是 FORBIDDEN，不符合
+    // 「訪客要拿到 UNAUTHORIZED」的要求。
+    //
+    // 絕不接受前端傳入的 object key：input 只有 factoryId（與選填的
+    // revisionId，用於審核修改申請 diff 畫面），key 一律從資料庫目前實際
+    // 存的 certificationEvidence／revision 的 originalData／proposedData
+    // 讀出，不相信、也不查詢任何呼叫端自己夾帶的 key 字串。expectedPrefix
+    // 比對是多一層 defense-in-depth（理論上從 DB 讀出的 key 不會是別的工廠
+    // 的，但仍防止未來重構不慎混入其他來源時被拿去換取簽章）。
+    getCertificationEvidenceViewUrls: protectedProcedure.input(z.object({
+      factoryId: z.number(),
+      revisionId: z.number().optional(),
+    })).query(async ({ ctx, input }) => {
+      if (ctx.user.role !== 'admin') {
+        throw new TRPCError({ code: 'FORBIDDEN', message: '只有管理員能查看徽章證明圖片' });
+      }
+      const factory = await db.getFactoryById(input.factoryId);
+      if (!factory) throw new TRPCError({ code: 'NOT_FOUND', message: '找不到工廠' });
+
+      const collectedKeys = new Set<string>();
+      const collectFrom = (evidence: unknown) => {
+        if (!Array.isArray(evidence)) return;
+        for (const entry of evidence) {
+          const keys = (entry as any)?.imageKeys;
+          if (!Array.isArray(keys)) continue;
+          for (const key of keys) if (typeof key === "string") collectedKeys.add(key);
+        }
+      };
+      collectFrom((factory as any).certificationEvidence);
+
+      if (input.revisionId) {
+        const revision = await db.getRevisionById(input.revisionId);
+        if (revision && revision.factoryId === input.factoryId) {
+          collectFrom((revision.originalData as any)?.certificationEvidence);
+          collectFrom((revision.proposedData as any)?.certificationEvidence);
+        }
+      }
+
+      if (!isPrivateStorageConfigured()) return { urls: {} as Record<string, string> };
+      const expectedPrefix = `${CERTIFICATION_EVIDENCE_KEY_PREFIX}/${factory.id}/`;
+      const urls: Record<string, string> = {};
+      for (const key of Array.from(collectedKeys)) {
+        if (!isValidCertificationEvidenceKey(key) || !key.startsWith(expectedPrefix)) continue;
+        urls[key] = await privateStorageCreateViewUrl(key, CERTIFICATION_EVIDENCE_VIEW_URL_TTL_SECONDS);
+      }
+      return { urls };
     }),
 
     submitForReview: protectedProcedure.mutation(async ({ ctx }) => {

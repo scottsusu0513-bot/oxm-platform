@@ -179,3 +179,39 @@ export async function privateStorageCreateDownloadUrl(
   });
   return getSignedUrl(getClient(config), command, { expiresIn: Math.max(1, Math.floor(expiresInSeconds)) });
 }
+
+/**
+ * 徽章證明圖片專用：直接把 server 端已經解碼好的圖片 buffer 寫入私有 bucket
+ * （不像 PDF 走前端直傳的 presigned PUT——圖片經過 compressImage 後體積很小，
+ * 沿用既有「base64 → server 解碼 → S3」流程即可，不需要另外設計直傳）。
+ * 回傳值只有 key，這個模組本身沒有、也不提供任何公開網址等價函式。
+ */
+export async function privateStoragePutObject(
+  key: string,
+  data: Buffer,
+  contentType: string,
+): Promise<{ key: string }> {
+  const config = requirePrivateStorageConfig();
+  await getClient(config).send(new PutObjectCommand({
+    Bucket: config.bucket,
+    Key: key,
+    Body: data,
+    ContentType: contentType,
+  }));
+  return { key };
+}
+
+/**
+ * 徽章證明圖片專用：產生短效 presigned GET 網址，供 <img> 直接內嵌顯示
+ * （不加 Content-Disposition: attachment，否則瀏覽器會強制下載而非預覽）。
+ * 呼叫端（routers.ts）負責限制 expiresInSeconds 落在建議的 10～15 分鐘內，
+ * 這裡不做上限判斷，只負責簽章。
+ */
+export async function privateStorageCreateViewUrl(
+  key: string,
+  expiresInSeconds: number,
+): Promise<string> {
+  const config = requirePrivateStorageConfig();
+  const command = new GetObjectCommand({ Bucket: config.bucket, Key: key });
+  return getSignedUrl(getClient(config), command, { expiresIn: Math.max(1, Math.floor(expiresInSeconds)) });
+}

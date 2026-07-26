@@ -78,17 +78,37 @@ export const MAX_EVIDENCE_IMAGES_PER_BADGE = 5;
 export const MAX_EVIDENCE_IMAGES_TOTAL = 30;
 export const MAX_EVIDENCE_DESCRIPTION_LENGTH = 500;
 
+/** 私有徽章證明圖片在 privateStorage bucket 內的固定前綴。 */
+export const CERTIFICATION_EVIDENCE_KEY_PREFIX = "certification-evidence";
+
+/**
+ * 徽章證明圖片私有 object key 的合法格式：
+ * certification-evidence/{factoryId 純數字}/{nanoid}.{jpg|png|webp}
+ * 刻意只允許數字 factoryId 與 URL-safe 亂數字元，不接受任何路徑分隔符號、
+ * 空白或徽章名稱／認證名稱（例如「ISO/IEC 27001」）被直接拼進路徑。
+ */
+const CERTIFICATION_EVIDENCE_KEY_PATTERN =
+  /^certification-evidence\/\d+\/[A-Za-z0-9_-]{10,40}\.(jpg|png|webp)$/;
+
+export function isValidCertificationEvidenceKey(key: unknown): key is string {
+  return typeof key === "string" && CERTIFICATION_EVIDENCE_KEY_PATTERN.test(key);
+}
+
 export interface CertificationEvidenceEntry {
   badgeId: string;
   description: string;
-  imageUrls: string[];
+  /** privateStorage 內的私有 object key（見 isValidCertificationEvidenceKey），
+   *  絕不是可直接存取的網址——資料庫與任何 API 回應都只會出現 key。 */
+  imageKeys: string[];
 }
 
 /**
  * 白名單清洗 evidence 陣列：只保留合法 badgeId 且該 id 有在目前選擇的
  * badges 清單中（避免殘留已移除徽章的證明資料）、去重、裁切數量與長度上限、
- * 圖片 URL 只接受 http(s)。用於 server 端寫入前的最終防線，也是可離線
- * 執行的純函式（不連線 DB），供安全測試直接驗證。
+ * 圖片只接受合法格式的私有 object key（見 isValidCertificationEvidenceKey），
+ * 不接受任何 http(s) 網址（避免不慎把公開或 presigned URL 存進資料庫）。
+ * 用於 server 端寫入前的最終防線，也是可離線執行的純函式（不連線 DB），
+ * 供安全測試直接驗證。
  */
 export function sanitizeCertificationEvidence(
   evidence: unknown,
@@ -113,17 +133,17 @@ export function sanitizeCertificationEvidence(
       ? entry.description.slice(0, MAX_EVIDENCE_DESCRIPTION_LENGTH)
       : "";
 
-    const rawImages = Array.isArray(entry.imageUrls) ? entry.imageUrls : [];
-    const imageUrls: string[] = [];
-    for (const url of rawImages) {
-      if (imageUrls.length >= MAX_EVIDENCE_IMAGES_PER_BADGE) break;
+    const rawImages = Array.isArray(entry.imageKeys) ? entry.imageKeys : [];
+    const imageKeys: string[] = [];
+    for (const key of rawImages) {
+      if (imageKeys.length >= MAX_EVIDENCE_IMAGES_PER_BADGE) break;
       if (totalImages >= MAX_EVIDENCE_IMAGES_TOTAL) break;
-      if (typeof url !== "string" || !/^https?:\/\//.test(url)) continue;
-      imageUrls.push(url);
+      if (!isValidCertificationEvidenceKey(key)) continue;
+      imageKeys.push(key);
       totalImages++;
     }
 
-    result.push({ badgeId, description, imageUrls });
+    result.push({ badgeId, description, imageKeys });
   }
 
   return result;
@@ -144,11 +164,145 @@ export function sanitizeBadgeAssignment(
 }
 
 /**
- * certificationEvidence（工廠私密證明說明＋圖片 URL）只供 owner／有效共管者／
- * admin 審核使用。任何公開 tRPC 回應（搜尋結果、公開工廠詳情、廣告輪播）
- * 一律透過這個 helper 移除，只保留公開的 certificationBadges id 清單。
+ * certificationEvidence（工廠私密證明說明＋私有圖片 object key）只供 admin
+ * 審核使用——工廠 owner／共管者送出證明圖片後，同樣不得再透過任何 API 取回
+ * 這個欄位（見 server/routers.ts 的 factory.getMine／factory.getById 一律
+ * 呼叫這個 helper，不分身份）。任何公開 tRPC 回應（搜尋結果、公開工廠詳情、
+ * 廣告輪播）也一律透過這個 helper 移除，只保留公開的 certificationBadges
+ * id 清單。
  */
 export function stripCertificationEvidence<T extends Record<string, any>>(factory: T): Omit<T, "certificationEvidence"> {
   const { certificationEvidence, ...rest } = factory;
   return rest;
+}
+
+/**
+ * factoryRevisions 的 originalData／proposedData 兩個 JSON 欄位各自都可能
+ * 內嵌 certificationEvidence（若該次修改申請有異動徽章）。factory.getById／
+ * factory.getMine 回傳給工廠 owner／共管者的 latestRevision 也必須套用跟
+ * stripCertificationEvidence 一樣的規則，否則會變成繞過主要欄位的漏洞，讓
+ * 工廠端能從 latestRevision.proposedData.certificationEvidence 讀到不該看到
+ * 的 object key。
+ */
+export function stripCertificationEvidenceFromRevision<
+  T extends { originalData?: Record<string, any> | null; proposedData?: Record<string, any> | null },
+>(revision: T): T {
+  const strip = (data: Record<string, any> | null | undefined) => {
+    if (!data || typeof data !== "object") return data;
+    if (!("certificationEvidence" in data)) return data;
+    const { certificationEvidence, ...rest } = data;
+    return rest;
+  };
+  return {
+    ...revision,
+    originalData: strip(revision.originalData),
+    proposedData: strip(revision.proposedData),
+  };
+}
+
+/**
+ * object key 全程只存在伺服器端：uploadBadgeEvidence 上傳成功「當下」就直接
+ * 把 key 綁定進 certificationEvidence（見 server/db.ts 的
+ * appendFactoryCertificationEvidenceImage），不再像先前設計依賴工廠端把
+ * 上傳後拿到的 key 暫存在瀏覽器、等到 factory.update／submitRevision 儲存
+ * 時才送回伺服器合併——工廠端現在完全不會經手任何 key，自然也不需要「合併
+ * 工廠端這次新上傳的 key」這一步。
+ *
+ * 純函式，不連線 DB：真正的讀取＋寫入（含 row lock 避免併發上傳互相覆蓋）
+ * 在 server/db.ts 的 appendFactoryCertificationEvidenceImage 完成，這裡只
+ * 負責「給定目前已存在的 evidence 陣列＋要附加的 badgeId／key，算出附加後
+ * 的新陣列」這個沒有副作用的邏輯，方便安全測試直接驗證邊界情況（上限、
+ * 找不到既有 entry 時新建等），不需要真的連 DB。
+ */
+export type AppendEvidenceImageResult =
+  | { ok: true; evidence: CertificationEvidenceEntry[]; imageCount: number }
+  | { ok: false; reason: "INVALID_BADGE" | "PER_BADGE_LIMIT" | "TOTAL_LIMIT" };
+
+export function appendCertificationEvidenceImage(
+  existingEvidence: unknown,
+  badgeId: string,
+  newKey: string,
+): AppendEvidenceImageResult {
+  if (!isValidBadgeId(badgeId)) return { ok: false, reason: "INVALID_BADGE" };
+
+  // 用「全部合法徽章」當作 selectedBadgeIds 傳入 sanitize，單純是為了正規化
+  // 既有資料格式（去除非法 key／裁切長度），不因為某個徽章「目前沒被勾選」
+  // 就把它既有的證明圖片洗掉——是否保留某徽章的 evidence 是
+  // applyCertificationEvidenceDescriptions／factory.update／submitRevision
+  // 的職責，不是這裡。
+  const normalized = sanitizeCertificationEvidence(existingEvidence, CERTIFICATION_BADGE_IDS);
+  const totalImages = normalized.reduce((sum, e) => sum + e.imageKeys.length, 0);
+  if (totalImages >= MAX_EVIDENCE_IMAGES_TOTAL) return { ok: false, reason: "TOTAL_LIMIT" };
+
+  const idx = normalized.findIndex(e => e.badgeId === badgeId);
+  if (idx === -1) {
+    const evidence = [...normalized, { badgeId, description: "", imageKeys: [newKey] }];
+    return { ok: true, evidence, imageCount: 1 };
+  }
+  const entry = normalized[idx];
+  if (entry.imageKeys.length >= MAX_EVIDENCE_IMAGES_PER_BADGE) return { ok: false, reason: "PER_BADGE_LIMIT" };
+  const imageKeys = [...entry.imageKeys, newKey];
+  const evidence = [...normalized];
+  evidence[idx] = { ...entry, imageKeys };
+  return { ok: true, evidence, imageCount: imageKeys.length };
+}
+
+/**
+ * 工廠端（owner／共管者）只能編輯每個已選徽章的「說明文字」，圖片一律透過
+ * appendCertificationEvidenceImage 在上傳當下直接綁定，不會、也不能再經由
+ * factory.update／submitRevision 這條路徑異動 imageKeys——因此這裡的
+ * clientDescriptions 只允許帶 { badgeId, description }，即使呼叫端夾帶了
+ * imageKeys 也會被忽略（zod 輸入 schema 已經沒有這個欄位，這裡再次確保
+ * 就算未來 schema 不慎鬆綁，這個函式本身也不會讀取／採用任何 client 端
+ * 傳入的 imageKeys）。既有 key 一律從資料庫目前實際存的內容原封不動帶入。
+ * 純函式，不連線 DB，安全測試可直接驗證。
+ */
+export function applyCertificationEvidenceDescriptions(
+  existingEvidence: unknown,
+  clientDescriptions: unknown,
+  selectedBadgeIds: readonly string[],
+): CertificationEvidenceEntry[] {
+  const existing = sanitizeCertificationEvidence(existingEvidence, CERTIFICATION_BADGE_IDS);
+  const existingByBadge = new Map(existing.map(e => [e.badgeId, e]));
+
+  const descByBadge = new Map<string, string>();
+  const rawList = Array.isArray(clientDescriptions) ? clientDescriptions : [];
+  for (const raw of rawList) {
+    if (!raw || typeof raw !== "object") continue;
+    const entry = raw as Record<string, unknown>;
+    const badgeId = entry.badgeId;
+    if (typeof badgeId !== "string" || !isValidBadgeId(badgeId)) continue;
+    const description = typeof entry.description === "string"
+      ? entry.description.slice(0, MAX_EVIDENCE_DESCRIPTION_LENGTH)
+      : "";
+    descByBadge.set(badgeId, description);
+  }
+
+  const selectedIds = sortBadgeIds(selectedBadgeIds);
+  return selectedIds.map(badgeId => {
+    const existingEntry = existingByBadge.get(badgeId);
+    const description = descByBadge.has(badgeId) ? descByBadge.get(badgeId)! : (existingEntry?.description ?? "");
+    return { badgeId, description, imageKeys: existingEntry?.imageKeys ?? [] };
+  });
+}
+
+/** 工廠端（owner／共管者）可見的「消毒後」證明圖片狀態——只有數量與是否已
+ *  上傳，絕不含 imageKeys 或任何網址。用於 factory.getById／getMine 回應，
+ *  讓工廠重新整理頁面後仍能看到已上傳狀態與先前填寫的說明文字，但無法取得
+ *  或推導出任何 object key。*/
+export interface CertificationEvidenceSummaryEntry {
+  badgeId: string;
+  description: string;
+  hasEvidence: boolean;
+  imageCount: number;
+}
+
+export function summarizeCertificationEvidenceForOwner(evidence: unknown): CertificationEvidenceSummaryEntry[] {
+  const normalized = sanitizeCertificationEvidence(evidence, CERTIFICATION_BADGE_IDS);
+  return normalized.map(e => ({
+    badgeId: e.badgeId,
+    description: e.description,
+    hasEvidence: e.imageKeys.length > 0,
+    imageCount: e.imageKeys.length,
+  }));
 }

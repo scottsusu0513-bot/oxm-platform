@@ -17,6 +17,7 @@ import { toast } from "sonner";
 import { INDUSTRY_OPTIONS } from "@shared/constants";
 import { CERTIFICATION_BADGE_MAP, sortBadgeIds } from "@shared/badges";
 import { BadgeIcon } from "@/components/badges/BadgeIcon";
+import { useCertificationEvidenceViewUrls } from "@/hooks/useCertificationEvidenceViewUrls";
 
 export default function FactoryReviewDetail() {
   const { user, loading: authLoading } = useAuth();
@@ -40,6 +41,9 @@ export default function FactoryReviewDetail() {
     { factoryId },
     { enabled: isAdmin && !!factoryId }
   );
+  // key 一律由伺服器自己從資料庫目前存的 certificationEvidence 讀出（見
+  // getCertificationEvidenceViewUrls 的說明），這裡不需要、也不能傳 key 進去。
+  const { urls: evidenceViewUrls } = useCertificationEvidenceViewUrls(isAdmin ? factoryId : undefined);
   const approveMutation = trpc.admin.approveFactory.useMutation();
   const rejectMutation = trpc.admin.rejectFactory.useMutation();
   const updateIndustryMut = trpc.admin.updateFactoryIndustry.useMutation({
@@ -380,7 +384,7 @@ export default function FactoryReviewDetail() {
               <CardContent>
                 {(() => {
                   const badgeIds = sortBadgeIds((factory as any).certificationBadges ?? []);
-                  const evidence = ((factory as any).certificationEvidence ?? []) as Array<{ badgeId: string; description: string; imageUrls: string[] }>;
+                  const evidence = ((factory as any).certificationEvidence ?? []) as Array<{ badgeId: string; description: string; imageKeys: string[] }>;
                   if (badgeIds.length === 0) {
                     return <p className="text-muted-foreground text-center py-8">工廠尚未選擇任何徽章</p>;
                   }
@@ -396,20 +400,30 @@ export default function FactoryReviewDetail() {
                               <p className="font-medium">{def?.name ?? id}</p>
                             </div>
                             {ev?.description && <p className="text-sm text-muted-foreground mt-2">{ev.description}</p>}
-                            {ev?.imageUrls && ev.imageUrls.length > 0 && (
+                            {ev?.imageKeys && ev.imageKeys.length > 0 && (
                               <div className="flex gap-2 mt-2 flex-wrap">
-                                {ev.imageUrls.map(url => (
-                                  <a
-                                    key={url}
-                                    href={url}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    title="點擊開啟原圖"
-                                    aria-label={`開啟${def?.name ?? id}證明原圖`}
-                                  >
-                                    <img src={url} alt="證明圖片" className="w-16 h-16 object-cover rounded border hover:opacity-80 transition-opacity" loading="lazy" />
-                                  </a>
-                                ))}
+                                {ev.imageKeys.map(key => {
+                                  const viewUrl = evidenceViewUrls[key];
+                                  if (!viewUrl) {
+                                    return (
+                                      <div key={key} className="w-16 h-16 rounded border bg-muted flex items-center justify-center text-[10px] text-muted-foreground">
+                                        載入中
+                                      </div>
+                                    );
+                                  }
+                                  return (
+                                    <a
+                                      key={key}
+                                      href={viewUrl}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      title="點擊開啟原圖（短效連結，過期需重新整理頁面）"
+                                      aria-label={`開啟${def?.name ?? id}證明原圖`}
+                                    >
+                                      <img src={viewUrl} alt="證明圖片" className="w-16 h-16 object-cover rounded border hover:opacity-80 transition-opacity" loading="lazy" />
+                                    </a>
+                                  );
+                                })}
                               </div>
                             )}
                           </div>

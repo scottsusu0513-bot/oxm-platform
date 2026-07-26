@@ -1,32 +1,49 @@
 import { useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { Textarea } from "@/components/ui/textarea";
-import { X, ImagePlus } from "lucide-react";
+import { ImagePlus, Check } from "lucide-react";
 import { toast } from "sonner";
-import { sortBadgeIds, CERTIFICATION_BADGE_MAP, MAX_EVIDENCE_IMAGES_PER_BADGE, MAX_EVIDENCE_IMAGES_TOTAL, MAX_EVIDENCE_DESCRIPTION_LENGTH, type CertificationEvidenceEntry } from "@shared/badges";
+import { sortBadgeIds, CERTIFICATION_BADGE_MAP, MAX_EVIDENCE_IMAGES_PER_BADGE, MAX_EVIDENCE_IMAGES_TOTAL, MAX_EVIDENCE_DESCRIPTION_LENGTH, type CertificationEvidenceSummaryEntry } from "@shared/badges";
 import { BadgeIcon } from "./BadgeIcon";
 
-type UploadFn = (file: File) => Promise<string>;
+/**
+ * 上傳單張證明圖片。object key 全程只存在伺服器端（上傳成功當下就直接
+ * 綁定進 certificationEvidence，見 server/routers.ts 的 uploadBadgeEvidence
+ * ／server/db.ts 的 appendFactoryCertificationEvidenceImage），這裡只拿得到
+ * 安全的統計數字，絕不會拿到 key、imageKeys 或任何網址。
+ */
+type UploadFn = (file: File, badgeId: string) => Promise<{ imageCount: number; hasEvidence: boolean }>;
 const ACCEPTED_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 const MAX_FILE_SIZE = 5 * 1024 * 1024;
 
-function getEntry(evidence: CertificationEvidenceEntry[], badgeId: string): CertificationEvidenceEntry {
-  return evidence.find(e => e.badgeId === badgeId) ?? { badgeId, description: "", imageUrls: [] };
+function getEntry(evidence: CertificationEvidenceSummaryEntry[], badgeId: string): CertificationEvidenceSummaryEntry {
+  const found = evidence.find(e => e.badgeId === badgeId);
+  return found ?? { badgeId, description: "", hasEvidence: false, imageCount: 0 };
 }
 
-function withEntry(evidence: CertificationEvidenceEntry[], badgeId: string, patch: Partial<CertificationEvidenceEntry>): CertificationEvidenceEntry[] {
+function withEntry(evidence: CertificationEvidenceSummaryEntry[], badgeId: string, patch: Partial<CertificationEvidenceSummaryEntry>): CertificationEvidenceSummaryEntry[] {
   const current = getEntry(evidence, badgeId);
   const next = { ...current, ...patch };
   return [...evidence.filter(e => e.badgeId !== badgeId), next];
 }
 
 /**
- * 每個已選徽章的說明文字 + 多張證明圖片上傳／縮圖／移除。
- * 已選徽章清單（badgeIds）與 evidence 陣列由父層 FactoryDashboard 管理。
+ * 每個已選徽章的說明文字 + 多張證明圖片上傳。
+ * 已選徽章清單（badgeIds）與 evidence 摘要陣列由父層 FactoryDashboard 管理。
+ *
+ * 圖片上傳成功「當下」就直接在伺服器端綁定完成（見 uploadBadgeEvidence），
+ * 不是「先暫存、等按下儲存才送出」的流程——因此這裡完全不經手、也不持有
+ * 任何 object key，只顯示伺服器回傳的安全統計數字（是否已上傳／張數）。
+ * 送出後工廠端不得再看到圖片縮圖或原圖（只有管理員能透過獨立的
+ * getCertificationEvidenceViewUrls API 查看）。上傳前的縮圖預覽一律用瀏覽器
+ * 本機 blob URL（URL.createObjectURL，零伺服器成本、不外流），上傳成功
+ * 「當下」就立刻捨棄該預覽並 revoke，之後只顯示一個通用的「已上傳」勾選
+ * 圖示，不再顯示任何圖片內容。
+ *
+ * 因為 key 完全不經過工廠端，這裡不再提供「移除已上傳圖片」功能——上傳即
+ * 綁定完成，沒有「送出前可撤回」的中繼狀態。
  *
  * onEvidenceChange 採 React setState 的 functional-updater 慣例（直接傳入
- * useState 的 setter 即可）—— 多檔上傳、跨徽章同時操作都一律以「讀取當下
- * 最新 state 的 updater function」寫回，不依賴呼叫當下閉包裡的 evidence
- * prop，避免同批多張圖片互相覆蓋、只留下最後一張的競態問題。
+ * useState 的 setter 即可）。
  */
 export function BadgeEvidenceEditor({
   badgeIds,
@@ -36,13 +53,13 @@ export function BadgeEvidenceEditor({
   disabled,
 }: {
   badgeIds: string[];
-  evidence: CertificationEvidenceEntry[];
-  onEvidenceChange: Dispatch<SetStateAction<CertificationEvidenceEntry[]>>;
+  evidence: CertificationEvidenceSummaryEntry[];
+  onEvidenceChange: Dispatch<SetStateAction<CertificationEvidenceSummaryEntry[]>>;
   onUploadImage: UploadFn;
   disabled?: boolean;
 }) {
   const sortedIds = sortBadgeIds(badgeIds);
-  const totalImages = evidence.reduce((sum, e) => sum + e.imageUrls.length, 0);
+  const totalImages = evidence.reduce((sum, e) => sum + e.imageCount, 0);
 
   if (sortedIds.length === 0) {
     return <p className="text-sm text-muted-foreground py-2">尚未選擇任何徽章，請先從上方搜尋並勾選。</p>;
@@ -61,25 +78,14 @@ export function BadgeEvidenceEditor({
             name={def.name}
             entry={entry}
             disabled={disabled}
-            remainingForBadge={Math.max(0, MAX_EVIDENCE_IMAGES_PER_BADGE - entry.imageUrls.length)}
+            remainingForBadge={Math.max(0, MAX_EVIDENCE_IMAGES_PER_BADGE - entry.imageCount)}
             remainingTotal={Math.max(0, MAX_EVIDENCE_IMAGES_TOTAL - totalImages)}
             onDescriptionChange={(v) => onEvidenceChange(prev => withEntry(prev, badgeId, { description: v }))}
             onUploadImage={onUploadImage}
-            onFilesUploaded={(urls) => onEvidenceChange(prev => {
-              const current = getEntry(prev, badgeId);
-              const totalNow = prev.reduce((sum, e) => sum + e.imageUrls.length, 0);
-              // 寫回當下再次以「最新 state」為準裁切一次，是防止競態的最後一道防線
-              // （例如使用者幾乎同時對兩個不同徽章各自上傳，兩邊各自的 updater 都是
-              // 以套用當下那一刻的 prev 為準，不會互相覆蓋）。
-              const roomForBadge = Math.max(0, MAX_EVIDENCE_IMAGES_PER_BADGE - current.imageUrls.length);
-              const roomTotal = Math.max(0, MAX_EVIDENCE_IMAGES_TOTAL - totalNow);
-              const accepted = urls.slice(0, Math.min(roomForBadge, roomTotal));
-              return withEntry(prev, badgeId, { imageUrls: [...current.imageUrls, ...accepted] });
-            })}
-            onRemoveImage={(url) => onEvidenceChange(prev => {
-              const current = getEntry(prev, badgeId);
-              return withEntry(prev, badgeId, { imageUrls: current.imageUrls.filter(u => u !== url) });
-            })}
+            onUploaded={(result) => onEvidenceChange(prev => withEntry(prev, badgeId, {
+              hasEvidence: result.hasEvidence,
+              imageCount: result.imageCount,
+            }))}
           />
         );
       })}
@@ -87,22 +93,30 @@ export function BadgeEvidenceEditor({
   );
 }
 
+interface PendingPreview {
+  id: string;
+  objectUrl: string;
+  status: "uploading" | "error";
+}
+
 function BadgeEvidenceRow({
-  badgeId, name, entry, disabled, remainingForBadge, remainingTotal, onDescriptionChange, onUploadImage, onFilesUploaded, onRemoveImage,
+  badgeId, name, entry, disabled, remainingForBadge, remainingTotal, onDescriptionChange, onUploadImage, onUploaded,
 }: {
   badgeId: string;
   name: string;
-  entry: CertificationEvidenceEntry;
+  entry: CertificationEvidenceSummaryEntry;
   disabled?: boolean;
   remainingForBadge: number;
   remainingTotal: number;
   onDescriptionChange: (v: string) => void;
   onUploadImage: UploadFn;
-  onFilesUploaded: (urls: string[]) => void;
-  onRemoveImage: (url: string) => void;
+  onUploaded: (result: { imageCount: number; hasEvidence: boolean }) => void;
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
+  // 上傳中的本機預覽（blob URL）。上傳完成（無論成功或失敗）就立刻從這裡
+  // 移除並 revoke，絕不會跟「已上傳」狀態混在一起顯示。
+  const [pendingPreviews, setPendingPreviews] = useState<PendingPreview[]>([]);
   const canAddMore = remainingForBadge > 0 && remainingTotal > 0;
 
   const handleFiles = async (files: FileList | null) => {
@@ -137,20 +151,45 @@ function BadgeEvidenceRow({
       return;
     }
 
+    // 上傳前的本機預覽：純瀏覽器端 blob URL，讓使用者確認有沒有選對圖片，
+    // 不經過伺服器。一律在這批上傳結束（無論成功或失敗）後立刻 revoke 並清空，
+    // 不會殘留成可持續查看的縮圖。
+    const previews: PendingPreview[] = toUpload.map((file, i) => ({
+      id: `${Date.now()}-${i}`,
+      objectUrl: URL.createObjectURL(file),
+      status: "uploading",
+    }));
+    setPendingPreviews(previews);
+
     setUploading(true);
     try {
-      // 每張獨立 upload，Promise.allSettled 確保同批中即使有幾張失敗，
-      // 其餘已成功上傳的圖片仍會被保留（不會因為其中一張 reject 就整批捨棄）。
-      const results = await Promise.allSettled(toUpload.map(file => onUploadImage(file)));
-      const succeededUrls: string[] = [];
-      let failedCount = 0;
-      for (const r of results) {
-        if (r.status === "fulfilled") succeededUrls.push(r.value);
-        else failedCount++;
+      // 伺服器端每次上傳都用 row lock 依序附加（見 appendFactoryCertificationEvidenceImage），
+      // 但這裡仍依序（非並行）送出，避免同一批多檔在極短時間內互相搶著讀取
+      // 「目前已達上限」的狀態，導致部分張數被判定超過上限而中途失敗。
+      let lastResult: { imageCount: number; hasEvidence: boolean } | null = null;
+      let succeededCount = 0;
+      const failedReasons: string[] = [];
+      for (const file of toUpload) {
+        try {
+          lastResult = await onUploadImage(file, badgeId);
+          succeededCount++;
+        } catch (err) {
+          failedReasons.push(err instanceof Error ? err.message : "上傳失敗");
+        }
       }
-      if (failedCount > 0) toast.error(`${failedCount} 張圖片上傳失敗，請重試`);
-      if (succeededUrls.length > 0) onFilesUploaded(succeededUrls);
+      if (failedReasons.length > 0) {
+        // 顯示實際失敗原因（例如「請求過於頻繁，請稍後再試」）而非固定的通用文字，
+        // 讓使用者能分辨是暫時性限流／格式錯誤，還是真的需要重新上傳。
+        const uniqueReasons = Array.from(new Set(failedReasons));
+        const detail = uniqueReasons.length === 1 ? uniqueReasons[0] : `${uniqueReasons.length} 種錯誤`;
+        toast.error(`${failedReasons.length} 張圖片上傳失敗：${detail}`);
+      }
+      if (succeededCount > 0 && lastResult) onUploaded(lastResult);
     } finally {
+      // 無論成功或失敗，本機預覽一律捨棄——成功的圖片改用下方的「已上傳」
+      // 勾選圖示呈現，不再顯示圖片本身；失敗的也不該留下任何殘影。
+      previews.forEach(p => URL.revokeObjectURL(p.objectUrl));
+      setPendingPreviews([]);
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
@@ -171,21 +210,23 @@ function BadgeEvidenceRow({
         maxLength={MAX_EVIDENCE_DESCRIPTION_LENGTH}
       />
       <div className="flex flex-wrap gap-2">
-        {entry.imageUrls.map(url => (
-          <div key={url} className="relative w-16 h-16 rounded border overflow-hidden bg-muted group">
-            <img src={url} alt="證明圖片" className="w-full h-full object-cover" />
-            {!disabled && (
-              <button
-                type="button"
-                onClick={() => onRemoveImage(url)}
-                aria-label="移除這張證明圖片"
-                className="absolute top-0.5 right-0.5 bg-black/60 text-white rounded-full p-0.5 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
-              >
-                <X className="w-3 h-3" />
-              </button>
-            )}
+        {/* 上傳前／上傳中：瀏覽器本機預覽，只在這批上傳完成前短暫存在 */}
+        {pendingPreviews.map(p => (
+          <div key={p.id} className="relative w-16 h-16 rounded border overflow-hidden bg-muted">
+            <img src={p.objectUrl} alt="預覽中" className="w-full h-full object-cover opacity-70" />
+            <div className="absolute inset-0 flex items-center justify-center bg-black/30">
+              <span className="text-[10px] text-white">上傳中</span>
+            </div>
           </div>
         ))}
+        {/* 已送出成功：只顯示通用的「已上傳」勾選圖示與張數，不顯示圖片內容或
+            任何網址／key。送出後工廠端無法、也不應該再看到這些圖片本身。 */}
+        {entry.hasEvidence && (
+          <div className="relative w-16 h-16 rounded border bg-green-50 flex flex-col items-center justify-center gap-0.5">
+            <Check className="w-5 h-5 text-green-600" />
+            <span className="text-[9px] text-green-700">已上傳 {entry.imageCount}</span>
+          </div>
+        )}
         {!disabled && canAddMore && (
           <button
             type="button"

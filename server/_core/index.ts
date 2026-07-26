@@ -32,7 +32,7 @@ async function startServer() {
   // 圖片上傳及含 avatarUrl 的工廠建立/更新路由放寬到 15 MB，其他 API 限制 100 KB
   app.use((req, res, next) => {
     const path = req.path ?? "";
-    if (/uploadAvatar|uploadPhoto|uploadImage|uploadCoverImage|factory\.create|factory\.update/.test(path)) {
+    if (/uploadAvatar|uploadPhoto|uploadImage|uploadCoverImage|uploadBadgeEvidence|factory\.create|factory\.update/.test(path)) {
       return express.json({ limit: "15mb" })(req, res, next);
     }
     return express.json({ limit: "100kb" })(req, res, next);
@@ -47,6 +47,11 @@ async function startServer() {
   app.use("/api/trpc/admin.", adminLimiter);
   app.use((req, _res, next) => {
     const path = req.path;
+    // factory.uploadBadgeEvidence 刻意不在這裡比對——它的限流是依已驗證的
+    // ctx.user.id 計算（每人每小時 20 次），用 server/_core/trpc.ts 的
+    // badgeEvidenceUploadProcedure（tRPC middleware）實作，與這裡其餘三種
+    // 圖片上傳共用的 IP-based uploadLimiter（10 次/小時）完全獨立分離，
+    // 兩邊互不消耗彼此的配額。
     if (/factory\.uploadAvatar|factory\.uploadPhoto|product\.uploadImage/.test(path)) {
       return uploadLimiter(req, _res, next);
     }

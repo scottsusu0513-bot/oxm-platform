@@ -28,7 +28,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { COLLABORATION_ORDER_NEXT_STAGE, COLLABORATION_ORDER_STAGE_LABELS, COLLABORATION_ORDER_STAGE_TRANSITION_DATE_FIELD, type CollaborationOrderStage } from "@shared/collaborationOrderStage";
-import { sortBadgeIds, type CertificationEvidenceEntry } from "@shared/badges";
+import { sortBadgeIds, type CertificationEvidenceSummaryEntry } from "@shared/badges";
 import { BadgePicker } from "@/components/badges/BadgePicker";
 import { BadgeEvidenceEditor } from "@/components/badges/BadgeEvidenceEditor";
 import { FactoryPreviewModal } from "@/components/FactoryPreviewModal";
@@ -44,6 +44,23 @@ function formatNumber(val: string): string {
 
 function parseNumber(val: string): string {
   return val.replace(/,/g, "");
+}
+
+// factory.getMine／getById 回傳的 certificationEvidenceStatus 是伺服器端算好
+// 的消毒摘要（見 shared/badges.ts 的 summarizeCertificationEvidenceForOwner），
+// 只有 badgeId／說明文字／是否已上傳／張數，不含任何 object key。這裡只做
+// 型別防呆，避免欄位缺漏時畫面整個崩潰。
+function normalizeCertificationEvidenceStatus(raw: unknown): CertificationEvidenceSummaryEntry[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((e): e is Record<string, unknown> => !!e && typeof e === "object")
+    .map(e => ({
+      badgeId: String(e.badgeId ?? ""),
+      description: typeof e.description === "string" ? e.description : "",
+      hasEvidence: Boolean((e as any).hasEvidence),
+      imageCount: typeof (e as any).imageCount === "number" ? (e as any).imageCount : 0,
+    }))
+    .filter(e => e.badgeId.length > 0);
 }
 
 // 狀態 Badge 元件
@@ -494,7 +511,14 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
   const [weekendHours, setWeekendHours] = useState((factory as any).weekendHours ?? "");
   const [businessNote, setBusinessNote] = useState((factory as any).businessNote ?? "");
   const [certificationBadges, setCertificationBadges] = useState<string[]>(sortBadgeIds((factory as any).certificationBadges ?? []));
-  const [certificationEvidence, setCertificationEvidence] = useState<CertificationEvidenceEntry[]>((factory as any).certificationEvidence ?? []);
+  // factory.certificationEvidence 原始欄位（含 imageKeys）從伺服器端一律被
+  // 移除（見 stripCertificationEvidence 對工廠 owner／共管者也套用），這裡
+  // 讀的是消毒後的 certificationEvidenceStatus 摘要（badgeId／說明文字／
+  // 是否已上傳／張數），不含任何 key。圖片上傳成功「當下」就已經在伺服器端
+  // 綁定完成，不需要、也無法透過這個 state 送回任何圖片資訊。不可再向伺服器
+  // 請求任何檢視網址（不使用 useCertificationEvidenceViewUrls，那支 hook
+  // 現在僅限管理員審核頁面呼叫）。
+  const [certificationEvidence, setCertificationEvidence] = useState<CertificationEvidenceSummaryEntry[]>(normalizeCertificationEvidenceStatus((factory as any).certificationEvidenceStatus));
   const [previewOpen, setPreviewOpen] = useState(false);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(factory.avatarUrl ?? null);
   const [avatarUrl, setAvatarUrl] = useState<string | null>(factory.avatarUrl ?? null);
@@ -533,17 +557,20 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
     businessNote: ((factory as any).businessNote ?? "") as string,
     avatarUrl: (factory.avatarUrl ?? null) as string | null,
     certificationBadges: sortBadgeIds((factory as any).certificationBadges ?? []) as string[],
-    certificationEvidence: ((factory as any).certificationEvidence ?? []) as CertificationEvidenceEntry[],
+    certificationEvidence: normalizeCertificationEvidenceStatus((factory as any).certificationEvidenceStatus),
   });
 
   const arrEq = (a: string[], b: string[]) =>
     a.length === b.length && [...a].sort().join("\0") === [...b].sort().join("\0");
 
-  const evidenceSignature = (list: CertificationEvidenceEntry[]) =>
+  // 只比對說明文字：圖片上傳成功當下就已經在伺服器端綁定完成（不需要按
+  // 「儲存」才生效），imageCount／hasEvidence 的變化不該讓表單被判定為
+  // 「尚未儲存」。
+  const evidenceSignature = (list: CertificationEvidenceSummaryEntry[]) =>
     JSON.stringify(
       [...list]
         .sort((a, b) => a.badgeId.localeCompare(b.badgeId))
-        .map(e => [e.badgeId, e.description, [...e.imageUrls].sort()])
+        .map(e => [e.badgeId, e.description])
     );
 
   const isDirty =
@@ -581,10 +608,13 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
   const uploadAvatarMut = trpc.factory.uploadAvatar.useMutation();
   const uploadCoverImageMut = trpc.factory.uploadCoverImage.useMutation();
   const uploadBadgeEvidenceMut = trpc.factory.uploadBadgeEvidence.useMutation();
-  const handleUploadBadgeEvidenceImage = async (file: File): Promise<string> => {
+  // 圖片上傳成功「當下」就已經在伺服器端綁定完成（見 server/routers.ts 的
+  // uploadBadgeEvidence），這裡只拿得到安全的統計數字（是否已上傳／張數），
+  // 不會、也不需要拿到 object key——不儲存表單也不影響這次上傳的結果。
+  const handleUploadBadgeEvidenceImage = async (file: File, badgeId: string) => {
     const base64 = await compressImage(file);
-    const result = await uploadBadgeEvidenceMut.mutateAsync({ base64, mimeType: "image/jpeg", factoryId: factory.id });
-    return result.url;
+    const result = await uploadBadgeEvidenceMut.mutateAsync({ base64, mimeType: "image/jpeg", factoryId: factory.id, badgeId });
+    return { imageCount: result.imageCount, hasEvidence: result.hasEvidence };
   };
   const submitForReviewMut = trpc.factory.submitForReview.useMutation({
     onSuccess: () => { toast.success("已送出審核！請等待管理員審核"); utils.factory.getMine.invalidate(); },
@@ -707,7 +737,9 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
     businessNote: businessNote || null,
     avatarUrl: avatarUrl || factory.avatarUrl || null,
     certificationBadges,
-    certificationEvidence,
+    // 只送出說明文字：object key 全程只存在伺服器端，這裡的 state 完全不
+    // 持有任何 key，送出時也只挑 badgeId／description 兩個欄位。
+    certificationEvidence: certificationEvidence.map(e => ({ badgeId: e.badgeId, description: e.description })),
   });
 
   const handleSave = () => {
@@ -746,7 +778,9 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
       website: website || undefined, contactEmail: contactEmail || undefined,
       avatarUrl: avatarUrl || factory.avatarUrl || undefined,
       certificationBadges,
-      certificationEvidence,
+      // 只送出說明文字，不含 imageCount／hasEvidence 等統計欄位（key 全程
+      // 只存在伺服器端，這個 state 本來就沒有 key 可送）。
+      certificationEvidence: certificationEvidence.map(e => ({ badgeId: e.badgeId, description: e.description })),
     }, {
       onSuccess: () => {
         toast.success("資料已更新");
@@ -1251,8 +1285,9 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
           <div>
             <p className="text-sm font-semibold text-foreground">徽章系統</p>
             <p className="text-xs text-muted-foreground mt-0.5">
-              選擇工廠具備的認證／標章，並可為每個徽章補充說明與證明圖片（僅供審核使用，不會公開顯示）。
-              徽章與證明資料會隨基本資料一起送審／提交修改申請。
+              選擇工廠具備的認證／標章，並可為每個徽章補充說明與證明圖片（僅供管理員審核使用，不會公開顯示）。
+              徽章與證明資料會隨基本資料一起送審／提交修改申請。基於資安考量，證明圖片送出後即無法再於本頁面查看，
+              請於上傳前先確認縮圖是否為正確的檔案；如需補充或更換，請直接新增即可。
             </p>
           </div>
           <BadgePicker selected={certificationBadges} onChange={handleBadgesChange} disabled={isLocked} />
