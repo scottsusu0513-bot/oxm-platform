@@ -303,6 +303,6 @@ describe("AdminAnnouncements.tsx: 表單只有 news 顯示 actionUrl 欄位，�
   });
 
   it("DEFAULT_FORM 與 resetForm 語意上會清空 actionUrl（新增成功後重設表單）", () => {
-    expect(source).toMatch(/const DEFAULT_FORM: FormState = \{ title: "", content: "", type: "news", isPinned: false, actionUrl: "" \};/);
+    expect(source).toMatch(/const DEFAULT_FORM: FormState = \{ title: "", content: "", type: "news", isPinned: false, actionUrl: "", sendEmail: false \};/);
   });
 });

@@ -4180,10 +4180,16 @@ export const appRouter = router({
       // 這條規則的真正落地保證在 db.ts 的 normalizeAnnouncementActionUrl，
       // 這裡只是把值傳過去，不在 Router 層另外維護一份規則。
       actionUrl: z.string().max(500).nullable().optional(),
+      // 一次性的發布選項：是否同步寄送 Email。不是公告本身的資料，因此不會
+      // 進入 announcementData（見下方拆解），也不會寫入 announcements 資料表。
+      sendEmail: z.boolean().default(false),
     })).mutation(async ({ input }) => {
+      // sendEmail 只是這次發布動作的選項，明確與公告資料拆開，避免被當成
+      // 公告欄位誤傳進 db.createAnnouncement／寫入資料庫。
+      const { sendEmail, ...announcementData } = input;
       let announcementId: number;
       try {
-        announcementId = await db.createAnnouncement(input);
+        announcementId = await db.createAnnouncement(announcementData);
       } catch (err) {
         throw new TRPCError({ code: "BAD_REQUEST", message: err instanceof Error ? err.message : "建立公告失敗" });
       }
@@ -4240,7 +4246,13 @@ export const appRouter = router({
         }
       })();
 
-      // Email 廣播：fire-and-forget，不阻塞公告建立，獨立於站內通知/push
+      // Email 廣播：一次性選項，只有管理員這次勾選 sendEmail 才會啟動；
+      // 預設不勾選／舊版前端未傳此欄位時完全不會進到這個區塊，也就不會查詢
+      // 收件人或呼叫 sendPlatformAnnouncementEmail()。與上面的站內通知／APP
+      // 推播各自獨立的 fire-and-forget 區塊完全無關，不受這個條件影響。
+      if (!sendEmail) {
+        console.log(`[announcement] email skipped id=${announcementId}: not selected by admin`);
+      } else {
       (async () => {
         const INTER_EMAIL_DELAY_MS = 500;
         const RETRY_DELAYS_MS = [1500, 3000, 5000];
@@ -4306,6 +4318,7 @@ export const appRouter = router({
           console.error(`[announcement] broadcast failed id=${announcementId}:`, err);
         }
       })();
+      }
 
       return { success: true };
     }),
