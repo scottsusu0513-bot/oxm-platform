@@ -1,4 +1,5 @@
 import { eq, and, like, desc, asc, sql, inArray, or, isNull, gt, gte, isNotNull, lte, ne, getTableColumns } from "drizzle-orm";
+import { alias } from "drizzle-orm/mysql-core";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
 import { createHash, randomUUID } from "crypto";
@@ -8120,9 +8121,50 @@ export async function getConsultantsByUserId(userId: number): Promise<UpgradeCon
     .where(eq(upgradeConsultants.userId, userId));
 }
 
+/**
+ * 案件的實際存取權限判斷：以「案件所在地解析出的區域」比對「使用者目前擁有的
+ * 有效（isActive）顧問身分」，而不是只看 upgradeApplications.assignedConsultantId。
+ * 這樣即使案件尚未分派、或 assignedConsultantId 因故與案件實際地區不一致，
+ * 只要顧問的區域身分與案件地區相符，權限判斷依然正確；反過來說，即使
+ * assignedConsultantId 剛好等於某顧問的 id，只要地區對不上，也不會放行。
+ *
+ * location 無法解析出任何已知區域時，回傳 undefined——這類案件預設只有管理員
+ * 能查看，任何顧問身分都不放行，避免地址格式異常的案件意外外洩給顧問。
+ */
+export function findConsultantForApplicationRegion(
+  consultants: UpgradeConsultant[],
+  app: { location: string },
+): UpgradeConsultant | undefined {
+  const region = resolveRegionKey(app.location);
+  if (!region) return undefined;
+  return consultants.find(c => c.isActive && c.regionKey === region);
+}
+
+/**
+ * 綁定顧問帳號前的區域唯一性檢查：非管理員顧問只能有一個有效區域身分，
+ * 避免同一帳號同時綁定北中南多個地區（會讓「顧問只能看自己地區案件」這條
+ * 權限規則失去意義——若同一帳號同時是北部與南部顧問，等於變相取得跨區權限）。
+ * 只檢查「其他」顧問列（id 不同）是否已經綁定同一個 userId；解除綁定
+ * （userId=null）或綁定到自己原本那筆不受此限制。
+ */
+export async function assertConsultantUserNotBoundElsewhere(consultantId: number, userId: number): Promise<void> {
+  const db_ = await getDb();
+  if (!db_) return;
+  const existing = await db_.select({ id: upgradeConsultants.id, regionKey: upgradeConsultants.regionKey })
+    .from(upgradeConsultants)
+    .where(and(eq(upgradeConsultants.userId, userId), ne(upgradeConsultants.id, consultantId)));
+  if (existing.length > 0) {
+    const regionLabel: Record<string, string> = { north: "北部", central: "中部", south: "南部" };
+    throw new Error(`此使用者已是「${regionLabel[existing[0].regionKey] ?? existing[0].regionKey}」地區的顧問，一個帳號同時只能擔任一個地區的有效顧問`);
+  }
+}
+
 export async function bindConsultantUser(consultantId: number, userId: number | null): Promise<void> {
   const db_ = await getDb();
   if (!db_) return;
+  if (userId != null) {
+    await assertConsultantUserNotBoundElsewhere(consultantId, userId);
+  }
   await db_.update(upgradeConsultants)
     .set({ userId })
     .where(eq(upgradeConsultants.id, consultantId));
@@ -8175,49 +8217,88 @@ export async function backfillUnassignedCasesToConsultant(
   return { backfilledIds, backfilledApps };
 }
 
-export async function listApplicationsByConsultantIds(
-  consultantIds: number[],
-  opts?: { status?: UpgradeApplication["status"]; limit?: number; offset?: number },
-): Promise<(UpgradeApplication & { factoryName: string | null })[]> {
-  const db_ = await getDb();
-  if (!db_) return [];
-  if (consultantIds.length === 0) return [];
-  const conditions: ReturnType<typeof eq>[] = [
-    inArray(upgradeApplications.assignedConsultantId, consultantIds) as any,
-  ];
-  if (opts?.status) conditions.push(eq(upgradeApplications.status, opts.status) as any);
-  const rows = await db_.select({
-    ...getTableColumns(upgradeApplications),
-    factoryName: factories.name,
-  })
-    .from(upgradeApplications)
-    .leftJoin(factories, eq(upgradeApplications.factoryId, factories.id))
-    .where(and(...conditions))
-    .orderBy(desc(upgradeApplications.createdAt))
-    .limit(opts?.limit ?? 100)
-    .offset(opts?.offset ?? 0);
-  return rows as (UpgradeApplication & { factoryName: string | null })[];
+// 顧問查看自己案件的權限判斷一律以「案件地區」為準（見 findConsultantForApplicationRegion
+// 的說明），不只依 assignedConsultantId 過濾——否則同區尚未分派、或因資料不一致
+// 而 assignedConsultantId 對不上的案件會被漏掉。resolveRegionKey 是字串比對邏輯
+// （正規化＋關鍵字 includes），無法單純轉成一組 SQL WHERE 條件又不重複維護一份
+// 一樣的規則，因此這裡採用「SQL 先依狀態縮小範圍＋應用層用 resolveRegionKey 判斷
+// 地區」的做法，與 backfillUnassignedCasesToConsultant 既有的做法一致。
+function filterApplicationsByRegions<T extends { location: string }>(
+  rows: T[],
+  regionKeys: Array<"north" | "central" | "south">,
+): T[] {
+  return rows.filter(r => {
+    const region = resolveRegionKey(r.location);
+    return region != null && regionKeys.includes(region);
+  });
 }
 
-export async function countApplicationsByConsultantIds(
-  consultantIds: number[],
+// 承辦顧問顯示名稱：一路沿著真實關聯取得（assignedConsultantId → upgradeConsultants
+// → 綁定的 userId → users 顯示名稱），不是用案件地區字串（如「北部」）代替；
+// 這裡用 alias 對 users 表做第二次 join，一次查詢就帶回，不需要每張卡片再各自
+// 查一次顧問資料（避免 N+1）。未指派或該地區尚未綁定使用者時為 null，前端顯示
+// 「尚未指派」。
+const assignedConsultantUsers = alias(users, "assignedConsultantUsers");
+
+function selectUpgradeApplicationWithRelations() {
+  return {
+    ...getTableColumns(upgradeApplications),
+    factoryName: factories.name,
+    assignedConsultantUserName: sql<string | null>`COALESCE(${assignedConsultantUsers.name}, ${assignedConsultantUsers.primaryEmail}, ${assignedConsultantUsers.email})`,
+  };
+}
+
+export async function listUpgradeApplicationsByRegions(
+  regionKeys: Array<"north" | "central" | "south">,
+  opts?: { status?: UpgradeApplication["status"]; limit?: number; offset?: number },
+): Promise<(UpgradeApplication & { factoryName: string | null; assignedConsultantUserName: string | null })[]> {
+  const db_ = await getDb();
+  if (!db_) return [];
+  if (regionKeys.length === 0) return [];
+  const conditions = opts?.status ? [eq(upgradeApplications.status, opts.status)] : [];
+  const rows = await db_.select(selectUpgradeApplicationWithRelations())
+    .from(upgradeApplications)
+    .leftJoin(factories, eq(upgradeApplications.factoryId, factories.id))
+    .leftJoin(upgradeConsultants, eq(upgradeApplications.assignedConsultantId, upgradeConsultants.id))
+    .leftJoin(assignedConsultantUsers, eq(upgradeConsultants.userId, assignedConsultantUsers.id))
+    .where(conditions.length ? and(...conditions) : undefined)
+    .orderBy(desc(upgradeApplications.createdAt));
+  const filtered = filterApplicationsByRegions(rows, regionKeys) as (UpgradeApplication & { factoryName: string | null; assignedConsultantUserName: string | null })[];
+  const offset = opts?.offset ?? 0;
+  const limit = opts?.limit ?? 100;
+  return filtered.slice(offset, offset + limit);
+}
+
+export async function countUpgradeApplicationsByRegions(
+  regionKeys: Array<"north" | "central" | "south">,
   status?: UpgradeApplication["status"],
 ): Promise<number> {
   const db_ = await getDb();
   if (!db_) return 0;
-  if (consultantIds.length === 0) return 0;
-  const conditions: any[] = [inArray(upgradeApplications.assignedConsultantId, consultantIds)];
-  if (status) conditions.push(eq(upgradeApplications.status, status));
-  const [row] = await db_.select({ n: sql<number>`COUNT(*)` })
+  if (regionKeys.length === 0) return 0;
+  const conditions = status ? [eq(upgradeApplications.status, status)] : [];
+  const rows = await db_.select({ location: upgradeApplications.location })
     .from(upgradeApplications)
-    .where(and(...conditions));
-  return Number(row?.n ?? 0);
+    .where(conditions.length ? and(...conditions) : undefined);
+  return filterApplicationsByRegions(rows, regionKeys).length;
+}
+
+// 案件的「最後更新者」快照：userId 供之後查關聯用，name 是當下的顯示名稱快照，
+// 沿用 communityBidOffers.lastUpdatedByNameSnapshot 的慣例——即使使用者之後改名
+// 或帳號被刪除，歷史紀錄顯示的名稱仍維持當時的樣子，不需要額外 join 也不會消失。
+export type CaseUpdatedBy = { userId: number; name: string };
+
+/** 顯示名稱 fallback 順序：暱稱 → 已驗證信箱 → 帳號信箱 → 「使用者 #id」，
+ * 避免顧問／管理員帳號沒有填寫暱稱時，最後更新者快照顯示空白。 */
+export function resolveActorNameSnapshot(user: { id: number; name: string | null; primaryEmail: string | null; email: string | null }): string {
+  return user.name ?? user.primaryEmail ?? user.email ?? `使用者 #${user.id}`;
 }
 
 export async function acknowledgeUpgradeApplication(
   id: number,
   consultantId: number,
   userId: number,
+  updatedBy?: CaseUpdatedBy,
 ): Promise<{ ok: boolean }> {
   const db_ = await getDb();
   if (!db_) return { ok: false };
@@ -8241,6 +8322,7 @@ export async function acknowledgeUpgradeApplication(
       status: "evaluating",
       ...(firstView ? { viewedAt: now, viewedByUserId: userId } : {}),
       statusTimeline: newTl,
+      ...(updatedBy ? { lastUpdatedByUserId: updatedBy.userId, lastUpdatedByNameSnapshot: updatedBy.name } : {}),
     })
     .where(eq(upgradeApplications.id, id));
   return { ok: true };
@@ -8253,6 +8335,7 @@ export async function adminGetUpgradeStats(): Promise<{
     total: number;
     unviewed: number;
     inProgress: number;
+    deferred: number;
     submitted: number;
     completed: number;
     ineligible: number;
@@ -8260,9 +8343,10 @@ export async function adminGetUpgradeStats(): Promise<{
   unviewed: number;
   overdue48h: number;
   unassigned: number;
+  deferred: number;
 }> {
   const db_ = await getDb();
-  if (!db_) return { total: 0, byRegion: {}, unviewed: 0, overdue48h: 0, unassigned: 0 };
+  if (!db_) return { total: 0, byRegion: {}, unviewed: 0, overdue48h: 0, unassigned: 0, deferred: 0 };
 
   const cutoff48h = new Date(Date.now() - 48 * 60 * 60 * 1000);
 
@@ -8279,13 +8363,13 @@ export async function adminGetUpgradeStats(): Promise<{
 
   const byRegion: Record<string, {
     consultantName: string; total: number; unviewed: number;
-    inProgress: number; submitted: number; completed: number; ineligible: number;
+    inProgress: number; deferred: number; submitted: number; completed: number; ineligible: number;
   }> = {};
   for (const r of regionStatusRows) {
     if (!byRegion[r.regionKey]) {
       byRegion[r.regionKey] = {
         consultantName: r.consultantName,
-        total: 0, unviewed: 0, inProgress: 0, submitted: 0, completed: 0, ineligible: 0,
+        total: 0, unviewed: 0, inProgress: 0, deferred: 0, submitted: 0, completed: 0, ineligible: 0,
       };
     }
     const count = Number(r.n);
@@ -8294,6 +8378,8 @@ export async function adminGetUpgradeStats(): Promise<{
     // 評估中/已立案（含舊狀態 viewed/contacted/consulting）
     if (["evaluating", "viewed", "contacted", "accepted", "consulting"].includes(r.status))
       byRegion[r.regionKey].inProgress += count;
+    // 緩追區：暫緩處理，等待後續合適補助方案
+    if (r.status === "deferred") byRegion[r.regionKey].deferred += count;
     // 送件及政府審核流程中
     if (["submitted", "rejected", "approved", "transforming"].includes(r.status))
       byRegion[r.regionKey].submitted += count;
@@ -8316,12 +8402,16 @@ export async function adminGetUpgradeStats(): Promise<{
   const [{ unassigned }] = await db_.select({ unassigned: sql<number>`COUNT(*)` })
     .from(upgradeApplications).where(eq(upgradeApplications.status, "unassigned"));
 
+  const [{ deferred }] = await db_.select({ deferred: sql<number>`COUNT(*)` })
+    .from(upgradeApplications).where(eq(upgradeApplications.status, "deferred"));
+
   return {
     total: Number(total),
     byRegion,
     unviewed: Number(unviewed),
     overdue48h: Number(overdue48h),
     unassigned: Number(unassigned),
+    deferred: Number(deferred),
   };
 }
 
@@ -8356,21 +8446,20 @@ export async function listUpgradeApplications(opts?: {
   status?: UpgradeApplication["status"];
   limit?: number;
   offset?: number;
-}): Promise<(UpgradeApplication & { factoryName: string | null })[]> {
+}): Promise<(UpgradeApplication & { factoryName: string | null; assignedConsultantUserName: string | null })[]> {
   const db_ = await getDb();
   if (!db_) return [];
   const conditions = opts?.status ? [eq(upgradeApplications.status, opts.status)] : [];
-  const rows = await db_.select({
-    ...getTableColumns(upgradeApplications),
-    factoryName: factories.name,
-  })
+  const rows = await db_.select(selectUpgradeApplicationWithRelations())
     .from(upgradeApplications)
     .leftJoin(factories, eq(upgradeApplications.factoryId, factories.id))
+    .leftJoin(upgradeConsultants, eq(upgradeApplications.assignedConsultantId, upgradeConsultants.id))
+    .leftJoin(assignedConsultantUsers, eq(upgradeConsultants.userId, assignedConsultantUsers.id))
     .where(conditions.length ? and(...conditions) : undefined)
     .orderBy(desc(upgradeApplications.createdAt))
     .limit(opts?.limit ?? 100)
     .offset(opts?.offset ?? 0);
-  return rows as (UpgradeApplication & { factoryName: string | null })[];
+  return rows as (UpgradeApplication & { factoryName: string | null; assignedConsultantUserName: string | null })[];
 }
 
 export async function getUpgradeApplicationById(id: number): Promise<UpgradeApplication | undefined> {
@@ -8383,6 +8472,7 @@ export async function getUpgradeApplicationById(id: number): Promise<UpgradeAppl
 export async function updateUpgradeApplicationStatus(
   id: number,
   status: UpgradeApplication["status"],
+  updatedBy?: CaseUpdatedBy,
 ): Promise<void> {
   const db_ = await getDb();
   if (!db_) return;
@@ -8395,14 +8485,20 @@ export async function updateUpgradeApplicationStatus(
   // Only record first entry time — never overwrite once a status has been reached
   if (!newTl[status]) newTl[status] = new Date().toISOString();
   await db_.update(upgradeApplications)
-    .set({ status, statusTimeline: newTl })
+    .set({
+      status, statusTimeline: newTl,
+      ...(updatedBy ? { lastUpdatedByUserId: updatedBy.userId, lastUpdatedByNameSnapshot: updatedBy.name } : {}),
+    })
     .where(eq(upgradeApplications.id, id));
 }
 
-export async function updateUpgradeCaseNotes(id: number, notes: string | null): Promise<void> {
+export async function updateUpgradeCaseNotes(id: number, notes: string | null, updatedBy?: CaseUpdatedBy): Promise<void> {
   const db_ = await getDb();
   if (!db_) return;
-  await db_.update(upgradeApplications).set({ notes }).where(eq(upgradeApplications.id, id));
+  await db_.update(upgradeApplications).set({
+    notes,
+    ...(updatedBy ? { lastUpdatedByUserId: updatedBy.userId, lastUpdatedByNameSnapshot: updatedBy.name } : {}),
+  }).where(eq(upgradeApplications.id, id));
 }
 
 export async function updateCaseAmounts(
@@ -8418,6 +8514,7 @@ export async function updateCaseAmounts(
     submittedSubsidyProgram?: string | null;
     submittedSubsidyProgramOther?: string | null;
   },
+  updatedBy?: CaseUpdatedBy,
 ): Promise<void> {
   const db_ = await getDb();
   if (!db_) return;
@@ -8431,6 +8528,8 @@ export async function updateCaseAmounts(
     oxmCommissionAmount: number | null;
     submittedSubsidyProgram: string | null;
     submittedSubsidyProgramOther: string | null;
+    lastUpdatedByUserId: number;
+    lastUpdatedByNameSnapshot: string;
   }> = {};
   if ("plannedSubsidyAmount" in data)         update.plannedSubsidyAmount         = data.plannedSubsidyAmount;
   if ("approvedSubsidyAmount" in data)        update.approvedSubsidyAmount        = data.approvedSubsidyAmount;
@@ -8442,6 +8541,10 @@ export async function updateCaseAmounts(
   if ("submittedSubsidyProgram" in data)      update.submittedSubsidyProgram      = data.submittedSubsidyProgram;
   if ("submittedSubsidyProgramOther" in data) update.submittedSubsidyProgramOther = data.submittedSubsidyProgramOther;
   if (Object.keys(update).length === 0) return;
+  if (updatedBy) {
+    update.lastUpdatedByUserId = updatedBy.userId;
+    update.lastUpdatedByNameSnapshot = updatedBy.name;
+  }
   await db_.update(upgradeApplications).set(update).where(eq(upgradeApplications.id, id));
 }
 
@@ -8470,31 +8573,31 @@ export async function countUpgradeApplications(status?: UpgradeApplication["stat
   return Number(row?.n ?? 0);
 }
 
-// 過件率分母：顧問「已經手評估」的案件 —— 明確列舉真正代表已開始評估或更後續流程的狀態，
-// 不用「排除 new/unassigned」的寬鬆寫法，避免 archived 等例外狀態被誤算進去。
-//   evaluating/viewed/contacted：顧問評估中（viewed/contacted 為舊資料的同義字）
-//   ineligible：顧問評估後判定資格不符（已評估過，但不算立案）
-//   accepted/consulting：已立案處理（consulting 為舊資料的同義字）
-//   submitted：已送出政府審核
-//   rejected：政府駁回（已評估、已立案、已送審，但最終未過件）
-//   approved/transforming/completed：政府核准／企業轉型中／案件結案
-// 不列入：new（等待查收）、unassigned（等待分派）、archived（管理員可能在任何階段封存，
-// 無法確定是否已評估過，不可一律算入）。
-const UPGRADE_EVALUATED_STATUSES = [
-  "evaluating", "viewed", "contacted",
-  "ineligible",
+// 過件率分子：已通過 OXM 資格審核的案件 —— 只要案件曾經通過資格審核進入
+// accepted 或更後段流程（submitted/rejected/approved/transforming/completed，
+// 含 legacy consulting），一律算「通過」。rejected 也算通過：rejected 是「已
+// 通過 OXM 資格審核、送件後遭政府駁回」，駁回的是政府審核結果，不是 OXM 資格
+// 審核結果，因此仍計入分子，不可當成未通過。
+const UPGRADE_ACCEPTED_STATUSES = [
   "accepted", "consulting",
   "submitted",
   "rejected",
   "approved", "transforming", "completed",
 ] as const;
 
-// 過件率分子：已正式進入立案／服務流程的案件 —— 只計入真正的立案結果，
-// 不包含評估後的負向結果（ineligible 資格不符、rejected 政府駁回）與 archived（無法確認是否曾評估）。
-const UPGRADE_ACCEPTED_STATUSES = [
-  "accepted", "consulting",
-  "submitted",
-  "approved", "transforming", "completed",
+// 過件率分母：已完成「資格判定」的案件（通過 + 未通過）——
+//   ineligible：資格不符＝未通過
+//   UPGRADE_ACCEPTED_STATUSES 全部（accepted/consulting/submitted/rejected/
+//     approved/transforming/completed）：資格審核通過（見上方分子說明）
+// 明確排除，不列入分子也不列入分母：
+//   evaluating/viewed/contacted：仍在評估中，資格判定尚未定案
+//   new／unassigned：案件尚未查收／尚未分派，更談不上資格判定
+//   deferred（緩追區）：工廠體質符合但目前無適合方案而暫緩，刻意保留判定、
+//     等待後續合適補助出現，因此不算「已完成資格判定」
+//   archived：管理員可能在任何階段封存，無法確定是否已完成資格判定，不可一律算入
+const UPGRADE_ELIGIBILITY_DECIDED_STATUSES = [
+  "ineligible",
+  ...UPGRADE_ACCEPTED_STATUSES,
 ] as const;
 
 export async function getUpgradePublicStats() {
@@ -8507,15 +8610,20 @@ export async function getUpgradePublicStats() {
     .from(upgradeApplications)
     .where(isNotNull(upgradeApplications.factoryId));
 
-  // 顧問已經手評估案件數 —— 過件率分母
+  // 已完成資格判定的案件數（通過 + 未通過）—— 過件率分母。刻意不包含仍在
+  // evaluating／緩追區（deferred）等尚未定案的案件，避免短時間湧入的新案件、
+  // 或暫緩處理的案件拉低過件率（欄位名稱 evaluatedCases 為既有前端契約，
+  // 語意已更新為「已完成資格判定」，見 UPGRADE_ELIGIBILITY_DECIDED_STATUSES 說明）。
   const [eRow] = await db_
     .select({ n: sql<number>`COUNT(*)` })
     .from(upgradeApplications)
-    .where(inArray(upgradeApplications.status, UPGRADE_EVALUATED_STATUSES));
+    .where(inArray(upgradeApplications.status, UPGRADE_ELIGIBILITY_DECIDED_STATUSES));
 
-  // acceptedCases：已正式立案處理案件數（accepted/consulting/submitted/approved/transforming/completed）——
-  // 過件率分子。注意這裡代表「已正式進入立案／服務流程」，不是僅指「政府核准補助」的案件數，
-  // 因此命名為 acceptedCases 而非 approvedCases，避免與 approved 這個 status 名稱混淆。
+  // acceptedCases：已通過 OXM 資格審核的案件數（accepted/consulting/submitted/
+  // rejected/approved/transforming/completed）—— 過件率分子。注意這裡代表
+  // 「已通過 OXM 資格審核」，不是僅指「政府核准補助」的案件數（rejected 是政府
+  // 審核駁回，OXM 資格審核仍算通過，因此也計入），因此命名為 acceptedCases 而非
+  // approvedCases，避免與 approved 這個 status 名稱混淆。
   const [aRow] = await db_
     .select({ n: sql<number>`COUNT(*)` })
     .from(upgradeApplications)

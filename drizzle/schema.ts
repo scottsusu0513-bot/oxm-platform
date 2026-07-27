@@ -1179,11 +1179,15 @@ export const upgradeApplications = mysqlTable("upgradeApplications", {
   notes: text("notes"),
   factoryId: int("factoryId"), // nullable — OXM factory that submitted this application
   consentAgreed: boolean("consentAgreed").notNull().default(true),
-  // status flow: new → evaluating → accepted → submitted → rejected/approved → transforming → completed
-  // ineligible / unassigned / archived are exception states
+  // status flow: new → evaluating → ineligible/deferred/accepted → submitted → rejected/approved → transforming → completed
+  // ineligible / deferred / unassigned / archived are exception states
+  //   deferred（緩追區）：工廠體質符合但目前沒有適合的補助方案，暫緩追蹤；
+  //   可與 evaluating 互轉（移至緩追區 / 重新評估），也可直接轉 accepted 或 ineligible。
+  //   不算「已完成資格判定」，因此不列入過件率分子分母（見 server/db.ts
+  //   UPGRADE_ACCEPTED_STATUSES / UPGRADE_ELIGIBILITY_DECIDED_STATUSES 的說明）。
   // legacy: viewed/contacted/consulting kept for backward compat until data migration
   status: mysqlEnum("status", [
-    "new", "evaluating", "ineligible", "accepted", "submitted",
+    "new", "evaluating", "ineligible", "deferred", "accepted", "submitted",
     "rejected", "approved", "transforming", "completed",
     "unassigned", "archived",
     "viewed", "contacted", "consulting",
@@ -1203,12 +1207,19 @@ export const upgradeApplications = mysqlTable("upgradeApplications", {
   submittedSubsidyProgram: varchar("submittedSubsidyProgram", { length: 50 }), // SBIR / CITD / SIIR / 研發轉型補助 / 海外通路計畫 / 其他
   submittedSubsidyProgramOther: varchar("submittedSubsidyProgramOther", { length: 100 }), // 選「其他」時手寫
   statusTimeline: json("statusTimeline").$type<Record<string, string>>(),
+  // 最後一次修改案件的使用者（管理員或顧問）：FK 對應真實 userId（使用者被
+  // 刪除時 SET NULL，不影響歷史紀錄），name snapshot 另外保存當下顯示名稱，
+  // 沿用 communityBidOffers.lastUpdatedByUserId/lastUpdatedByNameSnapshot 的
+  // 慣例，避免使用者之後改名或被刪除時舊紀錄的顯示名稱跟著消失或需要額外 join。
+  lastUpdatedByUserId: int("lastUpdatedByUserId").references(() => users.id, { onDelete: "set null" }),
+  lastUpdatedByNameSnapshot: varchar("lastUpdatedByNameSnapshot", { length: 100 }).notNull().default(""),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 }, (t) => ({
   statusCreatedIdx: index("ua_status_created_idx").on(t.status, t.createdAt),
   consultantIdx: index("ua_consultant_idx").on(t.assignedConsultantId, t.status, t.createdAt),
   factoryIdx: index("ua_factory_idx").on(t.factoryId),
+  lastUpdaterIdx: index("ua_last_updater_idx").on(t.lastUpdatedByUserId),
 }));
 
 export type UpgradeApplication = typeof upgradeApplications.$inferSelect;

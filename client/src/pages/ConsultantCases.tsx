@@ -25,6 +25,7 @@ const STATUSES: Record<string, { label: string; color: string }> = {
   new:         { label: "新案件",     color: "bg-blue-100 text-blue-700" },
   evaluating:  { label: "評估中",     color: "bg-cyan-100 text-cyan-700" },
   ineligible:  { label: "資格不符",   color: "bg-red-100 text-red-700" },
+  deferred:    { label: "緩追區",     color: "bg-orange-100 text-orange-700" },
   accepted:    { label: "已立案處理", color: "bg-violet-100 text-violet-700" },
   submitted:   { label: "已送出審核", color: "bg-amber-100 text-amber-700" },
   rejected:    { label: "政府駁回",   color: "bg-rose-100 text-rose-700" },
@@ -56,6 +57,7 @@ const STATUS_GROUPS: Record<string, string[]> = {
   new:         ["new"],
   evaluating:  ["evaluating", "viewed", "contacted"],
   ineligible:  ["ineligible"],
+  deferred:    ["deferred"],
   accepted:    ["accepted", "consulting"],
   submitted:   ["submitted"],
   rejected:    ["rejected"],
@@ -64,10 +66,13 @@ const STATUS_GROUPS: Record<string, string[]> = {
   unassigned:  ["unassigned"],
 };
 
+// 頁面順序：資格不符 → 緩追區 → 已立案處理中（緩追區工廠體質符合但目前無適合
+// 補助方案，暫緩追蹤，等待後續合適補助出現，不算最終資格判定）。
 const TAB_ORDER = [
   { key: "new",          label: "新案件" },
   { key: "evaluating",   label: "評估中" },
   { key: "ineligible",   label: "資格不符" },
+  { key: "deferred",     label: "緩追區" },
   { key: "accepted",     label: "已立案處理" },
   { key: "submitted",    label: "已送出審核" },
   { key: "rejected",     label: "政府駁回" },
@@ -164,6 +169,14 @@ type Case = {
   viewedAt?: Date | string | null;
   createdAt: Date;
   updatedAt: Date;
+  // 承辦顧問（由 assignedConsultantId → 綁定的 userId 一路 join 取得的顯示名稱，
+  // 不是案件地區字串）；未指派或該地區尚未綁定使用者時為 null。
+  assignedConsultantUserName?: string | null;
+  // 最後更新者：userId 供關聯用，name snapshot 是當下顯示名稱快照。舊案件若
+  // 從未被這次新增的邏輯更新過，兩者皆為初始值（null / 空字串），視為「尚無
+  // 更新紀錄」，不可用其他欄位猜測。
+  lastUpdatedByUserId?: number | null;
+  lastUpdatedByNameSnapshot?: string;
 };
 
 // ── 金額格式化 ───────────────────────────────────────────────────────────────
@@ -180,6 +193,20 @@ function fmtDt(d: Date | string): string {
   const h = String(dt.getHours()).padStart(2, "0");
   const m = String(dt.getMinutes()).padStart(2, "0");
   return `${Y}/${M}/${D} ${h}:${m}`;
+}
+
+// 最後更新時間固定以台灣時間顯示（YYYY/MM/DD HH:mm，24 小時制），不依賴瀏覽器
+// 所在時區——與上面 fmtDt（案件流程時間軸，沿用既有瀏覽器本地時間慣例）刻意
+// 分開，因為「最後更新」欄位的需求明確要求固定台灣時間。
+function fmtTaipeiDateTime(d: Date | string): string {
+  const dt = new Date(d);
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Taipei",
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  }).formatToParts(dt);
+  const get = (t: string) => parts.find(p => p.type === t)?.value ?? "";
+  return `${get("year")}/${get("month")}/${get("day")} ${get("hour")}:${get("minute")}`;
 }
 
 // ── 案件流程時間軸 ──────────────────────────────────────────────────────────
@@ -266,6 +293,7 @@ const STAT_COLORS: Record<string, string> = {
   blue:    "bg-blue-50 border-blue-100 text-blue-700",
   cyan:    "bg-cyan-50 border-cyan-100 text-cyan-700",
   red:     "bg-red-50 border-red-100 text-red-700",
+  orange:  "bg-orange-50 border-orange-100 text-orange-700",
   violet:  "bg-violet-50 border-violet-100 text-violet-700",
   amber:   "bg-amber-50 border-amber-100 text-amber-700",
   rose:    "bg-rose-50 border-rose-100 text-rose-700",
@@ -533,6 +561,15 @@ function CaseCard({ item, defaultExpanded }: { item: Case; defaultExpanded?: boo
               <span className="flex items-center gap-1 min-w-0 truncate"><Phone className="w-3 h-3 shrink-0" />{item.phone}</span>
               <span className="flex items-center gap-1 min-w-0 truncate"><Mail className="w-3 h-3 shrink-0" />{item.email}</span>
             </div>
+            {/* 承辦顧問／最後更新者：由後端關聯／快照直接帶回，不是前端猜測顯示。 */}
+            <div className="flex items-center gap-3 text-xs text-muted-foreground mt-1 flex-wrap">
+              <span>承辦顧問：{item.assignedConsultantUserName ?? "尚未指派"}</span>
+              <span>
+                最後更新：{item.lastUpdatedByNameSnapshot
+                  ? `${item.lastUpdatedByNameSnapshot}｜${fmtTaipeiDateTime(item.updatedAt)}`
+                  : "尚無更新紀錄"}
+              </span>
+            </div>
           </div>
           <div className="text-right shrink-0 space-y-0.5 ml-2">
             <div className="text-xs text-muted-foreground whitespace-nowrap">{createdDate}</div>
@@ -601,6 +638,7 @@ function CaseCard({ item, defaultExpanded }: { item: Case; defaultExpanded?: boo
             顧問備註
             {eff === "evaluating" && <span className="text-red-500 ml-1">（立案前必填）</span>}
             {eff === "ineligible" && <span className="text-muted-foreground/70 ml-1">（仍可更新）</span>}
+            {eff === "deferred" && <span className="text-muted-foreground/70 ml-1">（仍可更新）</span>}
           </p>
           <Textarea
             value={localNotes}
@@ -862,9 +900,54 @@ function CaseCard({ item, defaultExpanded }: { item: Case; defaultExpanded?: boo
             </Button>
           )}
 
-          {/* 評估中：標記資格不符 + 立案處理 */}
+          {/* 評估中：標記資格不符 + 移至緩追區 + 立案處理 */}
           {eff === "evaluating" && (
             <>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 text-xs border-red-200 text-red-600 hover:bg-red-50"
+                disabled={busy}
+                onClick={handleMarkIneligible}
+              >
+                {statusMut.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <Ban className="w-3.5 h-3.5 mr-1" />}
+                標記資格不符
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 text-xs border-orange-200 text-orange-600 hover:bg-orange-50"
+                disabled={busy}
+                onClick={() => statusMut.mutate({ applicationId: item.id, nextStatus: "deferred" })}
+              >
+                {statusMut.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <Clock className="w-3.5 h-3.5 mr-1" />}
+                移至緩追區
+              </Button>
+              <Button
+                size="sm"
+                className="h-8 text-xs"
+                disabled={busy}
+                onClick={handleAccepted}
+              >
+                {statusMut.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <FileCheck className="w-3.5 h-3.5 mr-1" />}
+                立案處理
+              </Button>
+            </>
+          )}
+
+          {/* 緩追區：可重新評估，或直接轉為已立案／資格不符 */}
+          {eff === "deferred" && (
+            <>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 text-xs"
+                disabled={busy}
+                onClick={() => statusMut.mutate({ applicationId: item.id, nextStatus: "evaluating" })}
+              >
+                {statusMut.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <ArrowLeft className="w-3.5 h-3.5 mr-1" />}
+                重新評估
+              </Button>
               <Button
                 size="sm"
                 variant="outline"
@@ -1049,6 +1132,7 @@ export default function ConsultantCases() {
     new:         tabCount("new"),
     evaluating:  tabCount("evaluating"),
     ineligible:  tabCount("ineligible"),
+    deferred:    tabCount("deferred"),
     accepted:    tabCount("accepted"),
     submitted:   tabCount("submitted"),
     rejected:    tabCount("rejected"),
@@ -1078,6 +1162,7 @@ export default function ConsultantCases() {
             <StatCard label="新案件"     count={stats.new}          color="blue" />
             <StatCard label="評估中"     count={stats.evaluating}   color="cyan" />
             <StatCard label="資格不符"   count={stats.ineligible}   color="red" />
+            <StatCard label="緩追區"     count={stats.deferred}     color="orange" />
             <StatCard label="已立案處理" count={stats.accepted}     color="violet" />
             <StatCard label="已送出審核" count={stats.submitted}    color="amber" />
             <StatCard label="政府駁回"   count={stats.rejected}     color="rose" />

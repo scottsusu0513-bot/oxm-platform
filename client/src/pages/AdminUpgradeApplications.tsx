@@ -24,6 +24,7 @@ const STATUSES = [
   { value: "new",         label: "新案件",     color: "bg-blue-100 text-blue-700" },
   { value: "evaluating",  label: "評估中",     color: "bg-cyan-100 text-cyan-700" },
   { value: "ineligible",  label: "資格不符",   color: "bg-red-100 text-red-700" },
+  { value: "deferred",    label: "緩追區",     color: "bg-orange-100 text-orange-700" },
   { value: "accepted",    label: "已立案處理", color: "bg-violet-100 text-violet-700" },
   { value: "submitted",   label: "已送出審核", color: "bg-amber-100 text-amber-700" },
   { value: "rejected",    label: "政府駁回",   color: "bg-rose-100 text-rose-700" },
@@ -128,7 +129,27 @@ type Application = {
   statusTimeline?: Record<string, string> | null;
   viewedAt?: Date | string | null;
   createdAt: Date;
+  updatedAt: Date;
+  // 承辦顧問（由 assignedConsultantId → 綁定的 userId 一路 join 取得的顯示名稱，
+  // 不是案件地區字串）；未指派或該地區尚未綁定使用者時為 null。
+  assignedConsultantUserName?: string | null;
+  // 最後更新者：舊案件從未被更新過時兩者皆為初始值，視為「尚無更新紀錄」。
+  lastUpdatedByUserId?: number | null;
+  lastUpdatedByNameSnapshot?: string;
 };
+
+// 最後更新時間固定以台灣時間顯示（YYYY/MM/DD HH:mm，24 小時制），與
+// ConsultantCases.tsx 的 fmtTaipeiDateTime 邏輯一致。
+function fmtTaipeiDateTime(d: Date | string): string {
+  const dt = new Date(d);
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Taipei",
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  }).formatToParts(dt);
+  const get = (t: string) => parts.find(p => p.type === t)?.value ?? "";
+  return `${get("year")}/${get("month")}/${get("day")} ${get("hour")}:${get("minute")}`;
+}
 
 function ApplicationCard({
   item,
@@ -167,6 +188,15 @@ function ApplicationCard({
               <span className="flex items-center gap-1 shrink-0"><MapPin className="w-3 h-3" />{item.location}</span>
               <span className="flex items-center gap-1 min-w-0 truncate"><Phone className="w-3 h-3 shrink-0" />{item.phone}</span>
               <span className="flex items-center gap-1 min-w-0 truncate"><Mail className="w-3 h-3 shrink-0" />{item.email}</span>
+            </div>
+            {/* 承辦顧問／最後更新者：由後端關聯／快照直接帶回，不是前端猜測顯示。 */}
+            <div className="flex items-center gap-3 text-xs text-muted-foreground mt-1 flex-wrap">
+              <span>承辦顧問：{item.assignedConsultantUserName ?? "尚未指派"}</span>
+              <span>
+                最後更新：{item.lastUpdatedByNameSnapshot
+                  ? `${item.lastUpdatedByNameSnapshot}｜${fmtTaipeiDateTime(item.updatedAt)}`
+                  : "尚無更新紀錄"}
+              </span>
             </div>
           </div>
           <span className="text-xs text-muted-foreground whitespace-nowrap shrink-0 ml-2">
@@ -423,12 +453,12 @@ function StatsTab() {
   if (query.isLoading) return <AppLoading />;
   if (!query.data) return <p className="text-sm text-muted-foreground py-8 text-center">無資料</p>;
 
-  const { total, unassigned, unviewed, overdue48h, byRegion } = query.data;
+  const { total, unassigned, unviewed, overdue48h, deferred, byRegion } = query.data;
 
   return (
     <div className="space-y-6">
       {/* 全域總覽 */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
         <Card>
           <CardContent className="p-4 text-center">
             <p className="text-2xl font-bold">{total}</p>
@@ -445,6 +475,12 @@ function StatsTab() {
           <CardContent className="p-4 text-center">
             <p className="text-2xl font-bold text-blue-600">{unviewed}</p>
             <p className="text-xs text-muted-foreground mt-1">新案待查收</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4 text-center">
+            <p className="text-2xl font-bold text-orange-600">{deferred}</p>
+            <p className="text-xs text-muted-foreground mt-1">緩追區</p>
           </CardContent>
         </Card>
         <Card className={overdue48h > 0 ? "border-red-200" : ""}>
@@ -479,7 +515,7 @@ function StatsTab() {
                     </div>
                     <span className="ml-auto text-xs text-muted-foreground">共 <strong>{stat.total}</strong> 筆</span>
                   </div>
-                  <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 text-xs">
+                  <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 text-xs">
                     <div className="rounded-lg bg-blue-50 border border-blue-100 p-2 text-center">
                       <p className="text-lg font-bold text-blue-700 leading-none">{stat.unviewed}</p>
                       <p className="text-blue-600 mt-1 opacity-80">新案件</p>
@@ -487,6 +523,10 @@ function StatsTab() {
                     <div className="rounded-lg bg-violet-50 border border-violet-100 p-2 text-center">
                       <p className="text-lg font-bold text-violet-700 leading-none">{stat.inProgress}</p>
                       <p className="text-violet-600 mt-1 opacity-80">處理中</p>
+                    </div>
+                    <div className="rounded-lg bg-orange-50 border border-orange-100 p-2 text-center">
+                      <p className="text-lg font-bold text-orange-700 leading-none">{stat.deferred}</p>
+                      <p className="text-orange-600 mt-1 opacity-80">緩追區</p>
                     </div>
                     <div className="rounded-lg bg-green-50 border border-green-100 p-2 text-center">
                       <p className="text-lg font-bold text-green-700 leading-none">{stat.submitted}</p>
@@ -651,6 +691,7 @@ export default function AdminUpgradeApplications() {
             <TabsTrigger value="new"         className="text-xs whitespace-nowrap">新案件</TabsTrigger>
             <TabsTrigger value="evaluating"  className="text-xs whitespace-nowrap">評估中</TabsTrigger>
             <TabsTrigger value="ineligible"  className="text-xs whitespace-nowrap">資格不符</TabsTrigger>
+            <TabsTrigger value="deferred"    className="text-xs whitespace-nowrap">緩追區</TabsTrigger>
             <TabsTrigger value="accepted"    className="text-xs whitespace-nowrap">已立案</TabsTrigger>
             <TabsTrigger value="submitted"   className="text-xs whitespace-nowrap">已送出審核</TabsTrigger>
             <TabsTrigger value="rejected"    className="text-xs whitespace-nowrap">政府駁回</TabsTrigger>
@@ -666,7 +707,7 @@ export default function AdminUpgradeApplications() {
           <TabsContent value="all" className="mt-4">
             <ApplicationList />
           </TabsContent>
-          {(["new","evaluating","ineligible","accepted","submitted","rejected","transforming","completed","archived"] as const).map(s => (
+          {(["new","evaluating","ineligible","deferred","accepted","submitted","rejected","transforming","completed","archived"] as const).map(s => (
             <TabsContent key={s} value={s} className="mt-4">
               <ApplicationList status={s} />
             </TabsContent>

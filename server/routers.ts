@@ -6656,7 +6656,7 @@ export const appRouter = router({
     }),
 
     adminList: adminProcedure.input(z.object({
-      status: z.enum(["new","evaluating","ineligible","accepted","submitted","rejected","approved","transforming","completed","unassigned","archived","viewed","contacted","consulting"]).optional(),
+      status: z.enum(["new","evaluating","ineligible","deferred","accepted","submitted","rejected","approved","transforming","completed","unassigned","archived","viewed","contacted","consulting"]).optional(),
       limit: z.number().int().min(1).max(200).default(50),
       offset: z.number().int().min(0).default(0),
     })).query(async ({ input }) => {
@@ -6675,9 +6675,9 @@ export const appRouter = router({
 
     adminUpdateStatus: adminProcedure.input(z.object({
       id: z.number(),
-      status: z.enum(["new","evaluating","ineligible","accepted","submitted","rejected","approved","transforming","completed","unassigned","archived","viewed","contacted","consulting"]),
-    })).mutation(async ({ input }) => {
-      await db.updateUpgradeApplicationStatus(input.id, input.status);
+      status: z.enum(["new","evaluating","ineligible","deferred","accepted","submitted","rejected","approved","transforming","completed","unassigned","archived","viewed","contacted","consulting"]),
+    })).mutation(async ({ ctx, input }) => {
+      await db.updateUpgradeApplicationStatus(input.id, input.status, { userId: ctx.user!.id, name: db.resolveActorNameSnapshot(ctx.user!) });
       return { success: true };
     }),
 
@@ -6712,7 +6712,7 @@ export const appRouter = router({
 
     // 顧問查看自己地區的案件（admin 可看全部）
     myCases: protectedProcedure.input(z.object({
-      status: z.enum(["new","evaluating","ineligible","accepted","submitted","rejected","approved","transforming","completed","unassigned","archived","viewed","contacted","consulting"]).optional(),
+      status: z.enum(["new","evaluating","ineligible","deferred","accepted","submitted","rejected","approved","transforming","completed","unassigned","archived","viewed","contacted","consulting"]).optional(),
       limit: z.number().int().min(1).max(200).default(50),
       offset: z.number().int().min(0).default(0),
     })).query(async ({ ctx, input }) => {
@@ -6727,10 +6727,12 @@ export const appRouter = router({
       }
       const activeConsultants = consultants.filter(c => c.isActive);
       if (activeConsultants.length === 0) throw new TRPCError({ code: "FORBIDDEN", message: "您不是顧問" });
-      const ids = activeConsultants.map(c => c.id);
+      // 依「顧問帳號所屬區域」過濾，而非 assignedConsultantId：確保同區尚未
+      // 分派、或資料不一致的案件不會被漏掉（見 db.findConsultantForApplicationRegion）。
+      const regionKeys = activeConsultants.map(c => c.regionKey);
       const [items, total] = await Promise.all([
-        db.listApplicationsByConsultantIds(ids, { status: input.status, limit: input.limit, offset: input.offset }),
-        db.countApplicationsByConsultantIds(ids, input.status),
+        db.listUpgradeApplicationsByRegions(regionKeys, { status: input.status, limit: input.limit, offset: input.offset }),
+        db.countUpgradeApplicationsByRegions(regionKeys, input.status),
       ]);
       return { items, total, consultants };
     }),
@@ -6742,13 +6744,14 @@ export const appRouter = router({
       const app = await db.getUpgradeApplicationById(input.applicationId);
       if (!app) throw new TRPCError({ code: "NOT_FOUND", message: "找不到案件" });
       if (app.status !== "new") throw new TRPCError({ code: "BAD_REQUEST", message: "此案件已查收或狀態不符" });
+      const updatedBy = { userId: ctx.user.id, name: db.resolveActorNameSnapshot(ctx.user) };
 
       if (ctx.user.isAdmin) {
         // Admin 視同顧問：若案件已分派則用 assignedConsultantId，否則直接改狀態
         if (app.assignedConsultantId) {
-          await db.acknowledgeUpgradeApplication(app.id, app.assignedConsultantId, ctx.user.id);
+          await db.acknowledgeUpgradeApplication(app.id, app.assignedConsultantId, ctx.user.id, updatedBy);
         } else {
-          await db.updateUpgradeApplicationStatus(app.id, "evaluating");
+          await db.updateUpgradeApplicationStatus(app.id, "evaluating", updatedBy);
         }
         if (app.factoryId) {
           notifyFactoryMembers(app.factoryId, {
@@ -6765,9 +6768,10 @@ export const appRouter = router({
 
       const consultants = await db.getConsultantsByUserId(ctx.user.id);
       if (consultants.length === 0) throw new TRPCError({ code: "FORBIDDEN", message: "您不是顧問" });
-      const belongsToMe = consultants.some(c => c.id === app.assignedConsultantId);
-      if (!belongsToMe) throw new TRPCError({ code: "FORBIDDEN", message: "此案件不屬於您的地區" });
-      const result = await db.acknowledgeUpgradeApplication(app.id, app.assignedConsultantId!, ctx.user.id);
+      // 依「案件所屬區域」比對「顧問目前的有效區域身分」，不只看 assignedConsultantId。
+      const myConsultant = db.findConsultantForApplicationRegion(consultants.filter(c => c.isActive), app);
+      if (!myConsultant) throw new TRPCError({ code: "FORBIDDEN", message: "此案件不屬於您的地區" });
+      const result = await db.acknowledgeUpgradeApplication(app.id, myConsultant.id, ctx.user.id, updatedBy);
       if (!result.ok) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "查收失敗，請重試" });
       // 通知工廠：申請已進入評估中
       if (app.factoryId) {
@@ -6790,7 +6794,7 @@ export const appRouter = router({
     // 顧問推進案件狀態（嚴格 transition，不含 new→evaluating，由 acknowledge 處理）
     updateCaseStatus: protectedProcedure.input(z.object({
       applicationId: z.number().int().positive(),
-      nextStatus: z.enum(["ineligible", "accepted", "submitted", "rejected", "transforming", "completed"]),
+      nextStatus: z.enum(["evaluating", "ineligible", "deferred", "accepted", "submitted", "rejected", "transforming", "completed"]),
     })).mutation(async ({ ctx, input }) => {
       const app = await db.getUpgradeApplicationById(input.applicationId);
       if (!app) throw new TRPCError({ code: "NOT_FOUND", message: "找不到案件" });
@@ -6798,20 +6802,23 @@ export const appRouter = router({
         const consultants = await db.getConsultantsByUserId(ctx.user.id);
         const active = consultants.filter(c => c.isActive);
         if (active.length === 0) throw new TRPCError({ code: "FORBIDDEN", message: "您不是顧問" });
-        if (!active.some(c => c.id === app.assignedConsultantId))
+        // 依「案件所屬區域」比對「顧問目前的有效區域身分」，不只看 assignedConsultantId。
+        if (!db.findConsultantForApplicationRegion(active, app))
           throw new TRPCError({ code: "FORBIDDEN", message: "此案件不屬於您的地區" });
       }
       // 嚴格 transition 驗證（含舊狀態 backward compat）
       const ALLOWED: Record<string, string[]> = {
-        evaluating:  ["ineligible", "accepted"],
+        evaluating:  ["ineligible", "deferred", "accepted"],
+        // 緩追區：可重新評估（回到 evaluating），也可比照評估中直接轉為已立案／資格不符。
+        deferred:    ["evaluating", "accepted", "ineligible"],
         accepted:    ["submitted"],
         submitted:   ["rejected", "transforming"],  // 政府通過後直接進企業轉型中
         rejected:    ["submitted"],                  // 政府駁回後可補件重新送審
         approved:    ["transforming", "completed"],   // backward compat：舊 approved 資料可推進至轉型或直接結案
         transforming:["completed"],
         // Legacy backward compat
-        viewed:      ["ineligible", "accepted"],
-        contacted:   ["ineligible", "accepted"],
+        viewed:      ["ineligible", "deferred", "accepted"],
+        contacted:   ["ineligible", "deferred", "accepted"],
         consulting:  ["submitted", "ineligible", "accepted"],
       };
       if (!ALLOWED[app.status]?.includes(input.nextStatus)) {
@@ -6839,11 +6846,14 @@ export const appRouter = router({
       if (input.nextStatus === "rejected") {
         await db.clearApprovalAndFeeData(input.applicationId);
       }
-      await db.updateUpgradeApplicationStatus(input.applicationId, input.nextStatus);
+      const updatedBy = { userId: ctx.user.id, name: db.resolveActorNameSnapshot(ctx.user) };
+      await db.updateUpgradeApplicationStatus(input.applicationId, input.nextStatus, updatedBy);
       // 通知工廠：案件狀態更新
       if (app.factoryId) {
         const upgradeStatusLabels: Record<string, string> = {
+          evaluating: "重新進入評估",
           ineligible: "不符申請資格",
+          deferred: "暫時移至緩追區，等待合適補助方案",
           accepted: "通過評估，準備送件",
           submitted: "已送件政府審核",
           rejected: "政府審核未通過",
@@ -6878,10 +6888,10 @@ export const appRouter = router({
         const consultants = await db.getConsultantsByUserId(ctx.user.id);
         const active = consultants.filter(c => c.isActive);
         if (active.length === 0) throw new TRPCError({ code: "FORBIDDEN", message: "您不是顧問" });
-        if (!active.some(c => c.id === app.assignedConsultantId))
+        if (!db.findConsultantForApplicationRegion(active, app))
           throw new TRPCError({ code: "FORBIDDEN", message: "此案件不屬於您的地區" });
       }
-      await db.updateUpgradeCaseNotes(input.applicationId, input.notes || null);
+      await db.updateUpgradeCaseNotes(input.applicationId, input.notes || null, { userId: ctx.user.id, name: db.resolveActorNameSnapshot(ctx.user) });
       return { success: true };
     }),
 
@@ -6904,7 +6914,7 @@ export const appRouter = router({
         const consultants = await db.getConsultantsByUserId(ctx.user.id);
         const active = consultants.filter(c => c.isActive);
         if (active.length === 0) throw new TRPCError({ code: "FORBIDDEN", message: "您不是顧問" });
-        if (!active.some(c => c.id === app.assignedConsultantId))
+        if (!db.findConsultantForApplicationRegion(active, app))
           throw new TRPCError({ code: "FORBIDDEN", message: "此案件不屬於您的地區" });
       }
 
@@ -6961,7 +6971,7 @@ export const appRouter = router({
         ...(derivedOxmAmount !== undefined ? { oxmCommissionRate: String(OXM_RATE), oxmCommissionAmount: derivedOxmAmount } : {}),
         ...(input.submittedSubsidyProgram !== undefined ? { submittedSubsidyProgram: input.submittedSubsidyProgram } : {}),
         ...(programOtherValue !== undefined             ? { submittedSubsidyProgramOther: programOtherValue }           : {}),
-      });
+      }, { userId: ctx.user.id, name: db.resolveActorNameSnapshot(ctx.user) });
       return { success: true };
     }),
 
@@ -6975,7 +6985,11 @@ export const appRouter = router({
       consultantId: z.number(),
       userId: z.number().nullable(),
     })).mutation(async ({ input }) => {
-      await db.bindConsultantUser(input.consultantId, input.userId);
+      try {
+        await db.bindConsultantUser(input.consultantId, input.userId);
+      } catch (err) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: err instanceof Error ? err.message : "綁定失敗" });
+      }
 
       // 解除綁定：不補派
       if (input.userId == null) {
