@@ -54,8 +54,14 @@ export const factories = mysqlTable("factories", {
   operationStatus: mysqlEnum("operationStatus", ["normal", "busy", "full"]).default("normal").notNull(),
   certified: boolean("certified").default(false).notNull(),
   subIndustry: json("subIndustry").$type<string[]>().default([]),
-  // 徽章系統：公開 badge id 清單（BNI 永遠第一，其餘依 shared/badges.ts 排序）
+  // 徽章系統：「已獲得」的徽章 id 清單（BNI 永遠第一，其餘依 shared/badges.ts 排序）。
+  // 只能透過 approveFactory／approveRevisionAtomic 新增，一般 update／修改申請審核
+  // 不得移除既有項目（見 server/routers.ts）——這是「擁有權」，不是「是否公開顯示」。
   certificationBadges: json("certificationBadges").$type<string[]>().default([]),
+  // 徽章系統：certificationBadges 的子集合，工廠自行決定要不要顯示於公開頁面／
+  // 搜尋卡片，不需任何審核即可切換（見 server/routers.ts 的 updateVisibleBadges）。
+  // 伺服器端寫入時一律驗證為 certificationBadges 的子集合，見 migration 0066。
+  certificationBadgesVisible: json("certificationBadgesVisible").$type<string[]>().default([]),
   // 徽章系統：私密證明資料（工廠說明文字＋私有 object key，見 server/privateStorage.ts），
   // 只供 owner／共管者／admin 透過短效 presigned URL 審核使用，
   // 公開頁面與搜尋結果絕不可回傳此欄位，資料庫內也絕不儲存永久網址或 presigned URL

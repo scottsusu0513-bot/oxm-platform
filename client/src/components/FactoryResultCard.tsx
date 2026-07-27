@@ -8,7 +8,7 @@ import { Star, MapPin, Factory, Heart, Wrench, Plus, Minus } from "lucide-react"
 import { isNativeApp } from "@/lib/platform";
 import { performLogin } from "@/const";
 import { toast } from "sonner";
-import { BadgeRow } from "@/components/badges/BadgeRow";
+import { BadgeRibbon } from "@/components/badges/BadgeRibbon";
 
 // 這個元件是搜尋結果工廠卡片的共用實作，供 Search.tsx／我的收藏／近期瀏覽等頁面使用。
 // （工廠管理後台的「預覽工廠頁面」改為使用 FactoryDetailView 呈現完整公開頁，不再用這個卡片元件。）
@@ -112,11 +112,17 @@ export function FactoryCard({ factory, getFavState, handleFavToggle, cartHas, ca
     </div>
   );
 
+  // 已獲得且選擇公開顯示的徽章（見 shared/badges.ts 的 stripHiddenBadgesForPublic，
+  // 公開搜尋 API 只會回傳這個欄位，不含擁有但隱藏／待審的徽章或任何證明資料）。
+  const visibleBadgeIds: string[] = Array.isArray(factory.certificationBadgesVisible) ? factory.certificationBadgesVisible : [];
+
+  // 卡片本身不能再用 overflow-hidden（會把跨越上邊界的緞帶勳章切掉），改成
+  // 圖片各自的容器自己 overflow-hidden + 對應圓角，視覺上仍是方正的圖片角。
   const cardBody = (
-    <Card className={`hover:shadow-md transition-shadow h-full overflow-hidden flex flex-col ${previewMode ? "" : "cursor-pointer"}`}>
+    <Card className={`hover:shadow-md transition-shadow h-full flex flex-col overflow-visible ${previewMode ? "" : "cursor-pointer"}`}>
       {isWide ? (
         <>
-          <div className="relative h-28 shrink-0 bg-orange-50/40 flex items-center justify-center p-3 overflow-hidden">
+          <div className="relative h-28 shrink-0 bg-orange-50/40 flex items-center justify-center p-3 overflow-hidden rounded-t-xl">
             <img src={avatarUrl!} alt={factory.name} className="w-full h-full object-contain" loading="lazy" />
             <div className="absolute top-2 right-2" onClick={(e) => e.preventDefault()}>
               <FavButton factoryId={factory.id} initialIsFav={getFavState(factory.id)} onToggle={handleFavToggle} previewMode={previewMode} />
@@ -129,7 +135,7 @@ export function FactoryCard({ factory, getFavState, handleFavToggle, cartHas, ca
         </>
       ) : (
         <>
-          <div className="flex flex-1 min-h-0 flex-col md:flex-row">
+          <div className="flex flex-1 min-h-0 flex-col md:flex-row overflow-hidden rounded-xl">
             <div className="relative h-32 md:h-auto md:w-[145px] shrink-0 bg-orange-50/40 flex items-center justify-center p-3">
               {avatarUrl ? (
                 <img src={avatarUrl} alt={factory.name} className="max-h-full max-w-full object-contain" loading="lazy" />
@@ -154,16 +160,28 @@ export function FactoryCard({ factory, getFavState, handleFavToggle, cartHas, ca
     </Card>
   );
 
+  // 外層包一層 relative + 預留上方空間（mt-5／mt-6），緞帶勳章用 absolute
+  // 定位在這段預留空間裡並往下壓進卡片一部分，達到「跨越卡片上邊界」的
+  // 效果，且不論外部呼叫端的 grid gap 多寬，都不會壓到上一排卡片。
+  const wrapped = (
+    <div className="relative h-full mt-5 sm:mt-6">
+      {visibleBadgeIds.length > 0 && (
+        <div className="absolute -top-5 sm:-top-6 left-3 z-20 pointer-events-auto" onClick={(e) => e.preventDefault()}>
+          <BadgeRibbon badgeIds={visibleBadgeIds} size={isMobile ? 32 : 40} maxVisible={isMobile ? 3 : 4} />
+        </div>
+      )}
+      {cardBody}
+    </div>
+  );
+
   if (previewMode) {
-    return <div className="h-full">{cardBody}</div>;
+    return wrapped;
   }
 
   return (
-    <div className="h-full">
-      <Link href={`/factory/${factory.id}`} className="block h-full">
-        {cardBody}
-      </Link>
-    </div>
+    <Link href={`/factory/${factory.id}`} className="block h-full">
+      {wrapped}
+    </Link>
   );
 }
 
@@ -182,16 +200,10 @@ function FactoryCardContent({ factory, isMobile }: { factory: any; isMobile: boo
           factory.weekendHours ? `假日 ${factory.weekendHours}` : null,
         ].filter(Boolean).join("／")
       : "無";
-  const certificationBadges: string[] = Array.isArray(factory.certificationBadges) ? factory.certificationBadges : [];
-
   return (
     <>
-      {/* 徽章列 — 獨立窄列在最上方，向右排列，不與名稱／評分共用同一行避免擠壓 */}
-      {certificationBadges.length > 0 && (
-        <div className="shrink-0 mb-1.5">
-          <BadgeRow badgeIds={certificationBadges} maxVisible={isMobile ? 3 : 5} size={20} />
-        </div>
-      )}
+      {/* 徽章改成別在卡片左上角的緞帶勳章（見外層 wrapped 的 BadgeRibbon），
+          這裡不再需要卡片內容區塊自己的徽章列。 */}
 
       {/* 標題區 */}
       <div className="flex items-start justify-between shrink-0">

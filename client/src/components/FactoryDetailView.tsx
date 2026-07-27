@@ -114,7 +114,10 @@ export interface FactoryDetailViewFactory {
   avgRating?: string | number | null;
   reviewCount?: number | null;
   avgResponseHours?: string | number | null;
-  certificationBadges?: string[] | null;
+  /** 已獲得且選擇公開顯示的徽章（見 shared/badges.ts 的 stripHiddenBadgesForPublic／
+   *  summarizeCertificationEvidenceForOwner）——公開頁與預覽一律讀這個欄位，
+   *  不會、也不該讀到擁有但隱藏、或待審中的徽章。 */
+  certificationBadgesVisible?: string[] | null;
   products: any[];
 }
 
@@ -130,8 +133,12 @@ interface FactoryDetailViewProps {
   favPending?: boolean;
   reviewSubmitPending?: boolean;
   reportPending?: boolean;
-  /** 預覽模式：畫面與正式頁一致，但所有互動按鈕皆停用，不觸發任何資料寫入 */
-  previewMode?: boolean;
+  /**
+   * "public"（預設）＝正式 /factory/:id 頁；"preview"＝工廠管理後台的預覽彈窗。
+   * 兩種模式渲染完全相同的區塊與內容，唯一差異是 preview 停用所有會送出資料、
+   * 觸發導頁或開啟圖片操作 UI 的互動——只保留捲動與（由外層彈窗負責的）關閉。
+   */
+  mode?: "public" | "preview";
   onChat?: (productId?: number, productName?: string) => void;
   onToggleFav?: () => void;
   onShare?: () => void;
@@ -158,7 +165,7 @@ export function FactoryDetailView({
   favPending = false,
   reviewSubmitPending = false,
   reportPending = false,
-  previewMode = false,
+  mode = "public",
   onChat,
   onToggleFav,
   onShare,
@@ -167,6 +174,7 @@ export function FactoryDetailView({
   onSubmitReport,
   onOverlayOpenChange,
 }: FactoryDetailViewProps) {
+  const isPreview = mode === "preview";
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [previewImages, setPreviewImages] = useState<string[]>([]);
   const [previewIndex, setPreviewIndex] = useState(0);
@@ -217,38 +225,38 @@ export function FactoryDetailView({
 
   const handleChatClick = (productId?: number, productName?: string) => {
     if (!isAuthenticated) { setLoginDialogOpen(true); return; }
-    if (previewMode) return;
+    if (isPreview) return;
     onChat?.(productId, productName);
   };
 
   const handleToggleFavClick = () => {
     if (!isAuthenticated) { performLogin(); return; }
-    if (previewMode) return;
+    if (isPreview) return;
     onToggleFav?.();
   };
 
   const handleShareClick = () => {
-    if (previewMode) return;
+    if (isPreview) return;
     onShare?.();
   };
 
   const handleSubmitReviewClick = () => {
     if (rating === 0) return;
     if (myReview) { setShowUpdateConfirm(true); return; }
-    if (previewMode) return;
+    if (isPreview) return;
     onSubmitCreateReview?.(rating, comment);
   };
 
   const handleConfirmUpdateClick = () => {
     if (!myReview) return;
     setShowUpdateConfirm(false);
-    if (previewMode) return;
+    if (isPreview) return;
     onSubmitUpdateReview?.(rating, comment);
   };
 
   const handleSubmitReportClick = async () => {
     if (!reportReason.trim()) return;
-    if (previewMode) { setShowReportDialog(false); setReportReason(""); return; }
+    if (isPreview) { setShowReportDialog(false); setReportReason(""); return; }
     try {
       await onSubmitReport?.(reportReason);
       // 與原本 mutation onSuccess 行為一致：只有送出成功才關閉對話框並清空原因，
@@ -260,6 +268,18 @@ export function FactoryDetailView({
     }
   };
 
+  // 預覽模式下，電話／網站／信箱一律只顯示文字，不渲染成可點擊連結——避免
+  // 觸控／點擊時被瀏覽器直接導去 tel:／mailto:／外部網站，離開預覽畫面。
+  const renderTel = (phone: string, className: string) =>
+    isPreview ? <span className={className}>{phone}</span>
+      : <a href={`tel:${phone.replace(/[\s\-\(\)]/g, "")}`} className={className}>{phone}</a>;
+  const renderWebsite = (site: string, className: string) =>
+    isPreview ? <span className={className}>{site}</span>
+      : <a href={site.startsWith("http") ? site : `https://${site}`} target="_blank" rel="noopener noreferrer" className={className}>{site}</a>;
+  const renderMailto = (email: string, className: string) =>
+    isPreview ? <span className={className}>{email}</span>
+      : <a href={`mailto:${email}`} className={className}>{email}</a>;
+
   const factoryIndustryArr: string[] = (() => {
     const raw = factory.industry;
     if (Array.isArray(raw)) return raw;
@@ -270,7 +290,7 @@ export function FactoryDetailView({
   const factorySubIndustryArr: string[] = Array.isArray(factory.subIndustry) ? factory.subIndustry : [];
   const factoryMfgModes: string[] = Array.isArray(factory.mfgModes) ? factory.mfgModes : [];
 
-  const factoryBadgeIds = sortBadgeIds((factory.certificationBadges ?? []) as string[]);
+  const factoryBadgeIds = sortBadgeIds((factory.certificationBadgesVisible ?? []) as string[]);
 
   const tocItems = [
     { id: "section-basic", label: "基本資料" },
@@ -309,8 +329,8 @@ export function FactoryDetailView({
         <div className="relative z-10 flex flex-col sm:flex-row sm:items-start gap-3 mb-4">
           {/* Left: Logo — overlaps cover */}
           <div
-            className={`w-20 h-20 md:w-24 md:h-24 rounded-2xl border-4 border-white shadow-lg bg-white overflow-hidden shrink-0 -mt-10 md:-mt-12 ${factory.avatarUrl ? "cursor-pointer hover:opacity-90 transition-opacity" : ""}`}
-            onClick={() => { if (factory.avatarUrl) { setPreviewImages([factory.avatarUrl]); setPreviewIndex(0); } }}
+            className={`w-20 h-20 md:w-24 md:h-24 rounded-2xl border-4 border-white shadow-lg bg-white overflow-hidden shrink-0 -mt-10 md:-mt-12 ${factory.avatarUrl && !isPreview ? "cursor-pointer hover:opacity-90 transition-opacity" : ""}`}
+            onClick={() => { if (factory.avatarUrl && !isPreview) { setPreviewImages([factory.avatarUrl]); setPreviewIndex(0); } }}
           >
             {factory.avatarUrl ? (
               <img src={factory.avatarUrl} alt={factory.name} className="w-full h-full object-contain" loading="eager" />
@@ -337,18 +357,18 @@ export function FactoryDetailView({
 
           {/* Right: action buttons */}
           <div className="flex gap-2 shrink-0 flex-wrap">
-            <Button onClick={() => handleChatClick()} disabled={previewMode}>
+            <Button onClick={() => handleChatClick()} disabled={isPreview}>
               <MessageCircle className="w-4 h-4 mr-1.5" />聯繫工廠
             </Button>
-            <Button variant={isFav ? "default" : "outline"} onClick={handleToggleFavClick} disabled={previewMode || favPending}>
+            <Button variant={isFav ? "default" : "outline"} onClick={handleToggleFavClick} disabled={isPreview || favPending}>
               <Heart className={`w-4 h-4 mr-1.5 ${isFav ? "fill-current" : ""}`} />
               {isFav ? "已收藏" : "收藏"}
             </Button>
-            <Button variant="outline" onClick={handleShareClick} disabled={previewMode}>
+            <Button variant="outline" onClick={handleShareClick} disabled={isPreview}>
               <Share2 className="w-4 h-4 mr-1.5" />分享
             </Button>
             {isAuthenticated && (
-              <Button size="sm" variant="ghost" className="text-muted-foreground hover:text-destructive" onClick={() => setShowReportDialog(true)} disabled={previewMode}>
+              <Button size="sm" variant="ghost" className="text-muted-foreground hover:text-destructive" onClick={() => setShowReportDialog(true)} disabled={isPreview}>
                 <Flag className="w-4 h-4 mr-1" />檢舉
               </Button>
             )}
@@ -429,7 +449,7 @@ export function FactoryDetailView({
                   <InfoRow
                     label1="聯絡電話"
                     val1={factory.phone
-                      ? <a href={`tel:${factory.phone.replace(/[\s\-\(\)]/g, "")}`} className="hover:underline underline-offset-2">{factory.phone}</a>
+                      ? renderTel(factory.phone, "hover:underline underline-offset-2")
                       : undefined}
                     label2="是否接小量"
                     val2={undefined}
@@ -480,7 +500,7 @@ export function FactoryDetailView({
                     label1="官方網站"
                     val1={factory.website
                       ? (isValidUrl(factory.website)
-                          ? <a href={factory.website.startsWith("http") ? factory.website : `https://${factory.website}`} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline break-all">{factory.website}</a>
+                          ? renderWebsite(factory.website, "text-primary hover:underline break-all")
                           : factory.website)
                       : undefined}
                     label2="社群 / 外部連結"
@@ -537,9 +557,7 @@ export function FactoryDetailView({
                       <Phone className="w-4 h-4 text-muted-foreground mt-0.5 shrink-0" />
                       <div>
                         <p className="text-xs text-muted-foreground">聯絡電話</p>
-                        <a href={`tel:${factory.phone.replace(/[\s\-\(\)]/g, "")}`} className="text-sm hover:underline">
-                          {factory.phone}
-                        </a>
+                        {renderTel(factory.phone, "text-sm hover:underline")}
                       </div>
                     </div>
                   )}
@@ -558,11 +576,7 @@ export function FactoryDetailView({
                       <div>
                         <p className="text-xs text-muted-foreground">官方網站</p>
                         {isValidUrl(factory.website) ? (
-                          <a href={factory.website.startsWith("http") ? factory.website : `https://${factory.website}`}
-                             target="_blank" rel="noopener noreferrer"
-                             className="text-sm text-primary hover:underline break-all">
-                            {factory.website}
-                          </a>
+                          renderWebsite(factory.website, "text-sm text-primary hover:underline break-all")
                         ) : (
                           <p className="text-sm">{factory.website}</p>
                         )}
@@ -574,9 +588,7 @@ export function FactoryDetailView({
                       <Send className="w-4 h-4 text-muted-foreground mt-0.5 shrink-0" />
                       <div>
                         <p className="text-xs text-muted-foreground">聯絡信箱</p>
-                        <a href={`mailto:${factory.contactEmail}`} className="text-sm hover:underline break-all">
-                          {factory.contactEmail}
-                        </a>
+                        {renderMailto(factory.contactEmail, "text-sm hover:underline break-all")}
                       </div>
                     </div>
                   )}
@@ -601,8 +613,8 @@ export function FactoryDetailView({
                       {photos.map((photo, idx) => (
                         <div
                           key={photo.id}
-                          className="aspect-square rounded-lg overflow-hidden bg-muted cursor-pointer hover:opacity-90 transition-opacity"
-                          onClick={() => setLightboxIndex(idx)}
+                          className={`aspect-square rounded-lg overflow-hidden bg-muted transition-opacity ${isPreview ? "" : "cursor-pointer hover:opacity-90"}`}
+                          onClick={() => { if (!isPreview) setLightboxIndex(idx); }}
                         >
                           <img src={photo.url} alt={photo.caption ?? ""} className="w-full h-full object-cover" loading="lazy" />
                         </div>
@@ -649,7 +661,7 @@ export function FactoryDetailView({
                                 {product.images && (product.images as string[]).length > 0 && (
                                   <ProductImageCarousel
                                     images={product.images as string[]}
-                                    onImageClick={(imgs, i) => { setPreviewImages(imgs); setPreviewIndex(i); }}
+                                    onImageClick={isPreview ? undefined : (imgs, i) => { setPreviewImages(imgs); setPreviewIndex(i); }}
                                   />
                                 )}
                                 <div className="flex-1">
@@ -675,7 +687,7 @@ export function FactoryDetailView({
                                   </div>
                                 </div>
                               </div>
-                              <Button variant="outline" size="sm" onClick={() => handleChatClick(product.id, product.name)} className="shrink-0" disabled={previewMode}>
+                              <Button variant="outline" size="sm" onClick={() => handleChatClick(product.id, product.name)} className="shrink-0" disabled={isPreview}>
                                 <MessageCircle className="w-4 h-4 mr-1" />詢問此產品
                               </Button>
                             </div>
@@ -729,7 +741,7 @@ export function FactoryDetailView({
                         rows={3}
                       />
                       <Button
-                        disabled={rating === 0 || reviewSubmitPending || previewMode}
+                        disabled={rating === 0 || reviewSubmitPending || isPreview}
                         onClick={handleSubmitReviewClick}
                       >
                         <Send className="w-4 h-4 mr-1" />
@@ -912,7 +924,7 @@ export function FactoryDetailView({
             <AlertDialogCancel onClick={() => setReportReason("")}>取消</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleSubmitReportClick}
-              disabled={!reportReason.trim() || reportPending || previewMode}
+              disabled={!reportReason.trim() || reportPending || isPreview}
               className="bg-destructive hover:bg-destructive/90"
             >
               {reportPending ? "送出中..." : "送出檢舉"}

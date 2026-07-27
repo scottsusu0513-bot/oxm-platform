@@ -15,7 +15,7 @@ import { notifyOwner } from "./_core/notification";
 import { storagePut, storagePresignedUrl, storageDelete } from "./storage";
 import { validateImageUpload } from "./_core/security";
 import { INDUSTRY_OPTIONS, TAIWAN_REGIONS, CAPITAL_OPTIONS, INDUSTRY_SLUGS } from "../shared/constants";
-import { stripCertificationEvidence, stripCertificationEvidenceFromRevision, isValidCertificationEvidenceKey, isValidBadgeId, CERTIFICATION_EVIDENCE_KEY_PREFIX, applyCertificationEvidenceDescriptions, summarizeCertificationEvidenceForOwner, sortBadgeIds } from "../shared/badges";
+import { stripCertificationEvidence, stripCertificationEvidenceFromRevision, stripHiddenBadgesForPublic, isValidCertificationEvidenceKey, isValidBadgeId, CERTIFICATION_EVIDENCE_KEY_PREFIX, applyCertificationEvidenceDescriptions, summarizeCertificationEvidenceForOwner, sortBadgeIds } from "../shared/badges";
 import { nanoid } from "nanoid";
 import { factories, conversations, reviews, reports, factoryCoManagers, users, upgradeConsultants, type Factory } from "../drizzle/schema";
 import { desc, eq, and, sql, isNull } from "drizzle-orm";
@@ -734,7 +734,13 @@ export const appRouter = router({
       // certificationEvidence 原始欄位（含 imageKeys）也一律移除；改為
       // 只在有權限查看這筆工廠時，額外附上消毒後的 certificationEvidenceStatus
       // 摘要（只有 badgeId／說明文字／是否已上傳／張數，不含任何 key）。
-      const publicSafeFactory = stripCertificationEvidence(factory);
+      // 非授權（一般公開瀏覽）視角：certificationBadges（已獲得徽章完整清單，
+      // 可能含工廠自己隱藏的徽章）一律不可見，只留 certificationBadgesVisible。
+      // 有權限管理這筆工廠時才能看到完整的 certificationBadges（管理頁需要
+      // 用它跟 certificationBadgesVisible 比對，畫出「已獲得徽章」勾選清單）。
+      const publicSafeFactory = isAuthorized
+        ? stripCertificationEvidence(factory)
+        : stripHiddenBadgesForPublic(stripCertificationEvidence(factory));
       const safeLatestRevision = latestRevision ? stripCertificationEvidenceFromRevision(latestRevision) : null;
       const result: Record<string, any> = { ...publicSafeFactory, products: prods, latestRevision: safeLatestRevision };
       if (isAuthorized) {
@@ -873,6 +879,25 @@ export const appRouter = router({
       return { success: true };
     }),
 
+    // 徽章「公開顯示」切換：只能在「已獲得徽章」的子集合裡切換，完全不經過
+    // 基本資料修改申請審核——這是刻意的設計，擁有權（certificationBadges）
+    // 跟公開顯示（certificationBadgesVisible）本來就是兩件事，取消顯示不能
+    // 也不應該建立修改申請、不能要求重新上傳證明或重新送審。伺服器端在
+    // db.updateVisibleBadges 內會再次驗證只保留已擁有的徽章 id，不相信前端
+    // 傳入的陣列已經是合法子集合。
+    updateVisibleBadges: protectedProcedure.input(z.object({
+      factoryId: z.number(),
+      visibleBadgeIds: z.array(z.string().max(50)).max(30),
+    })).mutation(async ({ ctx, input }) => {
+      const factory = await db.getFactoryById(input.factoryId);
+      if (!factory) throw new TRPCError({ code: 'NOT_FOUND', message: '找不到工廠' });
+      const isOwner = factory.ownerId === ctx.user.id;
+      const isCoMgr = !isOwner && await db.isActiveCoManager(factory.id, ctx.user.id);
+      if (!isOwner && !isCoMgr) throw new TRPCError({ code: 'FORBIDDEN', message: '無權限修改此工廠的徽章顯示設定' });
+      const visible = await db.updateVisibleBadges(input.factoryId, input.visibleBadgeIds);
+      return { certificationBadgesVisible: visible };
+    }),
+
     submitRevision: protectedProcedure.input(z.object({
       factoryId: z.number(),
       proposedData: z.record(z.string(), z.any()),
@@ -927,8 +952,15 @@ export const appRouter = router({
       // imageKeys 已從輸入 schema 移除，proposedData.certificationEvidence
       // 只可能帶說明文字，必須跟目前線上工廠實際存的 imageKeys 合併，不能
       // 直接整個覆蓋，否則會把已透過 uploadBadgeEvidence 綁定的圖片洗掉。
+      //
+      // 徽章「擁有權」不得透過一般修改申請被竄改：這裡一律用「目前已擁有的
+      // 徽章」聯集「這次申請新增的徽章」，工廠端無論送了什麼內容都不可能讓
+      // certificationBadges 比目前實際擁有的還少——真正的「取消顯示」走
+      // 完全獨立、不需審核的 factory.updateVisibleBadges，不會經過這裡。
       if ("certificationBadges" in proposedData || "certificationEvidence" in proposedData) {
-        const certificationBadges = sortBadgeIds(Array.isArray(proposedData.certificationBadges) ? proposedData.certificationBadges : []);
+        const existingOwned = Array.isArray(factory.certificationBadges) ? factory.certificationBadges as string[] : [];
+        const requested = Array.isArray(proposedData.certificationBadges) ? proposedData.certificationBadges : [];
+        const certificationBadges = sortBadgeIds([...existingOwned, ...requested]);
         proposedData.certificationBadges = certificationBadges;
         proposedData.certificationEvidence = applyCertificationEvidenceDescriptions(
           factory.certificationEvidence,
@@ -1011,11 +1043,14 @@ export const appRouter = router({
   }
 
   // 廣告資料一起回傳，前端不需要再打一支 ad.getActive
-  // 公開搜尋結果一律不含 certificationEvidence（工廠私密證明資料）
+  // 公開搜尋結果一律不含 certificationEvidence（工廠私密證明資料），徽章也
+  // 一律只保留 certificationBadgesVisible（工廠選擇公開顯示的子集合），不得
+  // 洩漏擁有但隱藏的徽章（certificationBadges）。
+  const stripForSearch = (f: any) => stripHiddenBadgesForPublic(stripCertificationEvidence(f));
   return {
     ...result,
-    items: result.items.map(stripCertificationEvidence),
-    ads: ads.map(ad => ad.factory ? { ...ad, factory: stripCertificationEvidence(ad.factory) } : ad),
+    items: result.items.map(stripForSearch),
+    ads: ads.map(ad => ad.factory ? { ...ad, factory: stripForSearch(ad.factory) } : ad),
   };
 }),
 
@@ -3322,8 +3357,8 @@ export const appRouter = router({
   })).query(async ({ ctx, input }) => {
     const result = await db.getFavoritesByUser(ctx.user.id, input.page, input.pageSize);
     // 收藏清單裡的工廠對這位使用者來說只是一般會員視角，不是 owner／共管者／admin，
-    // 一律不得看到 certificationEvidence。
-    return { ...result, items: result.items.map(stripCertificationEvidence) };
+    // 一律不得看到 certificationEvidence，徽章也只能看到公開顯示的子集合。
+    return { ...result, items: result.items.map(f => stripHiddenBadgesForPublic(stripCertificationEvidence(f))) };
   }),
 }),
 
@@ -3410,7 +3445,7 @@ export const appRouter = router({
     }),
 
     approveFactory: adminProcedure.input(z.object({ factoryId: z.number() })).mutation(async ({ input }) => {
-  await db.updateFactory(input.factoryId, -1, { status: 'approved' });
+  await db.approveFactoryWithBadgeSync(input.factoryId);
   const factory = await db.getFactoryById(input.factoryId);
   if (factory?.contactEmail) {
     await sendFactoryApprovedEmail({
@@ -3478,6 +3513,14 @@ export const appRouter = router({
       pageSize: z.number().int().min(1).max(100).default(20),
     })).query(async ({ input }) => {
       return db.getAdminPendingRevisions(input.page, input.pageSize);
+    }),
+
+    // 「檢視詳情」導頁用：直接以 revisionId 取得單筆修改申請完整內容，
+    // 讓 FactoryReviewDetail.tsx 不需要先載入整份待審清單。
+    getRevisionDetail: adminProcedure.input(z.object({ revisionId: z.number() })).query(async ({ input }) => {
+      const revision = await db.getAdminRevisionDetail(input.revisionId);
+      if (!revision) throw new TRPCError({ code: 'NOT_FOUND', message: '找不到此修改申請' });
+      return revision;
     }),
 
     approveRevision: adminProcedure.input(z.object({ revisionId: z.number() })).mutation(async ({ ctx, input }) => {
@@ -4106,7 +4149,7 @@ export const appRouter = router({
       region: z.string().optional(),
     })).query(async ({ input }) => {
       const ads = await db.getActiveAds(input);
-      return ads.slice(0, 5).map(ad => ad.factory ? { ...ad, factory: stripCertificationEvidence(ad.factory) } : ad);
+      return ads.slice(0, 5).map(ad => ad.factory ? { ...ad, factory: stripHiddenBadgesForPublic(stripCertificationEvidence(ad.factory)) } : ad);
     }),
 
     create: adminProcedure.input(z.object({

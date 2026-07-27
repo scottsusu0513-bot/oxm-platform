@@ -552,6 +552,14 @@ function AdminDashboardContent() {
                           <div className="flex gap-2 pt-1">
                             <Button
                               size="sm"
+                              variant="outline"
+                              className="gap-1"
+                              onClick={() => setLocation(`/admin/factory-review?id=${rev.factoryId}&revisionId=${rev.id}`)}
+                            >
+                              <Eye className="w-4 h-4" />檢視詳情
+                            </Button>
+                            <Button
+                              size="sm"
                               className="bg-green-600 hover:bg-green-700 text-white gap-1"
                               disabled={approveRevisionMutation.isPending}
                               onClick={async () => {

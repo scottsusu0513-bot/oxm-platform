@@ -10,7 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Checkbox } from "@/components/ui/checkbox";
-import { ArrowLeft, Building2, MapPin, AlertCircle, Image, Package, User, ChevronDown, Pencil, Users, Award } from "lucide-react";
+import { ArrowLeft, Building2, MapPin, AlertCircle, Image, Package, User, ChevronDown, Pencil, Users, Award, X } from "lucide-react";
 import { FloatingBackButton } from "@/components/FloatingBackButton";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -19,19 +19,53 @@ import { CERTIFICATION_BADGE_MAP, sortBadgeIds } from "@shared/badges";
 import { BadgeIcon } from "@/components/badges/BadgeIcon";
 import { useCertificationEvidenceViewUrls } from "@/hooks/useCertificationEvidenceViewUrls";
 
+// 修改申請 diff 用：BASIC_DATA_FIELDS 對應的中文標籤（見 server/db.ts）。
+// certificationBadges／certificationEvidence 在「徽章系統」分頁單獨處理，
+// 不會出現在這份標籤清單裡（一般欄位走文字 diff，徽章走專用的徽章 diff UI）。
+const FIELD_LABELS: Record<string, string> = {
+  name: "工廠名稱", industry: "主產業", subIndustry: "子產業", mfgModes: "代工模式",
+  region: "所在地區", description: "簡介", capitalLevel: "資本額", foundedYear: "成立年份",
+  ownerName: "負責人", contactPersonName: "聯絡窗口", phone: "電話", website: "網站",
+  contactEmail: "電郵", address: "公廠地址", operationStatus: "接單狀態",
+  weekdayHours: "平日營業時間", weekendHours: "假日營業時間", businessNote: "營業備註",
+  avatarUrl: "工廠大頭貼",
+};
+const OPERATION_STATUS_LABELS: Record<string, string> = { normal: "接單中", busy: "產線繁忙", full: "產線滿載" };
+
+function formatFieldValue(field: string, val: unknown): React.ReactNode {
+  if (val === null || val === undefined || val === "") return "（空）";
+  if (field === "avatarUrl" && typeof val === "string") {
+    return <img src={val} alt="" className="w-12 h-12 rounded object-cover" />;
+  }
+  if (field === "operationStatus" && typeof val === "string") {
+    return OPERATION_STATUS_LABELS[val] ?? val;
+  }
+  if (Array.isArray(val)) return val.length > 0 ? val.join("、") : "（空）";
+  return String(val);
+}
+
 export default function FactoryReviewDetail() {
   const { user, loading: authLoading } = useAuth();
   const [location, setLocation] = useLocation();
-  const factoryId = parseInt(new URLSearchParams(window.location.search).get("id") || "0");
+  const searchParams = new URLSearchParams(window.location.search);
+  const factoryId = parseInt(searchParams.get("id") || "0");
+  const revisionIdParam = searchParams.get("revisionId");
+  const revisionId = revisionIdParam ? parseInt(revisionIdParam) : undefined;
+  const isRevisionMode = !!revisionId;
   const [rejectionReason, setRejectionReason] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [industryEdit, setIndustryEdit] = useState<string[] | null>(null);
   const [industryPopoverOpen, setIndustryPopoverOpen] = useState(false);
+  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
 
   const isAdmin = !authLoading && user?.role === "admin";
   const { data: factory, isLoading: factoryLoading } = trpc.admin.getFactoryDetail.useQuery(
     { id: factoryId },
     { enabled: isAdmin && !!factoryId }
+  );
+  const { data: revision, isLoading: revisionLoading } = trpc.admin.getRevisionDetail.useQuery(
+    { revisionId: revisionId ?? 0 },
+    { enabled: isAdmin && isRevisionMode }
   );
   const { data: photos } = trpc.factory.getPhotos.useQuery(
     { factoryId },
@@ -41,11 +75,15 @@ export default function FactoryReviewDetail() {
     { factoryId },
     { enabled: isAdmin && !!factoryId }
   );
-  // key 一律由伺服器自己從資料庫目前存的 certificationEvidence 讀出（見
-  // getCertificationEvidenceViewUrls 的說明），這裡不需要、也不能傳 key 進去。
-  const { urls: evidenceViewUrls } = useCertificationEvidenceViewUrls(isAdmin ? factoryId : undefined);
+  // key 一律由伺服器自己從資料庫目前存的 certificationEvidence／revision 的
+  // originalData／proposedData 讀出（見 getCertificationEvidenceViewUrls 的
+  // 說明），這裡不需要、也不能傳 key 進去；revisionId 有值時會一併把該筆
+  // 修改申請 originalData／proposedData 裡的 key 也收進來換發短效網址。
+  const { urls: evidenceViewUrls } = useCertificationEvidenceViewUrls(isAdmin ? factoryId : undefined, revisionId);
   const approveMutation = trpc.admin.approveFactory.useMutation();
   const rejectMutation = trpc.admin.rejectFactory.useMutation();
+  const approveRevisionMutation = trpc.admin.approveRevision.useMutation();
+  const rejectRevisionMutation = trpc.admin.rejectRevision.useMutation();
   const updateIndustryMut = trpc.admin.updateFactoryIndustry.useMutation({
     onSuccess: () => {
       toast.success("產業分類已更新");
@@ -65,7 +103,7 @@ export default function FactoryReviewDetail() {
     );
   }
 
-  if (factoryLoading) return <AppLoading />;
+  if (factoryLoading || (isRevisionMode && revisionLoading)) return <AppLoading />;
   if (!factory) {
     return (
       <div className="flex items-center justify-center min-h-screen">
@@ -73,15 +111,33 @@ export default function FactoryReviewDetail() {
       </div>
     );
   }
+  if (isRevisionMode && !revision) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="text-red-600">找不到此修改申請（可能已被其他管理員處理）</div>
+      </div>
+    );
+  }
+
+  const originalData = (revision?.originalData as Record<string, any>) ?? {};
+  const proposedData = (revision?.proposedData as Record<string, any>) ?? {};
+  const changedFields = isRevisionMode
+    ? Object.keys(proposedData).filter(k => JSON.stringify(originalData[k]) !== JSON.stringify(proposedData[k]))
+    : [];
 
   const handleApprove = async () => {
     try {
       setIsSubmitting(true);
-      await approveMutation.mutateAsync({ factoryId });
-      toast.success("已批准該工廠");
+      if (isRevisionMode && revisionId) {
+        await approveRevisionMutation.mutateAsync({ revisionId });
+        toast.success("已通過修改申請");
+      } else {
+        await approveMutation.mutateAsync({ factoryId });
+        toast.success("已批准該工廠");
+      }
       window.location.href = "/admin";
-    } catch (error) {
-      toast.error("批准失敗");
+    } catch (error: any) {
+      toast.error(error?.message || "批准失敗");
     } finally {
       setIsSubmitting(false);
     }
@@ -94,11 +150,16 @@ export default function FactoryReviewDetail() {
     }
     try {
       setIsSubmitting(true);
-      await rejectMutation.mutateAsync({ factoryId, reason: rejectionReason });
-      toast.success("已拒絕該工廠");
+      if (isRevisionMode && revisionId) {
+        await rejectRevisionMutation.mutateAsync({ revisionId, reason: rejectionReason });
+        toast.success("已拒絕此修改申請");
+      } else {
+        await rejectMutation.mutateAsync({ factoryId, reason: rejectionReason });
+        toast.success("已拒絕該工廠");
+      }
       window.location.href = "/admin";
-    } catch (error) {
-      toast.error("拒絕失敗");
+    } catch (error: any) {
+      toast.error(error?.message || "拒絕失敗");
     } finally {
       setIsSubmitting(false);
     }
@@ -108,9 +169,17 @@ export default function FactoryReviewDetail() {
     <div className="min-h-screen bg-gradient-to-br from-orange-50 to-amber-50 px-4 pb-4 md:px-8 md:pb-8 admin-page-top">
       <div className="max-w-4xl mx-auto">
       <FloatingBackButton fallbackHref="/admin" noNavbar />
-        <div className="flex items-center gap-4 mb-8">
-          <h1 className="text-3xl font-bold text-gray-900">工廠審核詳情</h1>
+        <div className="flex items-center gap-4 mb-2">
+          <h1 className="text-3xl font-bold text-gray-900">{isRevisionMode ? "修改申請詳情" : "工廠審核詳情"}</h1>
         </div>
+        {isRevisionMode && revision && (
+          <div className="mb-8 px-3 py-2 bg-blue-50 border border-blue-100 rounded-md text-sm text-blue-800">
+            提交者：{revision.submitterName} · {new Date(revision.submittedAt).toLocaleDateString("zh-TW")}
+            {revision.revisionReason && <span> · 申請原因：{revision.revisionReason}</span>}
+            {" · "}修改欄位數：{changedFields.filter(f => f !== "certificationBadges" && f !== "certificationEvidence").length + (changedFields.includes("certificationBadges") || changedFields.includes("certificationEvidence") ? 1 : 0)}
+          </div>
+        )}
+        {!isRevisionMode && <div className="mb-8" />}
 
         <Tabs defaultValue="basic">
           <TabsList className="mb-4 w-full sm:w-fit max-w-full overflow-x-auto justify-start">
@@ -154,6 +223,33 @@ export default function FactoryReviewDetail() {
                     <span>{(factory as any).ownerAccountName ?? ""}{(factory as any).ownerAccountEmail ? ` (${(factory as any).ownerAccountEmail})` : ""}</span>
                   </div>
                 )}
+                {isRevisionMode ? (
+                  <div className="space-y-2">
+                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">
+                      工廠完整基本資料（修改前為紅色、修改後為綠色，未修改欄位為一般顏色）
+                    </p>
+                    {(["name", "industry", "subIndustry", "mfgModes", "region", "description", "capitalLevel", "foundedYear", "ownerName", "contactPersonName", "phone", "website", "contactEmail", "address", "operationStatus", "weekdayHours", "weekendHours", "businessNote", "avatarUrl"] as const).map(field => {
+                      const changed = field in proposedData && JSON.stringify(originalData[field]) !== JSON.stringify(proposedData[field]);
+                      const label = FIELD_LABELS[field] ?? field;
+                      if (!changed) {
+                        return (
+                          <div key={field} className="grid grid-cols-[7rem_1fr] gap-2 text-sm border-b py-1.5">
+                            <span className="text-gray-500">{label}</span>
+                            <span>{formatFieldValue(field, originalData[field])}</span>
+                          </div>
+                        );
+                      }
+                      return (
+                        <div key={field} className="grid grid-cols-[7rem_1fr_1fr] gap-2 text-sm border-l-2 border-orange-300 pl-2 py-1">
+                          <span className="text-gray-500 pt-0.5">{label}</span>
+                          <div className="bg-red-50 rounded px-2 py-1 text-red-700 min-h-[28px]">{formatFieldValue(field, originalData[field])}</div>
+                          <div className="bg-green-50 rounded px-2 py-1 text-green-700 min-h-[28px]">{formatFieldValue(field, proposedData[field])}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                <>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <Label className="text-gray-600">產業分類</Label>
@@ -284,6 +380,8 @@ export default function FactoryReviewDetail() {
                   <Label className="text-gray-600">代工模式</Label>
                   <p className="font-medium">{factory.mfgModes?.join(", ") || "未提供"}</p>
                 </div>
+                </>
+                )}
               </CardContent>
             </Card>
           </TabsContent>
@@ -382,7 +480,71 @@ export default function FactoryReviewDetail() {
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                {(() => {
+                {isRevisionMode ? (() => {
+                  const oldBadgeIds = sortBadgeIds((originalData.certificationBadges ?? (factory as any).certificationBadges ?? []) as string[]);
+                  const newBadgeIds = "certificationBadges" in proposedData
+                    ? sortBadgeIds(proposedData.certificationBadges as string[])
+                    : oldBadgeIds;
+                  const allBadgeIds = sortBadgeIds(Array.from(new Set([...oldBadgeIds, ...newBadgeIds])));
+                  const oldEvidence = (originalData.certificationEvidence ?? []) as Array<{ badgeId: string; description: string; imageKeys: string[] }>;
+                  const newEvidence = ("certificationEvidence" in proposedData ? proposedData.certificationEvidence : oldEvidence) as Array<{ badgeId: string; description: string; imageKeys: string[] }>;
+                  if (allBadgeIds.length === 0) {
+                    return <p className="text-muted-foreground text-center py-8">此修改申請未異動徽章</p>;
+                  }
+                  const renderEvidenceThumb = (key: string, colorClass: string) => {
+                    const viewUrl = evidenceViewUrls[key];
+                    if (!viewUrl) {
+                      return <div key={key} className={`w-16 h-16 rounded border ${colorClass} flex items-center justify-center text-[10px] text-muted-foreground`}>載入中</div>;
+                    }
+                    return (
+                      <button key={key} type="button" onClick={() => setLightboxUrl(viewUrl)} className={`w-16 h-16 rounded border ${colorClass} overflow-hidden hover:opacity-80 transition-opacity`}>
+                        <img src={viewUrl} alt="證明圖片" className="w-full h-full object-cover" loading="lazy" />
+                      </button>
+                    );
+                  };
+                  return (
+                    <div className="space-y-4">
+                      {allBadgeIds.map(id => {
+                        const def = CERTIFICATION_BADGE_MAP[id];
+                        const isAdded = !oldBadgeIds.includes(id) && newBadgeIds.includes(id);
+                        const isRemoved = oldBadgeIds.includes(id) && !newBadgeIds.includes(id);
+                        const oldEv = oldEvidence.find(e => e.badgeId === id);
+                        const newEv = newEvidence.find(e => e.badgeId === id);
+                        const oldKeys = oldEv?.imageKeys ?? [];
+                        const newKeys = newEv?.imageKeys ?? [];
+                        const addedKeys = newKeys.filter(k => !oldKeys.includes(k));
+                        const removedKeys = oldKeys.filter(k => !newKeys.includes(k));
+                        const unchangedKeys = newKeys.filter(k => oldKeys.includes(k));
+                        const descChanged = (oldEv?.description ?? "") !== (newEv?.description ?? "");
+                        return (
+                          <div key={id} className={`border rounded-lg p-3 ${isAdded ? "border-green-300 bg-green-50/40" : isRemoved ? "border-red-300 bg-red-50/40" : ""}`}>
+                            <div className="flex items-center gap-2">
+                              <BadgeIcon badgeId={id} size={32} />
+                              <p className="font-medium">{def?.name ?? id}</p>
+                              {isAdded && <span className="text-xs text-green-700 bg-green-100 rounded px-1.5 py-0.5">新增</span>}
+                              {isRemoved && <span className="text-xs text-red-700 bg-red-100 rounded px-1.5 py-0.5">移除</span>}
+                            </div>
+                            {descChanged ? (
+                              <div className="grid grid-cols-2 gap-2 mt-2">
+                                <div className="bg-red-50 rounded px-2 py-1 text-sm text-red-700 min-h-[28px]">{oldEv?.description || "（空）"}</div>
+                                <div className="bg-green-50 rounded px-2 py-1 text-sm text-green-700 min-h-[28px]">{newEv?.description || "（空）"}</div>
+                              </div>
+                            ) : (
+                              newEv?.description && <p className="text-sm text-muted-foreground mt-2">{newEv.description}</p>
+                            )}
+                            {(unchangedKeys.length > 0 || addedKeys.length > 0 || removedKeys.length > 0) && (
+                              <div className="flex gap-2 mt-2 flex-wrap">
+                                {unchangedKeys.map(k => renderEvidenceThumb(k, "bg-muted"))}
+                                {addedKeys.map(k => renderEvidenceThumb(k, "border-green-400 bg-green-50 ring-1 ring-green-300"))}
+                                {removedKeys.map(k => renderEvidenceThumb(k, "border-red-400 bg-red-50 ring-1 ring-red-300 opacity-70"))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })() : (() => {
                   const badgeIds = sortBadgeIds((factory as any).certificationBadges ?? []);
                   const evidence = ((factory as any).certificationEvidence ?? []) as Array<{ badgeId: string; description: string; imageKeys: string[] }>;
                   if (badgeIds.length === 0) {
@@ -412,16 +574,15 @@ export default function FactoryReviewDetail() {
                                     );
                                   }
                                   return (
-                                    <a
+                                    <button
                                       key={key}
-                                      href={viewUrl}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      title="點擊開啟原圖（短效連結，過期需重新整理頁面）"
-                                      aria-label={`開啟${def?.name ?? id}證明原圖`}
+                                      type="button"
+                                      onClick={() => setLightboxUrl(viewUrl)}
+                                      title="點擊放大檢視（短效連結，過期需重新整理頁面）"
+                                      aria-label={`放大檢視${def?.name ?? id}證明圖片`}
                                     >
                                       <img src={viewUrl} alt="證明圖片" className="w-16 h-16 object-cover rounded border hover:opacity-80 transition-opacity" loading="lazy" />
-                                    </a>
+                                    </button>
                                   );
                                 })}
                               </div>
@@ -494,6 +655,20 @@ export default function FactoryReviewDetail() {
           </CardContent>
         </Card>
       </div>
+
+      {/* 圖片放大檢視：只有管理員能看到（本頁本來就是 adminProcedure 保護），
+          網址一律來自 evidenceViewUrls（admin 專屬短效簽章），不會是永久公開網址。 */}
+      {lightboxUrl && (
+        <div
+          className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center"
+          onClick={() => setLightboxUrl(null)}
+        >
+          <img src={lightboxUrl} alt="證明圖片放大檢視" className="max-h-[85vh] max-w-[90vw] object-contain rounded" onClick={(e) => e.stopPropagation()} />
+          <button className="absolute top-4 right-4 text-white bg-black/40 rounded-full p-2 hover:bg-black/70" onClick={() => setLightboxUrl(null)}>
+            <X className="w-6 h-6" />
+          </button>
+        </div>
+      )}
     </div>
   );
 }

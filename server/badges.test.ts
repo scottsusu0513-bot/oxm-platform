@@ -282,45 +282,46 @@ function extractBlock(source: string, startAnchor: string, endAnchor: string): s
 
 describe("server/routers.ts 靜態安全合約 —— 四條回傳工廠資料的路徑都必須呼叫 stripCertificationEvidence", () => {
 
-  it("factory.search：回傳的 items 與 ads 內嵌的 factory 都呼叫 stripCertificationEvidence", () => {
+  it("factory.search：回傳的 items 與 ads 內嵌的 factory 都呼叫 stripCertificationEvidence 與 stripHiddenBadgesForPublic", () => {
     const block = extractBlock(
       ROUTERS_SOURCE,
       "search: publicProcedure.input(z.object({",
       "delete: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {",
     );
-    expect(block).toContain("items: result.items.map(stripCertificationEvidence)");
+    expect(block).toMatch(/const stripForSearch = \(f: any\) => stripHiddenBadgesForPublic\(stripCertificationEvidence\(f\)\);/);
+    expect(block).toContain("items: result.items.map(stripForSearch)");
     expect(block).toMatch(
-      /ads: ads\.map\(ad => ad\.factory \? \{ \.\.\.ad, factory: stripCertificationEvidence\(ad\.factory\) \} : ad\)/,
+      /ads: ads\.map\(ad => ad\.factory \? \{ \.\.\.ad, factory: stripForSearch\(ad\.factory\) \} : ad\)/,
     );
   });
 
-  it("favorite.getByUser：回傳的 items 呼叫 stripCertificationEvidence（收藏清單的使用者不是 owner／共管者／admin）", () => {
+  it("favorite.getByUser：回傳的 items 呼叫 stripCertificationEvidence 與 stripHiddenBadgesForPublic（收藏清單的使用者不是 owner／共管者／admin）", () => {
     const block = extractBlock(
       ROUTERS_SOURCE,
       "getByUser: protectedProcedure.input(z.object({",
       "// ===== 管理員儀表板 =====",
     );
-    expect(block).toContain("items: result.items.map(stripCertificationEvidence)");
+    expect(block).toMatch(/items: result\.items\.map\(f => stripHiddenBadgesForPublic\(stripCertificationEvidence\(f\)\)\)/);
   });
 
-  it("ad.getActive：nested factory 呼叫 stripCertificationEvidence", () => {
+  it("ad.getActive：nested factory 呼叫 stripCertificationEvidence 與 stripHiddenBadgesForPublic", () => {
     const block = extractBlock(
       ROUTERS_SOURCE,
       "getActive: publicProcedure.input(z.object({",
       "create: adminProcedure.input(z.object({\r\n      factoryId: z.number(),",
     );
     expect(block).toMatch(
-      /ads\.slice\(0, 5\)\.map\(ad => ad\.factory \? \{ \.\.\.ad, factory: stripCertificationEvidence\(ad\.factory\) \} : ad\)/,
+      /ads\.slice\(0, 5\)\.map\(ad => ad\.factory \? \{ \.\.\.ad, factory: stripHiddenBadgesForPublic\(stripCertificationEvidence\(ad\.factory\)\) \} : ad\)/,
     );
   });
 
-  it("factory.getById：不論呼叫者身份一律呼叫 stripCertificationEvidence（工廠 owner／共管者送出證明圖片後也不得再從這支 API 讀回原始 imageKeys）", () => {
+  it("factory.getById：不論呼叫者身份一律呼叫 stripCertificationEvidence；非授權視角額外呼叫 stripHiddenBadgesForPublic 移除完整 certificationBadges（工廠 owner／共管者送出證明圖片後也不得再從這支 API 讀回原始 imageKeys）", () => {
     const block = extractBlock(
       ROUTERS_SOURCE,
       "getById: publicProcedure.input(z.object({\r\n      id: z.number(),",
       "getMine: protectedProcedure.query(async ({ ctx }) => {",
     );
-    expect(block).toMatch(/const publicSafeFactory = stripCertificationEvidence\(factory\);/);
+    expect(block).toMatch(/const publicSafeFactory = isAuthorized\s*\? stripCertificationEvidence\(factory\)\s*: stripHiddenBadgesForPublic\(stripCertificationEvidence\(factory\)\);/);
     expect(block).toMatch(/latestRevision \? stripCertificationEvidenceFromRevision\(latestRevision\) : null/);
     // 反向確認：不能還殘留舊版「isAuthorized ? factory : ...」這種依身份決定
     // 是否裁剪的寫法。

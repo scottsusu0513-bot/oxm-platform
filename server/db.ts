@@ -206,6 +206,40 @@ export async function updateFactory(id: number, ownerId: number, data: Partial<I
 }
 
 /**
+ * 工廠審核通過（首次上線）：若先前不是 approved，目前 certificationBadges
+ * 全部視為這次一併新獲得的徽章，預設全部公開顯示（見任務規則「審核通過後
+ * 才加入已獲得徽章，並預設公開顯示」）。若工廠先前就已是 approved（理論上
+ * 不會從 approved 被改回其他狀態，這裡僅防禦性處理），不重置既有顯示設定。
+ */
+export async function approveFactoryWithBadgeSync(factoryId: number): Promise<void> {
+  const beforeApproval = await getFactoryById(factoryId);
+  const updateData: Record<string, any> = { status: 'approved' };
+  if (beforeApproval && beforeApproval.status !== 'approved') {
+    updateData.certificationBadgesVisible = Array.isArray(beforeApproval.certificationBadges) ? beforeApproval.certificationBadges : [];
+  }
+  await updateFactory(factoryId, -1, updateData);
+}
+
+/**
+ * 徽章「公開顯示」切換：certificationBadgesVisible 一律強制交集
+ * certificationBadges（已獲得徽章），伺服器端自己重新驗證，不相信呼叫端
+ * 傳入的陣列已經是合法子集合（防止繞過前端限制直接偽造顯示未獲得的徽章）。
+ * 不透過 updateFactory()——那支函式只在 data 帶有 certificationBadges／
+ * certificationEvidence 任一欄位時才處理徽章相關欄位，這裡只想單純切換
+ * 顯示設定，不應該、也不需要一併帶入 certificationBadges。
+ */
+export async function updateVisibleBadges(factoryId: number, requestedVisibleIds: string[]): Promise<string[]> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  const factory = await getFactoryById(factoryId);
+  if (!factory) throw new Error("找不到工廠");
+  const owned = new Set(Array.isArray(factory.certificationBadges) ? (factory.certificationBadges as string[]) : []);
+  const sanitizedVisible = sortBadgeIds(requestedVisibleIds.filter(id => owned.has(id)));
+  await db.update(factories).set({ certificationBadgesVisible: sanitizedVisible }).where(eq(factories.id, factoryId));
+  return sanitizedVisible;
+}
+
+/**
  * 徽章證明圖片上傳成功「當下」直接把 object key 綁進 certificationEvidence，
  * 不經過工廠端（見 server/routers.ts 的 uploadBadgeEvidence）。用
  * SELECT ... FOR UPDATE 鎖住該筆工廠列再讀取目前的 certificationEvidence，
@@ -5970,6 +6004,28 @@ export async function approveRevisionAtomic(revisionId: number, adminId: number)
     const sanitizedBadgeAssignment = ("certificationBadges" in proposed || "certificationEvidence" in proposed)
       ? sanitizeBadgeAssignment(proposed.certificationBadges, proposed.certificationEvidence)
       : null;
+    // 這次修改申請若新增了「先前沒擁有」的徽章，該徽章核准通過的那一刻起
+    // 就是「新獲得」，預設公開顯示；先前已擁有的徽章維持工廠自己原本設定的
+    // 顯示/隱藏狀態，不因這次審核跟著被重置。需要在套用新的 certificationBadges
+    // 之前，先讀出目前實際存的 certificationBadges／certificationBadgesVisible
+    // 當基準。
+    if (sanitizedBadgeAssignment) {
+      const [beforeRows]: any = await conn.execute(
+        "SELECT certificationBadges, certificationBadgesVisible FROM factories WHERE id = ?",
+        [rev.factoryId],
+      );
+      const beforeRow = beforeRows?.[0] ?? {};
+      const parseArr = (v: unknown): string[] => {
+        const parsed = typeof v === "string" ? JSON.parse(v) : v;
+        return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === "string") : [];
+      };
+      const previouslyOwned = new Set(parseArr(beforeRow.certificationBadges));
+      const previouslyVisible = parseArr(beforeRow.certificationBadgesVisible);
+      const newlyOwned = sanitizedBadgeAssignment.certificationBadges.filter(id => !previouslyOwned.has(id));
+      const mergedVisible = sortBadgeIds([...previouslyVisible, ...newlyOwned]);
+      setClauses.push("`certificationBadgesVisible` = ?");
+      setValues.push(JSON.stringify(mergedVisible));
+    }
     for (const field of allowedFields) {
       if (field in proposed) {
         const val = proposed[field];
@@ -6175,6 +6231,33 @@ export async function getRevisionById(revisionId: number) {
   const db = await getDb();
   if (!db) return null;
   const rows = await db.select().from(factoryRevisions)
+    .where(eq(factoryRevisions.id, revisionId))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+/**
+ * 管理員「檢視詳情」用：單筆修改申請＋工廠名稱／提交者名稱，供
+ * FactoryReviewDetail.tsx 用 revisionId 導航直接進入單筆詳情頁（不需要
+ * 先載入整份待審清單），與 getAdminPendingRevisions 回傳相同形狀。
+ */
+export async function getAdminRevisionDetail(revisionId: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select({
+    id: factoryRevisions.id,
+    factoryId: factoryRevisions.factoryId,
+    factoryName: factories.name,
+    submittedBy: factoryRevisions.submittedBy,
+    submitterName: users.name,
+    originalData: factoryRevisions.originalData,
+    proposedData: factoryRevisions.proposedData,
+    revisionReason: factoryRevisions.revisionReason,
+    status: factoryRevisions.status,
+    submittedAt: factoryRevisions.submittedAt,
+  }).from(factoryRevisions)
+    .innerJoin(factories, eq(factoryRevisions.factoryId, factories.id))
+    .innerJoin(users, eq(factoryRevisions.submittedBy, users.id))
     .where(eq(factoryRevisions.id, revisionId))
     .limit(1);
   return rows[0] ?? null;

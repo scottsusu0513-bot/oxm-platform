@@ -126,7 +126,7 @@ export function FactoryPreviewModal({
             isAuthenticated={isAuthenticated}
             user={user}
             isFav={isFav}
-            previewMode
+            mode="preview"
           />
         </div>
       </div>

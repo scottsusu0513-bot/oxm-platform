@@ -177,6 +177,23 @@ export function stripCertificationEvidence<T extends Record<string, any>>(factor
 }
 
 /**
+ * 公開視角（搜尋結果、公開工廠詳情、廣告輪播、非授權者呼叫 getById）絕對不能
+ * 看到 certificationBadges（已獲得徽章的完整清單，可能包含工廠自己選擇隱藏
+ * 的徽章）——公開只能看到 certificationBadgesVisible（工廠選擇公開顯示的
+ * 子集合），且這裡再次強制交集 certificationBadges 當作最後一道防線（即使
+ * 資料庫裡兩者不一致，公開端也絕對不會顯示未擁有的徽章）。
+ */
+export function stripHiddenBadgesForPublic<
+  T extends { certificationBadges?: unknown; certificationBadgesVisible?: unknown },
+>(factory: T): Omit<T, "certificationBadges" | "certificationBadgesVisible"> & { certificationBadgesVisible: string[] } {
+  const owned = new Set(Array.isArray(factory.certificationBadges) ? (factory.certificationBadges as string[]) : []);
+  const rawVisible = Array.isArray(factory.certificationBadgesVisible) ? (factory.certificationBadgesVisible as string[]) : [];
+  const certificationBadgesVisible = sortBadgeIds(rawVisible.filter(id => owned.has(id)));
+  const { certificationBadges, certificationBadgesVisible: _drop, ...rest } = factory as Record<string, any>;
+  return { ...rest, certificationBadgesVisible } as any;
+}
+
+/**
  * factoryRevisions 的 originalData／proposedData 兩個 JSON 欄位各自都可能
  * 內嵌 certificationEvidence（若該次修改申請有異動徽章）。factory.getById／
  * factory.getMine 回傳給工廠 owner／共管者的 latestRevision 也必須套用跟

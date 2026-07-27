@@ -28,7 +28,8 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { COLLABORATION_ORDER_NEXT_STAGE, COLLABORATION_ORDER_STAGE_LABELS, COLLABORATION_ORDER_STAGE_TRANSITION_DATE_FIELD, type CollaborationOrderStage } from "@shared/collaborationOrderStage";
-import { sortBadgeIds, type CertificationEvidenceSummaryEntry } from "@shared/badges";
+import { sortBadgeIds, CERTIFICATION_BADGE_MAP, type CertificationEvidenceSummaryEntry } from "@shared/badges";
+import { BadgeIcon } from "@/components/badges/BadgeIcon";
 import { BadgePicker } from "@/components/badges/BadgePicker";
 import { BadgeEvidenceEditor } from "@/components/badges/BadgeEvidenceEditor";
 import { FactoryPreviewModal } from "@/components/FactoryPreviewModal";
@@ -511,6 +512,25 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
   const [weekendHours, setWeekendHours] = useState((factory as any).weekendHours ?? "");
   const [businessNote, setBusinessNote] = useState((factory as any).businessNote ?? "");
   const [certificationBadges, setCertificationBadges] = useState<string[]>(sortBadgeIds((factory as any).certificationBadges ?? []));
+  // 已獲得徽章：只能透過工廠審核／修改申請審核新增，這裡單純從伺服器資料
+  // 讀出當作顯示清單的來源，不是可編輯的表單 state——擁有權跟這個表單的
+  // 「儲存」／「送出修改申請」完全無關。
+  const ownedBadgeIds = sortBadgeIds((factory as any).certificationBadges ?? []);
+  // 公開顯示徽章：certificationBadges 的子集合，透過獨立的
+  // factory.updateVisibleBadges 立即儲存，不經過本頁的儲存／送審流程。
+  const [visibleBadgeIds, setVisibleBadgeIds] = useState<string[]>(sortBadgeIds((factory as any).certificationBadgesVisible ?? []));
+  const updateVisibleBadgesMut = trpc.factory.updateVisibleBadges.useMutation({
+    onError: (err) => {
+      toast.error(err.message);
+      // 失敗時還原成伺服器目前實際存的值，避免畫面顯示跟資料庫不一致。
+      setVisibleBadgeIds(sortBadgeIds((factory as any).certificationBadgesVisible ?? []));
+    },
+  });
+  const handleToggleBadgeVisibility = (badgeId: string, nextChecked: boolean) => {
+    const next = sortBadgeIds(nextChecked ? [...visibleBadgeIds, badgeId] : visibleBadgeIds.filter(id => id !== badgeId));
+    setVisibleBadgeIds(next);
+    updateVisibleBadgesMut.mutate({ factoryId: factory.id, visibleBadgeIds: next });
+  };
   // factory.certificationEvidence 原始欄位（含 imageKeys）從伺服器端一律被
   // 移除（見 stripCertificationEvidence 對工廠 owner／共管者也套用），這裡
   // 讀的是消毒後的 certificationEvidenceStatus 摘要（badgeId／說明文字／
@@ -791,16 +811,19 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
     });
   };
 
-  // 預覽工廠頁面：用目前表單「尚未儲存／送審」的值組出公開頁資料，其餘欄位
-  // （id、評分、照片、商品、評價等）補齊自現有工廠資料，讓工廠主在送出前先看到
-  // 公開頁面的實際呈現效果。與 FactoryDetailView 共用同一套公開頁 UI。
+  // 預覽工廠頁面：先完整帶入伺服器目前的 factory 物件（跟正式 /factory/:id
+  // 頁面讀到的是同一個資料型別／欄位集合，包含 certificationBadgesVisible、
+  // 未來新增的任何欄位都會自動一起帶進來），再用目前表單「尚未儲存／送審」
+  // 的值覆蓋過去——只覆蓋這個表單真的有在編輯的欄位，其餘一律照原樣沿用，
+  // 不再手動列舉一份會漏欄位的白名單。徽章顯示設定（certificationBadgesVisible）
+  // 刻意不在這裡覆蓋：它透過獨立 API 立即儲存，預覽應該顯示「目前實際生效」
+  // 的顯示狀態，不是表單裡尚未送出的徽章申請草稿。
   const previewFactory = {
-    id: factory.id,
+    ...factory,
     name,
     description,
     avatarUrl: avatarPreview ?? null,
     coverImageUrl: coverPreview ?? null,
-    businessType: factory.businessType,
     operationStatus,
     industry,
     subIndustry,
@@ -817,11 +840,6 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
     businessNote,
     capitalLevel,
     foundedYear: foundedYear ? parseInt(foundedYear) : null,
-    avgRating: factory.avgRating,
-    reviewCount: factory.reviewCount,
-    avgResponseHours: (factory as any).avgResponseHours,
-    certificationBadges,
-    products: factory.products ?? [],
   };
 
   const { user: previewUser, isAuthenticated: previewIsAuthenticated } = useAuth();
@@ -1281,23 +1299,59 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
         </div>
 
         {/* ── 徽章系統 ── */}
-        <div className="py-6 space-y-4">
-          <div>
-            <p className="text-sm font-semibold text-foreground">徽章系統</p>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              選擇工廠具備的認證／標章，並可為每個徽章補充說明與證明圖片（僅供管理員審核使用，不會公開顯示）。
-              徽章與證明資料會隨基本資料一起送審／提交修改申請。基於資安考量，證明圖片送出後即無法再於本頁面查看，
-              請於上傳前先確認縮圖是否為正確的檔案；如需補充或更換，請直接新增即可。
-            </p>
+        <div className="py-6 space-y-6">
+          {ownedBadgeIds.length > 0 && (
+            <div className="space-y-3">
+              <div>
+                <p className="text-sm font-semibold text-foreground">已獲得徽章</p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  勾選要顯示於工廠頁面及搜尋卡片的徽章，顯示設定可自由變更，無須重新送審。
+                </p>
+              </div>
+              <div className="grid sm:grid-cols-2 gap-2">
+                {ownedBadgeIds.map(badgeId => {
+                  const def = CERTIFICATION_BADGE_MAP[badgeId];
+                  if (!def) return null;
+                  return (
+                    <label
+                      key={badgeId}
+                      className="flex items-center gap-2.5 px-3 py-2 rounded-lg border bg-muted/30 text-sm hover:bg-muted/50 cursor-pointer"
+                    >
+                      <BadgeIcon badgeId={badgeId} size={24} />
+                      <span className="flex-1 truncate">{def.name}</span>
+                      <span className="text-[11px] text-green-700 bg-green-100 rounded px-1.5 py-0.5 shrink-0">已獲得</span>
+                      <span className="flex items-center gap-1.5 shrink-0" title="顯示於公開頁面">
+                        <Checkbox
+                          checked={visibleBadgeIds.includes(badgeId)}
+                          onCheckedChange={(checked) => handleToggleBadgeVisibility(badgeId, checked === true)}
+                        />
+                        <span className="text-xs text-muted-foreground">顯示於公開頁面</span>
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          <div className="space-y-4">
+            <div>
+              <p className="text-sm font-semibold text-foreground">申請新徽章</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                選擇工廠具備的認證／標章，並可為每個徽章補充說明與證明圖片（僅供管理員審核使用，不會公開顯示）。
+                徽章與證明資料會隨基本資料一起送審／提交修改申請。基於資安考量，證明圖片送出後即無法再於本頁面查看，
+                請於上傳前先確認縮圖是否為正確的檔案；如需補充或更換，請直接新增即可。審核通過後即成為已獲得徽章，並預設公開顯示。
+              </p>
+            </div>
+            <BadgePicker selected={certificationBadges} onChange={handleBadgesChange} disabled={isLocked} excludeIds={ownedBadgeIds} />
+            <BadgeEvidenceEditor
+              badgeIds={certificationBadges.filter(id => !ownedBadgeIds.includes(id))}
+              evidence={certificationEvidence}
+              onEvidenceChange={setCertificationEvidence}
+              onUploadImage={handleUploadBadgeEvidenceImage}
+              disabled={isLocked}
+            />
           </div>
-          <BadgePicker selected={certificationBadges} onChange={handleBadgesChange} disabled={isLocked} />
-          <BadgeEvidenceEditor
-            badgeIds={certificationBadges}
-            evidence={certificationEvidence}
-            onEvidenceChange={setCertificationEvidence}
-            onUploadImage={handleUploadBadgeEvidenceImage}
-            disabled={isLocked}
-          />
         </div>
 
         {/* ── 儲存按鈕 ── */}

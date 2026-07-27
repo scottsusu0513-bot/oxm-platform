@@ -5,22 +5,30 @@ import { Search } from "lucide-react";
 import { CERTIFICATION_BADGES, BADGE_CATEGORY_LABELS, sortBadgeIds, type BadgeCategory } from "@shared/badges";
 import { BadgeIcon } from "./BadgeIcon";
 
-/** 搜尋 + 複選徽章清單，用於 FactoryDashboard「徽章系統」區塊。 */
-export function BadgePicker({ selected, onChange, disabled }: {
+/**
+ * 搜尋 + 複選徽章清單，用於 FactoryDashboard「徽章系統」的「申請新徽章」
+ * 區塊。excludeIds（已獲得的徽章）一律不出現在清單中——已獲得的徽章只能
+ * 在上方「已獲得徽章」區塊切換顯示／隱藏，不會、也不需要再出現在這裡重新
+ * 申請一次。
+ */
+export function BadgePicker({ selected, onChange, disabled, excludeIds }: {
   selected: string[];
   onChange: (ids: string[]) => void;
   disabled?: boolean;
+  excludeIds?: string[];
 }) {
   const [query, setQuery] = useState("");
+  const excludeSet = useMemo(() => new Set(excludeIds ?? []), [excludeIds]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return CERTIFICATION_BADGES;
-    return CERTIFICATION_BADGES.filter(b =>
+    const base = CERTIFICATION_BADGES.filter(b => !excludeSet.has(b.id));
+    if (!q) return base;
+    return base.filter(b =>
       b.name.toLowerCase().includes(q) ||
       b.id.toLowerCase().includes(q)
     );
-  }, [query]);
+  }, [query, excludeSet]);
 
   const grouped = useMemo(() => {
     const groups = new Map<BadgeCategory, typeof CERTIFICATION_BADGES[number][]>();
