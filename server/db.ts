@@ -3394,37 +3394,48 @@ export async function getRetryableNewsNotifications(newsId: number): Promise<{ i
     .where(and(eq(newsNotifications.newsId, newsId), inArray(newsNotifications.status, ["pending", "failed"])));
 }
 
-// ===== 登入彈窗（綁定既有「平台消息」公告的登入曝光入口）=====
+// ===== 登入彈窗（綁定既有「平台消息／版本更新」公告的登入曝光入口）=====
 //
 // 這個表的資料結構刻意不做「草稿／已發布／封存」狀態機——announcements 這張表
 // 本身就沒有這個概念（一筆存在即代表已發布，delete 是直接硬刪除，沒有軟刪除
 // 欄位）。因此這裡「公告是否有效可綁定」的唯一判斷依據簡化為：
 //   1. announcementId 對應的公告仍然存在（沒被刪除）
-//   2. 該公告的 type === "news"（平台消息）
+//   2. 該公告的 type 屬於登入彈窗可綁定的白名單（見 LOGIN_POPUP_BINDABLE_ANNOUNCEMENT_TYPES）
 // 這與需求文件假設的「草稿/已發布/已封存」狀態機不同，是依實際 schema 現況
 // 做的最小合理調整。
 
 // 「一天一次」判定沿用上方 pageViews 已經驗證過的 twDateStr()（台灣時間
 // YYYY-MM-DD），確保每天重新計算的基準是 Asia/Taipei 00:00，而不是每隔 24 小時。
 
-async function getValidNewsAnnouncementById(announcementId: number) {
+// 登入彈窗可綁定的公告類型：正向白名單，而非「只要不是 maintenance 就放行」
+// 的反向判斷——未來新增公告類型時，預設不可綁定，需要明確加進這個清單才會
+// 開放，避免被意外放行。
+export const LOGIN_POPUP_BINDABLE_ANNOUNCEMENT_TYPES: readonly AnnouncementType[] = ["news", "update"];
+
+function isLoginPopupBindableAnnouncementType(type: AnnouncementType): boolean {
+  return (LOGIN_POPUP_BINDABLE_ANNOUNCEMENT_TYPES as readonly string[]).includes(type);
+}
+
+async function getBindableLoginPopupAnnouncementById(announcementId: number) {
   const db = await getDb();
   if (!db) return null;
   const [row] = await db.select().from(announcements).where(eq(announcements.id, announcementId)).limit(1);
   if (!row) return null;
-  if (row.type !== "news") return null;
+  if (!isLoginPopupBindableAnnouncementType(row.type)) return null;
   return row;
 }
 
-/** 管理員後台專用：可綁定的公告清單（類型為平台消息）。給下拉／可搜尋選擇器用，不含草稿/其他類型。 */
-export async function getPublishedNewsAnnouncementsForPicker(keyword?: string) {
+/** 管理員後台專用：登入彈窗可綁定的公告清單（平台消息／版本更新，不含停機
+ * 維護）。給下拉／可搜尋選擇器用，不含草稿/其他類型；每筆回傳 type 供前端
+ * 標示「平台消息／版本更新」。 */
+export async function getBindableAnnouncementsForLoginPopupPicker(keyword?: string) {
   const db = await getDb();
   if (!db) return [];
-  const conditions = [eq(announcements.type, "news")];
+  const conditions = [inArray(announcements.type, LOGIN_POPUP_BINDABLE_ANNOUNCEMENT_TYPES as AnnouncementType[])];
   if (keyword && keyword.trim()) {
     conditions.push(like(announcements.title, `%${keyword.trim()}%`));
   }
-  return db.select({ id: announcements.id, title: announcements.title, createdAt: announcements.createdAt })
+  return db.select({ id: announcements.id, title: announcements.title, type: announcements.type, createdAt: announcements.createdAt })
     .from(announcements)
     .where(and(...conditions))
     .orderBy(desc(announcements.createdAt))
@@ -3441,13 +3452,14 @@ export type LoginPopupAdminRow = {
   updatedAt: Date;
   boundAnnouncementTitle: string | null;
   boundAnnouncementCreatedAt: Date | null;
+  boundAnnouncementType: AnnouncementType | null;
   boundAnnouncementValid: boolean;
   // 啟用中彈窗依 updatedAt DESC、id DESC 排序後的順位（1~5）；未啟用則為 null。
   activeRank: number | null;
 };
 
-/** 管理員後台列表：帶出綁定公告的標題/發布日期、即時判斷綁定是否仍然有效、
- * 以及啟用中彈窗目前的排序順位（1~5，對應前台會顯示的順序）。 */
+/** 管理員後台列表：帶出綁定公告的標題/類型/發布日期、即時判斷綁定是否仍然
+ * 有效、以及啟用中彈窗目前的排序順位（1~5，對應前台會顯示的順序）。 */
 export async function getLoginPopupsForAdmin(): Promise<LoginPopupAdminRow[]> {
   const db = await getDb();
   if (!db) return [];
@@ -3481,9 +3493,12 @@ export async function getLoginPopupsForAdmin(): Promise<LoginPopupAdminRow[]> {
       updatedAt: r.updatedAt,
       boundAnnouncementTitle: r.boundAnnouncementTitle,
       boundAnnouncementCreatedAt: r.boundAnnouncementCreatedAt,
+      boundAnnouncementType: r.boundAnnouncementType,
       // 公告已刪除（announcementId 被 FK 設成 NULL 或找不到 join 結果）或類型已被
-      // 改成非平台消息，都視為「綁定公告已失效」。
-      boundAnnouncementValid: r.announcementId != null && r.boundAnnouncementTitle != null && r.boundAnnouncementType === "news",
+      // 改成登入彈窗白名單以外的類型（例如被改成停機維護），都視為「綁定公告
+      // 已失效」。
+      boundAnnouncementValid: r.announcementId != null && r.boundAnnouncementTitle != null
+        && r.boundAnnouncementType != null && isLoginPopupBindableAnnouncementType(r.boundAnnouncementType),
       activeRank,
     };
   });
@@ -3529,9 +3544,9 @@ export async function createLoginPopup(data: {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
 
-  const announcement = await getValidNewsAnnouncementById(data.announcementId);
+  const announcement = await getBindableLoginPopupAnnouncementById(data.announcementId);
   if (!announcement) {
-    throw new Error("綁定的公告不存在，或不是已發布的平台消息公告");
+    throw new Error("綁定的公告不存在，或不是可用的平台消息／版本更新公告");
   }
 
   const isActive = data.isActive ?? false;
@@ -3557,9 +3572,9 @@ export async function updateLoginPopup(id: number, data: Partial<{
   if (!db) throw new Error("DB not available");
 
   if (data.announcementId !== undefined) {
-    const announcement = await getValidNewsAnnouncementById(data.announcementId);
+    const announcement = await getBindableLoginPopupAnnouncementById(data.announcementId);
     if (!announcement) {
-      throw new Error("綁定的公告不存在，或不是已發布的平台消息公告");
+      throw new Error("綁定的公告不存在，或不是可用的平台消息／版本更新公告");
     }
   }
 
@@ -3570,11 +3585,11 @@ export async function updateLoginPopup(id: number, data: Partial<{
     if (!current) throw new Error("找不到該登入彈窗");
     const effectiveAnnouncementId = data.announcementId ?? current.announcementId;
     if (!effectiveAnnouncementId) {
-      throw new Error("綁定公告已失效，請重新綁定有效的平台消息公告後才能啟用");
+      throw new Error("綁定公告已失效，請重新綁定有效的平台消息或版本更新公告後才能啟用");
     }
-    const announcement = await getValidNewsAnnouncementById(effectiveAnnouncementId);
+    const announcement = await getBindableLoginPopupAnnouncementById(effectiveAnnouncementId);
     if (!announcement) {
-      throw new Error("綁定公告已失效，請重新綁定有效的平台消息公告後才能啟用");
+      throw new Error("綁定公告已失效，請重新綁定有效的平台消息或版本更新公告後才能啟用");
     }
   }
 
@@ -3600,10 +3615,10 @@ export type LoginPopupToShowItem = {
 
 /**
  * 共用查詢：目前有效且啟用中的登入彈窗，最多 MAX_ACTIVE_LOGIN_POPUPS 則。
- * 顯示條件只有：isActive=true、綁定公告存在且為平台消息；沒有時間區間
- * 判斷——啟用立即生效、停用立即停止顯示。不論訪客或會員都是同一份資料，
- * 差別只在於「今天是否已看過」這一層要不要檢查（見下方兩個呼叫端函式），
- * 避免維護兩份幾乎一樣的 SQL。
+ * 顯示條件只有：isActive=true、綁定公告存在且類型屬於登入彈窗可綁定白名單
+ * （平台消息／版本更新，不含停機維護）；沒有時間區間判斷——啟用立即生效、
+ * 停用立即停止顯示。不論訪客或會員都是同一份資料，差別只在於「今天是否已
+ * 看過」這一層要不要檢查（見下方兩個呼叫端函式），避免維護兩份幾乎一樣的 SQL。
  *
  * 前台顯示順序：最舊在最上方、最新在最下方（updatedAt asc、id asc）。
  * 這跟「選出哪 5 則」是兩件事——管理員後台列表（getLoginPopupsForAdmin）與
@@ -3627,7 +3642,7 @@ async function getActiveLoginPopupsForDisplay(): Promise<LoginPopupToShowItem[]>
     .innerJoin(announcements, eq(loginPopups.announcementId, announcements.id))
     .where(and(
       eq(loginPopups.isActive, true),
-      eq(announcements.type, "news"),
+      inArray(announcements.type, LOGIN_POPUP_BINDABLE_ANNOUNCEMENT_TYPES as AnnouncementType[]),
     ))
     // 這裡刻意維持 desc + limit（而不是直接改成 asc 再 limit）：desc 排序後
     // LIMIT 選出的一定是「目前啟用中最新的 MAX_ACTIVE_LOGIN_POPUPS 則」，跟

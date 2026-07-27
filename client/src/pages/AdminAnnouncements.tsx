@@ -296,9 +296,10 @@ function AdminAnnouncementsContent() {
 }
 
 // ── 登入彈窗管理 ──────────────────────────────────────────────────────────
-// 登入彈窗不是獨立公告系統，只是既有「平台消息」公告的登入曝光入口，因此這裡
-// 完全不提供自由輸入 announcementId／URL 的欄位，只能透過下方可搜尋選擇器從
-// 「已發布、類型為平台消息」的公告中挑選（見 loginPopup.announcementOptions）。
+// 登入彈窗不是獨立公告系統，只是既有公告的登入曝光入口，因此這裡完全不提供
+// 自由輸入 announcementId／URL 的欄位，只能透過下方可搜尋選擇器從「已發布、
+// 類型為平台消息或版本更新」的公告中挑選（見 loginPopup.announcementOptions；
+// 停機維護不納入，不可綁定）。
 
 type PopupFormState = {
   title: string;
@@ -318,6 +319,9 @@ function LoginPopupManager() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [keyword, setKeyword] = useState("");
   const [selectedAnnouncementTitle, setSelectedAnnouncementTitle] = useState("");
+  // 只是為了在選擇器按鈕與編輯回填時顯示「平台消息／版本更新」標示用，不會
+  // 送到後端——實際綁定與驗證一律以 announcementId 為準，type 由後端查詢。
+  const [selectedAnnouncementType, setSelectedAnnouncementType] = useState<"news" | "update" | "maintenance" | null>(null);
 
   const { data: announcementOptions = [] } = trpc.loginPopup.announcementOptions.useQuery({ keyword: keyword || undefined });
 
@@ -326,6 +330,7 @@ function LoginPopupManager() {
     setEditingId(null);
     setShowForm(false);
     setSelectedAnnouncementTitle("");
+    setSelectedAnnouncementType(null);
     setKeyword("");
   };
 
@@ -373,6 +378,7 @@ function LoginPopupManager() {
       isActive: item.isActive,
     });
     setSelectedAnnouncementTitle(item.boundAnnouncementTitle ?? "");
+    setSelectedAnnouncementType(item.boundAnnouncementType);
     setEditingId(item.id);
     setShowForm(true);
   };
@@ -398,7 +404,7 @@ function LoginPopupManager() {
 
   const handleToggleActive = (item: (typeof items)[number]) => {
     if (!item.isActive && !item.boundAnnouncementValid) {
-      toast.error("綁定公告已失效，請先重新綁定有效的平台消息公告");
+      toast.error("綁定公告已失效，請先重新綁定有效的平台消息或版本更新公告");
       return;
     }
     toggleMut.mutate({ id: item.id, isActive: !item.isActive });
@@ -431,11 +437,22 @@ function LoginPopupManager() {
               <Textarea value={form.summary} onChange={e => setForm(p => ({ ...p, summary: e.target.value }))} placeholder="顯示在彈窗中的短文摘要" rows={3} className="mt-1" />
             </div>
             <div>
-              <Label>綁定平台公告 *</Label>
+              <Label>綁定公告 *</Label>
               <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
                 <PopoverTrigger asChild>
                   <Button variant="outline" role="combobox" aria-expanded={pickerOpen} className="w-full justify-between mt-1 font-normal">
-                    <span className="truncate">{selectedAnnouncementTitle || "選擇平台消息公告..."}</span>
+                    <span className="truncate">
+                      {selectedAnnouncementTitle ? (
+                        <>
+                          {selectedAnnouncementType && (
+                            <Badge className={`${(TYPE_CONFIG[selectedAnnouncementType] ?? TYPE_CONFIG.news).className} border text-xs mr-1.5 align-middle`}>
+                              {(TYPE_CONFIG[selectedAnnouncementType] ?? TYPE_CONFIG.news).label}
+                            </Badge>
+                          )}
+                          {selectedAnnouncementTitle}
+                        </>
+                      ) : "選擇平台消息或版本更新..."}
+                    </span>
                     <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                   </Button>
                 </PopoverTrigger>
@@ -443,7 +460,7 @@ function LoginPopupManager() {
                   <Command shouldFilter={false}>
                     <CommandInput placeholder="搜尋公告標題..." value={keyword} onValueChange={setKeyword} />
                     <CommandList>
-                      <CommandEmpty>沒有符合的平台消息公告</CommandEmpty>
+                      <CommandEmpty>沒有符合的平台消息或版本更新</CommandEmpty>
                       {announcementOptions.map(opt => (
                         <CommandItem
                           key={opt.id}
@@ -451,6 +468,7 @@ function LoginPopupManager() {
                           onSelect={() => {
                             setForm(p => ({ ...p, announcementId: opt.id }));
                             setSelectedAnnouncementTitle(opt.title);
+                            setSelectedAnnouncementType(opt.type);
                             setPickerOpen(false);
                           }}
                         >
@@ -458,7 +476,7 @@ function LoginPopupManager() {
                           <div className="flex flex-col overflow-hidden">
                             <span className="truncate">{opt.title}</span>
                             <span className="text-xs text-muted-foreground">
-                              平台消息・{new Date(opt.createdAt).toLocaleDateString("zh-TW")}
+                              {(TYPE_CONFIG[opt.type] ?? TYPE_CONFIG.news).label}・{new Date(opt.createdAt).toLocaleDateString("zh-TW")}
                             </span>
                           </div>
                         </CommandItem>
@@ -467,7 +485,7 @@ function LoginPopupManager() {
                   </Command>
                 </PopoverContent>
               </Popover>
-              <p className="text-xs text-muted-foreground mt-1">只能選擇已發布、類型為「平台消息」的公告</p>
+              <p className="text-xs text-muted-foreground mt-1">可選擇已發布的「平台消息」或「版本更新」；停機維護不納入。</p>
             </div>
             <div className="flex items-center gap-3">
               <Switch checked={form.isActive} onCheckedChange={v => setForm(p => ({ ...p, isActive: v }))} />
@@ -517,7 +535,13 @@ function LoginPopupManager() {
                     <p className="font-semibold text-sm">{item.title}</p>
                     <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{item.summary}</p>
                     <p className="text-xs text-muted-foreground mt-1">
-                      綁定公告：{item.boundAnnouncementTitle ?? "（已失效或不存在）"}
+                      綁定公告：
+                      {item.boundAnnouncementTitle ? (
+                        <>
+                          {item.boundAnnouncementType && `${(TYPE_CONFIG[item.boundAnnouncementType] ?? TYPE_CONFIG.news).label}・`}
+                          {item.boundAnnouncementTitle}
+                        </>
+                      ) : "（已失效或不存在）"}
                       {item.boundAnnouncementCreatedAt && (
                         <> ・發布於 {new Date(item.boundAnnouncementCreatedAt).toLocaleDateString("zh-TW")}</>
                       )}

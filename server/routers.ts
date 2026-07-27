@@ -4776,18 +4776,19 @@ export const appRouter = router({
     }),
   }),
 
-  // ===== 登入彈窗（綁定既有「平台消息」公告的登入曝光入口）=====
+  // ===== 登入彈窗（綁定既有「平台消息／版本更新」公告的登入曝光入口）=====
   loginPopup: router({
     // 管理員：列表（含綁定公告是否仍然有效）
     adminList: adminProcedure.query(async () => {
       return db.getLoginPopupsForAdmin();
     }),
-    // 管理員：綁定公告選擇器的候選清單——只回傳已發布的「平台消息」，
-    // 不讓前端自己組 announcementId，也不暴露草稿/其他類型公告。
+    // 管理員：綁定公告選擇器的候選清單——只回傳已發布的「平台消息」與
+    // 「版本更新」，不含「停機維護」，不讓前端自己組 announcementId，也不
+    // 暴露草稿/其他類型公告。
     announcementOptions: adminProcedure.input(z.object({
       keyword: z.string().max(200).optional(),
     })).query(async ({ input }) => {
-      return db.getPublishedNewsAnnouncementsForPicker(input.keyword);
+      return db.getBindableAnnouncementsForLoginPopupPicker(input.keyword);
     }),
     create: adminProcedure.input(z.object({
       title: z.string().min(1).max(200),

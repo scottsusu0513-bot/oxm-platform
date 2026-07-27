@@ -6,8 +6,13 @@
  * 重要架構備註：announcements 表沒有「草稿／已發布／封存」狀態機——一筆存在
  * 的公告本身就代表已發布，announcement.delete 是硬刪除，沒有軟刪除欄位。
  * 因此「無法綁定草稿公告」在這個 schema 下沒有獨立可測的程式分支；等價的
- * 保護已經由「無法綁定不存在的公告」與「無法綁定非平台消息公告」這兩個測試
+ * 保護已經由「無法綁定不存在的公告」與「無法綁定停機維護公告」這兩個測試
  * 涵蓋。
+ *
+ * 可綁定的公告類型是正向白名單 ["news", "update"]（見 server/db.ts 的
+ * LOGIN_POPUP_BINDABLE_ANNOUNCEMENT_TYPES），平台消息與版本更新都可以綁定，
+ * 只有停機維護不可綁定；下方測試同時涵蓋「原本合法綁定的公告事後被改成
+ * 停機維護」這種綁定當下合法、後來才失效的情境。
  *
  * 前台一次最多顯示 5 則登入彈窗；同時啟用中的登入彈窗也最多 5 則，這條上限
  * 由後端 enforceMaxFiveActiveLoginPopups()（server/db.ts）保證，新增/編輯
@@ -98,7 +103,8 @@ const adminCtx = () => createAuthContext({ role: "admin" });
 const userCtx = (id: number) => createAuthContext({ role: "user", id });
 
 let newsAnnouncementId: number;
-let nonNewsAnnouncementId: number;
+let updateAnnouncementId: number;
+let maintenanceAnnouncementId: number;
 let deletableNewsAnnouncementId: number;
 
 let userA: number, userB: number, userC: number, userD: number, userE: number, userF: number;
@@ -111,7 +117,8 @@ const runId = `${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
 
 beforeAll(async () => {
   newsAnnouncementId = await db.createAnnouncement({ title: "登入彈窗測試公告（平台消息）", content: "測試內容", type: "news" });
-  nonNewsAnnouncementId = await db.createAnnouncement({ title: "登入彈窗測試公告（版本更新）", content: "測試內容", type: "update" });
+  updateAnnouncementId = await db.createAnnouncement({ title: "登入彈窗測試公告（版本更新）", content: "測試內容", type: "update" });
+  maintenanceAnnouncementId = await db.createAnnouncement({ title: "登入彈窗測試公告（停機維護）", content: "測試內容", type: "maintenance" });
   deletableNewsAnnouncementId = await db.createAnnouncement({ title: "即將被刪除的平台消息公告", content: "測試內容", type: "news" });
 
   [userA, userB, userC, userD, userE, userF] = await Promise.all(
@@ -133,21 +140,52 @@ describe("loginPopup.create: 綁定驗證", () => {
     expect(created).toBeTruthy();
     expect(created?.boundAnnouncementValid).toBe(true);
     expect(created?.boundAnnouncementTitle).toBe("登入彈窗測試公告（平台消息）");
+    expect(created?.boundAnnouncementType).toBe("news");
   });
 
-  it("無法綁定草稿公告 —— 本 schema 沒有草稿狀態，等價保護見下方兩個測試", () => {
+  it("管理員可建立綁定有效版本更新的登入彈窗", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    const result = await caller.loginPopup.create({
+      title: "測試登入彈窗（版本更新）", summary: "測試短文", announcementId: updateAnnouncementId, isActive: false,
+    });
+    expect(result.success).toBe(true);
+
+    const list = await caller.loginPopup.adminList();
+    const created = list.find(p => p.id === result.id);
+    expect(created).toBeTruthy();
+    expect(created?.boundAnnouncementValid).toBe(true);
+    expect(created?.boundAnnouncementTitle).toBe("登入彈窗測試公告（版本更新）");
+    expect(created?.boundAnnouncementType).toBe("update");
+  });
+
+  it("啟用綁定版本更新的登入彈窗後，會由 toShow 回傳", async () => {
+    const admin = appRouter.createCaller(adminCtx());
+    const created = await admin.loginPopup.create({
+      title: "版本更新-前台可見測試", summary: "短文", announcementId: updateAnnouncementId, isActive: true,
+    });
+    try {
+      const freshUserId = await ensureTestUser(`test-login-popup-user-update-toshow-${runId}`);
+      const caller = appRouter.createCaller(userCtx(freshUserId));
+      const { items } = await caller.loginPopup.toShow();
+      expect(items.find(i => i.id === created.id)).toBeTruthy();
+    } finally {
+      await deactivate(admin, created.id);
+    }
+  });
+
+  it("無法綁定草稿公告 —— 本 schema 沒有草稿狀態，等價保護見下方測試", () => {
     // announcements 表沒有 status/isDraft 欄位，delete 是硬刪除、沒有軟刪除，
     // 所以「草稿」在這裡不是一個可以真實建構出來的狀態。後端唯一能驗證、也
-    // 確實有驗證的兩個條件是：公告必須存在、公告必須是 news 類型——這兩點
-    // 分別由下面兩個測試覆蓋，效果等同於擋下任何「不是正式已發布平台消息」
-    // 的綁定嘗試。
+    // 確實有驗證的兩個條件是：公告必須存在、公告類型必須屬於登入彈窗可綁定
+    // 白名單（news 或 update）——這兩點分別由下面的測試覆蓋，效果等同於擋下
+    // 任何「不是正式已發布、可綁定類型」的綁定嘗試。
     expect(true).toBe(true);
   });
 
-  it("非平台消息公告不能綁定（也就不能啟用）", async () => {
+  it("停機維護公告不能綁定（也就不能啟用）", async () => {
     const caller = appRouter.createCaller(adminCtx());
     await expect(caller.loginPopup.create({
-      title: "不應建立成功", summary: "短文", announcementId: nonNewsAnnouncementId,
+      title: "不應建立成功", summary: "短文", announcementId: maintenanceAnnouncementId,
     })).rejects.toThrow();
   });
 
@@ -156,6 +194,106 @@ describe("loginPopup.create: 綁定驗證", () => {
     await expect(caller.loginPopup.create({
       title: "不應建立成功", summary: "短文", announcementId: 999999999,
     })).rejects.toThrow();
+  });
+});
+
+// ── 1b. 公告選擇器（announcementOptions） ─────────────────────────────────
+describe("loginPopup.announcementOptions: 可綁定公告選擇器", () => {
+  it("回傳平台消息", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    const options = await caller.loginPopup.announcementOptions({});
+    const opt = options.find(o => o.id === newsAnnouncementId);
+    expect(opt).toBeTruthy();
+    expect(opt?.type).toBe("news");
+  });
+
+  it("回傳版本更新", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    const options = await caller.loginPopup.announcementOptions({});
+    const opt = options.find(o => o.id === updateAnnouncementId);
+    expect(opt).toBeTruthy();
+    expect(opt?.type).toBe("update");
+  });
+
+  it("不回傳停機維護", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    const options = await caller.loginPopup.announcementOptions({});
+    expect(options.find(o => o.id === maintenanceAnnouncementId)).toBeUndefined();
+  });
+});
+
+// ── 1c. 重新綁定與類型事後被改成停機維護 ──────────────────────────────────
+describe("loginPopup.update: 重新綁定與綁定公告事後失效", () => {
+  it("既有登入彈窗可從平台消息重新綁定至版本更新", async () => {
+    const admin = appRouter.createCaller(adminCtx());
+    const created = await admin.loginPopup.create({
+      title: "重新綁定測試彈窗", summary: "短文", announcementId: newsAnnouncementId, isActive: false,
+    });
+    try {
+      await admin.loginPopup.update({ id: created.id, announcementId: updateAnnouncementId });
+      const list = await admin.loginPopup.adminList();
+      const row = list.find(p => p.id === created.id);
+      expect(row?.boundAnnouncementValid).toBe(true);
+      expect(row?.boundAnnouncementType).toBe("update");
+      expect(row?.boundAnnouncementTitle).toBe("登入彈窗測試公告（版本更新）");
+    } finally {
+      await deactivate(admin, created.id);
+    }
+  });
+
+  it("update 綁定停機維護公告會被拒絕", async () => {
+    const admin = appRouter.createCaller(adminCtx());
+    const created = await admin.loginPopup.create({
+      title: "更新綁定停機維護-應失敗", summary: "短文", announcementId: newsAnnouncementId, isActive: false,
+    });
+    try {
+      await expect(admin.loginPopup.update({ id: created.id, announcementId: maintenanceAnnouncementId })).rejects.toThrow();
+    } finally {
+      await deactivate(admin, created.id);
+    }
+  });
+
+  it("update 綁定不存在的公告會被拒絕", async () => {
+    const admin = appRouter.createCaller(adminCtx());
+    const created = await admin.loginPopup.create({
+      title: "更新綁定不存在公告-應失敗", summary: "短文", announcementId: newsAnnouncementId, isActive: false,
+    });
+    try {
+      await expect(admin.loginPopup.update({ id: created.id, announcementId: 999999999 })).rejects.toThrow();
+    } finally {
+      await deactivate(admin, created.id);
+    }
+  });
+
+  it("已綁定公告若後來被改成停機維護：管理列表判定失效、前台不再回傳、不可重新啟用", async () => {
+    const admin = appRouter.createCaller(adminCtx());
+    const downgradableAnnId = await db.createAnnouncement({ title: "即將被降級為停機維護的公告", content: "測試", type: "news" });
+    const created = await admin.loginPopup.create({
+      title: "綁定公告事後降級測試彈窗", summary: "短文", announcementId: downgradableAnnId, isActive: true,
+    });
+
+    try {
+      const freshUserId = await ensureTestUser(`test-login-popup-user-downgrade-${runId}`);
+      const caller = appRouter.createCaller(userCtx(freshUserId));
+      // 降級前：仍是合法可綁定類型，前台看得到。
+      expect((await caller.loginPopup.toShow()).items.find(i => i.id === created.id)).toBeTruthy();
+
+      await db.updateAnnouncement(downgradableAnnId, { type: "maintenance" });
+
+      const list = await admin.loginPopup.adminList();
+      const row = list.find(p => p.id === created.id);
+      expect(row?.boundAnnouncementValid).toBe(false);
+      expect(row?.boundAnnouncementType).toBe("maintenance");
+
+      const freshUserId2 = await ensureTestUser(`test-login-popup-user-downgrade-2-${runId}`);
+      const caller2 = appRouter.createCaller(userCtx(freshUserId2));
+      expect((await caller2.loginPopup.toShow()).items.find(i => i.id === created.id)).toBeUndefined();
+
+      // 失效後禁止（重新）啟用，即使目前資料庫裡 isActive 仍是 true。
+      await expect(admin.loginPopup.update({ id: created.id, isActive: true })).rejects.toThrow();
+    } finally {
+      await deactivate(admin, created.id);
+    }
   });
 });
 
@@ -212,7 +350,7 @@ describe("loginPopup.toShow: 未登入訪客", () => {
     }
   });
 
-  it("停用的消息、非平台消息、綁定公告已失效者，訪客一樣看不到", async () => {
+  it("停用的消息、停機維護、綁定公告已失效者，訪客一樣看不到", async () => {
     const admin = appRouter.createCaller(adminCtx());
     const inactive = await admin.loginPopup.create({
       title: "訪客-停用測試", summary: "短文", announcementId: newsAnnouncementId, isActive: true,
@@ -230,9 +368,10 @@ describe("loginPopup.toShow: 未登入訪客", () => {
       const { items } = await guest.loginPopup.toShow();
       expect(items.find(i => i.id === inactive.id)).toBeUndefined();
       expect(items.find(i => i.id === invalidated.id)).toBeUndefined();
-      // 非平台消息公告從一開始就無法綁定／啟用（見 loginPopup.create: 綁定驗證），
-      // 所以不存在「非 news 但啟用中」的資料可以測，這條規則本來就已經在建立
-      // 時被擋下，訪客/會員都不可能看到這種資料。
+      // 非白名單類型（停機維護）的公告從一開始就無法綁定／啟用（見
+      // loginPopup.create: 綁定驗證），所以不存在「綁定停機維護但啟用中」的
+      // 資料可以測，這條規則本來就已經在建立時被擋下，訪客/會員都不可能
+      // 看到這種資料。
     } finally {
       await deactivate(admin, invalidated.id);
     }
