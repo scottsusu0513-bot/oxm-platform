@@ -3604,6 +3604,11 @@ export type LoginPopupToShowItem = {
  * 判斷——啟用立即生效、停用立即停止顯示。不論訪客或會員都是同一份資料，
  * 差別只在於「今天是否已看過」這一層要不要檢查（見下方兩個呼叫端函式），
  * 避免維護兩份幾乎一樣的 SQL。
+ *
+ * 前台顯示順序：最舊在最上方、最新在最下方（updatedAt asc、id asc）。
+ * 這跟「選出哪 5 則」是兩件事——管理員後台列表（getLoginPopupsForAdmin）與
+ * 淘汰邏輯（enforceMaxFiveActiveLoginPopups）維持原本的 updatedAt desc、
+ * id desc，不受這裡影響。
  */
 async function getActiveLoginPopupsForDisplay(): Promise<LoginPopupToShowItem[]> {
   const db = await getDb();
@@ -3624,10 +3629,19 @@ async function getActiveLoginPopupsForDisplay(): Promise<LoginPopupToShowItem[]>
       eq(loginPopups.isActive, true),
       eq(announcements.type, "news"),
     ))
-    // 排序：1) 最新更新（updatedAt desc）2) updatedAt 相同時以 id desc 穩定排序。
+    // 這裡刻意維持 desc + limit（而不是直接改成 asc 再 limit）：desc 排序後
+    // LIMIT 選出的一定是「目前啟用中最新的 MAX_ACTIVE_LOGIN_POPUPS 則」，跟
+    // 前台最終顯示順序無關——這一步只負責選出正確的候選集合。若在這裡就
+    // 改成 asc + limit，選到的會是「最舊的 5 則」，只有剛好啟用數 ≤5 則時
+    // 結果才會剛好相同，一旦超過 5 則就會選錯集合（把不該顯示的舊資料
+    // 顯示出來、擠掉真正該顯示的最新幾則）。
     .orderBy(desc(loginPopups.updatedAt), desc(loginPopups.id))
     .limit(MAX_ACTIVE_LOGIN_POPUPS);
 
+  // 選出「最新 MAX_ACTIVE_LOGIN_POPUPS 則」這個候選集合之後，才在應用層把
+  // 陣列反轉成前台要求的顯示順序：最舊在最上方、最新在最下方
+  // （等同 updatedAt asc、id asc）。只調整這個集合內部的顯示順序，不影響
+  // 上面 SQL 選中的是哪幾筆。
   return rows
     .filter((r): r is typeof r & { announcementId: number } => r.announcementId != null) // 理論上 inner join 已保證非 null，這裡再防一層
     .map(r => ({
@@ -3637,7 +3651,8 @@ async function getActiveLoginPopupsForDisplay(): Promise<LoginPopupToShowItem[]>
       announcementId: r.announcementId,
       announcementTitle: r.announcementTitle,
       updatedAt: r.updatedAt,
-    }));
+    }))
+    .reverse();
 }
 
 /**

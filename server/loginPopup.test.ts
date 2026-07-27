@@ -191,7 +191,7 @@ describe("loginPopup.toShow: 未登入訪客", () => {
     }
   });
 
-  it("未登入訪客最多取得 5 則，排序為 updatedAt DESC、id DESC", async () => {
+  it("未登入訪客最多取得 5 則，顯示順序為 updatedAt ASC、id ASC（最舊在最上方、最新在最下方）", async () => {
     const admin = appRouter.createCaller(adminCtx());
     const created: number[] = [];
     try {
@@ -199,12 +199,14 @@ describe("loginPopup.toShow: 未登入訪客", () => {
         const r = await admin.loginPopup.create({ title: `訪客五則-P${i}`, summary: "短文", announcementId: newsAnnouncementId, isActive: true });
         created.push(r.id);
       }
-      // 第 6 則會觸發自動停用最舊一則（既有規則，訪客/會員共用同一份資料）
+      // 第 6 則會觸發自動停用最舊一則（既有規則，訪客/會員共用同一份資料）——
+      // 候選集合仍是「最新 5 則」（P2~P6），只是顯示順序改成最舊到最新。
       const guest = appRouter.createCaller(createPublicContext());
       const { items } = await guest.loginPopup.toShow();
       expect(items.length).toBe(5);
-      // 最新 5 則（P6~P2），依 updatedAt desc／id desc：P6 > P5 > P4 > P3 > P2
-      expect(items.map(i => i.id)).toEqual([...created].slice(1).reverse());
+      // 顯示內容仍是 P2~P6（P1 已被自動停用），但顯示順序為 P2、P3、P4、P5、P6
+      // （最舊到最新）。
+      expect(items.map(i => i.id)).toEqual([...created].slice(1));
     } finally {
       for (const id of created) await deactivate(admin, id);
     }
@@ -279,7 +281,7 @@ describe("loginPopup.toShow: 最多五則、排序與有效性", () => {
     }
   });
 
-  it("有 3 則啟用時依序（最新到最舊）回傳 3 筆", async () => {
+  it("有 3 則啟用時依序（最舊到最新）回傳 3 筆", async () => {
     const admin = appRouter.createCaller(adminCtx());
     const p1 = await admin.loginPopup.create({ title: "三則-P1", summary: "短文", announcementId: newsAnnouncementId, isActive: true });
     const p2 = await admin.loginPopup.create({ title: "三則-P2", summary: "短文", announcementId: newsAnnouncementId, isActive: true });
@@ -289,8 +291,8 @@ describe("loginPopup.toShow: 最多五則、排序與有效性", () => {
       const caller = appRouter.createCaller(userCtx(freshUserId));
       const { items } = await caller.loginPopup.toShow();
       expect(items.length).toBe(3);
-      // 依 updatedAt desc（後建立的較新）：P3 > P2 > P1
-      expect(items.map(i => i.id)).toEqual([p3.id, p2.id, p1.id]);
+      // 依 updatedAt asc（較早建立的排最前面）：P1、P2、P3
+      expect(items.map(i => i.id)).toEqual([p1.id, p2.id, p3.id]);
     } finally {
       await deactivate(admin, p1.id);
       await deactivate(admin, p2.id);
@@ -298,7 +300,7 @@ describe("loginPopup.toShow: 最多五則、排序與有效性", () => {
     }
   });
 
-  it("有 5 則啟用時回傳 5 筆；前台最多只回傳 5 筆", async () => {
+  it("有 5 則啟用時回傳 5 筆（P1 至 P5）；前台最多只回傳 5 筆", async () => {
     const admin = appRouter.createCaller(adminCtx());
     const created: number[] = [];
     try {
@@ -310,14 +312,14 @@ describe("loginPopup.toShow: 最多五則、排序與有效性", () => {
       const caller = appRouter.createCaller(userCtx(freshUserId));
       const { items } = await caller.loginPopup.toShow();
       expect(items.length).toBe(5);
-      // 最新建立的排最前面
-      expect(items.map(i => i.id)).toEqual([...created].reverse());
+      // 最舊建立的排最前面（P1~P5，建立順序本身就是最舊到最新）
+      expect(items.map(i => i.id)).toEqual(created);
     } finally {
       for (const id of created) await deactivate(admin, id);
     }
   });
 
-  it("updatedAt 相同時以 id DESC 排序", async () => {
+  it("updatedAt 相同時以 id ASC 排序", async () => {
     const admin = appRouter.createCaller(adminCtx());
     const lower = await admin.loginPopup.create({ title: "id 排序-較小 id", summary: "短文", announcementId: newsAnnouncementId, isActive: true });
     const higher = await admin.loginPopup.create({ title: "id 排序-較大 id", summary: "短文", announcementId: newsAnnouncementId, isActive: true });
@@ -326,7 +328,7 @@ describe("loginPopup.toShow: 最多五則、排序與有效性", () => {
       // 強制兩筆的 updatedAt 完全相同（MySQL timestamp 預設只有秒級精度，
       // 快速連續建立時本來就可能剛好同一秒；這裡直接用相同值覆寫，確保這個
       // 測試不會因為執行速度快慢而變得不穩定），單純驗證「updatedAt 相同時
-      // 以 id DESC 排序」這條規則本身，而不是巧合。
+      // 以 id ASC 排序」這條規則本身，而不是巧合。
       const conn = await getDb();
       const sameTimestamp = new Date();
       await conn!.execute(sql`UPDATE loginPopups SET updatedAt = ${sameTimestamp} WHERE id IN (${lower.id}, ${higher.id})`);
@@ -334,8 +336,8 @@ describe("loginPopup.toShow: 最多五則、排序與有效性", () => {
       const freshUserId = await ensureTestUser(`test-login-popup-user-tiebreak-${runId}`);
       const caller = appRouter.createCaller(userCtx(freshUserId));
       const { items } = await caller.loginPopup.toShow();
-      expect(items[0].id).toBe(higher.id);
-      expect(items[1]?.id).toBe(lower.id);
+      expect(items[0].id).toBe(lower.id);
+      expect(items[1]?.id).toBe(higher.id);
     } finally {
       await deactivate(admin, lower.id);
       await deactivate(admin, higher.id);
