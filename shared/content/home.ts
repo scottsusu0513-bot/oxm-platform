@@ -71,7 +71,7 @@ export const HOME_CONTENT = {
 
   industriesSection: {
     title: "熱門產業分類",
-    subtitle: "涵蓋十大產業，快速找到您需要的合作夥伴",
+    subtitle: "涵蓋全臺製造產業，快速找到您需要的合作夥伴",
     // 產業名稱本身沿用 shared/constants.ts 的 INDUSTRY_OPTIONS，不在這裡重複列出。
   },
 

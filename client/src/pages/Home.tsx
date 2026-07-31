@@ -534,13 +534,13 @@ export default function Home() {
                     <PopoverTrigger asChild>
                       <Button variant="outline" className="h-10 md:h-12 w-full justify-between text-sm md:text-base font-normal truncate">
                         <span className="truncate">
-                          {activeMode === "" ? "代工模式" : activeMode === "ODM" ? "ODM 設計代工" : "OEM 製造代工"}
+                          {activeMode === "" ? "代工模式" : activeMode === "ODM" ? "ODM 設計代工" : activeMode === "OEM" ? "OEM 製造代工" : "OBM（自有品牌）"}
                         </span>
                         <ChevronDown className="w-4 h-4 shrink-0 opacity-50 ml-1" />
                       </Button>
                     </PopoverTrigger>
                     <PopoverContent className="w-48 p-2" align="start">
-                      {[{ label: "不限模式", value: "" }, { label: "ODM 設計代工", value: "ODM" }, { label: "OEM 製造代工", value: "OEM" }].map(opt => (
+                      {[{ label: "不限模式", value: "" }, { label: "ODM 設計代工", value: "ODM" }, { label: "OEM 製造代工", value: "OEM" }, { label: "OBM（自有品牌）", value: "OBM" }].map(opt => (
                         <label key={opt.value} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted cursor-pointer text-sm">
                           <Checkbox checked={activeMode === opt.value} onCheckedChange={() => setActiveMode(opt.value)} />
                           {opt.label}

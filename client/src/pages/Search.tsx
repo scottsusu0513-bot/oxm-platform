@@ -469,7 +469,7 @@ export default function Search() {
                 <div className="mb-4">
                   <label className="text-xs font-medium text-muted-foreground mb-2 block">代工模式</label>
                   <div className="flex flex-col gap-2">
-                    {[{ l: "ODM", v: "ODM" }, { l: "OEM", v: "OEM" }, { l: "全部", v: "" }].map(m => (
+                    {[{ l: "ODM", v: "ODM" }, { l: "OEM", v: "OEM" }, { l: "OBM", v: "OBM" }, { l: "全部", v: "" }].map(m => (
                       <Button key={m.v} size="sm" variant={mfgMode === m.v ? "default" : "outline"}
                         onClick={() => onMfgModeChange(m.v)} className="justify-start">
                         {m.l}
@@ -645,7 +645,7 @@ export default function Search() {
                     ))}
                   </div>
                   <div className="flex gap-1">
-                    {[{ l: "ODM", v: "ODM" }, { l: "OEM", v: "OEM" }, { l: "全部", v: "" }].map(m => (
+                    {[{ l: "ODM", v: "ODM" }, { l: "OEM", v: "OEM" }, { l: "OBM", v: "OBM" }, { l: "全部", v: "" }].map(m => (
                       <Button key={m.v} size="sm" variant={mfgMode === m.v ? "default" : "outline"}
                         className="h-8 text-xs px-2"
                         onClick={() => onMfgModeChange(m.v)}>{m.l}

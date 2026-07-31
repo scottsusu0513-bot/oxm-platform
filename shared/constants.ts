@@ -48,6 +48,10 @@ export const INDUSTRIES = [
     name: "工業設備／機械",
     sub: ["工業機械設備", "自動化／產線設備", "產業專用機械", "檢測／量測設備", "機械零件／維修保養", "其他"],
   },
+  {
+    name: "綠色材料／永續材料",
+    sub: ["生質塑膠", "全澱粉基材料", "生物可分解材料", "再生材料", "天然纖維材料", "生質複合材料", "可堆肥材料", "其他"],
+  },
 ] as const;
 
 export const INDUSTRY_OPTIONS = INDUSTRIES.map(i => i.name) as unknown as readonly string[];
@@ -65,7 +69,7 @@ export const CAPABILITIES = [
 export type Capability = (typeof CAPABILITIES)[number];
 
 // ===== 代工模式 =====
-export const MFG_MODE_OPTIONS = ["ODM", "OEM"] as const;
+export const MFG_MODE_OPTIONS = ["ODM", "OEM", "OBM"] as const;
 export type MfgMode = (typeof MFG_MODE_OPTIONS)[number];
 
 // ===== 台灣縣市 =====
@@ -134,6 +138,7 @@ export const INDUSTRY_SLUGS: Record<string, string> = {
   "生活用品": "consumer-goods",
   "印刷": "printing",
   "工業設備／機械": "industrial-machinery",
+  "綠色材料／永續材料": "green-sustainable-materials",
 };
 
 // 每個 slug 對應一或多個主產業名稱（backward compat：plastic-rubber 同時對應塑膠與橡膠/矽膠）
@@ -207,6 +212,11 @@ export const INDUSTRY_SEO_CONTENT: Record<string, { intro: string; applications:
     intro: "台灣工業設備與機械代工產業具備精密機械設計、自動化產線整合與客製化機台製造的完整能力，廠商遍布台中精密機械聚落、新竹科學園區周邊及高雄工業區，能提供標準型與非標準型工業設備的 OEM/ODM 服務，並支援機械零件維修與產線改善。台灣機械業長年深耕全球供應鏈，在半導體、PCB、汽車、食品及紡織等多元產業的製程設備領域均有深厚積累。",
     applications: "工業設備與機械代工常見應用包含：半導體與面板製程設備零組件、自動化搬運與輸送系統、工業機器手臂與夾治具、CCD 視覺檢測設備、產線自動化改善整合、農業與食品加工機械、紡織機械零件，以及各類非標準客製化機台等，廣泛服務製造業生產自動化升級與設備汰換需求。",
     howToChoose: "選擇工業設備與機械工廠時，應確認廠商的機械設計能力（是否有 SolidWorks/AutoCAD 工程師）；自動化整合的控制系統熟悉度（PLC、伺服、視覺）；對目標產業製程的理解深度；以及售後維修與備品供應的服務承諾。建議提供產線現況與改善目標，讓廠商評估整合方案後再進行規格確認。",
+  },
+  "綠色材料／永續材料": {
+    intro: "台灣綠色材料與永續材料產業近年快速發展，涵蓋生質塑膠、全澱粉基材料、生物可分解材料、再生材料、天然纖維材料、生質複合材料與可堆肥材料等多元品項。廠商致力以植物基、回收再生或可分解原料取代傳統石化塑膠，協助品牌因應國際 ESG 與環保法規要求，適合追求永續轉型的品牌商、包裝廠與零售通路尋找替代材料供應夥伴。",
+    applications: "綠色材料與永續材料常見應用包含：一次性餐具與外帶容器（生質塑膠、全澱粉基材料）、電商緩衝包材與環保袋（生物可分解材料、可堆肥材料）、服飾與家紡纖維（天然纖維材料）、3C 及日用品外殼（再生材料、生質複合材料）、農業與園藝資材，以及品牌永續系列商品開發等，適合推動減塑與碳中和目標的企業採購。",
+    howToChoose: "選擇綠色材料與永續材料供應商時，應確認廠商是否具備國際認證（如 OK Compost、BPI 可堆肥認證、FSC 或 GRS 再生材料認證）；材料的分解條件（工業堆肥或家用堆肥）與實際耐用度是否符合產品使用情境；再生料的成分比例與一致性；以及是否能提供第三方檢測報告供品牌 ESG 揭露使用。建議先索取材料樣品進行實際應用測試，確認強度與外觀符合需求後再量產。",
   },
 };
 

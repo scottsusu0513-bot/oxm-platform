@@ -57,10 +57,10 @@ describe("community.getSpaces", () => {
     await expect(caller.community.getSpaces()).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 
-  it("returns 13 spaces for admin users", async () => {
+  it("returns 14 spaces for admin users", async () => {
     const caller = appRouter.createCaller(createAuthContext({ role: "admin" }));
     const spaces = await caller.community.getSpaces();
-    expect(spaces).toHaveLength(13);
+    expect(spaces).toHaveLength(14);
     expect(spaces[0]).toHaveProperty("code");
     expect(spaces[0]).toHaveProperty("name");
     expect(spaces[0]).toHaveProperty("postCount");
@@ -1433,6 +1433,9 @@ describe("resolveDefaultCommunitySpace", () => {
   it("correctly maps 工業設備／機械 to industrial-machinery", () => {
     expect(resolveDefaultCommunitySpace([{ industry: ["工業設備／機械"] }])).toBe("industrial-machinery");
   });
+  it("correctly maps 綠色材料／永續材料 to green-sustainable-materials", () => {
+    expect(resolveDefaultCommunitySpace([{ industry: ["綠色材料／永續材料"] }])).toBe("green-sustainable-materials");
+  });
 });
 
 // ===== community.getDefaultSpace =====
@@ -1458,14 +1461,14 @@ describe("community.getDefaultSpace", () => {
     expect(result.spaceCode.length).toBeGreaterThan(0);
   }, 10000);
 
-  // Admin spaceCode is one of the 13 valid community spaces
-  it("returns one of the 13 valid community space codes for admin", async () => {
+  // Admin spaceCode is one of the 14 valid community spaces
+  it("returns one of the 14 valid community space codes for admin", async () => {
     const caller = appRouter.createCaller(createAuthContext({ role: "admin" }));
     const result = await caller.community.getDefaultSpace();
     const VALID = new Set([
       "cross-industry", "textile", "metal-processing", "electronics", "plastic",
       "rubber-silicone", "woodworking", "packaging", "food", "chemical-manufacturing",
-      "consumer-goods", "printing", "industrial-machinery",
+      "consumer-goods", "printing", "industrial-machinery", "green-sustainable-materials",
     ]);
     expect(VALID.has(result.spaceCode)).toBe(true);
   }, 10000);
@@ -1480,11 +1483,12 @@ describe("community.getSpaces ordering", () => {
     expect(spaces[0].code).toBe("cross-industry");
   }, 10000);
 
-  // 14. total count is still 13
-  it("still returns exactly 13 spaces", async () => {
+  // 14. total count is now 14（新增「綠色材料／永續材料」後，12 個既有產業＋1
+  // 個新產業＋1 個跨產業資訊＝14）
+  it("still returns exactly 14 spaces", async () => {
     const caller = appRouter.createCaller(createAuthContext({ role: "admin" }));
     const spaces = await caller.community.getSpaces();
-    expect(spaces).toHaveLength(13);
+    expect(spaces).toHaveLength(14);
   }, 10000);
 
   // 15. cross-industry appears exactly once
