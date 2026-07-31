@@ -16,7 +16,7 @@ import {
   Search, ArrowRight, Star, Shield, MessageCircle, Zap,
   Shirt, Wrench, Cpu, Box, TreePine, Package, UtensilsCrossed,
   Heart, Flower2, Lamp, Users, CheckCircle, Factory, Sparkles, Cog, Layers, ChevronDown,
-  Megaphone, Newspaper, Pin, Instagram, Facebook, AtSign, Gauge,
+  Megaphone, Newspaper, Pin, Instagram, Facebook, AtSign, Gauge, Recycle,
   ChevronLeft, ChevronRight
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
@@ -286,7 +286,7 @@ const INDUSTRY_ICONS: Record<string, any> = {
   "紡織": Shirt, "金屬加工": Wrench, "電子零件": Cpu,
   "塑膠": Box, "橡膠 / 矽膠": Cog, "木工": TreePine, "包裝": Package,
   "食品": UtensilsCrossed, "化工製造": Heart, "生活用品": Lamp, "印刷": Layers,
-  "工業設備／機械": Gauge,
+  "工業設備／機械": Gauge, "永續材料": Recycle,
 };
 
 const INDUSTRY_COLORS: Record<string, string> = {

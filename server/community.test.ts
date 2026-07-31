@@ -1433,8 +1433,8 @@ describe("resolveDefaultCommunitySpace", () => {
   it("correctly maps 工業設備／機械 to industrial-machinery", () => {
     expect(resolveDefaultCommunitySpace([{ industry: ["工業設備／機械"] }])).toBe("industrial-machinery");
   });
-  it("correctly maps 綠色材料／永續材料 to green-sustainable-materials", () => {
-    expect(resolveDefaultCommunitySpace([{ industry: ["綠色材料／永續材料"] }])).toBe("green-sustainable-materials");
+  it("correctly maps 永續材料 to sustainable-materials", () => {
+    expect(resolveDefaultCommunitySpace([{ industry: ["永續材料"] }])).toBe("sustainable-materials");
   });
 });
 
@@ -1468,7 +1468,7 @@ describe("community.getDefaultSpace", () => {
     const VALID = new Set([
       "cross-industry", "textile", "metal-processing", "electronics", "plastic",
       "rubber-silicone", "woodworking", "packaging", "food", "chemical-manufacturing",
-      "consumer-goods", "printing", "industrial-machinery", "green-sustainable-materials",
+      "consumer-goods", "printing", "industrial-machinery", "sustainable-materials",
     ]);
     expect(VALID.has(result.spaceCode)).toBe(true);
   }, 10000);
@@ -1483,7 +1483,7 @@ describe("community.getSpaces ordering", () => {
     expect(spaces[0].code).toBe("cross-industry");
   }, 10000);
 
-  // 14. total count is now 14（新增「綠色材料／永續材料」後，12 個既有產業＋1
+  // 14. total count is now 14（新增「永續材料」後，12 個既有產業＋1
   // 個新產業＋1 個跨產業資訊＝14）
   it("still returns exactly 14 spaces", async () => {
     const caller = appRouter.createCaller(createAuthContext({ role: "admin" }));

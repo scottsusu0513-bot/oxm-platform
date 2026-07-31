@@ -16,7 +16,7 @@ import LoginDialog from "@/components/LoginDialog";
 import { toast } from "sonner";
 import {
   Newspaper, Star, Trophy, Building2, Globe, Factory, FileText, BellPlus, BellRing, Loader2, Check, ChevronDown,
-  Shirt, Hammer, Cpu, Boxes, Layers, Trees, Package, Utensils, FlaskConical, ShoppingBasket, Printer, Cog,
+  Shirt, Hammer, Cpu, Boxes, Layers, Trees, Package, Utensils, FlaskConical, ShoppingBasket, Printer, Cog, Recycle,
 } from "lucide-react";
 
 const BASE = "https://www.oxmmatch.com";
@@ -55,6 +55,7 @@ const INDUSTRY_ICON_MAP: Record<string, typeof Factory> = {
   "生活用品": ShoppingBasket,
   "印刷": Printer,
   "工業設備／機械": Cog,
+  "永續材料": Recycle,
 };
 
 function getIndustryIcon(name: string): typeof Factory {

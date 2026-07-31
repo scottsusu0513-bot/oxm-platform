@@ -1,5 +1,5 @@
 /**
- * 新增產業「綠色材料／永續材料」與新增代工模式「OBM」— 回歸測試。
+ * 新增產業「永續材料」與新增代工模式「OBM」— 回歸測試。
  *
  * 產業與子產業儲存在 factories.industry／factories.subIndustry（JSON 陣列，無
  * DB enum 限制），唯一權威來源是 shared/constants.ts 的 INDUSTRIES；代工模式
@@ -12,6 +12,9 @@
  *      是純靜態原始碼契約檢查（readFileSync + 字串比對），因為它們本來就不是
  *      從常數動態產生，無法用「import 常數後跑行為測試」驗證，只能直接確認
  *      原始碼裡真的有這段文字。
+ *   4. Home.tsx／News.tsx 各自獨立維護的產業 icon 對照表（INDUSTRY_ICONS／
+ *      INDUSTRY_ICON_MAP）都把「永續材料」對應到 Recycle（同樣是靜態原始碼
+ *      契約檢查，理由同上）。
  */
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
@@ -26,10 +29,10 @@ import {
   MFG_MODE_OPTIONS,
 } from "@shared/constants";
 
-const NEW_INDUSTRY_NAME = "綠色材料／永續材料";
+const NEW_INDUSTRY_NAME = "永續材料";
 const NEW_INDUSTRY_SUBS = ["生質塑膠", "全澱粉基材料", "生物可分解材料", "再生材料", "天然纖維材料", "生質複合材料", "可堆肥材料", "其他"];
 
-describe("新增產業：綠色材料／永續材料", () => {
+describe("新增產業：永續材料", () => {
   it("INDUSTRIES 包含新產業，且子產業依序精確等於指定的 7 項＋比照其他既有產業慣例補上的「其他」（共 8 項，不多不少）", () => {
     const entry = INDUSTRIES.find(i => i.name === NEW_INDUSTRY_NAME);
     expect(entry).toBeTruthy();
@@ -84,5 +87,25 @@ describe("新增代工模式：OBM", () => {
     // Search.tsx 桌面版側欄與手機版篩選各自獨立渲染同一組選項（非共用元件），
     // 兩處都必須各自加上 OBM，這裡確認至少出現兩次。
     expect(matches.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe("永續材料的產業 icon：Package/Box 改為 Recycle", () => {
+  it("client/src/pages/Home.tsx 的 INDUSTRY_ICONS 把「永續材料」對應到 Recycle（僅靜態原始碼契約，非行為證明）", () => {
+    const source = fs.readFileSync(
+      path.resolve(import.meta.dirname, "..", "client", "src", "pages", "Home.tsx"),
+      "utf-8"
+    );
+    expect(source).toMatch(/"永續材料":\s*Recycle/);
+    expect(source).toMatch(/\bRecycle\b/);
+  });
+
+  it("client/src/pages/News.tsx 的 INDUSTRY_ICON_MAP 把「永續材料」對應到 Recycle（僅靜態原始碼契約，非行為證明）", () => {
+    const source = fs.readFileSync(
+      path.resolve(import.meta.dirname, "..", "client", "src", "pages", "News.tsx"),
+      "utf-8"
+    );
+    expect(source).toMatch(/"永續材料":\s*Recycle/);
+    expect(source).toMatch(/\bRecycle\b/);
   });
 });
