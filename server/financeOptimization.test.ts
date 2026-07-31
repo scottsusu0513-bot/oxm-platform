@@ -995,14 +995,18 @@ describe("client/src/pages/FinanceConsultantCases.tsx: 五個看板文字內容�
   });
 });
 
-describe("client/src/components/Navbar.tsx: 找資源新增企業財務優化入口（僅靜態原始碼契約，非行為證明）", () => {
+describe("client/src/components/Navbar.tsx: 企業財務優化入口暫不公開曝光（僅靜態原始碼契約，非行為證明）", () => {
   const source = fs.readFileSync(
     path.resolve(import.meta.dirname, "..", "client", "src", "components", "Navbar.tsx"),
     "utf-8"
   );
-  it("找資源下拉選單包含企業財務優化，連到 /finance-optimization", () => {
-    expect(source).toMatch(/企業財務優化/);
-    expect(source).toMatch(/\/finance-optimization/);
+  // 上線前決定暫不公開曝光此入口：桌面下拉選單／手機 Accordion 共用的
+  // dropdownItems 資料來源不應該再含有這個連結，避免日後不小心又加回去。
+  // route 本身（/finance-optimization、/finance-optimization/apply）與既有
+  // 登入／工廠資格權限限制不受影響，管理員後台與顧問中心的入口也不受影響。
+  it("找資源下拉選單不包含企業財務優化的公開連結", () => {
+    expect(source).not.toMatch(/企業財務優化/);
+    expect(source).not.toMatch(/\/finance-optimization/);
   });
   it("顧問中心入口在兩種顧問身分皆有效或為管理員時導向 /consultant-center", () => {
     expect(source).toMatch(/consultantCenterHref/);

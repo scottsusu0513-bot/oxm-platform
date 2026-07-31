@@ -5,7 +5,7 @@ import {
   Factory, Mail, User, LogOut, LayoutDashboard, Menu, X,
   UserPlus, Search, Settings, UserCircle, ChevronDown,
   FileText, ScrollText, Bell, Briefcase, Lock,
-  Rocket, Users, Package, BookOpen, MessageSquare, Lightbulb, PiggyBank,
+  Rocket, Users, Package, BookOpen, MessageSquare, Lightbulb,
 } from "lucide-react";
 import UnverifiedEmailHint from "@/components/UnverifiedEmailHint";
 import { useState, useEffect, useRef } from "react";
@@ -121,12 +121,9 @@ const HUB_ITEMS: HubItem[] = [
         href: "/upgrade-center",
         Icon: Lightbulb,
       },
-      {
-        title: "企業財務優化",
-        description: "合法節稅｜融資優化｜資金更靈活",
-        href: "/finance-optimization",
-        Icon: PiggyBank,
-      },
+      // 財務優化相關公開入口暫時隱藏：對應 route 與既有登入／工廠資格權限
+      // 限制維持不變，只是不再出現在桌面下拉選單／手機 Accordion 這個共用的
+      // dropdownItems 資料來源裡。管理員後台與顧問中心的權限內入口不受影響。
     ],
   },
   {
