@@ -8145,30 +8145,15 @@ export function findConsultantForApplicationRegion(
 }
 
 /**
- * 綁定顧問帳號前的區域唯一性檢查：非管理員顧問只能有一個有效區域身分，
- * 避免同一帳號同時綁定北中南多個地區（會讓「顧問只能看自己地區案件」這條
- * 權限規則失去意義——若同一帳號同時是北部與南部顧問，等於變相取得跨區權限）。
- * 只檢查「其他」顧問列（id 不同）是否已經綁定同一個 userId；解除綁定
- * （userId=null）或綁定到自己原本那筆不受此限制。
+ * 綁定顧問帳號：同一使用者現在可以同時綁定多個地區的顧問列（例如同一人
+ * 同時負責北部與南部）——移除了先前「一個帳號只能擔任一個地區顧問」的限制。
+ * findConsultantForApplicationRegion／getConsultantsByUserId 本來就是以
+ * 「這個使用者名下所有 isActive 顧問列」去比對案件地區，天生就支援一人
+ * 綁定多個地區，不需要額外改動權限判斷邏輯。
  */
-export async function assertConsultantUserNotBoundElsewhere(consultantId: number, userId: number): Promise<void> {
-  const db_ = await getDb();
-  if (!db_) return;
-  const existing = await db_.select({ id: upgradeConsultants.id, regionKey: upgradeConsultants.regionKey })
-    .from(upgradeConsultants)
-    .where(and(eq(upgradeConsultants.userId, userId), ne(upgradeConsultants.id, consultantId)));
-  if (existing.length > 0) {
-    const regionLabel: Record<string, string> = { north: "北部", central: "中部", south: "南部" };
-    throw new Error(`此使用者已是「${regionLabel[existing[0].regionKey] ?? existing[0].regionKey}」地區的顧問，一個帳號同時只能擔任一個地區的有效顧問`);
-  }
-}
-
 export async function bindConsultantUser(consultantId: number, userId: number | null): Promise<void> {
   const db_ = await getDb();
   if (!db_) return;
-  if (userId != null) {
-    await assertConsultantUserNotBoundElsewhere(consultantId, userId);
-  }
   await db_.update(upgradeConsultants)
     .set({ userId })
     .where(eq(upgradeConsultants.id, consultantId));

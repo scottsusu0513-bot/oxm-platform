@@ -488,23 +488,60 @@ describe("backfillUnassignedCasesToConsultant: 只補派區域相符的案件", 
   });
 });
 
-// ── 5. 非管理員顧問只能有一個有效區域身分 ─────────────────────────────────
-describe("bindConsultantUser / adminBindUser: 同一帳號不能同時綁定多個地區", () => {
-  it("db.bindConsultantUser 拒絕把已綁定北部的使用者再綁到中部", async () => {
-    // northUserId 目前綁定在 north（beforeAll 已綁定），嘗試再綁到 central 應該被拒絕。
-    await expect(db.bindConsultantUser(centralConsultant!.id, northUserId)).rejects.toThrow(/一個帳號同時只能擔任一個地區的有效顧問/);
-    // 確認 central 沒有真的被改動
-    const central = await db.getConsultantById(centralConsultant!.id);
-    expect(central?.userId).toBe(centralUserId);
+// ── 5. 同一帳號可以同時綁定多個地區的顧問身分 ─────────────────────────────
+// 移除了先前「一個帳號只能擔任一個地區顧問」的限制：現實中存在北、南都有
+// 服務據點的顧問，管理員應該可以把同一個帳號綁定到多個地區的顧問列，
+// 該帳號之後應能同時看到、處理這幾個地區的案件。
+describe("bindConsultantUser / adminBindUser: 同一帳號可以同時綁定多個地區", () => {
+  it("db.bindConsultantUser 允許把已綁定北部的使用者再綁到南部；getConsultantsByUserId 回傳兩筆", async () => {
+    // northUserId 目前綁定在 north（beforeAll 已綁定）；再把同一個使用者綁到 south。
+    await expect(db.bindConsultantUser(southConsultant!.id, northUserId)).resolves.toBeUndefined();
+    try {
+      const south = await db.getConsultantById(southConsultant!.id);
+      expect(south?.userId).toBe(northUserId);
+
+      const consultants = await db.getConsultantsByUserId(northUserId);
+      const regionKeys = consultants.map(c => c.regionKey).sort();
+      expect(regionKeys).toEqual(["north", "south"]);
+    } finally {
+      // 還原 south 綁定，避免影響其他測試對 southUserId 的假設。
+      await db.bindConsultantUser(southConsultant!.id, southUserId);
+    }
   });
 
-  it("upgradeConsultant.adminBindUser 呼叫時同樣拒絕並回傳 BAD_REQUEST 訊息，不是內部錯誤", async () => {
+  it("同一帳號綁定北、南兩地區後，myCases 能同時看到兩個地區的案件", async () => {
+    await db.bindConsultantUser(southConsultant!.id, northUserId);
+    let northCaseId: number | undefined;
+    let southCaseId: number | undefined;
+    try {
+      northCaseId = await createTestCase({ companyName: "雙地區測試-北", location: "台北市", status: "evaluating", assignedConsultantId: northConsultant!.id });
+      southCaseId = await createTestCase({ companyName: "雙地區測試-南", location: "高雄市", status: "evaluating", assignedConsultantId: southConsultant!.id });
+
+      const caller = appRouter.createCaller(userCtx(northUserId, "北南雙地區測試顧問"));
+      const { items } = await caller.upgradeConsultant.myCases({ limit: 200, offset: 0 });
+      const ids = items.map(i => i.id);
+      expect(ids).toContain(northCaseId);
+      expect(ids).toContain(southCaseId);
+    } finally {
+      if (typeof northCaseId === "number") await deleteTestCase(northCaseId);
+      if (typeof southCaseId === "number") await deleteTestCase(southCaseId);
+      await db.bindConsultantUser(southConsultant!.id, southUserId);
+    }
+  });
+
+  it("upgradeConsultant.adminBindUser 呼叫時同樣允許（不再回傳 BAD_REQUEST）", async () => {
     const admin = appRouter.createCaller(adminCtx());
     await expect(admin.upgradeConsultant.adminBindUser({ consultantId: southConsultant!.id, userId: northUserId }))
-      .rejects.toThrow(/一個帳號同時只能擔任一個地區的有效顧問/);
+      .resolves.toMatchObject({ success: true });
+    try {
+      const south = await db.getConsultantById(southConsultant!.id);
+      expect(south?.userId).toBe(northUserId);
+    } finally {
+      await db.bindConsultantUser(southConsultant!.id, southUserId);
+    }
   });
 
-  it("解除綁定（userId=null）不受此限制", async () => {
+  it("解除綁定（userId=null）維持正常運作", async () => {
     // 用一個從未綁定過的全新測試使用者驗證解除綁定路徑本身不受影響。
     const tempUserId = await ensureTestUser(`test-upgrade-region-unbind-${runId}`, "解綁測試帳號");
     try {
