@@ -1167,12 +1167,28 @@ export const upgradeApplications = mysqlTable("upgradeApplications", {
   email: varchar("email", { length: 320 }).notNull(),
   location: varchar("location", { length: 100 }).notNull(),
   capitalAmount: varchar("capitalAmount", { length: 30 }).notNull(),
+  // 年營收：前端必填單選（500萬以下／500~1000萬／1000萬以上），DB 允許 NULL
+  // 是為了容納既有舊案件（新增本欄位前建立，從未被問過這題）——用 NULL 區分
+  // 「未填答」與「填答為某個選項」，不可用某個選項值頂替舊資料的沉默。
+  annualRevenue: varchar("annualRevenue", { length: 30 }),
   employeeCount: varchar("employeeCount", { length: 30 }).notNull(),
   factoryType: varchar("factoryType", { length: 30 }).notNull(),
+  // 是否為企業社：前端必填單選，僅供顧問初步資格判斷用，畫面不顯示任何結論性文字。
+  // 欄位命名為 isEnterpriseFirm（不用 isEnterpriseAssociation）——後者的
+  // "Association" 容易被誤讀為「企業協會／公會」，與台灣組織型態「企業社」
+  // （個人商號的一種登記類型）語意不同。
+  // DB 允許 NULL，理由同 annualRevenue（區分「舊案件未問過」與「答案為否」）。
+  isEnterpriseFirm: boolean("isEnterpriseFirm"),
   hasGovernmentProject: boolean("hasGovernmentProject").notNull().default(false),
   governmentProjectName: varchar("governmentProjectName", { length: 200 }),
   hasGovernmentAward: boolean("hasGovernmentAward").notNull().default(false),
   governmentAwardName: varchar("governmentAwardName", { length: 200 }),
+  // 是否曾申請過政府補助：與 hasGovernmentAward（是否曾「獲得」政府獎項）語意不同
+  // ——「申請過補助」與「得過獎項」是兩個不同問題，即使正式環境目前 hasGovernmentAward
+  // 尚無任何案件填值（2026-07-31 查證：4 筆案件皆為 false/NULL），仍新增獨立欄位，
+  // 不重用舊欄位改標題，避免舊資料語意被錯誤覆寫。hasGovernmentAward/governmentAwardName
+  // 保留不動。DB 允許 NULL，理由同上。
+  hasAppliedForGovernmentSubsidy: boolean("hasAppliedForGovernmentSubsidy"),
   hasPatent: boolean("hasPatent").notNull().default(false),
   patentCount: int("patentCount"),
   exportStatus: varchar("exportStatus", { length: 30 }).notNull(),

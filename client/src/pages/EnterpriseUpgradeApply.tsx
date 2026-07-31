@@ -32,12 +32,13 @@ type FormValues = {
   email: string;
   city: string;
   capitalLevel: string;
+  annualRevenue: string;
   employeeCount: string;
   factoryType: string;
+  isEnterpriseFirm: "yes" | "no";
   hasGovProject: "yes" | "no";
   govProjectName: string;
-  hasAward: "yes" | "no";
-  awardName: string;
+  hasAppliedForSubsidy: "yes" | "no";
   hasPatent: "yes" | "no";
   patentCount: string;
   exportMode: string;
@@ -54,6 +55,12 @@ const CAPITAL_LEVEL_OPTIONS = [
   { value: "500~2000萬",  label: "500～2,000 萬" },
   { value: "2000~5000萬", label: "2,000～5,000 萬" },
   { value: "5000萬以上",  label: "5,000 萬以上" },
+];
+
+const ANNUAL_REVENUE_OPTIONS = [
+  { value: "under_5m", label: "500 萬以下" },
+  { value: "5m_to_10m", label: "500～1,000 萬" },
+  { value: "over_10m", label: "1,000 萬以上" },
 ];
 
 const EMPLOYEE_COUNT_OPTIONS = [
@@ -196,8 +203,9 @@ export default function EnterpriseUpgradeApply() {
     formState: { errors },
   } = useForm<FormValues>({
     defaultValues: {
+      isEnterpriseFirm: "no",
       hasGovProject: "no",
-      hasAward: "no",
+      hasAppliedForSubsidy: "no",
       hasPatent: "no",
       agreeTerms: false,
     },
@@ -263,11 +271,12 @@ export default function EnterpriseUpgradeApply() {
   }, [approvedFactory, user, setValue]);
 
   const hasGovProject = watch("hasGovProject");
-  const hasAward = watch("hasAward");
+  const hasAppliedForSubsidy = watch("hasAppliedForSubsidy");
   const hasPatent = watch("hasPatent");
   const agreeTerms = watch("agreeTerms");
   // Controlled Select values
   const capitalLevelValue = watch("capitalLevel") ?? "";
+  const annualRevenueValue = watch("annualRevenue") ?? "";
   const employeeCountValue = watch("employeeCount") ?? "";
   const factoryTypeValue = watch("factoryType") ?? "";
   const exportModeValue = watch("exportMode") ?? "";
@@ -291,12 +300,13 @@ export default function EnterpriseUpgradeApply() {
       email: data.email,
       location: data.city,
       capitalAmount: data.capitalLevel,
+      annualRevenue: data.annualRevenue,
       employeeCount: data.employeeCount,
       factoryType: data.factoryType,
+      isEnterpriseFirm: data.isEnterpriseFirm === "yes",
       hasGovernmentProject: data.hasGovProject === "yes",
       governmentProjectName: data.hasGovProject === "yes" ? data.govProjectName || undefined : undefined,
-      hasGovernmentAward: data.hasAward === "yes",
-      governmentAwardName: data.hasAward === "yes" ? data.awardName || undefined : undefined,
+      hasAppliedForGovernmentSubsidy: data.hasAppliedForSubsidy === "yes",
       hasPatent: data.hasPatent === "yes",
       patentCount: data.hasPatent === "yes" && data.patentCount ? parseInt(data.patentCount) || undefined : undefined,
       exportStatus: data.exportMode,
@@ -660,6 +670,32 @@ export default function EnterpriseUpgradeApply() {
               {autoFilled.capitalLevel && <AutoFillHint factoryName={approvedFactory.name} />}
             </div>
 
+            {/* 年營收 */}
+            <div className="space-y-2">
+              <Label htmlFor="annualRevenue">
+                年營收 <span className="text-destructive">*</span>
+              </Label>
+              <Select
+                value={annualRevenueValue}
+                onValueChange={(v) => setValue("annualRevenue", v)}
+              >
+                <SelectTrigger id="annualRevenue">
+                  <SelectValue placeholder="請選擇年營收範圍" />
+                </SelectTrigger>
+                <SelectContent>
+                  {ANNUAL_REVENUE_OPTIONS.map((opt) => (
+                    <SelectItem key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <input type="hidden" {...register("annualRevenue", { required: "請選擇年營收範圍" })} />
+              {errors.annualRevenue && (
+                <p className="text-xs text-destructive">{errors.annualRevenue.message}</p>
+              )}
+            </div>
+
             {/* 員工人數 */}
             <div className="space-y-2">
               <Label htmlFor="employeeCount">
@@ -711,11 +747,48 @@ export default function EnterpriseUpgradeApply() {
                 <p className="text-xs text-destructive">{errors.factoryType.message}</p>
               )}
             </div>
+
+            {/* 是否為企業社 */}
+            <div className="space-y-3">
+              <Label>是否為企業社 <span className="text-destructive">*</span></Label>
+              <RadioGroup
+                defaultValue="no"
+                onValueChange={(v) => setValue("isEnterpriseFirm", v as "yes" | "no")}
+                className="flex gap-6"
+              >
+                <div className="flex items-center gap-2">
+                  <RadioGroupItem value="yes" id="enterpriseFirm-yes" />
+                  <Label htmlFor="enterpriseFirm-yes" className="font-normal cursor-pointer">是</Label>
+                </div>
+                <div className="flex items-center gap-2">
+                  <RadioGroupItem value="no" id="enterpriseFirm-no" />
+                  <Label htmlFor="enterpriseFirm-no" className="font-normal cursor-pointer">否</Label>
+                </div>
+              </RadioGroup>
+            </div>
           </fieldset>
 
-          {/* ── 研發與獎項 ── */}
+          {/* ── 研發與補助 ── */}
           <fieldset className="space-y-6 rounded-xl border border-border p-6">
-            <legend className="px-1 text-sm font-semibold text-muted-foreground">研發與獎項</legend>
+            <legend className="px-1 text-sm font-semibold text-muted-foreground">研發與補助</legend>
+
+            <div className="space-y-3">
+              <Label>是否曾申請過政府補助 <span className="text-destructive">*</span></Label>
+              <RadioGroup
+                defaultValue="no"
+                onValueChange={(v) => setValue("hasAppliedForSubsidy", v as "yes" | "no")}
+                className="flex gap-6"
+              >
+                <div className="flex items-center gap-2">
+                  <RadioGroupItem value="yes" id="appliedForSubsidy-yes" />
+                  <Label htmlFor="appliedForSubsidy-yes" className="font-normal cursor-pointer">有</Label>
+                </div>
+                <div className="flex items-center gap-2">
+                  <RadioGroupItem value="no" id="appliedForSubsidy-no" />
+                  <Label htmlFor="appliedForSubsidy-no" className="font-normal cursor-pointer">沒有</Label>
+                </div>
+              </RadioGroup>
+            </div>
 
             <div className="space-y-3">
               <Label>是否曾執行政府計畫 <span className="text-destructive">*</span></Label>
@@ -737,30 +810,6 @@ export default function EnterpriseUpgradeApply() {
                 <div className="pl-1 space-y-2">
                   <Label htmlFor="govProjectName">計畫名稱</Label>
                   <Input id="govProjectName" placeholder="例：SBIR 小型企業創新研發計畫" {...register("govProjectName")} />
-                </div>
-              )}
-            </div>
-
-            <div className="space-y-3">
-              <Label>是否曾獲政府獎項 <span className="text-destructive">*</span></Label>
-              <RadioGroup
-                defaultValue="no"
-                onValueChange={(v) => setValue("hasAward", v as "yes" | "no")}
-                className="flex gap-6"
-              >
-                <div className="flex items-center gap-2">
-                  <RadioGroupItem value="yes" id="award-yes" />
-                  <Label htmlFor="award-yes" className="font-normal cursor-pointer">有</Label>
-                </div>
-                <div className="flex items-center gap-2">
-                  <RadioGroupItem value="no" id="award-no" />
-                  <Label htmlFor="award-no" className="font-normal cursor-pointer">沒有</Label>
-                </div>
-              </RadioGroup>
-              {hasAward === "yes" && (
-                <div className="pl-1 space-y-2">
-                  <Label htmlFor="awardName">獎項名稱</Label>
-                  <Input id="awardName" placeholder="例：台灣精品獎" {...register("awardName")} />
                 </div>
               )}
             </div>

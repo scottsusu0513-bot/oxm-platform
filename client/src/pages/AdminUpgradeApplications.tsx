@@ -58,6 +58,12 @@ const CAPITAL_LABELS: Record<string, string> = {
   over_1y: "1 億以上",
 };
 
+const ANNUAL_REVENUE_LABELS: Record<string, string> = {
+  under_5m: "500 萬以下",
+  "5m_to_10m": "500～1,000 萬",
+  over_10m: "1,000 萬以上",
+};
+
 const EMPLOYEE_LABELS: Record<string, string> = {
   "1_5": "1～5 人",
   "6_30": "6～30 人",
@@ -104,12 +110,15 @@ type Application = {
   email: string;
   location: string;
   capitalAmount: string;
+  annualRevenue?: string | null;
   employeeCount: string;
   factoryType: string;
+  isEnterpriseFirm?: boolean | null;
   hasGovernmentProject: boolean;
   governmentProjectName: string | null;
   hasGovernmentAward: boolean;
   governmentAwardName: string | null;
+  hasAppliedForGovernmentSubsidy?: boolean | null;
   hasPatent: boolean;
   patentCount: number | null;
   exportStatus: string;
@@ -228,11 +237,13 @@ function ApplicationCard({
               <div><span className="text-muted-foreground">聯絡人：</span>{item.contactName}</div>
               <div><span className="text-muted-foreground">所在地：</span>{item.location}</div>
               <div><span className="text-muted-foreground">資本額：</span>{CAPITAL_LABELS[item.capitalAmount] ?? item.capitalAmount}</div>
+              <div><span className="text-muted-foreground">年營收：</span>{item.annualRevenue ? (ANNUAL_REVENUE_LABELS[item.annualRevenue] ?? item.annualRevenue) : "未填"}</div>
               <div><span className="text-muted-foreground">員工人數：</span>{EMPLOYEE_LABELS[item.employeeCount] ?? item.employeeCount}</div>
               <div><span className="text-muted-foreground">工廠類型：</span>{FACTORY_TYPE_LABELS[item.factoryType] ?? item.factoryType}</div>
+              <div><span className="text-muted-foreground">是否為企業社：</span>{item.isEnterpriseFirm == null ? "未填" : (item.isEnterpriseFirm ? "是" : "否")}</div>
               <div><span className="text-muted-foreground">出口狀況：</span>{EXPORT_LABELS[item.exportStatus] ?? item.exportStatus}</div>
+              <div><span className="text-muted-foreground">曾申請政府補助：</span>{item.hasAppliedForGovernmentSubsidy == null ? "未填" : (item.hasAppliedForGovernmentSubsidy ? "有" : "沒有")}</div>
               <div><span className="text-muted-foreground">政府計畫：</span>{item.hasGovernmentProject ? (item.governmentProjectName || "有（未填名稱）") : "無"}</div>
-              <div><span className="text-muted-foreground">政府獎項：</span>{item.hasGovernmentAward ? (item.governmentAwardName || "有（未填名稱）") : "無"}</div>
               <div><span className="text-muted-foreground">專利：</span>{item.hasPatent ? `有（${item.patentCount ?? "未填數量"}件）` : "無"}</div>
             </div>
             {(item.plannedSubsidyAmount != null || item.approvedSubsidyAmount != null || item.oxmCommissionAmount != null || item.submittedSubsidyProgram != null) && (
