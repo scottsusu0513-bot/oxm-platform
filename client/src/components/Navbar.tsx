@@ -5,7 +5,7 @@ import {
   Factory, Mail, User, LogOut, LayoutDashboard, Menu, X,
   UserPlus, Search, Settings, UserCircle, ChevronDown,
   FileText, ScrollText, Bell, Briefcase, Lock,
-  Rocket, Users, Package, BookOpen, MessageSquare, Lightbulb,
+  Rocket, Users, Package, BookOpen, MessageSquare, Lightbulb, PiggyBank,
 } from "lucide-react";
 import UnverifiedEmailHint from "@/components/UnverifiedEmailHint";
 import { useState, useEffect, useRef } from "react";
@@ -120,6 +120,12 @@ const HUB_ITEMS: HubItem[] = [
         description: "SBIR、CITD、SIIR 等企業補助媒合",
         href: "/upgrade-center",
         Icon: Lightbulb,
+      },
+      {
+        title: "企業財務優化",
+        description: "合法節稅｜融資優化｜資金更靈活",
+        href: "/finance-optimization",
+        Icon: PiggyBank,
       },
     ],
   },
@@ -386,6 +392,13 @@ export default function Navbar() {
     staleTime: 120000,
     refetchOnMount: "always",
   });
+  // 財務優化顧問身份：與企業補助顧問完全獨立的查詢／快取，任一方有效都會顯示
+  // 「顧問中心」入口，兩者皆有效或為管理員時導向分流頁（/consultant-center）。
+  const financeConsultantProfilesQuery = trpc.financeConsultant.myProfiles.useQuery(undefined, {
+    enabled: isAuthenticated && !isAdmin,
+    staleTime: 120000,
+    refetchOnMount: "always",
+  });
 
   // 用 localStorage 快取顧問身份（key 依 user id 區分，避免 App WebView 跨帳號快取污染）
   // 初始值設 false；useEffect 在 userId 與 query 資料都就位後正確更新
@@ -409,7 +422,35 @@ export default function Navbar() {
     try { setConsultantActiveCache(localStorage.getItem(userKey) === "1"); } catch {}
   }, [isAuthenticated, userId, consultantProfilesQuery.data]);
 
+  // 財務優化顧問身份快取，與上方企業補助顧問快取用同一套手法、獨立的 key。
+  const [financeConsultantActiveCache, setFinanceConsultantActiveCache] = useState(false);
+  useEffect(() => {
+    if (!isAuthenticated || !userId) {
+      setFinanceConsultantActiveCache(false);
+      return;
+    }
+    const userKey = `oxm_finance_consultant_active_${userId}`;
+    if (financeConsultantProfilesQuery.data !== undefined) {
+      const active = financeConsultantProfilesQuery.data.some(p => p.isActive);
+      try { localStorage.setItem(userKey, active ? "1" : "0"); } catch {}
+      setFinanceConsultantActiveCache(active);
+      return;
+    }
+    try { setFinanceConsultantActiveCache(localStorage.getItem(userKey) === "1"); } catch {}
+  }, [isAuthenticated, userId, financeConsultantProfilesQuery.data]);
+
   const showConsultantCenter = isAdmin || consultantActiveCache;
+  const showFinanceConsultantCenter = isAdmin || financeConsultantActiveCache;
+  const showAnyConsultantCenter = showConsultantCenter || showFinanceConsultantCenter;
+  // 導頁目標：兩種顧問身份都有效（或管理員）時進入分流頁，只有單一身份時
+  // 直接導向原本的案件頁——保留既有企業補助顧問「顧問中心」入口的原有行為，
+  // 不因新增財務優化顧問而多一層點擊。
+  const consultantCenterHref =
+    isAdmin || (consultantActiveCache && financeConsultantActiveCache)
+      ? "/consultant-center"
+      : financeConsultantActiveCache
+      ? "/finance-consultant/cases"
+      : "/upgrade-consultant/cases";
 
   const pendingCount = pendingCountQuery.data?.count ?? 0;
   const hasAdminNotification = !!(adminNotifQuery.data?.hasMessageReplies || adminNotifQuery.data?.hasSupportPending);
@@ -646,11 +687,11 @@ export default function Navbar() {
                     </Link>
                   </DropdownMenuItem>
                 ) : null}
-                {showConsultantCenter && (
+                {showAnyConsultantCenter && (
                   <>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem asChild>
-                      <Link href="/upgrade-consultant/cases" className="flex items-center gap-2 cursor-pointer text-orange-600 focus:text-orange-600">
+                      <Link href={consultantCenterHref} className="flex items-center gap-2 cursor-pointer text-orange-600 focus:text-orange-600">
                         <Briefcase className="w-4 h-4" />
                         顧問中心
                       </Link>
@@ -867,8 +908,8 @@ export default function Navbar() {
                 </Link>
               ) : null}
 
-              {showConsultantCenter && (
-                <Link href="/upgrade-consultant/cases" onClick={() => setMobileOpen(false)}>
+              {showAnyConsultantCenter && (
+                <Link href={consultantCenterHref} onClick={() => setMobileOpen(false)}>
                   <Button variant="ghost" className="w-full justify-start text-orange-600">
                     <Briefcase className="w-4 h-4 mr-2" />
                     顧問中心

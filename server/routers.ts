@@ -512,6 +512,23 @@ function assertValidSpaceCode(spaceCode: string): void {
   }
 }
 
+/**
+ * 從 mysql2 錯誤中取出 code（例如 "ER_DUP_ENTRY"）。drizzle-orm 透過
+ * query builder（.insert()／.update()／.execute()）執行時，不論是否包在
+ * db.transaction() 裡，都會把底層 mysql2 錯誤包成新的 Error，並把原始錯誤
+ * 的 .code 移到 .cause.code，而不是保留在最外層的 .code——只檢查
+ * err.code 會永遠比對不到，讓「攔截 ER_DUP_ENTRY 轉成安全訊息」的分支
+ * 形同虛設。這裡同時檢查兩個位置，不論 drizzle 版本或呼叫方式改變都能正確
+ * 判斷。
+ */
+function extractMysqlErrorCode(err: unknown): string | undefined {
+  if (!err || typeof err !== "object") return undefined;
+  const e = err as { code?: unknown; cause?: { code?: unknown } };
+  if (typeof e.code === "string") return e.code;
+  if (e.cause && typeof e.cause === "object" && typeof e.cause.code === "string") return e.cause.code;
+  return undefined;
+}
+
 export const appRouter = router({
   system: systemRouter,
 
@@ -7049,6 +7066,352 @@ export const appRouter = router({
     // 管理員：統計
     adminStats: adminProcedure.query(async () => {
       return db.adminGetUpgradeStats();
+    }),
+  }),
+
+  // ===== 企業財務優化 =====
+  // 與企業升級中心（upgradeCenter/upgradeConsultant）完全獨立的資料模型與權限：
+  // 顧問授權只看 financeConsultants 是否有一筆該 userId 的有效紀錄，不使用固定
+  // email／userId／前端條件；既有政府補助顧問資料不受影響。
+  financeCenter: router({
+    submitApplication: protectedProcedure.input(z.object({
+      contactName: z.string().min(1).max(100),
+      phone: z.string().min(7).max(30).regex(/^[\d\-+() ]{7,20}$/, "電話格式不正確"),
+      contactTime: z.string().min(1).max(100),
+      consentAgreed: z.literal(true),
+      factoryId: z.number().int().positive(),
+    })).mutation(async ({ input, ctx }) => {
+      // 只能替自己有權管理（owner 或 co-manager）且已通過審核的工廠送出申請，
+      // 與 upgradeCenter.submitApplication 相同的驗證方式，伺服器端強制檢查，
+      // 不信任前端傳入的 factoryId 之外的任何工廠資料。
+      const [owned, coManaged] = await Promise.all([
+        db.getFactoryByOwnerId(ctx.user.id),
+        db.getCoManagedFactories(ctx.user.id),
+      ]);
+      const isOwner = owned?.id === input.factoryId;
+      const coManagedFactory = coManaged.find(f => f.factoryId === input.factoryId);
+      const isCoManaged = !!coManagedFactory;
+      if (!isOwner && !isCoManaged) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "無法代表此工廠送出申請" });
+      }
+      const factory = isOwner ? owned : await db.getFactoryById(input.factoryId);
+      if (!factory || factory.status !== "approved") {
+        throw new TRPCError({ code: "FORBIDDEN", message: "工廠通過審核後才能申請企業財務健檢" });
+      }
+
+      // 重複申請防護：同一工廠若已有新案件／評估中／緩追區的未結案案件，不得
+      // 再次建立。這裡先做一次友善的預先檢查；真正可靠的防線是 migration
+      // 0068 建立的 fa_open_factory_uq（VIRTUAL generated column + UNIQUE INDEX），
+      // 即使高併發下同時送出多筆也不會產生重複的未結案案件。
+      if (await db.hasOpenFinanceApplication(input.factoryId)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "此工廠已有進行中的企業財務優化案件，請至企業財務優化專區查看目前進度" });
+      }
+
+      // 候選顧問查詢與案件寫入必須是同一個 transaction（內部對候選顧問列
+      // 加上 FOR UPDATE row lock），否則會出現「查詢時還有一位啟用中顧問，
+      // 顧問卻在查詢完成、案件寫入前被停用」的競態，導致新案件指派給一個
+      // 已經停用的顧問。詳見 db.createFinanceApplicationWithAutoAssign 註解。
+      let id: number;
+      let consultant: Awaited<ReturnType<typeof db.createFinanceApplicationWithAutoAssign>>["assignedConsultant"];
+      try {
+        const result = await db.createFinanceApplicationWithAutoAssign({
+          factoryId: input.factoryId,
+          // 公司名稱／地址由 server 依 factoryId 重新讀取工廠資料寫入，不信任前端傳入值。
+          companyNameSnapshot: factory.name,
+          companyAddressSnapshot: factory.address,
+          contactName: input.contactName,
+          phone: input.phone,
+          contactTime: input.contactTime,
+          consentAgreed: true,
+          status: "new",
+          statusTimeline: { new: new Date().toISOString() },
+        });
+        id = result.id;
+        consultant = result.assignedConsultant;
+      } catch (err: unknown) {
+        // 高併發下兩個請求同時通過上方預先檢查時，由 DB 唯一索引擋下第二筆。
+        if (extractMysqlErrorCode(err) === "ER_DUP_ENTRY") {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "此工廠已有進行中的企業財務優化案件，請至企業財務優化專區查看目前進度" });
+        }
+        throw err;
+      }
+
+      // 站內通知申請人：已收到申請
+      notifyUser(ctx.user.id, {
+        eventType: "finance_application_submitted",
+        eventGroup: "finance",
+        message: `「${factory.name}」的企業財務優化健檢申請已送出`,
+        actionUrl: "/finance-optimization",
+        titleSnapshot: factory.name,
+        dedupeKey: `finance_submitted:${id}`,
+      });
+
+      if (consultant?.userId) {
+        // 指派到有效顧問：站內通知該顧問（不寄送 Email／Push，沿用現有通知機制）
+        notifyUser(consultant.userId, {
+          eventType: "finance_new_case",
+          eventGroup: "finance",
+          message: `新企業財務優化案件「${factory.name}」已分派給您，請儘速查收`,
+          actionUrl: "/finance-consultant/cases",
+          titleSnapshot: factory.name,
+          dedupeKey: `finance_new_case:${id}`,
+        });
+      } else {
+        // 尚未設定／找不到單一啟用中顧問：通知管理員手動指派，案件仍安全建立
+        notifyAdmins({
+          eventType: "finance_unassigned",
+          eventGroup: "finance",
+          message: `新企業財務優化申請「${factory.name}」尚未指派顧問，請至財務優化案件區手動分派`,
+          actionUrl: "/admin/finance-applications",
+          titleSnapshot: factory.name,
+          dedupeKey: `finance_unassigned:${id}`,
+        });
+      }
+
+      return { success: true, id };
+    }),
+
+    // 申請進度查詢：回傳目前使用者名下工廠的財務優化案件，且刻意不回傳
+    // notes（顧問內部備註），避免洩漏給一般申請人。
+    myApplicationProgress: protectedProcedure.query(async ({ ctx }) => {
+      const [owned, coManaged] = await Promise.all([
+        db.getFactoryByOwnerId(ctx.user.id),
+        db.getCoManagedFactories(ctx.user.id),
+      ]);
+      const factoryIds: number[] = [];
+      if (owned?.id) factoryIds.push(owned.id);
+      for (const f of coManaged) {
+        if (!factoryIds.includes(f.factoryId)) factoryIds.push(f.factoryId);
+      }
+      if (factoryIds.length === 0) return { hasFactory: false, applications: [] };
+      const applications = await db.getFinanceApplicationsByFactoryIds(factoryIds);
+      // 明確欄位白名單（而非排除 notes 的黑名單）：只回傳申請人本來就知道、
+      // 自己填寫過的欄位，杜絕日後在 financeApplications 加欄位時，這裡因為
+      // 忘記排除而意外外洩顧問內部資訊（notes／assignedConsultantId／
+      // lastUpdatedByUserId／lastUpdatedByNameSnapshot 一律不回傳）。
+      const sanitized = applications.map((a) => ({
+        id: a.id,
+        factoryId: a.factoryId,
+        companyNameSnapshot: a.companyNameSnapshot,
+        companyAddressSnapshot: a.companyAddressSnapshot,
+        contactName: a.contactName,
+        phone: a.phone,
+        contactTime: a.contactTime,
+        consentAgreed: a.consentAgreed,
+        status: a.status,
+        statusTimeline: a.statusTimeline,
+        createdAt: a.createdAt,
+        updatedAt: a.updatedAt,
+      }));
+      return { hasFactory: true, applications: sanitized };
+    }),
+
+    adminList: adminProcedure.input(z.object({
+      status: z.enum(["new", "evaluating", "deferred", "not_interested", "won"]).optional(),
+      limit: z.number().int().min(1).max(200).default(50),
+      offset: z.number().int().min(0).default(0),
+    })).query(async ({ input }) => {
+      const [items, total] = await Promise.all([
+        db.listFinanceApplications({ status: input.status, limit: input.limit, offset: input.offset }),
+        db.countFinanceApplications(input.status),
+      ]);
+      return { items, total };
+    }),
+
+    adminGet: adminProcedure.input(z.object({ id: z.number() })).query(async ({ input }) => {
+      const item = await db.getFinanceApplicationById(input.id);
+      if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "找不到案件" });
+      return item;
+    }),
+  }),
+
+  // ===== 財務優化顧問案件管理 =====
+  financeConsultant: router({
+    // 目前登入者的財務顧問身份（空陣列＝不是財務顧問）
+    myProfiles: protectedProcedure.query(async ({ ctx }) => {
+      return db.getFinanceConsultantsByUserId(ctx.user.id);
+    }),
+
+    // 顧問／管理員查看案件：目前只有單一顧問池，沒有地區區分，任一位有效
+    // 財務顧問可查看全部財務案件；管理員一律可查看全部。
+    myCases: protectedProcedure.input(z.object({
+      status: z.enum(["new", "evaluating", "deferred", "not_interested", "won"]).optional(),
+      limit: z.number().int().min(1).max(200).default(50),
+      offset: z.number().int().min(0).default(0),
+    })).query(async ({ ctx, input }) => {
+      if (!ctx.user.isAdmin) {
+        const consultants = await db.getFinanceConsultantsByUserId(ctx.user.id);
+        if (!consultants.some(c => c.isActive)) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "您不是財務優化顧問" });
+        }
+      }
+      const [items, total] = await Promise.all([
+        db.listFinanceApplications({ status: input.status, limit: input.limit, offset: input.offset }),
+        db.countFinanceApplications(input.status),
+      ]);
+      return { items, total };
+    }),
+
+    // 合法流程：new→evaluating；evaluating→deferred/not_interested/won；
+    // deferred→evaluating/not_interested/won；not_interested/won 為結案狀態。
+    updateCaseStatus: protectedProcedure.input(z.object({
+      applicationId: z.number().int().positive(),
+      nextStatus: z.enum(["evaluating", "deferred", "not_interested", "won"]),
+    })).mutation(async ({ ctx, input }) => {
+      if (!ctx.user.isAdmin) {
+        const consultants = await db.getFinanceConsultantsByUserId(ctx.user.id);
+        if (!consultants.some(c => c.isActive)) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "您不是財務優化顧問" });
+        }
+      }
+      const app = await db.getFinanceApplicationById(input.applicationId);
+      if (!app) throw new TRPCError({ code: "NOT_FOUND", message: "找不到案件" });
+
+      const FINANCE_ALLOWED: Record<string, string[]> = {
+        new: ["evaluating"],
+        evaluating: ["deferred", "not_interested", "won"],
+        deferred: ["evaluating", "not_interested", "won"],
+      };
+      if (!FINANCE_ALLOWED[app.status]?.includes(input.nextStatus)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: `目前狀態「${app.status}」不能推進至「${input.nextStatus}」` });
+      }
+
+      const updatedBy = { userId: ctx.user.id, name: db.resolveActorNameSnapshot(ctx.user) };
+      await db.updateFinanceApplicationStatus(input.applicationId, input.nextStatus, updatedBy);
+
+      const FINANCE_STATUS_LABELS: Record<string, string> = {
+        evaluating: "進入評估中",
+        deferred: "暫時移至緩追區",
+        not_interested: "客戶暫無意願",
+        won: "已完成媒合",
+      };
+      notifyFactoryMembers(app.factoryId, {
+        eventType: `finance_status_${input.nextStatus}`,
+        eventGroup: "finance",
+        message: `「${app.companyNameSnapshot}」企業財務優化案件狀態更新：${FINANCE_STATUS_LABELS[input.nextStatus] ?? input.nextStatus}`,
+        actionUrl: "/finance-optimization",
+        titleSnapshot: app.companyNameSnapshot,
+        dedupeKey: `finance_status:${app.id}:${input.nextStatus}`,
+      });
+      return { success: true };
+    }),
+
+    // 顧問內部備註：僅授權顧問／管理員可讀寫，不回傳給一般申請人（見
+    // financeCenter.myApplicationProgress 已排除 notes 欄位）。
+    updateCaseNotes: protectedProcedure.input(z.object({
+      applicationId: z.number().int().positive(),
+      notes: z.string().max(5000),
+    })).mutation(async ({ ctx, input }) => {
+      if (!ctx.user.isAdmin) {
+        const consultants = await db.getFinanceConsultantsByUserId(ctx.user.id);
+        if (!consultants.some(c => c.isActive)) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "您不是財務優化顧問" });
+        }
+      }
+      const app = await db.getFinanceApplicationById(input.applicationId);
+      if (!app) throw new TRPCError({ code: "NOT_FOUND", message: "找不到案件" });
+      await db.updateFinanceCaseNotes(input.applicationId, input.notes || null, { userId: ctx.user.id, name: db.resolveActorNameSnapshot(ctx.user) });
+      return { success: true };
+    }),
+
+    // 管理員：手動指派／改派承辦顧問（含補派尚未指派顧問時建立的案件）。
+    // Server 一律拒絕指派給停用中、尚未綁定使用者帳號或不存在的顧問——這裡
+    // 是給前端明確的 TRPCError code；db.adminAssignFinanceConsultant 內還有
+    // 一層 defense-in-depth 的相同驗證。
+    adminAssignConsultant: adminProcedure.input(z.object({
+      applicationId: z.number().int().positive(),
+      consultantId: z.number().int().positive().nullable(),
+    })).mutation(async ({ ctx, input }) => {
+      const app = await db.getFinanceApplicationById(input.applicationId);
+      if (!app) throw new TRPCError({ code: "NOT_FOUND", message: "找不到案件" });
+      if (input.consultantId != null) {
+        const consultant = await db.getFinanceConsultantById(input.consultantId);
+        if (!consultant) throw new TRPCError({ code: "NOT_FOUND", message: "找不到顧問" });
+        if (!consultant.isActive) throw new TRPCError({ code: "BAD_REQUEST", message: "此顧問目前已停用，無法指派承辦" });
+        if (consultant.userId == null) throw new TRPCError({ code: "BAD_REQUEST", message: "此顧問尚未綁定使用者帳號，無法指派承辦" });
+      }
+      // 上面只是提早給出人類可讀錯誤訊息的預檢查；真正的競態保護是
+      // db.adminAssignFinanceConsultant 內部的 transaction + FOR UPDATE
+      // 重新驗證。極端情況下（預檢查通過後、寫入前，顧問被另一個請求停用／
+      // 解除綁定），這裡的 catch 把該情境轉成友善的 BAD_REQUEST，而不是外洩
+      // 未預期的 500 錯誤。
+      try {
+        await db.adminAssignFinanceConsultant(input.applicationId, input.consultantId, { userId: ctx.user!.id, name: db.resolveActorNameSnapshot(ctx.user!) });
+      } catch (err) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: err instanceof Error ? err.message : "指派失敗" });
+      }
+      return { success: true };
+    }),
+
+    // 管理員：顧問設定管理（目前只有一位合作顧問，未來可擴充多位）
+    adminListConsultants: adminProcedure.query(async () => {
+      return db.listAllFinanceConsultants();
+    }),
+
+    adminCreateConsultant: adminProcedure.input(z.object({
+      name: z.string().min(1).max(100),
+    })).mutation(async ({ input }) => {
+      const id = await db.adminCreateFinanceConsultant(input.name);
+      return { success: true, id };
+    }),
+
+    // 解除綁定（userId=null）時，該顧問名下未結案案件會安全改為未指派
+    // （db.adminBindFinanceConsultantUser 內同一 transaction 完成），這裡負責
+    // 通知管理員有案件需要重新指派。pre-check 通過後仍可能在高併發下遇到
+    // fc_user_id_uq UNIQUE INDEX 競態，一律攔截 ER_DUP_ENTRY 轉成固定、安全
+    // 的 BAD_REQUEST 訊息，不回傳原始 SQL 錯誤。
+    adminBindUser: adminProcedure.input(z.object({
+      consultantId: z.number(),
+      userId: z.number().nullable(),
+    })).mutation(async ({ ctx, input }) => {
+      let reassignedCases: Awaited<ReturnType<typeof db.adminBindFinanceConsultantUser>>["reassignedCases"] = [];
+      try {
+        const result = await db.adminBindFinanceConsultantUser(
+          input.consultantId,
+          input.userId,
+          { userId: ctx.user!.id, name: db.resolveActorNameSnapshot(ctx.user!) },
+        );
+        reassignedCases = result.reassignedCases;
+      } catch (err) {
+        if (extractMysqlErrorCode(err) === "ER_DUP_ENTRY") {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "此使用者已綁定其他財務優化顧問，一個帳號同時只能擔任一位財務優化顧問" });
+        }
+        throw new TRPCError({ code: "BAD_REQUEST", message: err instanceof Error ? err.message : "綁定失敗" });
+      }
+      if (reassignedCases.length > 0) {
+        notifyAdmins({
+          eventType: "finance_cases_unassigned_cascade",
+          eventGroup: "finance",
+          message: `解除財務優化顧問綁定後，${reassignedCases.length} 筆案件已安全改為未指派，請重新分派`,
+          actionUrl: "/admin/finance-applications",
+          titleSnapshot: "財務優化顧問解除綁定",
+          dedupeKey: `finance_cascade_unbind:${input.consultantId}:${Date.now()}`,
+        });
+      }
+      return { success: true };
+    }),
+
+    // 停用顧問（isActive=false）時，同理安全改為未指派並通知管理員。
+    adminSetActive: adminProcedure.input(z.object({
+      consultantId: z.number(),
+      isActive: z.boolean(),
+    })).mutation(async ({ ctx, input }) => {
+      const { reassignedCases } = await db.adminSetFinanceConsultantActive(
+        input.consultantId,
+        input.isActive,
+        { userId: ctx.user!.id, name: db.resolveActorNameSnapshot(ctx.user!) },
+      );
+      if (reassignedCases.length > 0) {
+        notifyAdmins({
+          eventType: "finance_cases_unassigned_cascade",
+          eventGroup: "finance",
+          message: `財務優化顧問已停用，${reassignedCases.length} 筆案件已安全改為未指派，請重新分派`,
+          actionUrl: "/admin/finance-applications",
+          titleSnapshot: "財務優化顧問停用",
+          dedupeKey: `finance_cascade_deactivate:${input.consultantId}:${Date.now()}`,
+        });
+      }
+      return { success: true };
     }),
   }),
 

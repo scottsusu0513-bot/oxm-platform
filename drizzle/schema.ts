@@ -1224,3 +1224,71 @@ export const upgradeApplications = mysqlTable("upgradeApplications", {
 
 export type UpgradeApplication = typeof upgradeApplications.$inferSelect;
 export type InsertUpgradeApplication = typeof upgradeApplications.$inferInsert;
+
+// ===== 企業財務優化：顧問設定 =====
+// 目前只有一位合作顧問，未來可擴充多位；不綁定固定 email／userId，
+// 授權完全由「是否在此表中有一筆有效（isActive）紀錄」決定（見
+// server/db.ts getFinanceConsultantsByUserId）。與 upgradeConsultants
+// 是各自獨立的表，因此既有補助顧問資料不會因為這次新增而意外取得
+// 財務案件權限。
+export const financeConsultants = mysqlTable("financeConsultants", {
+  id: int("id").autoincrement().primaryKey(),
+  name: varchar("name", { length: 100 }).notNull(),
+  userId: int("userId").references(() => users.id, { onDelete: "set null" }),
+  isActive: boolean("isActive").notNull().default(true),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (t) => ({
+  // UNIQUE 而非一般 index：避免同一 userId 被重複綁定到多筆顧問紀錄，確保
+  // 「系統只有一位啟用中顧問時自動指派」的判斷不會被同一人重複掛號影響。
+  // MySQL UNIQUE INDEX 允許多筆 NULL（尚未綁定的顧問列可以同時存在）。
+  userIdUq: uniqueIndex("fc_user_id_uq").on(t.userId),
+}));
+
+export type FinanceConsultant = typeof financeConsultants.$inferSelect;
+export type InsertFinanceConsultant = typeof financeConsultants.$inferInsert;
+
+// ===== 企業財務優化：申請案件 =====
+// 獨立於 upgradeApplications 的資料模型（不同顧問流程、不同狀態機），
+// 依使用者需求刻意不含統一編號／經營概況／稅務融資勾選／下次追蹤日期。
+export const financeApplications = mysqlTable("financeApplications", {
+  id: int("id").autoincrement().primaryKey(),
+  factoryId: int("factoryId").notNull().references(() => factories.id, { onDelete: "cascade" }),
+  // 公司名稱／地址由 server 依 factoryId 讀取工廠資料寫入的 snapshot，
+  // 不信任前端傳入值；即使工廠之後改名，案件仍保留申請當下的內容。
+  companyNameSnapshot: varchar("companyNameSnapshot", { length: 200 }).notNull(),
+  companyAddressSnapshot: varchar("companyAddressSnapshot", { length: 500 }).notNull(),
+  contactName: varchar("contactName", { length: 100 }).notNull(),
+  phone: varchar("phone", { length: 30 }).notNull(),
+  contactTime: varchar("contactTime", { length: 100 }).notNull(),
+  consentAgreed: boolean("consentAgreed").notNull().default(true),
+  // 五個看板：new(新案件) → evaluating(評估中) → deferred(緩追區)／
+  // not_interested(無意願)／won(成交區)；deferred 可回到 evaluating。
+  // not_interested／won 為結案狀態，結案後可對同一工廠重新建立新案件。
+  status: mysqlEnum("status", ["new", "evaluating", "deferred", "not_interested", "won"]).notNull().default("new"),
+  assignedConsultantId: int("assignedConsultantId").references(() => financeConsultants.id, { onDelete: "set null" }),
+  notes: text("notes"), // 顧問內部備註，僅授權顧問／管理員可見，不回傳給申請人
+  statusTimeline: json("statusTimeline").$type<Record<string, string>>(),
+  // 沿用 upgradeApplications.lastUpdatedByUserId/lastUpdatedByNameSnapshot 慣例
+  lastUpdatedByUserId: int("lastUpdatedByUserId").references(() => users.id, { onDelete: "set null" }),
+  lastUpdatedByNameSnapshot: varchar("lastUpdatedByNameSnapshot", { length: 100 }).notNull().default(""),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  // Virtual generated column：狀態為 new/evaluating/deferred（未結案）時等於
+  // factoryId，否則為 NULL。MySQL UNIQUE INDEX 忽略 NULL，因此只會限制「同一
+  // 工廠最多一筆未結案案件」，結案（not_interested／won）後的歷史案件不受限，
+  // 可重新申請。與 factoryRevisions.pendingFactoryId 相同手法，可靠地在
+  // DB 層防止重複申請（不只是前端擋按鈕）。
+  openFactoryId: int("openFactoryId").generatedAlwaysAs(
+    sql`CASE WHEN \`status\` IN ('new','evaluating','deferred') THEN \`factoryId\` ELSE NULL END`
+  ),
+}, (t) => ({
+  openFactoryUq: uniqueIndex("fa_open_factory_uq").on(t.openFactoryId),
+  statusCreatedIdx: index("fa_status_created_idx").on(t.status, t.createdAt),
+  consultantIdx: index("fa_consultant_idx").on(t.assignedConsultantId, t.status, t.createdAt),
+  factoryIdx: index("fa_factory_idx").on(t.factoryId),
+  lastUpdaterIdx: index("fa_last_updater_idx").on(t.lastUpdatedByUserId),
+}));
+
+export type FinanceApplication = typeof financeApplications.$inferSelect;
+export type InsertFinanceApplication = typeof financeApplications.$inferInsert;

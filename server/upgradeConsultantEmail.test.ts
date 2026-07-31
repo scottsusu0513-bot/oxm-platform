@@ -49,43 +49,52 @@ async function deleteTestUser(userId: number): Promise<void> {
   await conn.execute(sql`DELETE FROM users WHERE id = ${userId}`);
 }
 
+/**
+ * 建立一筆完全屬於本測試自己的 upgradeConsultants fixture（不依賴、不觸碰任何
+ * 既有的 north／central／south 顧問列）。regionKey 雖然有 UNIQUE 索引，但這裡
+ * 用測試自建、測試自刪的獨立列，不會與既有資料或其他測試互相干擾——即使本機
+ * 測試資料庫（oxm_test）一開始完全沒有任何顧問 seed 資料，這個測試也能正常
+ * 執行；反過來說，即使本機 oxm 已經有真實的 north/central/south 顧問，這裡
+ * 建立的也是「另一筆獨立的顧問紀錄」，不會覆蓋或修改既有那三筆。
+ */
+async function createTestConsultant(regionKey: "north" | "central" | "south", userId: number): Promise<number> {
+  const conn = await getDb();
+  if (!conn) throw new Error("no db");
+  const [result] = await conn.execute(sql`
+    INSERT INTO upgradeConsultants (name, regionKey, userId, serviceAreas, isActive, createdAt, updatedAt)
+    VALUES (${`Email 測試顧問 ${runId}`}, ${regionKey}, ${userId}, ${JSON.stringify(["測試服務區"])}, true, NOW(), NOW())
+  `) as unknown as [{ insertId: number }, unknown];
+  return result.insertId;
+}
+
+async function deleteTestConsultant(consultantId: number): Promise<void> {
+  const conn = await getDb();
+  if (!conn) return;
+  await conn.execute(sql`DELETE FROM upgradeConsultants WHERE id = ${consultantId}`);
+}
+
 describe("listAllConsultants: boundUser.email 使用 COALESCE(primaryEmail, email)", () => {
   it("使用者 email=null、primaryEmail 有值時，boundUser.email 回傳 primaryEmail 而非 null", async () => {
-    // 三個地區顧問（north/central/south）是既有 seed 資料，regionKey 有唯一索引，
-    // 不能另外新增一筆；改用「暫時綁定→驗證→還原」的方式測試真實函式，沿用專案
-    // 既有的 bindConsultantUser，不繞過真正的讀取邏輯。
-    //
-    // testUserId／northConsultant／originalUserId 宣告在 try 外、賦值放進 try
-    // 內：不論是建立測試使用者、查詢 north 顧問、或任何一個 assertion 失敗，
-    // finally 都能依實際執行到哪一步精確判斷該清什麼——測試使用者一定會被刪除，
-    // north 顧問只有真的被改過 userId 才需要／才會被還原。
     let testUserId: number | undefined;
-    let northConsultant: Awaited<ReturnType<typeof db.getConsultantByRegion>> | undefined;
-    let originalUserId: number | null | undefined;
+    let testConsultantId: number | undefined;
 
     try {
       testUserId = await createTestUserWithPrimaryEmailOnly();
-
-      northConsultant = await db.getConsultantByRegion("north");
-      if (!northConsultant) {
-        throw new Error("本機測試資料庫缺少 north 顧問 seed 資料，無法執行此測試");
-      }
-      originalUserId = northConsultant.userId;
-
-      await db.bindConsultantUser(northConsultant.id, testUserId);
+      // regionKey 用 "north" 只是任取一個合法 enum 值，這是測試自建的獨立列，
+      // 不是既有共用的 north 顧問（沒有唯一索引衝突：一次只建立這一筆）。
+      testConsultantId = await createTestConsultant("north", testUserId);
 
       const all = await db.listAllConsultants();
-      const row = all.find(c => c.id === northConsultant!.id);
+      const row = all.find(c => c.id === testConsultantId);
 
-      expect(row, "找不到剛綁定的顧問紀錄").toBeDefined();
+      expect(row, "找不到剛建立的測試顧問紀錄").toBeDefined();
       expect(row!.boundUser).not.toBeNull();
       expect(row!.boundUser!.email).toBe(`${runId}@example.test`);
       expect(row!.boundUser!.email).not.toBeNull();
     } finally {
-      // north 顧問只有真的執行過 bindConsultantUser（originalUserId 已被讀出）
-      // 才需要還原；testUserId 只要建立成功就一定要刪除，不論後面哪一步失敗。
-      if (northConsultant && originalUserId !== undefined) {
-        await db.bindConsultantUser(northConsultant.id, originalUserId);
+      // 只清理本測試自己建立、且已確認建立成功的 fixture；不觸碰任何既有顧問列。
+      if (testConsultantId) {
+        await deleteTestConsultant(testConsultantId);
       }
       if (testUserId) {
         await deleteTestUser(testUserId);

@@ -25,10 +25,11 @@
  *    upgradeConsultants → 綁定的 userId → users 顯示名稱）。
  *
  * 測試手法：
- * - upgradeConsultants 的 north/central/south 三筆是既有 seed 資料，regionKey
- *   有 UNIQUE 索引不能另外新增，因此沿用 server/upgradeConsultantEmail.test.ts
- *   已驗證過的「暫時綁定→驗證→還原」模式，且全程只用 db.bindConsultantUser
- *   這個真實函式（不繞過真正的綁定/驗證邏輯）。
+ * - upgradeConsultants 的 north/central/south 三筆改為本檔案自建、自刪的獨立
+ *   fixture（regionKey 雖有 UNIQUE 索引，但只要不依賴任何既有列，自建三筆全新
+ *   資料完全不會與本機既有的 north/central/south 顧問衝突或被誤觸）。全程
+ *   只用 db.bindConsultantUser／db.createUpgradeApplication 等真實函式（不繞
+ *   過真正的綁定/驗證邏輯）。
  * - 顧問帳號用 loginPopup.test.ts 已驗證過的原生 SQL 建立測試使用者模式
  *   （避開 db.upsertUser 對 schema 全欄位的假設）。
  * - 案件權限與 mutation 走 appRouter.createCaller(ctx) 真實 tRPC 呼叫（沿用
@@ -80,7 +81,7 @@ function createAuthContext(overrides?: Partial<AuthenticatedUser>): TrpcContext 
   };
 }
 
-const adminCtx = () => createAuthContext({ role: "admin" });
+const adminCtx = () => createAuthContext({ role: "admin", id: adminActorUserId });
 const userCtx = (id: number, name: string) => createAuthContext({ role: "user", id, name });
 
 const runId = `${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
@@ -133,49 +134,79 @@ async function deleteTestCase(id: number): Promise<void> {
   await conn.execute(sql`DELETE FROM upgradeApplications WHERE id = ${id}`);
 }
 
-// ── 顧問帳號暫時綁定（沿用 upgradeConsultantEmail.test.ts 已驗證過的模式） ──
-let northConsultant: Awaited<ReturnType<typeof db.getConsultantByRegion>>;
-let centralConsultant: Awaited<ReturnType<typeof db.getConsultantByRegion>>;
-let southConsultant: Awaited<ReturnType<typeof db.getConsultantByRegion>>;
-let originalNorthUserId: number | null;
-let originalCentralUserId: number | null;
-let originalSouthUserId: number | null;
+// ── 本檔案自建、自刪的獨立 north/central/south 顧問 fixture ─────────────────
+// 不依賴、不觸碰任何既有的 north/central/south 顧問列：三筆全新資料，userId 在
+// INSERT 當下就直接綁定測試使用者，afterAll 只刪除這三筆自建的顧問列與使用者。
+async function createTestConsultant(
+  regionKey: "north" | "central" | "south",
+  userId: number,
+  name: string,
+): Promise<NonNullable<Awaited<ReturnType<typeof db.getConsultantById>>>> {
+  const conn = await getDb();
+  if (!conn) throw new Error("no db");
+  const [result] = await conn.execute(sql`
+    INSERT INTO upgradeConsultants (name, regionKey, userId, serviceAreas, isActive, createdAt, updatedAt)
+    VALUES (${name}, ${regionKey}, ${userId}, ${JSON.stringify(["測試服務區"])}, true, NOW(), NOW())
+  `) as unknown as [{ insertId: number }, unknown];
+  const consultant = await db.getConsultantById(result.insertId);
+  if (!consultant) throw new Error(`failed to create test consultant (${regionKey})`);
+  return consultant;
+}
 
-let northUserId: number;
-let centralUserId: number;
-let southUserId: number;
+async function deleteTestConsultant(consultantId: number): Promise<void> {
+  const conn = await getDb();
+  if (!conn) return;
+  await conn.execute(sql`DELETE FROM upgradeConsultants WHERE id = ${consultantId}`);
+}
+
+// 型別故意用 number | undefined／可能是 undefined 的物件（不是預設值或既有
+// 身分 fallback）：beforeAll 中途失敗時，尚未建立成功的欄位必須維持
+// undefined，讓 cleanupFixtures() 能精確判斷「這個資源是否真的建立成功過」，
+// 不會把 undefined 傳進任何 DELETE 的 SQL 參數，也不會在清理時對
+// undefined.id 拋出 TypeError（那樣反而會讓 afterAll 自己中途失敗、漏清理
+// 後面的項目）。改用循序 await（不是 Promise.all）建立，確保「這一步失敗時，
+// 前面已成功的步驟其 ID 一定已經賦值完成」，不會出現「Promise.all 其中一個
+// reject、其餘幾個明明成功卻因為解構賦值整組落空」的情況。
+let northConsultant: NonNullable<Awaited<ReturnType<typeof db.getConsultantById>>> | undefined;
+let centralConsultant: NonNullable<Awaited<ReturnType<typeof db.getConsultantById>>> | undefined;
+let southConsultant: NonNullable<Awaited<ReturnType<typeof db.getConsultantById>>> | undefined;
+
+let northUserId: number | undefined;
+let centralUserId: number | undefined;
+let southUserId: number | undefined;
+let adminActorUserId: number | undefined;
+
+/** 依 FK 安全順序（顧問列 → 使用者）清理已確定建立成功的 fixture；success、
+ *  afterAll、beforeAll 中途失敗的 catch 都呼叫同一支函式，可安全重複呼叫。 */
+async function cleanupFixtures(): Promise<void> {
+  if (northConsultant) { await deleteTestConsultant(northConsultant.id); northConsultant = undefined; }
+  if (centralConsultant) { await deleteTestConsultant(centralConsultant.id); centralConsultant = undefined; }
+  if (southConsultant) { await deleteTestConsultant(southConsultant.id); southConsultant = undefined; }
+  if (typeof northUserId === "number") { await deleteTestUser(northUserId); northUserId = undefined; }
+  if (typeof centralUserId === "number") { await deleteTestUser(centralUserId); centralUserId = undefined; }
+  if (typeof southUserId === "number") { await deleteTestUser(southUserId); southUserId = undefined; }
+  if (typeof adminActorUserId === "number") { await deleteTestUser(adminActorUserId); adminActorUserId = undefined; }
+}
 
 beforeAll(async () => {
-  northConsultant = await db.getConsultantByRegion("north");
-  centralConsultant = await db.getConsultantByRegion("central");
-  southConsultant = await db.getConsultantByRegion("south");
-  if (!northConsultant || !centralConsultant || !southConsultant) {
-    throw new Error("本機測試資料庫缺少 north/central/south 顧問 seed 資料，無法執行此測試");
+  try {
+    northUserId = await ensureTestUser(`test-upgrade-region-north-${runId}`, "北部測試顧問");
+    centralUserId = await ensureTestUser(`test-upgrade-region-central-${runId}`, "中部測試顧問");
+    southUserId = await ensureTestUser(`test-upgrade-region-south-${runId}`, "南部測試顧問");
+    adminActorUserId = await ensureTestUser(`test-upgrade-region-admin-${runId}`, "Test User");
+
+    northConsultant = await createTestConsultant("north", northUserId, `區域測試北部顧問-${runId}`);
+    centralConsultant = await createTestConsultant("central", centralUserId, `區域測試中部顧問-${runId}`);
+    southConsultant = await createTestConsultant("south", southUserId, `區域測試南部顧問-${runId}`);
+  } catch (err) {
+    await cleanupFixtures();
+    throw err;
   }
-  originalNorthUserId = northConsultant.userId;
-  originalCentralUserId = centralConsultant.userId;
-  originalSouthUserId = southConsultant.userId;
-
-  [northUserId, centralUserId, southUserId] = await Promise.all([
-    ensureTestUser(`test-upgrade-region-north-${runId}`, "北部測試顧問"),
-    ensureTestUser(`test-upgrade-region-central-${runId}`, "中部測試顧問"),
-    ensureTestUser(`test-upgrade-region-south-${runId}`, "南部測試顧問"),
-  ]);
-
-  await db.bindConsultantUser(northConsultant.id, northUserId);
-  await db.bindConsultantUser(centralConsultant.id, centralUserId);
-  await db.bindConsultantUser(southConsultant.id, southUserId);
 }, 30000);
 
 afterAll(async () => {
-  if (northConsultant) await db.bindConsultantUser(northConsultant.id, originalNorthUserId);
-  if (centralConsultant) await db.bindConsultantUser(centralConsultant.id, originalCentralUserId);
-  if (southConsultant) await db.bindConsultantUser(southConsultant.id, originalSouthUserId);
-  await Promise.all([
-    deleteTestUser(northUserId),
-    deleteTestUser(centralUserId),
-    deleteTestUser(southUserId),
-  ]);
+  // 只清理本檔案自己建立、且已確認建立成功的 fixture；不觸碰任何既有顧問列。
+  await cleanupFixtures();
 }, 30000);
 
 // ── 1. 緩追區狀態：進入、顯示、恢復評估 ───────────────────────────────────
@@ -344,10 +375,13 @@ describe("getUpgradePublicStats / countUpgradeApplications: 過件率分子分�
 // ── 3. 北中南顧問區域權限 ──────────────────────────────────────────────────
 describe("upgradeConsultant.myCases / 單筆存取: 依案件地區而非 assignedConsultantId 判斷", () => {
   it("北部顧問只能在 myCases 取得北部案件，看不到中部／南部案件", async () => {
-    const northCase = await createTestCase({ companyName: "區域測試-北", location: "台北市", status: "evaluating", assignedConsultantId: northConsultant!.id });
-    const centralCase = await createTestCase({ companyName: "區域測試-中", location: "台中市", status: "evaluating", assignedConsultantId: centralConsultant!.id });
-    const southCase = await createTestCase({ companyName: "區域測試-南", location: "高雄市", status: "evaluating", assignedConsultantId: southConsultant!.id });
+    let northCase: number | undefined;
+    let centralCase: number | undefined;
+    let southCase: number | undefined;
     try {
+      northCase = await createTestCase({ companyName: "區域測試-北", location: "台北市", status: "evaluating", assignedConsultantId: northConsultant!.id });
+      centralCase = await createTestCase({ companyName: "區域測試-中", location: "台中市", status: "evaluating", assignedConsultantId: centralConsultant!.id });
+      southCase = await createTestCase({ companyName: "區域測試-南", location: "高雄市", status: "evaluating", assignedConsultantId: southConsultant!.id });
       const caller = appRouter.createCaller(userCtx(northUserId, "北部測試顧問"));
       const { items } = await caller.upgradeConsultant.myCases({ limit: 200, offset: 0 });
       const ids = items.map(i => i.id);
@@ -355,17 +389,20 @@ describe("upgradeConsultant.myCases / 單筆存取: 依案件地區而非 assign
       expect(ids).not.toContain(centralCase);
       expect(ids).not.toContain(southCase);
     } finally {
-      await deleteTestCase(northCase);
-      await deleteTestCase(centralCase);
-      await deleteTestCase(southCase);
+      if (typeof northCase === "number") await deleteTestCase(northCase);
+      if (typeof centralCase === "number") await deleteTestCase(centralCase);
+      if (typeof southCase === "number") await deleteTestCase(southCase);
     }
   });
 
   it("管理員可在 myCases 取得北中南全部案件", async () => {
-    const northCase = await createTestCase({ companyName: "區域測試-管理員北", location: "台北市", status: "evaluating", assignedConsultantId: northConsultant!.id });
-    const centralCase = await createTestCase({ companyName: "區域測試-管理員中", location: "台中市", status: "evaluating", assignedConsultantId: centralConsultant!.id });
-    const southCase = await createTestCase({ companyName: "區域測試-管理員南", location: "高雄市", status: "evaluating", assignedConsultantId: southConsultant!.id });
+    let northCase: number | undefined;
+    let centralCase: number | undefined;
+    let southCase: number | undefined;
     try {
+      northCase = await createTestCase({ companyName: "區域測試-管理員北", location: "台北市", status: "evaluating", assignedConsultantId: northConsultant!.id });
+      centralCase = await createTestCase({ companyName: "區域測試-管理員中", location: "台中市", status: "evaluating", assignedConsultantId: centralConsultant!.id });
+      southCase = await createTestCase({ companyName: "區域測試-管理員南", location: "高雄市", status: "evaluating", assignedConsultantId: southConsultant!.id });
       const admin = appRouter.createCaller(adminCtx());
       const { items } = await admin.upgradeConsultant.myCases({ limit: 200, offset: 0 });
       const ids = items.map(i => i.id);
@@ -373,9 +410,9 @@ describe("upgradeConsultant.myCases / 單筆存取: 依案件地區而非 assign
       expect(ids).toContain(centralCase);
       expect(ids).toContain(southCase);
     } finally {
-      await deleteTestCase(northCase);
-      await deleteTestCase(centralCase);
-      await deleteTestCase(southCase);
+      if (typeof northCase === "number") await deleteTestCase(northCase);
+      if (typeof centralCase === "number") await deleteTestCase(centralCase);
+      if (typeof southCase === "number") await deleteTestCase(southCase);
     }
   });
 
@@ -395,17 +432,19 @@ describe("upgradeConsultant.myCases / 單筆存取: 依案件地區而非 assign
   });
 
   it("顧問無法讀取或修改其他區域的指定案件 ID（updateCaseStatus／updateCaseNotes／updateCaseAmounts／acknowledge 皆套用相同限制）", async () => {
-    const southCase = await createTestCase({ companyName: "區域測試-權限南", location: "高雄市", status: "evaluating", assignedConsultantId: southConsultant!.id });
-    const southNewCase = await createTestCase({ companyName: "區域測試-權限南-new", location: "高雄市", status: "new", assignedConsultantId: southConsultant!.id });
+    let southCase: number | undefined;
+    let southNewCase: number | undefined;
     try {
+      southCase = await createTestCase({ companyName: "區域測試-權限南", location: "高雄市", status: "evaluating", assignedConsultantId: southConsultant!.id });
+      southNewCase = await createTestCase({ companyName: "區域測試-權限南-new", location: "高雄市", status: "new", assignedConsultantId: southConsultant!.id });
       const northCaller = appRouter.createCaller(userCtx(northUserId, "北部測試顧問"));
       await expect(northCaller.upgradeConsultant.updateCaseStatus({ applicationId: southCase, nextStatus: "ineligible" })).rejects.toThrow();
       await expect(northCaller.upgradeConsultant.updateCaseNotes({ applicationId: southCase, notes: "x" })).rejects.toThrow();
       await expect(northCaller.upgradeConsultant.updateCaseAmounts({ applicationId: southCase, plannedSubsidyAmount: 1000 })).rejects.toThrow();
       await expect(northCaller.upgradeConsultant.acknowledge({ applicationId: southNewCase })).rejects.toThrow();
     } finally {
-      await deleteTestCase(southCase);
-      await deleteTestCase(southNewCase);
+      if (typeof southCase === "number") await deleteTestCase(southCase);
+      if (typeof southNewCase === "number") await deleteTestCase(southNewCase);
     }
   });
 
@@ -428,9 +467,11 @@ describe("upgradeConsultant.myCases / 單筆存取: 依案件地區而非 assign
 // ── 4. 指派時區域一致性（backfillUnassignedCasesToConsultant 既有不變式） ──
 describe("backfillUnassignedCasesToConsultant: 只補派區域相符的案件", () => {
   it("綁定北部顧問時，只補派地址解析為北部的 unassigned 案件，南部的 unassigned 案件不受影響", async () => {
-    const northUnassigned = await createTestCase({ companyName: "補派測試-北", location: "台北市", status: "unassigned", assignedConsultantId: null });
-    const southUnassigned = await createTestCase({ companyName: "補派測試-南", location: "高雄市", status: "unassigned", assignedConsultantId: null });
+    let northUnassigned: number | undefined;
+    let southUnassigned: number | undefined;
     try {
+      northUnassigned = await createTestCase({ companyName: "補派測試-北", location: "台北市", status: "unassigned", assignedConsultantId: null });
+      southUnassigned = await createTestCase({ companyName: "補派測試-南", location: "高雄市", status: "unassigned", assignedConsultantId: null });
       const { backfilledIds } = await db.backfillUnassignedCasesToConsultant(northConsultant!.id, "north");
       expect(backfilledIds).toContain(northUnassigned);
       expect(backfilledIds).not.toContain(southUnassigned);
@@ -441,8 +482,8 @@ describe("backfillUnassignedCasesToConsultant: 只補派區域相符的案件", 
       expect(southRow?.assignedConsultantId).toBeNull();
       expect(southRow?.status).toBe("unassigned");
     } finally {
-      await deleteTestCase(northUnassigned);
-      await deleteTestCase(southUnassigned);
+      if (typeof northUnassigned === "number") await deleteTestCase(northUnassigned);
+      if (typeof southUnassigned === "number") await deleteTestCase(southUnassigned);
     }
   });
 });
@@ -498,7 +539,7 @@ describe("案件 mutation 的最後更新者記錄 與 承辦顧問顯示名稱"
       const admin = appRouter.createCaller(adminCtx());
       await admin.upgradeConsultant.updateCaseStatus({ applicationId: caseId, nextStatus: "ineligible" });
       const app = await db.getUpgradeApplicationById(caseId);
-      expect(app?.lastUpdatedByUserId).toBe(1); // adminCtx() 使用 id=1
+      expect(app?.lastUpdatedByUserId).toBe(adminActorUserId); // adminCtx() 使用自建的 adminActorUserId
       expect(app?.lastUpdatedByNameSnapshot).toBe("Test User");
     } finally {
       await deleteTestCase(caseId);
@@ -506,10 +547,13 @@ describe("案件 mutation 的最後更新者記錄 與 承辦顧問顯示名稱"
   });
 
   it("updateCaseAmounts／acknowledge／upgradeCenter.adminUpdateStatus 也都會記錄最後更新者", async () => {
-    const amountsCase = await createTestCase({ companyName: "更新者測試-金額", location: "台北市", status: "accepted", assignedConsultantId: northConsultant!.id });
-    const ackCase = await createTestCase({ companyName: "更新者測試-查收", location: "台北市", status: "new", assignedConsultantId: northConsultant!.id });
-    const adminUpdateCase = await createTestCase({ companyName: "更新者測試-admin更新", location: "台北市", status: "evaluating", assignedConsultantId: null });
+    let amountsCase: number | undefined;
+    let ackCase: number | undefined;
+    let adminUpdateCase: number | undefined;
     try {
+      amountsCase = await createTestCase({ companyName: "更新者測試-金額", location: "台北市", status: "accepted", assignedConsultantId: northConsultant!.id });
+      ackCase = await createTestCase({ companyName: "更新者測試-查收", location: "台北市", status: "new", assignedConsultantId: northConsultant!.id });
+      adminUpdateCase = await createTestCase({ companyName: "更新者測試-admin更新", location: "台北市", status: "evaluating", assignedConsultantId: null });
       const caller = appRouter.createCaller(userCtx(northUserId, "北部測試顧問"));
       await caller.upgradeConsultant.updateCaseAmounts({ applicationId: amountsCase, plannedSubsidyAmount: 500000 });
       const amountsApp = await db.getUpgradeApplicationById(amountsCase);
@@ -522,11 +566,11 @@ describe("案件 mutation 的最後更新者記錄 與 承辦顧問顯示名稱"
       const admin = appRouter.createCaller(adminCtx());
       await admin.upgradeCenter.adminUpdateStatus({ id: adminUpdateCase, status: "ineligible" });
       const adminApp = await db.getUpgradeApplicationById(adminUpdateCase);
-      expect(adminApp?.lastUpdatedByUserId).toBe(1);
+      expect(adminApp?.lastUpdatedByUserId).toBe(adminActorUserId);
     } finally {
-      await deleteTestCase(amountsCase);
-      await deleteTestCase(ackCase);
-      await deleteTestCase(adminUpdateCase);
+      if (typeof amountsCase === "number") await deleteTestCase(amountsCase);
+      if (typeof ackCase === "number") await deleteTestCase(ackCase);
+      if (typeof adminUpdateCase === "number") await deleteTestCase(adminUpdateCase);
     }
   });
 

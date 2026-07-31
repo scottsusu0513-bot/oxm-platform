@@ -37,6 +37,10 @@ const Community             = lazy(() => import("./pages/Community"));
 const Notifications         = lazy(() => import("./pages/Notifications"));
 const EnterpriseUpgradeCenter = lazy(() => import("./pages/EnterpriseUpgradeCenter"));
 const EnterpriseUpgradeApply  = lazy(() => import("./pages/EnterpriseUpgradeApply"));
+const FinanceOptimization      = lazy(() => import("./pages/FinanceOptimization"));
+const FinanceOptimizationApply = lazy(() => import("./pages/FinanceOptimizationApply"));
+const ConsultantHub            = lazy(() => import("./pages/ConsultantHub"));
+const FinanceConsultantCases   = lazy(() => import("./pages/FinanceConsultantCases"));
 const NotFound              = lazy(() => import("./pages/NotFound"));
 const OrderDetail           = lazy(() => import("./pages/OrderDetail"));
 
@@ -54,6 +58,7 @@ const PendingFactoriesList  = lazy(() => import("./pages/PendingFactoriesList"))
 const AdminSupportCenter    = lazy(() => import("./pages/AdminSupportCenter"));
 const AdminUpgradeApplications = lazy(() => import("./pages/AdminUpgradeApplications"));
 const ConsultantCases        = lazy(() => import("./pages/ConsultantCases"));
+const AdminFinanceApplications = lazy(() => import("./pages/FinanceConsultantCases"));
 const AdminAnnouncements    = lazy(() => import("./pages/AdminAnnouncements"));
 const AdminNews             = lazy(() => import("./pages/AdminNews"));
 const News                  = lazy(() => import("./pages/News"));
@@ -346,6 +351,11 @@ function Router() {
         <Route path="/upgrade-center/apply" component={EnterpriseUpgradeApply} />
         <Route path="/upgrade-center" component={EnterpriseUpgradeCenter} />
         <Route path="/upgrade-consultant/cases" component={ConsultantCases} />
+        <Route path="/finance-optimization/apply" component={FinanceOptimizationApply} />
+        <Route path="/finance-optimization" component={FinanceOptimization} />
+        <Route path="/consultant-center" component={ConsultantHub} />
+        <Route path="/finance-consultant/cases" component={FinanceConsultantCases} />
+        <Route path="/admin/finance-applications" component={AdminFinanceApplications} />
         <Route path="/404" component={NotFound} />
         <Route component={NotFound} />
       </Switch>

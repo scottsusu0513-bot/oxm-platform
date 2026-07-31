@@ -24,6 +24,7 @@ import {
   communityReactions, communityMentions, communityNotifications,
   communityBids, communityBidIndustries, communityBidReviewHistory, communityBidOffers,
   upgradeApplications, upgradeConsultants,
+  financeApplications, financeConsultants,
   news, newsIndustries, newsNotifications, newsAttachments, newsReads, newsBoardSubscriptions,
   type Factory, type InsertFactory, type Product, type InsertProduct, type Favorite, type InsertFavorite,
   type Conversation,
@@ -33,6 +34,8 @@ import {
   type CommunityBid, type CommunityBidReviewHistory, type CommunityBidOffer,
   type UpgradeApplication, type InsertUpgradeApplication,
   type UpgradeConsultant,
+  type FinanceApplication, type InsertFinanceApplication,
+  type FinanceConsultant,
   type Announcement,
   type News, type InsertNews, type NewsAttachment,
 } from "../drizzle/schema";
@@ -4240,6 +4243,7 @@ export async function getCoManagedFactories(userId: number) {
   return db.select({
     factoryId: factoryCoManagers.factoryId,
     name: factories.name,
+    address: factories.address,
     region: factories.region,
     contactEmail: factories.contactEmail,
     phone: factories.phone,
@@ -8661,6 +8665,381 @@ export async function getUpgradeApplicationsByFactoryIds(
     .where(inArray(upgradeApplications.factoryId, factoryIds))
     .orderBy(desc(upgradeApplications.createdAt));
   return rows;
+}
+
+// ===== 企業財務優化 =====
+// 與企業升級中心（upgradeApplications／upgradeConsultants）完全獨立的資料模型與
+// 顧問權限：授權只看「financeConsultants 是否有一筆該 userId 的有效（isActive）
+// 紀錄」，不是固定 email／userId／前端判斷。目前只有單一顧問，因此不像政府補助
+// 顧問區分北中南地區——任何一位有效財務顧問可查看／處理全部財務案件；
+// 未來若擴充多位顧問，可在此加上分派規則，不影響既有呼叫端。
+
+export async function getFinanceConsultantsByUserId(userId: number): Promise<FinanceConsultant[]> {
+  const db_ = await getDb();
+  if (!db_) return [];
+  return db_.select().from(financeConsultants).where(eq(financeConsultants.userId, userId));
+}
+
+export async function getFinanceConsultantById(id: number): Promise<FinanceConsultant | undefined> {
+  const db_ = await getDb();
+  if (!db_) return undefined;
+  const [row] = await db_.select().from(financeConsultants).where(eq(financeConsultants.id, id));
+  return row;
+}
+
+export type FinanceConsultantWithBoundUser = FinanceConsultant & { boundUser: BoundUserInfo | null };
+
+export async function listAllFinanceConsultants(): Promise<FinanceConsultantWithBoundUser[]> {
+  const db_ = await getDb();
+  if (!db_) return [];
+  const consultants = await db_.select().from(financeConsultants).orderBy(financeConsultants.id);
+  const userIds = consultants.map(c => c.userId).filter((id): id is number => id != null);
+  const userMap = new Map<number, BoundUserInfo>();
+  if (userIds.length > 0) {
+    const fetched = await db_
+      .select({
+        id: users.id,
+        name: users.name,
+        email: sql<string | null>`COALESCE(${users.primaryEmail}, ${users.email})`,
+        createdAt: users.createdAt,
+      })
+      .from(users)
+      .where(inArray(users.id, userIds));
+    fetched.forEach(u => userMap.set(u.id, u));
+  }
+  return consultants.map(c => ({ ...c, boundUser: c.userId != null ? (userMap.get(c.userId) ?? null) : null }));
+}
+
+export async function adminCreateFinanceConsultant(name: string): Promise<number> {
+  const db_ = await getDb();
+  if (!db_) throw new Error("DB not available");
+  const [result] = await db_.insert(financeConsultants).values({ name, isActive: true });
+  return result.insertId;
+}
+
+/**
+ * 財務顧問指派／停用／解除綁定這幾個 transaction 都會對 financeConsultants
+ * 加 row lock（FOR UPDATE），但取得鎖的路徑不完全相同：自動指派的候選人查詢
+ * 是 `WHERE isActive=true AND userId IS NOT NULL` 條件掃描，可能經由 userId
+ * 的 UNIQUE INDEX；停用／解除綁定則是先用主鍵精確查詢再更新。兩種路徑在
+ * InnoDB 底層取得 index lock 的順序不保證完全一致，高併發下仍可能出現真正
+ * 的 MySQL deadlock（ER_LOCK_DEADLOCK）——這是 MySQL 保證會偵測並讓其中一個
+ * transaction 完整 rollback 的正常機制（不會留下部分寫入的中間狀態），標準
+ * 作法是讓呼叫端重試整個 transaction。這裡提供一個小的重試包裝，讓這四個
+ * financeConsultants 相關 transaction 在遇到 deadlock 時自動重試，避免把
+ * 這種瞬時、可安全重試的情況以錯誤回傳給使用者。
+ */
+async function withDeadlockRetry<T>(run: () => Promise<T>, maxAttempts = 3): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await run();
+    } catch (err: unknown) {
+      const code = (err as { code?: string; cause?: { code?: string } })?.code
+        ?? (err as { cause?: { code?: string } })?.cause?.code;
+      if (code === "ER_LOCK_DEADLOCK" && attempt < maxAttempts) continue;
+      throw err;
+    }
+  }
+}
+
+/**
+ * 顧問名下未結案（new／evaluating／deferred）案件安全改為未指派：在同一筆
+ * transaction 內完成「解除承辦顧問」與「記錄最後更新者」，避免出現「案件顯示
+ * 已指派給某顧問，但該顧問已停用／解除綁定、實際無人能經過權限檢查讀取」的
+ * 中間狀態。結案狀態（not_interested／won）不受影響，保留歷史資料。
+ * 呼叫端（adminSetFinanceConsultantActive／adminBindFinanceConsultantUser）
+ * 都已經在各自的 transaction 內呼叫這支函式，此處直接吃 tx。
+ */
+async function reassignOpenFinanceCasesAwayFromConsultant(
+  tx: any, // drizzle transaction handle — only called from within db_.transaction(async (tx) => ...) below
+  consultantId: number,
+  updatedBy?: CaseUpdatedBy,
+): Promise<FinanceApplication[]> {
+  const openRows: FinanceApplication[] = await tx.select().from(financeApplications)
+    .where(and(
+      eq(financeApplications.assignedConsultantId, consultantId),
+      inArray(financeApplications.status, FINANCE_OPEN_STATUSES),
+    ));
+  if (openRows.length === 0) return [];
+  await tx.update(financeApplications).set({
+    assignedConsultantId: null,
+    ...(updatedBy ? { lastUpdatedByUserId: updatedBy.userId, lastUpdatedByNameSnapshot: updatedBy.name } : {}),
+  }).where(and(
+    eq(financeApplications.assignedConsultantId, consultantId),
+    inArray(financeApplications.status, FINANCE_OPEN_STATUSES),
+  ));
+  return openRows;
+}
+
+/** 停用顧問：isActive=false 時，名下未結案案件在同一 transaction 內安全改為
+ *  未指派（見 reassignOpenFinanceCasesAwayFromConsultant）。重新啟用
+ *  （isActive=true）不需要級聯，案件本來就沒有因為停用而被動過。 */
+export async function adminSetFinanceConsultantActive(
+  id: number,
+  isActive: boolean,
+  updatedBy?: CaseUpdatedBy,
+): Promise<{ reassignedCases: FinanceApplication[] }> {
+  const db_ = await getDb();
+  if (!db_) return { reassignedCases: [] };
+  return withDeadlockRetry(() => db_.transaction(async (tx) => {
+    // 與 createFinanceApplicationWithAutoAssign 使用相同的鎖定順序：先對
+    // financeConsultants 目標列取得 row lock（FOR UPDATE），確保跟自動指派的
+    // transaction 之間不會出現交錯的中間狀態——不論哪個 transaction 先取得鎖，
+    // 兩邊都會等對方 commit 後才看到彼此的變更，結果永遠一致。
+    await tx.select().from(financeConsultants).where(eq(financeConsultants.id, id)).for("update");
+    await tx.update(financeConsultants).set({ isActive }).where(eq(financeConsultants.id, id));
+    if (isActive) return { reassignedCases: [] };
+    const reassignedCases = await reassignOpenFinanceCasesAwayFromConsultant(tx, id, updatedBy);
+    return { reassignedCases };
+  }));
+}
+
+/**
+ * 綁定顧問帳號前的唯一性檢查：同一 userId 不能同時綁定兩筆顧問紀錄，否則會
+ * 讓「系統只有一位啟用中顧問時自動指派」的判斷失準（例如同一人被重複綁定
+ * 兩筆啟用中紀錄時，autoAssignFinanceConsultant 會誤判為「有兩位顧問」而
+ * 放棄自動指派）。這是綁定前的語意清楚預檢查，讓管理端拿到人類可讀的錯誤
+ * 訊息；真正的高併發競態保護是 DB 層 fc_user_id_uq UNIQUE INDEX——即使兩個
+ * 請求同時通過這裡的預檢查，實際 UPDATE 時仍會被 UNIQUE INDEX 擋下一筆，
+ * 呼叫端（routers.ts adminBindUser）另外攔截 ER_DUP_ENTRY 轉換成固定的
+ * BAD_REQUEST 訊息，不會外洩原始 SQL 錯誤。解除綁定（userId=null）不受此限制。
+ */
+export async function assertFinanceConsultantUserNotBoundElsewhere(consultantId: number, userId: number): Promise<void> {
+  const db_ = await getDb();
+  if (!db_) return;
+  const existing = await db_.select({ id: financeConsultants.id, name: financeConsultants.name })
+    .from(financeConsultants)
+    .where(and(eq(financeConsultants.userId, userId), ne(financeConsultants.id, consultantId)));
+  if (existing.length > 0) {
+    throw new Error(`此使用者已綁定顧問「${existing[0].name}」，一個帳號同時只能擔任一位財務優化顧問`);
+  }
+}
+
+/** 解除綁定（userId=null）時，名下未結案案件在同一 transaction 內安全改為
+ *  未指派，理由同 adminSetFinanceConsultantActive。綁定新使用者（userId 非
+ *  null）不需要級聯。 */
+export async function adminBindFinanceConsultantUser(
+  id: number,
+  userId: number | null,
+  updatedBy?: CaseUpdatedBy,
+): Promise<{ reassignedCases: FinanceApplication[] }> {
+  const db_ = await getDb();
+  if (!db_) return { reassignedCases: [] };
+  if (userId != null) {
+    await assertFinanceConsultantUserNotBoundElsewhere(id, userId);
+  }
+  return withDeadlockRetry(() => db_.transaction(async (tx) => {
+    // 同上：先鎖定 financeConsultants 目標列，與自動指派 transaction 使用
+    // 相同的鎖定順序，避免「解除綁定與自動指派交錯，案件被指派給已解除綁定
+    // 顧問」的中間狀態。
+    await tx.select().from(financeConsultants).where(eq(financeConsultants.id, id)).for("update");
+    await tx.update(financeConsultants).set({ userId }).where(eq(financeConsultants.id, id));
+    if (userId != null) return { reassignedCases: [] };
+    const reassignedCases = await reassignOpenFinanceCasesAwayFromConsultant(tx, id, updatedBy);
+    return { reassignedCases };
+  }));
+}
+
+/** 自動指派：候選人必須同時符合 isActive=true 且 userId 已綁定
+ *  （userId IS NOT NULL）——啟用中但尚未綁定使用者帳號的顧問無法實際登入
+ *  查看案件，指派給這種顧問等同於指派給沒有人能存取的黑洞。只有「剛好一位」
+ *  同時符合兩個條件的顧問時才自動指派，避免未來多顧問情境下猜錯分派對象；
+ *  沒有或有多位符合條件的顧問時回傳 null，案件仍會建立，由管理員在後台看見
+ *  「未指派」再手動處理。 */
+export async function autoAssignFinanceConsultant(): Promise<FinanceConsultant | null> {
+  const db_ = await getDb();
+  if (!db_) return null;
+  const candidates = await db_.select().from(financeConsultants)
+    .where(and(eq(financeConsultants.isActive, true), isNotNull(financeConsultants.userId)));
+  return candidates.length === 1 ? candidates[0] : null;
+}
+
+/**
+ * 自動指派＋建立案件：候選人查詢與案件寫入必須在同一個 transaction、對候選
+ * 顧問列加上真正的 row lock（SELECT ... FOR UPDATE）內完成——否則會出現
+ * 「查詢候選人時還有一位啟用中顧問 → 顧問被停用、名下案件已改為未指派 →
+ * 新案件才寫入，卻指派給這個剛被停用的顧問」的競態窗口（候選人查詢與案件
+ * 寫入之間存在時間差，足以讓另一個停用/解除綁定的 transaction 插進來）。
+ *
+ * FOR UPDATE 鎖定候選列後，任何同時想停用／解除綁定同一顧問的 transaction
+ * （adminSetFinanceConsultantActive／adminBindFinanceConsultantUser，同樣
+ * 會鎖定 financeConsultants 列）都必須等這個 transaction commit 之後才能
+ * 繼續——不論哪個 transaction 先取得鎖，最終結果都是一致的：
+ *   - 如果停用/解除綁定先 commit：這裡的候選人查詢會看到最新狀態（該顧問
+ *     已不符合條件），新案件正確地維持未指派或指派給其他仍有效的候選人。
+ *   - 如果這裡先 commit：新案件已指派給（當下仍有效的）顧問；隨後停用/解除
+ *     綁定 transaction 執行時，reassignOpenFinanceCasesAwayFromConsultant
+ *     會重新查詢當下資料（此時已包含剛 commit 的新案件），照常把它一併
+ *     級聯改為未指派——不會停留在「指派給已停用顧問」的中間狀態。
+ */
+export async function createFinanceApplicationWithAutoAssign(
+  data: Omit<InsertFinanceApplication, "assignedConsultantId">,
+): Promise<{ id: number; assignedConsultant: FinanceConsultant | null }> {
+  const db_ = await getDb();
+  if (!db_) throw new Error("DB not available");
+  return withDeadlockRetry(() => db_.transaction(async (tx) => {
+    // 強制用 PRIMARY（主鍵）掃描，不要用 userId 的 UNIQUE INDEX（fc_user_id_uq）
+    // ——financeConsultants 只有個位數列，強制全表掃描沒有效能疑慮；換來的是
+    // 跟 adminSetFinanceConsultantActive／adminBindFinanceConsultantUser／
+    // adminAssignFinanceConsultant 完全一致的鎖定順序（一律先鎖主鍵列）。如果
+    // 讓查詢最佳化器自行選擇，很容易選到 userId 的 UNIQUE INDEX 做 range scan，
+    // 這樣一來這裡取得鎖的順序（先鎖 index entry、才鎖主鍵列）會跟「先用主鍵
+    // 查到列、才更新 userId 這個有 UNIQUE INDEX 的欄位」的解除綁定 transaction
+    // 相反，兩者同時發生時就會形成真正的 MySQL deadlock（ER_LOCK_DEADLOCK）。
+    const candidates = await tx.select().from(financeConsultants, { useIndex: "PRIMARY" })
+      .where(and(eq(financeConsultants.isActive, true), isNotNull(financeConsultants.userId)))
+      .for("update");
+    const assignedConsultant = candidates.length === 1 ? candidates[0] : null;
+    const [result] = await tx.insert(financeApplications).values({
+      ...data,
+      assignedConsultantId: assignedConsultant?.id ?? null,
+    });
+    return { id: result.insertId, assignedConsultant };
+  }));
+}
+
+export async function hasOpenFinanceApplication(factoryId: number): Promise<boolean> {
+  const db_ = await getDb();
+  if (!db_) return false;
+  const [row] = await db_.select({ n: sql<number>`COUNT(*)` })
+    .from(financeApplications)
+    .where(and(
+      eq(financeApplications.factoryId, factoryId),
+      inArray(financeApplications.status, FINANCE_OPEN_STATUSES),
+    ));
+  return Number(row?.n ?? 0) > 0;
+}
+
+const FINANCE_OPEN_STATUSES = ["new", "evaluating", "deferred"] as const;
+
+export async function createFinanceApplication(data: InsertFinanceApplication): Promise<number> {
+  const db_ = await getDb();
+  if (!db_) throw new Error("DB not available");
+  const [result] = await db_.insert(financeApplications).values(data);
+  return result.insertId;
+}
+
+export async function getFinanceApplicationById(id: number): Promise<FinanceApplication | undefined> {
+  const db_ = await getDb();
+  if (!db_) return undefined;
+  const [row] = await db_.select().from(financeApplications).where(eq(financeApplications.id, id));
+  return row;
+}
+
+export async function getFinanceApplicationsByFactoryIds(factoryIds: number[]): Promise<FinanceApplication[]> {
+  const db_ = await getDb();
+  if (!db_) return [];
+  if (factoryIds.length === 0) return [];
+  return db_.select().from(financeApplications)
+    .where(inArray(financeApplications.factoryId, factoryIds))
+    .orderBy(desc(financeApplications.createdAt));
+}
+
+// 承辦顧問顯示名稱：一路沿真實關聯取得（assignedConsultantId → financeConsultants
+// → 綁定的 userId → users 顯示名稱），與 selectUpgradeApplicationWithRelations 相同手法。
+const assignedFinanceConsultantUsers = alias(users, "assignedFinanceConsultantUsers");
+
+function selectFinanceApplicationWithRelations() {
+  return {
+    ...getTableColumns(financeApplications),
+    assignedConsultantUserName: sql<string | null>`COALESCE(${assignedFinanceConsultantUsers.name}, ${assignedFinanceConsultantUsers.primaryEmail}, ${assignedFinanceConsultantUsers.email})`,
+  };
+}
+
+export async function listFinanceApplications(opts?: {
+  status?: FinanceApplication["status"];
+  limit?: number;
+  offset?: number;
+}): Promise<(FinanceApplication & { assignedConsultantUserName: string | null })[]> {
+  const db_ = await getDb();
+  if (!db_) return [];
+  const conditions = opts?.status ? [eq(financeApplications.status, opts.status)] : [];
+  const rows = await db_.select(selectFinanceApplicationWithRelations())
+    .from(financeApplications)
+    .leftJoin(financeConsultants, eq(financeApplications.assignedConsultantId, financeConsultants.id))
+    .leftJoin(assignedFinanceConsultantUsers, eq(financeConsultants.userId, assignedFinanceConsultantUsers.id))
+    .where(conditions.length ? and(...conditions) : undefined)
+    // createdAt DESC 加上 id DESC 當唯一 tie-breaker：createdAt 精度是秒級，
+    // 同一秒內建立多筆案件時，光靠 createdAt 排序在分頁下（limit/offset）不
+    // 保證穩定順序，可能導致同一筆案件在不同頁之間重複出現或被跳過；id 是
+    // primary key，加進來當第二排序鍵可以讓每次查詢的順序完全確定。
+    .orderBy(desc(financeApplications.createdAt), desc(financeApplications.id))
+    .limit(opts?.limit ?? 100)
+    .offset(opts?.offset ?? 0);
+  return rows as (FinanceApplication & { assignedConsultantUserName: string | null })[];
+}
+
+export async function countFinanceApplications(status?: FinanceApplication["status"]): Promise<number> {
+  const db_ = await getDb();
+  if (!db_) return 0;
+  const conditions = status ? [eq(financeApplications.status, status)] : [];
+  const [row] = await db_.select({ n: sql<number>`COUNT(*)` })
+    .from(financeApplications)
+    .where(conditions.length ? and(...conditions) : undefined);
+  return Number(row?.n ?? 0);
+}
+
+export async function updateFinanceApplicationStatus(
+  id: number,
+  status: FinanceApplication["status"],
+  updatedBy?: CaseUpdatedBy,
+): Promise<void> {
+  const db_ = await getDb();
+  if (!db_) return;
+  const [cur] = await db_.select({ tl: financeApplications.statusTimeline })
+    .from(financeApplications).where(eq(financeApplications.id, id));
+  const existing = (cur?.tl ?? {}) as Record<string, string>;
+  const newTl = { ...existing };
+  if (!newTl[status]) newTl[status] = new Date().toISOString();
+  await db_.update(financeApplications).set({
+    status, statusTimeline: newTl,
+    ...(updatedBy ? { lastUpdatedByUserId: updatedBy.userId, lastUpdatedByNameSnapshot: updatedBy.name } : {}),
+  }).where(eq(financeApplications.id, id));
+}
+
+export async function updateFinanceCaseNotes(id: number, notes: string | null, updatedBy?: CaseUpdatedBy): Promise<void> {
+  const db_ = await getDb();
+  if (!db_) return;
+  await db_.update(financeApplications).set({
+    notes,
+    ...(updatedBy ? { lastUpdatedByUserId: updatedBy.userId, lastUpdatedByNameSnapshot: updatedBy.name } : {}),
+  }).where(eq(financeApplications.id, id));
+}
+
+/**
+ * 手動指派／改派承辦顧問：Server 端一律拒絕指派給停用中、尚未綁定使用者帳號
+ * 或不存在的顧問——這三種顧問要嘛已無法登入查看案件、要嘛根本不存在，指派
+ * 給它們等同於把案件送進沒有人能存取的黑洞。router 層（financeConsultant.
+ * adminAssignConsultant）已有相同前置檢查，這裡是 defense-in-depth，避免
+ * 未來新增其他呼叫路徑時繞過驗證。
+ */
+export async function adminAssignFinanceConsultant(
+  id: number,
+  consultantId: number | null,
+  updatedBy?: CaseUpdatedBy,
+): Promise<void> {
+  const db_ = await getDb();
+  if (!db_) return;
+  await withDeadlockRetry(() => db_.transaction(async (tx) => {
+    // 手動指派也必須在 transaction 內、鎖定顧問列之後重新驗證一次，否則
+    // router 層先前的預檢查（db.getFinanceConsultantById）可能在檢查通過之後、
+    // 這裡真正寫入之前，被另一個停用／解除綁定的 transaction 搶先 commit，
+    // 造成案件仍然被指派給一個已經停用/解除綁定的顧問。與
+    // createFinanceApplicationWithAutoAssign／adminSetFinanceConsultantActive／
+    // adminBindFinanceConsultantUser 使用相同的鎖定順序（先鎖 financeConsultants）。
+    if (consultantId != null) {
+      const [consultant] = await tx.select().from(financeConsultants)
+        .where(eq(financeConsultants.id, consultantId))
+        .for("update");
+      if (!consultant) throw new Error("找不到顧問，無法指派承辦");
+      if (!consultant.isActive) throw new Error("此顧問目前已停用，無法指派承辦");
+      if (consultant.userId == null) throw new Error("此顧問尚未綁定使用者帳號，無法指派承辦");
+    }
+    await tx.update(financeApplications).set({
+      assignedConsultantId: consultantId,
+      ...(updatedBy ? { lastUpdatedByUserId: updatedBy.userId, lastUpdatedByNameSnapshot: updatedBy.name } : {}),
+    }).where(eq(financeApplications.id, id));
+  }));
 }
 
 // ── 首次接觸判斷：判斷兩個 userId 之間是否曾有任一方向的訊息紀錄
