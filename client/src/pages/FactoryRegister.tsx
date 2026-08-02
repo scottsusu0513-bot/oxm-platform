@@ -15,7 +15,7 @@ import { INDUSTRIES, INDUSTRY_OPTIONS, TAIWAN_REGIONS, CAPITAL_OPTIONS, MFG_MODE
 import { useState, useEffect, useRef } from "react";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
-import { Factory, ArrowLeft, AlertCircle, Camera, X, Wrench } from "lucide-react";
+import { Factory, ArrowLeft, AlertCircle, Camera, X, Wrench, Mail } from "lucide-react";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 
 type BusinessType = "factory" | "studio";
@@ -31,12 +31,38 @@ type FormErrors = {
 };
 
 export default function FactoryRegister() {
-  const { user, isAuthenticated } = useAuth();
+  const { user, isAuthenticated, refresh } = useAuth();
   const [, navigate] = useLocation();
   const [formStarted, setFormStarted] = useState(false);
   const [businessType, setBusinessType] = useState<BusinessType>("factory");
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const utils = trpc.useUtils();
+
+  // 使用者可能在另一個分頁完成主信箱驗證後切回這一頁，回到分頁時主動重新取得
+  // 最新的 auth.me 狀態，避免驗證完成後這一頁還停留在舊的未驗證畫面。
+  useEffect(() => {
+    function onFocus() { refresh(); }
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [refresh]);
+
+  const [resending, setResending] = useState(false);
+  const sendVerifMut = trpc.auth.sendVerificationEmail.useMutation({
+    onSuccess: (res) => {
+      if (res.alreadyVerified) {
+        toast.success("此信箱已驗證完成，正在為您重新整理狀態。");
+        refresh();
+      } else {
+        toast.success("驗證信已寄出，請前往信箱完成驗證。");
+      }
+      setResending(false);
+    },
+    onError: (e) => { toast.error(e.message); setResending(false); },
+  });
+  const handleResendVerification = () => {
+    setResending(true);
+    sendVerifMut.mutate();
+  };
 
   const { data: existingFactory, isLoading: factoryLoading } = trpc.factory.getMine.useQuery(undefined, { enabled: isAuthenticated });
   const coManagedQuery = trpc.factory.getCoManagedFactories.useQuery(undefined, {
@@ -137,7 +163,16 @@ export default function FactoryRegister() {
       }
       toast.success(`${typeLabel}建立成功！請在後台完善資料後送出審核。`);
       window.location.href = "/dashboard";
-    } catch {
+    } catch (err: any) {
+      // 最後防線：頁面開啟期間主信箱驗證狀態失效（例如驗證信 token 過期或被
+      // 其他裝置登出重新登入切換帳號），後端 requireVerifiedEmail 會擋下並
+      // 回傳這個固定訊息——這種情況必須明確告知使用者去完成驗證，不能顯示
+      // 「建立失敗，請稍後再試或聯繫客服」誤導使用者以為是系統錯誤。
+      if (err?.message === "UNVERIFIED_EMAIL") {
+        toast.error("請先完成主信箱驗證");
+        refresh();
+        return;
+      }
       toast.error("建立失敗，請稍後再試或聯繫客服");
     }
   };
@@ -180,6 +215,55 @@ export default function FactoryRegister() {
           <h2 className="text-xl font-semibold mb-2">您已有管理中的工廠</h2>
           <p className="text-muted-foreground mb-4">您已有管理中的工廠，請至工廠管理後台管理資料</p>
           <Button onClick={() => navigate("/dashboard")}>返回管理後台</Button>
+        </div>
+      </div>
+    );
+  }
+
+  // 前端提前攔截：後端 requireVerifiedEmail 已經在 factory.create 擋下未驗證
+  // 主信箱的帳號（見 server/routers.ts），這裡只是把同一條規則提前到「進入
+  // 表單前」，避免使用者填完整張表單才在送出時收到通用失敗訊息。不得移除
+  // 後端那一層，這裡純粹是使用體驗上的提前引導。
+  //
+  // 沒有設定主要信箱：先引導去會員中心設定，尚未有信箱可寄驗證信。
+  if (!user?.primaryEmail) {
+    return (
+      <div className="min-h-screen bg-background">
+        <Navbar />
+        <div className="container py-16 text-center max-w-md mx-auto">
+          <Mail className="w-16 h-16 mx-auto mb-4 text-muted-foreground" />
+          <h2 className="text-xl font-semibold mb-2">請先設定主要信箱</h2>
+          <p className="text-muted-foreground mb-6">
+            建立{typeLabel}前，需要先在會員中心設定主要信箱並完成驗證，才能接收詢價、合作確認與系統通知。
+          </p>
+          <Button onClick={() => navigate("/member")}>前往會員中心設定</Button>
+        </div>
+      </div>
+    );
+  }
+
+  // 已設定主要信箱，但尚未完成驗證：沿用既有主信箱驗證流程（同一顆
+  // sendVerificationEmail mutation、同一套 5 分鐘 cooldown／防重送機制），
+  // 不在頁面載入時自動寄信，必須由使用者主動點擊「重新寄送驗證信」。
+  if (!user?.primaryEmailVerifiedAt) {
+    return (
+      <div className="min-h-screen bg-background">
+        <Navbar />
+        <div className="container py-16 text-center max-w-md mx-auto">
+          <Mail className="w-16 h-16 mx-auto mb-4 text-amber-600" />
+          <h2 className="text-xl font-semibold mb-2">請先完成主信箱驗證，才能建立{typeLabel}</h2>
+          <p className="text-sm text-muted-foreground mb-1">目前設定的主信箱：</p>
+          <p className="font-medium mb-6 break-all">{user.primaryEmail}</p>
+          <Button
+            className="mb-3"
+            disabled={resending || sendVerifMut.isPending}
+            onClick={handleResendVerification}
+          >
+            {resending || sendVerifMut.isPending ? "寄送中…" : "重新寄送驗證信"}
+          </Button>
+          <div>
+            <Button variant="ghost" size="sm" onClick={() => navigate("/member")}>前往會員中心</Button>
+          </div>
         </div>
       </div>
     );
