@@ -15,6 +15,7 @@ import { notifyOwner } from "./_core/notification";
 import { storagePut, storagePresignedUrl, storageDelete } from "./storage";
 import { validateImageUpload } from "./_core/security";
 import { INDUSTRY_OPTIONS, TAIWAN_REGIONS, CAPITAL_OPTIONS, INDUSTRY_SLUGS } from "../shared/constants";
+import { clampImageCrop } from "../shared/imageCrop";
 import { stripCertificationEvidence, stripCertificationEvidenceFromRevision, stripHiddenBadgesForPublic, isValidCertificationEvidenceKey, isValidBadgeId, CERTIFICATION_EVIDENCE_KEY_PREFIX, applyCertificationEvidenceDescriptions, summarizeCertificationEvidenceForOwner, sortBadgeIds } from "../shared/badges";
 import { nanoid } from "nanoid";
 import { factories, conversations, reviews, reports, factoryCoManagers, users, upgradeConsultants, type Factory } from "../drizzle/schema";
@@ -44,6 +45,22 @@ function requireVerifiedEmail(user: { primaryEmailVerifiedAt: Date | null }): vo
     throw new TRPCError({ code: "FORBIDDEN", message: "UNVERIFIED_EMAIL" });
   }
 }
+
+// 全站共用「圖片顯示範圍」輸入驗證：所有接受 crop 的 mutation 都用同一個
+// schema，並在寫入前一律再跑一次 clampImageCrop()——不只信任前端夾好的值，
+// 避免竄改過的 request 直接把不合理數值存進資料庫（見 shared/imageCrop.ts）。
+const imageCropObjectSchema = z.object({
+  zoom: z.number(),
+  posX: z.number(),
+  posY: z.number(),
+});
+const imageCropInputSchema = imageCropObjectSchema.nullable().optional()
+  .transform(v => (v === undefined ? undefined : v === null ? null : clampImageCrop(v)));
+// 陣列裡的每一格永遠存在（只是可能是 null），不能是 undefined——供
+// products.imageCrops 這種「與圖片陣列順序對齊」的欄位使用，跟上面允許
+// 整個欄位省略的 imageCropInputSchema 分開。
+const imageCropArrayItemSchema = imageCropObjectSchema.nullable()
+  .transform(v => (v === null ? null : clampImageCrop(v)));
 
 // ── chat.send 與「首次送出」原子 mutation 共用的通知邏輯 ─────────────────
 // 抽出來讓 chat.send（買家傳給已存在對話）與新的 chat.sendFirstMessage
@@ -419,6 +436,7 @@ const FactoryBasicDataSchema = z.object({
   weekendHours: z.string().nullable(),
   businessNote: z.string().nullable(),
   avatarUrl: z.string().nullable(),
+  avatarCrop: z.object({ zoom: z.number(), posX: z.number(), posY: z.number() }).nullable(),
   certificationBadges: z.array(z.string()).max(30),
   // imageKeys 刻意不在這裡開放：圖片 object key 全程只存在伺服器端（見
   // shared/badges.ts 的 appendCertificationEvidenceImage／
@@ -840,6 +858,7 @@ export const appRouter = router({
       contactEmail: z.string().optional(),
       businessType: z.enum(["factory", "studio"]).optional(),
       avatarUrl: z.string().regex(/^https?:\/\//, "avatarUrl 必須為 http/https URL").optional(),
+      avatarCrop: imageCropInputSchema,
       address: z.string().optional(),
       operationStatus: z.enum(["normal", "busy", "full"]).optional(),
       weekdayHours: z.string().max(50).optional(),
@@ -1084,6 +1103,10 @@ export const appRouter = router({
       mimeType: z.enum(["image/jpeg", "image/png", "image/webp"]).default("image/jpeg"),
       // Optional: pass factoryId to support co-managers; falls back to owner lookup when omitted.
       factoryId: z.number().optional(),
+      // 工廠頭貼／Logo 的顯示範圍（見 shared/imageCrop.ts）。可省略／null——
+      // 既有呼叫端（尚未升級的舊版前端）不帶這個欄位時，avatarCrop 維持
+      // 不變或 fallback 成置中顯示，不影響既有行為。
+      crop: imageCropInputSchema,
     })).mutation(async ({ ctx, input }) => {
       let factory: Awaited<ReturnType<typeof db.getFactoryByOwnerId>>;
       if (input.factoryId) {
@@ -1101,6 +1124,7 @@ export const appRouter = router({
       const validation = await validateImageUpload(buffer);
       if (!validation.valid) throw new Error(validation.error ?? "圖片格式不正確");
       const ext = input.mimeType.includes("png") ? "png" : input.mimeType.includes("webp") ? "webp" : "jpg";
+      const crop = input.crop ?? null;
 
       switch (factory.status) {
         case 'draft':
@@ -1108,8 +1132,8 @@ export const appRouter = router({
           // Direct update: upload and save to DB
           const key = `factory-avatars/${factory.id}/${nanoid()}.${ext}`;
           const { url } = await storagePut(key, buffer, input.mimeType);
-          await db.updateFactory(factory.id, ctx.user.id, { avatarUrl: url });
-          return { url, savedToDb: true };
+          await db.updateFactory(factory.id, ctx.user.id, { avatarUrl: url, avatarCrop: crop });
+          return { url, crop, savedToDb: true };
         }
         case 'pending': {
           throw new TRPCError({ code: 'BAD_REQUEST', message: '首次申請審核中，不可更換大頭貼' });
@@ -1120,18 +1144,42 @@ export const appRouter = router({
           // If the user abandons without submitting, the object is orphaned under factory-avatars-temp/.
           // A S3 lifecycle rule on the factory-avatars-temp/ prefix (e.g., expire after 30 days)
           // can be applied to clean up abandoned temp objects without affecting production avatars.
+          // avatarCrop 跟 avatarUrl 一樣只暫存在前端，等 submitRevision 時一併
+          // 帶入 proposedData（見 BASIC_DATA_FIELDS／FactoryBasicDataSchema）。
           const key = `factory-avatars-temp/${factory.id}/${nanoid()}.${ext}`;
           const { url } = await storagePut(key, buffer, input.mimeType);
-          return { url, savedToDb: false };
+          return { url, crop, savedToDb: false };
         }
         default:
           throw new Error("未知的工廠狀態");
       }
     }),
 
+    // 重新調整既有工廠頭貼／Logo 的顯示範圍，不重新上傳圖片本體。draft／
+    // rejected／admin 直接寫入；approved 狀態下沿用跟 uploadAvatar 相同的
+    // 「不可直接更換大頭貼」規則（此時應該走 submitRevision）。
+    updateAvatarCrop: protectedProcedure.input(z.object({
+      factoryId: z.number(),
+      crop: imageCropInputSchema,
+    })).mutation(async ({ ctx, input }) => {
+      const factory = await db.getFactoryById(input.factoryId);
+      if (!factory) throw new TRPCError({ code: 'NOT_FOUND', message: '找不到工廠' });
+      const isOwner = factory.ownerId === ctx.user.id;
+      const isCoMgr = !isOwner && await db.isActiveCoManager(factory.id, ctx.user.id);
+      const isAdmin = ctx.user.role === 'admin';
+      if (!isOwner && !isCoMgr && !isAdmin) throw new TRPCError({ code: 'FORBIDDEN', message: '無權限調整此工廠大頭貼顯示範圍' });
+      if (factory.status === 'pending') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: '首次申請審核中，不可調整大頭貼顯示範圍' });
+      }
+      await db.updateFactory(factory.id, isAdmin ? -1 : factory.ownerId, { avatarCrop: input.crop ?? null });
+      return { crop: input.crop ?? null };
+    }),
+
     uploadCoverImage: protectedProcedure.input(z.object({
       base64: z.string().max(20 * 1024 * 1024),
       factoryId: z.number(),
+      // 封面的顯示範圍。省略／null 時 fallback 成置中顯示。
+      crop: imageCropInputSchema,
     })).mutation(async ({ ctx, input }) => {
       const factory = await db.getFactoryById(input.factoryId);
       if (!factory) throw new TRPCError({ code: 'NOT_FOUND', message: '找不到工廠' });
@@ -1145,8 +1193,25 @@ export const appRouter = router({
       if (!validation.valid) throw new Error(validation.error ?? "圖片格式不正確");
       const key = `factory-covers/${factory.id}/${nanoid()}.jpg`;
       const { url } = await storagePut(key, buffer, "image/jpeg");
-      await db.updateFactory(factory.id, isAdmin ? -1 : factory.ownerId, { coverImageUrl: url });
-      return { url };
+      const crop = input.crop ?? null;
+      await db.updateFactory(factory.id, isAdmin ? -1 : factory.ownerId, { coverImageUrl: url, coverCrop: crop });
+      return { url, crop };
+    }),
+
+    // 重新調整既有封面的顯示範圍，不重新上傳圖片本體——保留原圖，只更新中繼
+    // 資料，滿足「已上傳圖片可以再次編輯顯示範圍」的需求。
+    updateCoverCrop: protectedProcedure.input(z.object({
+      factoryId: z.number(),
+      crop: imageCropInputSchema,
+    })).mutation(async ({ ctx, input }) => {
+      const factory = await db.getFactoryById(input.factoryId);
+      if (!factory) throw new TRPCError({ code: 'NOT_FOUND', message: '找不到工廠' });
+      const isOwner = factory.ownerId === ctx.user.id;
+      const isCoMgr = !isOwner && await db.isActiveCoManager(factory.id, ctx.user.id);
+      const isAdmin = ctx.user.role === 'admin';
+      if (!isOwner && !isCoMgr && !isAdmin) throw new TRPCError({ code: 'FORBIDDEN', message: '無權限調整此工廠封面顯示範圍' });
+      await db.updateFactory(factory.id, isAdmin ? -1 : factory.ownerId, { coverCrop: input.crop ?? null });
+      return { crop: input.crop ?? null };
     }),
 
     // 徽章證明圖片走私有儲存（server/privateStorage.ts），與大頭貼／封面／照片／
@@ -1314,6 +1379,7 @@ export const appRouter = router({
       base64: z.string().max(10 * 1024 * 1024),
       mimeType: z.enum(["image/jpeg", "image/png", "image/webp"]).default("image/jpeg"),
       caption: z.string().max(200).optional(),
+      crop: imageCropInputSchema,
     })).mutation(async ({ ctx, input }) => {
       const factory = await db.getFactoryByOwnerId(ctx.user.id);
       if (!factory) throw new Error("找不到工廠");
@@ -1324,8 +1390,8 @@ export const appRouter = router({
       const ext = input.mimeType.includes("png") ? "png" : input.mimeType.includes("webp") ? "webp" : "jpg";
       const key = `factory-photos/${factory.id}/${nanoid()}.${ext}`;
       const { url } = await storagePut(key, buffer, input.mimeType);
-      const id = await db.addFactoryPhoto(factory.id, url, input.caption);
-      return { id, url };
+      const id = await db.addFactoryPhoto(factory.id, url, input.caption, input.crop ?? null);
+      return { id, url, crop: input.crop ?? null };
     }),
 
     deletePhoto: protectedProcedure.input(z.object({ photoId: z.number() })).mutation(async ({ ctx, input }) => {
@@ -1343,6 +1409,17 @@ export const appRouter = router({
       if (!factory) throw new Error("找不到工廠");
       await db.updateFactoryPhotoCaption(input.photoId, factory.id, input.caption);
       return { success: true };
+    }),
+
+    // 重新調整既有相簿照片的顯示範圍，不重新上傳圖片本體。
+    updatePhotoCrop: protectedProcedure.input(z.object({
+      photoId: z.number(),
+      crop: imageCropInputSchema,
+    })).mutation(async ({ ctx, input }) => {
+      const factory = await db.getFactoryByOwnerId(ctx.user.id);
+      if (!factory) throw new Error("找不到工廠");
+      await db.updateFactoryPhotoCrop(input.photoId, factory.id, input.crop ?? null);
+      return { success: true, crop: input.crop ?? null };
     }),
 
     reviewHistory: protectedProcedure.input(z.object({ factoryId: z.number() })).query(async ({ ctx, input }) => {
@@ -1582,6 +1659,8 @@ export const appRouter = router({
       provideSample: z.boolean().default(false),
       description: z.string().optional(),
       images: z.array(z.string()).max(3).optional(),
+      // 與 images 陣列順序對齊的顯示範圍，見 shared/imageCrop.ts。
+      imageCrops: z.array(imageCropArrayItemSchema).max(3).optional(),
     })).mutation(async ({ ctx, input }) => {
       await assertFactoryManager(input.factoryId, ctx.user.id);
       if (input.categoryId != null) {
@@ -1606,6 +1685,7 @@ export const appRouter = router({
       provideSample: z.boolean().optional(),
       description: z.string().optional(),
       images: z.array(z.string()).max(3).optional(),
+      imageCrops: z.array(imageCropArrayItemSchema).max(3).optional(),
     })).mutation(async ({ ctx, input }) => {
       await assertFactoryManager(input.factoryId, ctx.user.id);
       const { id, factoryId, ...data } = input;

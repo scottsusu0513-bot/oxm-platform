@@ -33,6 +33,9 @@ import { BadgeIcon } from "@/components/badges/BadgeIcon";
 import { BadgePicker } from "@/components/badges/BadgePicker";
 import { BadgeEvidenceEditor } from "@/components/badges/BadgeEvidenceEditor";
 import { FactoryPreviewModal } from "@/components/FactoryPreviewModal";
+import { CroppedImage } from "@/components/CroppedImage";
+import { ImageCropEditor } from "@/components/ImageCropEditor";
+import type { ImageCropData } from "@shared/imageCrop";
 
 // 千分位格式化
 function formatNumber(val: string): string {
@@ -87,153 +90,6 @@ function StatusBadge({ status }: { status: string }) {
     </Badge>
   );
   return null;
-}
-
-const COVER_RATIO = 16 / 5;
-
-function clampCoverPos(x: number, y: number, cw: number, dw: number, dh: number) {
-  return {
-    x: Math.min(0, Math.max(cw - dw, x)),
-    y: Math.min(0, Math.max(cw / COVER_RATIO - dh, y)),
-  };
-}
-
-function CoverImageCropper({
-  imageSrc,
-  onApply,
-  onCancel,
-  onReselect,
-}: {
-  imageSrc: string;
-  onApply: (base64: string) => void;
-  onCancel: () => void;
-  onReselect: () => void;
-}) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const imgRef = useRef<HTMLImageElement>(null);
-  const [pos, setPos] = useState({ x: 0, y: 0 });
-  const [dispSize, setDispSize] = useState({ w: 0, h: 0 });
-  const [natSize, setNatSize] = useState({ w: 0, h: 0 });
-  const dispSizeRef = useRef({ w: 0, h: 0 });
-  const dragging = useRef(false);
-  const dragOrigin = useRef({ mx: 0, my: 0, ix: 0, iy: 0 });
-
-  useEffect(() => {
-    const img = imgRef.current;
-    const con = containerRef.current;
-    if (!img || !con) return;
-    const init = () => {
-      const cw = con.clientWidth;
-      const nw = img.naturalWidth, nh = img.naturalHeight;
-      if (!nw || !nh) return;
-      setNatSize({ w: nw, h: nh });
-      const scale = Math.max(cw / nw, (cw / COVER_RATIO) / nh);
-      const ds = { w: nw * scale, h: nh * scale };
-      dispSizeRef.current = ds;
-      setDispSize(ds);
-      const ch = cw / COVER_RATIO;
-      setPos(clampCoverPos(-(ds.w - cw) / 2, -(ds.h - ch) / 2, cw, ds.w, ds.h));
-    };
-    if (img.complete && img.naturalWidth) { init(); return; }
-    img.addEventListener("load", init);
-    return () => img.removeEventListener("load", init);
-  }, [imageSrc]);
-
-  useEffect(() => { dispSizeRef.current = dispSize; }, [dispSize]);
-
-  useEffect(() => {
-    const onMove = (e: MouseEvent | TouchEvent) => {
-      if (!dragging.current) return;
-      const cx = "touches" in e ? e.touches[0].clientX : e.clientX;
-      const cy = "touches" in e ? e.touches[0].clientY : e.clientY;
-      const con = containerRef.current;
-      if (!con) return;
-      const cw = con.clientWidth;
-      const ds = dispSizeRef.current;
-      setPos(clampCoverPos(
-        dragOrigin.current.ix + (cx - dragOrigin.current.mx),
-        dragOrigin.current.iy + (cy - dragOrigin.current.my),
-        cw, ds.w, ds.h
-      ));
-    };
-    const onUp = () => { dragging.current = false; };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-    window.addEventListener("touchmove", onMove, { passive: false });
-    window.addEventListener("touchend", onUp);
-    return () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-      window.removeEventListener("touchmove", onMove);
-      window.removeEventListener("touchend", onUp);
-    };
-  }, []);
-
-  const startDrag = (clientX: number, clientY: number) => {
-    dragging.current = true;
-    dragOrigin.current = { mx: clientX, my: clientY, ix: pos.x, iy: pos.y };
-  };
-
-  const handleApply = () => {
-    const con = containerRef.current, img = imgRef.current;
-    if (!con || !img || !natSize.w) return;
-    const cw = con.clientWidth, ch = cw / COVER_RATIO;
-    const scale = natSize.w / dispSize.w;
-    const srcX = Math.max(0, -pos.x * scale);
-    const srcY = Math.max(0, -pos.y * scale);
-    const srcW = Math.min(cw * scale, natSize.w - srcX);
-    const srcH = Math.min(ch * scale, natSize.h - srcY);
-    const cv = document.createElement("canvas");
-    cv.width = 1600; cv.height = 500;
-    cv.getContext("2d")!.drawImage(img, srcX, srcY, srcW, srcH, 0, 0, 1600, 500);
-    onApply(cv.toDataURL("image/jpeg", 0.88));
-  };
-
-  return (
-    <div className="fixed inset-0 z-[100] bg-black/80 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl">
-        <div className="px-5 py-4 border-b flex items-center justify-between">
-          <h3 className="font-semibold text-base">調整封面顯示範圍</h3>
-          <button type="button" onClick={onCancel}><X className="w-5 h-5 text-muted-foreground" /></button>
-        </div>
-        <div className="p-5 space-y-4">
-          <p className="text-xs text-muted-foreground">拖曳圖片調整顯示位置，框內為最終裁切範圍（16:5）</p>
-          <div
-            ref={containerRef}
-            className="relative w-full rounded-lg overflow-hidden bg-black select-none"
-            style={{ aspectRatio: "16/5", cursor: "grab" }}
-            onMouseDown={e => { e.preventDefault(); startDrag(e.clientX, e.clientY); }}
-            onTouchStart={e => { startDrag(e.touches[0].clientX, e.touches[0].clientY); }}
-          >
-            <img
-              ref={imgRef}
-              src={imageSrc}
-              alt=""
-              style={{
-                position: "absolute",
-                left: pos.x,
-                top: pos.y,
-                width: dispSize.w || "auto",
-                height: dispSize.h || "auto",
-                maxWidth: "none",
-                pointerEvents: "none",
-                userSelect: "none",
-              }}
-              draggable={false}
-            />
-            <div className="absolute inset-0 border-2 border-white/60 rounded-lg pointer-events-none" />
-          </div>
-          <div className="flex justify-end gap-2">
-            <Button type="button" variant="ghost" size="sm" onClick={onReselect}>重新選圖</Button>
-            <Button type="button" variant="outline" size="sm" onClick={onCancel}>取消</Button>
-            <Button type="button" size="sm" onClick={handleApply}>
-              <CheckCircle className="w-4 h-4 mr-1" />套用封面
-            </Button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
 }
 
 export default function FactoryDashboard() {
@@ -331,9 +187,11 @@ export default function FactoryDashboard() {
 
         <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-6">
           <div className="flex items-center gap-4">
-            {/* 大頭貼 */}
+            {/* 工廠頭貼／Logo */}
             {factory.avatarUrl && (
-              <img src={factory.avatarUrl} alt={factory.name} className="w-16 h-16 rounded-full object-cover border-2 border-border shrink-0" loading="lazy" />
+              <div className="w-16 h-16 rounded-full border-2 border-border shrink-0 overflow-hidden">
+                <CroppedImage src={factory.avatarUrl} crop={(factory as any).avatarCrop ?? null} alt={factory.name} loading="lazy" />
+              </div>
             )}
             {!factory.avatarUrl && (
               <div className="w-16 h-16 rounded-full bg-orange-100 flex items-center justify-center border-2 border-border shrink-0">
@@ -542,14 +400,22 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
   const [previewOpen, setPreviewOpen] = useState(false);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(factory.avatarUrl ?? null);
   const [avatarUrl, setAvatarUrl] = useState<string | null>(factory.avatarUrl ?? null);
+  const [avatarCrop, setAvatarCrop] = useState<ImageCropData | null>((factory as any).avatarCrop ?? null);
   const [avatarUploading, setAvatarUploading] = useState(false);
   const avatarInputRef = useRef<HTMLInputElement>(null);
+  // 新選的頭貼／Logo 原圖（尚未確認顯示範圍）；重新編輯既有頭貼時也重用這個
+  // state，此時放的是已上傳的 factory.avatarUrl，isReselecting=false。
+  const [avatarEditorSrc, setAvatarEditorSrc] = useState<string | null>(null);
+  const [avatarEditorIsNewFile, setAvatarEditorIsNewFile] = useState(true);
 
   const [coverPreview, setCoverPreview] = useState<string | null>((factory as any).coverImageUrl ?? null);
-  const [coverCropperOpen, setCoverCropperOpen] = useState(false);
-  const [coverOriginalSrc, setCoverOriginalSrc] = useState("");
+  const [coverCrop, setCoverCrop] = useState<ImageCropData | null>((factory as any).coverCrop ?? null);
   const [coverUploading, setCoverUploading] = useState(false);
   const coverInputRef = useRef<HTMLInputElement>(null);
+  // 新選的封面原圖（尚未確認顯示範圍）；重新編輯既有封面時也重用這個 state，
+  // 此時放的是已上傳的 factory.coverImageUrl，isReselecting=false。
+  const [coverEditorSrc, setCoverEditorSrc] = useState<string | null>(null);
+  const [coverEditorIsNewFile, setCoverEditorIsNewFile] = useState(true);
 
   // Snapshot of saved form values for dirty detection.
   // avatarUrl is included here. For draft/rejected, it is updated in handleAvatarChange immediately
@@ -576,6 +442,7 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
     weekendHours: ((factory as any).weekendHours ?? "") as string,
     businessNote: ((factory as any).businessNote ?? "") as string,
     avatarUrl: (factory.avatarUrl ?? null) as string | null,
+    avatarCrop: ((factory as any).avatarCrop ?? null) as ImageCropData | null,
     certificationBadges: sortBadgeIds((factory as any).certificationBadges ?? []) as string[],
     certificationEvidence: normalizeCertificationEvidenceStatus((factory as any).certificationEvidenceStatus),
   });
@@ -613,6 +480,7 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
     weekendHours !== initialForm.current.weekendHours ||
     businessNote !== initialForm.current.businessNote ||
     (avatarUrl ?? null) !== (initialForm.current.avatarUrl ?? null) ||
+    JSON.stringify(avatarCrop) !== JSON.stringify(initialForm.current.avatarCrop) ||
     !arrEq(certificationBadges, initialForm.current.certificationBadges) ||
     evidenceSignature(certificationEvidence) !== evidenceSignature(initialForm.current.certificationEvidence);
 
@@ -678,59 +546,135 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
     setFoundedYear(cleaned);
   };
 
+  // 選擇新頭貼／Logo 檔案：先壓縮（保留原圖比例，不裁切），開啟共用顯示範圍
+  // 編輯器讓使用者確認呈現範圍，使用者從沒看過結果前不會直接套用系統預設
+  // 置中裁切。
   const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    e.target.value = "";
     if (file.size > 5 * 1024 * 1024) { toast.error("圖片大小不能超過 5MB"); return; }
-    setAvatarUploading(true);
     try {
       const base64 = await compressImage(file);
-      setAvatarPreview(base64);
-      const result = await uploadAvatarMut.mutateAsync({ base64, mimeType: "image/jpeg", factoryId: factory.id });
+      setAvatarEditorIsNewFile(true);
+      setAvatarEditorSrc(base64);
+    } catch {
+      toast.error("圖片讀取失敗，請重試");
+    }
+  };
+
+  // 重新調整既有頭貼／Logo 的顯示範圍，不重新上傳圖片本體。
+  const handleAvatarReeditCrop = () => {
+    if (!avatarPreview) return;
+    setAvatarEditorIsNewFile(false);
+    setAvatarEditorSrc(avatarPreview);
+  };
+
+  const updateAvatarCropMut = trpc.factory.updateAvatarCrop.useMutation();
+
+  const handleAvatarCropConfirm = async (crop: ImageCropData) => {
+    const isNewFile = avatarEditorIsNewFile;
+    const srcForUpload = avatarEditorSrc;
+    setAvatarEditorSrc(null);
+    if (!srcForUpload) return;
+
+    if (!isNewFile) {
+      // 只調整既有圖片的顯示範圍中繼資料，不重新上傳圖片本體。
+      setAvatarUploading(true);
+      try {
+        await updateAvatarCropMut.mutateAsync({ factoryId: factory.id, crop });
+        setAvatarCrop(crop);
+        initialForm.current = { ...initialForm.current, avatarCrop: crop };
+        toast.success("顯示範圍已更新");
+        if (isOwner) await utils.factory.getMine.invalidate();
+        else await utils.factory.getById.invalidate({ id: factory.id, includeRevision: true });
+      } catch {
+        toast.error("更新失敗，請重試");
+      } finally {
+        setAvatarUploading(false);
+      }
+      return;
+    }
+
+    setAvatarUploading(true);
+    try {
+      const result = await uploadAvatarMut.mutateAsync({ base64: srcForUpload, mimeType: "image/jpeg", factoryId: factory.id, crop });
       setAvatarUrl(result.url);
       setAvatarPreview(result.url);
+      setAvatarCrop(result.crop ?? null);
       if ((result as any).savedToDb !== false) {
         // draft/rejected: server saved immediately → sync initialForm so isDirty resets to false
-        initialForm.current = { ...initialForm.current, avatarUrl: result.url ?? null };
+        initialForm.current = { ...initialForm.current, avatarUrl: result.url ?? null, avatarCrop: result.crop ?? null };
         if (isOwner) {
           await utils.factory.getMine.invalidate();
         } else {
           await utils.factory.getById.invalidate({ id: factory.id, includeRevision: true });
         }
       }
-      // approved: savedToDb is false — URL stays staged in avatarUrl state for the revision submission
+      // approved: savedToDb is false — URL／crop 都留在 state 裡等 submitRevision
     } catch {
       toast.error("圖片上傳失敗，請重試");
       setAvatarPreview(factory.avatarUrl ?? null);
       setAvatarUrl(factory.avatarUrl ?? null);
+      setAvatarCrop((factory as any).avatarCrop ?? null);
     } finally {
       setAvatarUploading(false);
     }
   };
 
-  const handleCoverFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // 選擇新封面檔案：一樣先壓縮（保留原圖，不裁切像素），開啟共用編輯器。
+  const handleCoverFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     e.target.value = "";
-    const reader = new FileReader();
-    reader.onload = ev => {
-      setCoverOriginalSrc(ev.target?.result as string);
-      setCoverCropperOpen(true);
-    };
-    reader.readAsDataURL(file);
+    try {
+      const base64 = await compressImage(file, 2400, 0.85);
+      setCoverEditorIsNewFile(true);
+      setCoverEditorSrc(base64);
+    } catch {
+      toast.error("圖片讀取失敗，請重試");
+    }
   };
 
-  const handleCoverApply = async (base64: string) => {
-    setCoverCropperOpen(false);
-    setCoverPreview(base64);
+  // 重新調整既有封面的顯示範圍，保留原圖，不重新上傳。
+  const handleCoverReeditCrop = () => {
+    if (!coverPreview) return;
+    setCoverEditorIsNewFile(false);
+    setCoverEditorSrc(coverPreview);
+  };
+
+  const updateCoverCropMut = trpc.factory.updateCoverCrop.useMutation();
+
+  const handleCoverCropConfirm = async (crop: ImageCropData) => {
+    const isNewFile = coverEditorIsNewFile;
+    const srcForUpload = coverEditorSrc;
+    setCoverEditorSrc(null);
+    if (!srcForUpload) return;
+
+    if (!isNewFile) {
+      setCoverUploading(true);
+      try {
+        await updateCoverCropMut.mutateAsync({ factoryId: factory.id, crop });
+        setCoverCrop(crop);
+        toast.success("封面顯示範圍已更新");
+      } catch (err: unknown) {
+        toast.error((err as any)?.message ?? "更新失敗，請重試");
+      } finally {
+        setCoverUploading(false);
+      }
+      return;
+    }
+
     setCoverUploading(true);
     try {
-      const result = await uploadCoverImageMut.mutateAsync({ base64, factoryId: factory.id });
+      const result = await uploadCoverImageMut.mutateAsync({ base64: srcForUpload, factoryId: factory.id, crop });
       setCoverPreview(result.url);
+      setCoverCrop(result.crop ?? null);
       toast.success("封面圖已更新");
     } catch (err: unknown) {
       toast.error((err as any)?.message ?? "封面上傳失敗");
       setCoverPreview((factory as any).coverImageUrl ?? null);
+      setCoverCrop((factory as any).coverCrop ?? null);
     } finally {
       setCoverUploading(false);
     }
@@ -756,6 +700,7 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
     weekendHours: weekendHours || null,
     businessNote: businessNote || null,
     avatarUrl: avatarUrl || factory.avatarUrl || null,
+    avatarCrop: avatarCrop ?? null,
     certificationBadges,
     // 只送出說明文字：object key 全程只存在伺服器端，這裡的 state 完全不
     // 持有任何 key，送出時也只挑 badgeId／description 兩個欄位。
@@ -779,6 +724,7 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
       region, description, capitalLevel, foundedYear, ownerName, contactPersonName, phone, website, contactEmail,
       address, operationStatus, weekdayHours, weekendHours, businessNote,
       avatarUrl: avatarUrl ?? null,
+      avatarCrop: avatarCrop ?? null,
       certificationBadges: sortBadgeIds(certificationBadges),
       certificationEvidence: [...certificationEvidence],
     };
@@ -797,6 +743,7 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
       phone: phone || undefined,
       website: website || undefined, contactEmail: contactEmail || undefined,
       avatarUrl: avatarUrl || factory.avatarUrl || undefined,
+      avatarCrop,
       certificationBadges,
       // 只送出說明文字，不含 imageCount／hasEvidence 等統計欄位（key 全程
       // 只存在伺服器端，這個 state 本來就沒有 key 可送）。
@@ -823,7 +770,9 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
     name,
     description,
     avatarUrl: avatarPreview ?? null,
+    avatarCrop: avatarCrop ?? null,
     coverImageUrl: coverPreview ?? null,
+    coverCrop: coverCrop ?? null,
     operationStatus,
     industry,
     subIndustry,
@@ -967,10 +916,10 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
           </div>
         )}
 
-        {/* ── 大頭貼 ── */}
+        {/* ── 大頭貼／Logo ── */}
         {!isLocked && (
           <div className="py-6 space-y-2">
-            <Label>工廠大頭貼</Label>
+            <Label>工廠頭貼／Logo</Label>
             <div className="flex items-center gap-4">
               <div
                 className="w-20 h-20 rounded-full border-2 border-dashed border-border flex items-center justify-center overflow-hidden cursor-pointer hover:border-orange-400 transition-colors bg-muted relative"
@@ -982,7 +931,7 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
                     <p className="text-xs text-muted-foreground mt-1">上傳中</p>
                   </div>
                 ) : avatarPreview ? (
-                  <img src={avatarPreview} alt="大頭貼" className="w-full h-full object-cover" />
+                  <CroppedImage src={avatarPreview} crop={avatarCrop} alt="工廠頭貼／Logo" />
                 ) : (
                   <div className="text-center">
                     <Camera className="w-6 h-6 mx-auto text-muted-foreground" />
@@ -995,7 +944,12 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
                   <Camera className="w-4 h-4 mr-1" />{avatarUploading ? "上傳中..." : "更換照片"}
                 </Button>
                 {avatarPreview && !avatarUploading && (
-                  <Button type="button" variant="ghost" size="sm" onClick={() => { setAvatarPreview(null); setAvatarUrl(null); }}>
+                  <Button type="button" variant="outline" size="sm" onClick={handleAvatarReeditCrop}>
+                    調整顯示範圍
+                  </Button>
+                )}
+                {avatarPreview && !avatarUploading && (
+                  <Button type="button" variant="ghost" size="sm" onClick={() => { setAvatarPreview(null); setAvatarUrl(null); setAvatarCrop(null); }}>
                     <X className="w-4 h-4 mr-1" />移除
                   </Button>
                 )}
@@ -1006,6 +960,18 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
           </div>
         )}
 
+        {avatarEditorSrc && (
+          <ImageCropEditor
+            open={true}
+            onOpenChange={(open) => { if (!open) setAvatarEditorSrc(null); }}
+            imageSrc={avatarEditorSrc}
+            aspectRatio={1}
+            initialCrop={avatarEditorIsNewFile ? null : avatarCrop}
+            title="調整頭貼／Logo 顯示範圍"
+            onConfirm={handleAvatarCropConfirm}
+          />
+        )}
+
         {/* ── 封面背景圖 ── */}
         <div className="py-6 space-y-3 border-t">
           <div>
@@ -1014,7 +980,7 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
           </div>
           {coverPreview && (
             <div className="w-full rounded-lg overflow-hidden border bg-muted relative" style={{ aspectRatio: "16/5" }}>
-              <img src={coverPreview} alt="封面預覽" className="w-full h-full object-cover" />
+              <CroppedImage src={coverPreview} crop={coverCrop} alt="封面預覽" />
               {coverUploading && (
                 <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
                   <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
@@ -1036,9 +1002,19 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
             {coverPreview && !coverUploading && (
               <Button
                 type="button"
+                variant="outline"
+                size="sm"
+                onClick={handleCoverReeditCrop}
+              >
+                調整顯示範圍
+              </Button>
+            )}
+            {coverPreview && !coverUploading && (
+              <Button
+                type="button"
                 variant="ghost"
                 size="sm"
-                onClick={() => setCoverPreview(null)}
+                onClick={() => { setCoverPreview(null); setCoverCrop(null); }}
               >
                 <X className="w-4 h-4 mr-1" />移除
               </Button>
@@ -1053,13 +1029,15 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
           />
         </div>
 
-        {/* Cover cropper modal */}
-        {coverCropperOpen && (
-          <CoverImageCropper
-            imageSrc={coverOriginalSrc}
-            onApply={handleCoverApply}
-            onCancel={() => setCoverCropperOpen(false)}
-            onReselect={() => { setCoverCropperOpen(false); coverInputRef.current?.click(); }}
+        {coverEditorSrc && (
+          <ImageCropEditor
+            open={true}
+            onOpenChange={(open) => { if (!open) setCoverEditorSrc(null); }}
+            imageSrc={coverEditorSrc}
+            aspectRatio={16 / 5}
+            initialCrop={coverEditorIsNewFile ? null : coverCrop}
+            title="調整封面顯示範圍"
+            onConfirm={handleCoverCropConfirm}
           />
         )}
 
@@ -1418,11 +1396,15 @@ function PhotoManager({ factoryId, onDirtyChange }: { factoryId: number; onDirty
   const [editCaptionId, setEditCaptionId] = useState<number | null>(null);
   const [captionDraft, setCaptionDraft] = useState("");
 
+  // 多張照片逐張調整顯示範圍：選好的檔案先壓縮成 base64 佇列，一次只開一個
+  // 編輯器，確認或取消都會自動換下一張，直到佇列清空。
+  const [uploadQueue, setUploadQueue] = useState<string[]>([]);
+  // 重新編輯既有照片的顯示範圍：photoId 非 null 時，editorSrc 是該照片現有的
+  // url，不是新檔案，確認時呼叫 updatePhotoCrop 而不是 uploadPhoto。
+  const [reeditPhoto, setReeditPhoto] = useState<{ id: number; url: string; crop: ImageCropData | null } | null>(null);
+
   const { data: photos = [] } = trpc.factory.getPhotos.useQuery({ factoryId });
-  const uploadMut = trpc.factory.uploadPhoto.useMutation({
-    onSuccess: () => { utils.factory.getPhotos.invalidate({ factoryId }); toast.success("照片已上傳"); },
-    onError: (err) => toast.error(err.message),
-  });
+  const uploadMut = trpc.factory.uploadPhoto.useMutation();
   const deleteMut = trpc.factory.deletePhoto.useMutation({
     onSuccess: () => { utils.factory.getPhotos.invalidate({ factoryId }); toast.success("照片已刪除"); },
     onError: (err) => toast.error(err.message),
@@ -1431,22 +1413,64 @@ function PhotoManager({ factoryId, onDirtyChange }: { factoryId: number; onDirty
     onSuccess: () => { utils.factory.getPhotos.invalidate({ factoryId }); setEditCaptionId(null); },
     onError: (err) => toast.error(err.message),
   });
+  const updateCropMut = trpc.factory.updatePhotoCrop.useMutation();
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
+    e.target.value = "";
     if (!files.length) return;
     const remaining = 20 - photos.length;
-    const toUpload = files.slice(0, remaining);
-    setUploading(true);
-    for (const file of toUpload) {
+    const toQueue = files.slice(0, remaining);
+    const compressed: string[] = [];
+    for (const file of toQueue) {
       if (file.size > 5 * 1024 * 1024) { toast.error(`${file.name} 超過 5MB，請選擇較小的圖片`); continue; }
       try {
-        const base64 = await compressImage(file);
-        await uploadMut.mutateAsync({ base64, mimeType: "image/jpeg" });
+        compressed.push(await compressImage(file));
       } catch {}
     }
-    setUploading(false);
-    e.target.value = "";
+    if (compressed.length > 0) {
+      setUploadQueue(compressed);
+      setUploading(true);
+    }
+  };
+
+  // 佇列裡目前這一張確認顯示範圍後上傳，不論成功與否都往下一張前進，讓多張
+  // 照片的逐張調整流程不會因單張失敗就整個卡住。
+  const handleQueueConfirm = async (crop: ImageCropData) => {
+    const [current, ...rest] = uploadQueue;
+    setUploadQueue(rest);
+    if (!current) return;
+    setUploading(true);
+    try {
+      await uploadMut.mutateAsync({ base64: current, mimeType: "image/jpeg", crop });
+      await utils.factory.getPhotos.invalidate({ factoryId });
+      toast.success("照片已上傳");
+    } catch (err: any) {
+      toast.error(err?.message ?? "照片上傳失敗");
+    } finally {
+      if (rest.length === 0) setUploading(false);
+    }
+  };
+
+  const handleQueueCancel = () => {
+    setUploadQueue(prev => {
+      const rest = prev.slice(1);
+      if (rest.length === 0) setUploading(false);
+      return rest;
+    });
+  };
+
+  const handleReeditConfirm = async (crop: ImageCropData) => {
+    const target = reeditPhoto;
+    setReeditPhoto(null);
+    if (!target) return;
+    try {
+      await updateCropMut.mutateAsync({ photoId: target.id, crop });
+      await utils.factory.getPhotos.invalidate({ factoryId });
+      toast.success("顯示範圍已更新");
+    } catch (err: any) {
+      toast.error(err?.message ?? "更新失敗，請重試");
+    }
   };
 
   return (
@@ -1476,8 +1500,15 @@ function PhotoManager({ factoryId, onDirtyChange }: { factoryId: number; onDirty
             {photos.map((photo) => (
               <div key={photo.id} className="group relative">
                 <div className="aspect-square rounded-lg overflow-hidden bg-muted border">
-                  <img src={photo.url} alt={photo.caption ?? ""} className="w-full h-full object-cover" loading="lazy" />
+                  <CroppedImage src={photo.url} crop={(photo as any).crop ?? null} alt={photo.caption ?? ""} loading="lazy" />
                 </div>
+                <button
+                  onClick={() => setReeditPhoto({ id: photo.id, url: photo.url, crop: (photo as any).crop ?? null })}
+                  className="absolute top-1 left-1 bg-black/60 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/80"
+                  title="調整顯示範圍"
+                >
+                  <ImagePlus className="w-3 h-3" />
+                </button>
                 <button
                   onClick={() => deleteMut.mutate({ photoId: photo.id })}
                   className="absolute top-1 right-1 bg-black/60 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-500"
@@ -1520,6 +1551,31 @@ function PhotoManager({ factoryId, onDirtyChange }: { factoryId: number; onDirty
           </div>
         )}
       </CardContent>
+
+      {uploadQueue.length > 0 && (
+        <ImageCropEditor
+          key={uploadQueue.length}
+          open={true}
+          onOpenChange={(open) => { if (!open) handleQueueCancel(); }}
+          imageSrc={uploadQueue[0]}
+          aspectRatio={1}
+          initialCrop={null}
+          title={`調整照片顯示範圍（還剩 ${uploadQueue.length} 張）`}
+          onConfirm={handleQueueConfirm}
+        />
+      )}
+
+      {reeditPhoto && (
+        <ImageCropEditor
+          open={true}
+          onOpenChange={(open) => { if (!open) setReeditPhoto(null); }}
+          imageSrc={reeditPhoto.url}
+          aspectRatio={1}
+          initialCrop={reeditPhoto.crop}
+          title="調整照片顯示範圍"
+          onConfirm={handleReeditConfirm}
+        />
+      )}
     </Card>
   );
 }
@@ -1661,8 +1717,15 @@ function ProductForm({ factoryId, product, onDone }: { factoryId: number; produc
   const [provideSample, setProvideSample] = useState(product?.provideSample ?? false);
   const [description, setDescription] = useState(product?.description ?? "");
   const [images, setImages] = useState<string[]>((product?.images as string[]) ?? []);
+  // 與 images 陣列順序對齊，第 i 筆對應 images[i]（見 shared/imageCrop.ts）。
+  const [imageCrops, setImageCrops] = useState<(ImageCropData | null)[]>(
+    (product?.imageCrops as (ImageCropData | null)[]) ?? images.map(() => null)
+  );
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // 新上傳的商品圖片逐張調整顯示範圍的佇列（base64 原圖）。
+  const [productImageQueue, setProductImageQueue] = useState<string[]>([]);
+  const [reeditImageIndex, setReeditImageIndex] = useState<number | null>(null);
 
   const createMut = trpc.product.create.useMutation({ onSuccess: () => { toast.success("產品已新增"); onDone(); }, onError: e => toast.error(e.message) });
   const updateMut = trpc.product.update.useMutation({ onSuccess: () => { toast.success("產品已更新"); onDone(); }, onError: e => toast.error(e.message) });
@@ -1715,16 +1778,48 @@ function ProductForm({ factoryId, product, onDone }: { factoryId: number; produc
     const files = e.target.files;
     if (!files) return;
     if (images.length + files.length > 3) { toast.error("最多只能上傳 3 張圖片"); return; }
-    setUploading(true);
+    const compressed: string[] = [];
+    for (const file of Array.from(files)) {
+      if (file.size > 5 * 1024 * 1024) { toast.error(`${file.name} 超過 5MB 限制`); continue; }
+      try { compressed.push(await compressImage(file)); } catch {}
+    }
+    if (fileInputRef.current) fileInputRef.current.value = "";
+    if (compressed.length > 0) {
+      setProductImageQueue(compressed);
+      setUploading(true);
+    }
+  };
+
+  // 佇列裡目前這一張確認顯示範圍後上傳，images／imageCrops 兩個陣列保持同一
+  // 個順序對齊，不論成功與否都往下一張前進。
+  const handleProductImageQueueConfirm = async (crop: ImageCropData) => {
+    const [current, ...rest] = productImageQueue;
+    setProductImageQueue(rest);
+    if (!current) return;
     try {
-      for (const file of Array.from(files)) {
-        if (file.size > 5 * 1024 * 1024) { toast.error(`${file.name} 超過 5MB 限制`); continue; }
-        const base64 = await compressImage(file);
-        const result = await uploadMut.mutateAsync({ factoryId, base64, mimeType: "image/jpeg" });
-        setImages(prev => [...prev, result.url]);
-      }
-    } catch { toast.error("圖片上傳失敗"); }
-    finally { setUploading(false); if (fileInputRef.current) fileInputRef.current.value = ""; }
+      const result = await uploadMut.mutateAsync({ factoryId, base64: current, mimeType: "image/jpeg" });
+      setImages(prev => [...prev, result.url]);
+      setImageCrops(prev => [...prev, crop]);
+    } catch {
+      toast.error("圖片上傳失敗");
+    } finally {
+      if (rest.length === 0) setUploading(false);
+    }
+  };
+
+  const handleProductImageQueueCancel = () => {
+    setProductImageQueue(prev => {
+      const rest = prev.slice(1);
+      if (rest.length === 0) setUploading(false);
+      return rest;
+    });
+  };
+
+  const handleProductImageReeditConfirm = (crop: ImageCropData) => {
+    const idx = reeditImageIndex;
+    setReeditImageIndex(null);
+    if (idx === null) return;
+    setImageCrops(prev => prev.map((c, i) => (i === idx ? crop : c)));
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -1738,6 +1833,7 @@ function ProductForm({ factoryId, product, onDone }: { factoryId: number; produc
       acceptSmallOrder, provideSample,
       description: description || undefined,
       images,
+      imageCrops,
     };
     if (product) updateMut.mutate({ ...data, id: product.id });
     else createMut.mutate(data);
@@ -1848,8 +1944,18 @@ function ProductForm({ factoryId, product, onDone }: { factoryId: number; produc
         <div className="flex gap-2 mt-2 flex-wrap">
           {images.map((img, i) => (
             <div key={i} className="relative group">
-              <img src={img} alt="" className="w-20 h-20 rounded-lg object-cover border" />
-              <button type="button" onClick={() => setImages(prev => prev.filter((_, j) => j !== i))}
+              <div className="w-20 h-20 rounded-lg overflow-hidden border">
+                <CroppedImage src={img} crop={imageCrops[i] ?? null} />
+              </div>
+              <button type="button" onClick={() => setReeditImageIndex(i)}
+                className="absolute -top-2 -left-2 bg-black/70 text-white rounded-full w-5 h-5 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                title="調整顯示範圍">
+                <ImagePlus className="w-3 h-3" />
+              </button>
+              <button type="button" onClick={() => {
+                setImages(prev => prev.filter((_, j) => j !== i));
+                setImageCrops(prev => prev.filter((_, j) => j !== i));
+              }}
                 className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs opacity-0 group-hover:opacity-100 transition-opacity">
                 <X className="w-3 h-3" />
               </button>
@@ -1863,6 +1969,31 @@ function ProductForm({ factoryId, product, onDone }: { factoryId: number; produc
           )}
         </div>
         <input ref={fileInputRef} type="file" accept="image/*" multiple onChange={handleImageUpload} className="hidden" />
+
+        {productImageQueue.length > 0 && (
+          <ImageCropEditor
+            key={productImageQueue.length}
+            open={true}
+            onOpenChange={(open) => { if (!open) handleProductImageQueueCancel(); }}
+            imageSrc={productImageQueue[0]}
+            aspectRatio={1}
+            initialCrop={null}
+            title={`調整商品圖片顯示範圍（還剩 ${productImageQueue.length} 張）`}
+            onConfirm={handleProductImageQueueConfirm}
+          />
+        )}
+
+        {reeditImageIndex !== null && (
+          <ImageCropEditor
+            open={true}
+            onOpenChange={(open) => { if (!open) setReeditImageIndex(null); }}
+            imageSrc={images[reeditImageIndex]}
+            aspectRatio={1}
+            initialCrop={imageCrops[reeditImageIndex] ?? null}
+            title="調整商品圖片顯示範圍"
+            onConfirm={handleProductImageReeditConfirm}
+          />
+        )}
       </div>
 
       <div className="flex gap-6">

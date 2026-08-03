@@ -13,6 +13,8 @@ import {
 import LoginDialog from "@/components/LoginDialog";
 import { sortBadgeIds, CERTIFICATION_BADGE_MAP } from "@shared/badges";
 import { BadgeIcon } from "@/components/badges/BadgeIcon";
+import { CroppedImage } from "@/components/CroppedImage";
+import type { ImageCropData } from "@shared/imageCrop";
 
 function normalizeDescription(text: string): string {
   return text.replace(/\n{3,}/g, "\n\n");
@@ -39,20 +41,19 @@ function InfoRow({ label1, val1, label2, val2 }: {
   );
 }
 
-function ProductImageCarousel({ images, onImageClick }: { images: string[]; onImageClick?: (images: string[], index: number) => void }) {
+function ProductImageCarousel({ images, imageCrops, onImageClick }: { images: string[]; imageCrops?: (ImageCropData | null)[]; onImageClick?: (images: string[], index: number) => void }) {
   const [idx, setIdx] = useState(0);
   if (!images.length) return null;
   const prev = (e: React.MouseEvent) => { e.stopPropagation(); setIdx(i => (i - 1 + images.length) % images.length); };
   const next = (e: React.MouseEvent) => { e.stopPropagation(); setIdx(i => (i + 1) % images.length); };
   return (
     <div className="relative w-28 h-28 shrink-0 rounded-lg overflow-hidden bg-muted">
-      <img
-        src={images[idx]}
-        alt=""
-        className={`w-full h-full object-cover ${onImageClick ? "cursor-pointer" : ""}`}
-        loading="lazy"
+      <div
+        className={`w-full h-full ${onImageClick ? "cursor-pointer" : ""}`}
         onClick={(e) => { e.stopPropagation(); onImageClick?.(images, idx); }}
-      />
+      >
+        <CroppedImage src={images[idx]} crop={imageCrops?.[idx] ?? null} loading="lazy" />
+      </div>
       {images.length > 1 && (
         <>
           <button onClick={prev} className="absolute left-0 inset-y-0 w-7 flex items-center justify-center bg-black/30 hover:bg-black/50 text-white transition-colors">
@@ -93,7 +94,9 @@ export interface FactoryDetailViewFactory {
   name: string;
   description?: string | null;
   avatarUrl?: string | null;
+  avatarCrop?: ImageCropData | null;
   coverImageUrl?: string | null;
+  coverCrop?: ImageCropData | null;
   businessType?: string | null;
   operationStatus?: string | null;
   industry?: string[] | string | null;
@@ -309,10 +312,9 @@ export function FactoryDetailView({
       <div className="w-full lg:max-w-7xl lg:mx-auto">
         <div className="relative overflow-hidden aspect-[16/5] lg:rounded-b-xl">
           {factory.coverImageUrl ? (
-            <img
+            <CroppedImage
               src={factory.coverImageUrl}
-              alt=""
-              className="w-full h-full object-cover"
+              crop={factory.coverCrop}
               loading="eager"
             />
           ) : (
@@ -333,7 +335,7 @@ export function FactoryDetailView({
             onClick={() => { if (factory.avatarUrl && !isPreview) { setPreviewImages([factory.avatarUrl]); setPreviewIndex(0); } }}
           >
             {factory.avatarUrl ? (
-              <img src={factory.avatarUrl} alt={factory.name} className="w-full h-full object-contain" loading="eager" />
+              <CroppedImage src={factory.avatarUrl} crop={factory.avatarCrop} alt={factory.name} loading="eager" />
             ) : (
               <div className="w-full h-full flex items-center justify-center">
                 {factory.businessType === "studio"
@@ -616,7 +618,7 @@ export function FactoryDetailView({
                           className={`aspect-square rounded-lg overflow-hidden bg-muted transition-opacity ${isPreview ? "" : "cursor-pointer hover:opacity-90"}`}
                           onClick={() => { if (!isPreview) setLightboxIndex(idx); }}
                         >
-                          <img src={photo.url} alt={photo.caption ?? ""} className="w-full h-full object-cover" loading="lazy" />
+                          <CroppedImage src={photo.url} crop={(photo as any).crop ?? null} alt={photo.caption ?? ""} loading="lazy" />
                         </div>
                       ))}
                     </div>
@@ -655,18 +657,21 @@ export function FactoryDetailView({
                         {factory.products.filter((p: any) =>
                           activeCat === "all" || p.categoryId === activeCat
                         ).map((product: any) => (
-                          <div key={product.id} className="p-4 rounded-lg border hover:bg-muted/30 transition-colors">
+                          <div key={product.id} className="p-4 rounded-lg border hover:bg-muted/30 transition-colors min-w-0">
                             <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
-                              <div className="flex gap-3 flex-1">
+                              <div className="flex gap-3 flex-1 min-w-0">
                                 {product.images && (product.images as string[]).length > 0 && (
                                   <ProductImageCarousel
                                     images={product.images as string[]}
+                                    imageCrops={product.imageCrops as (ImageCropData | null)[] | undefined}
                                     onImageClick={isPreview ? undefined : (imgs, i) => { setPreviewImages(imgs); setPreviewIndex(i); }}
                                   />
                                 )}
-                                <div className="flex-1">
-                                  <h4 className="font-medium mb-1">{product.name}</h4>
-                                  {product.description && <p className="text-sm text-muted-foreground mb-2">{product.description}</p>}
+                                <div className="flex-1 min-w-0">
+                                  <h4 className="font-medium mb-1 break-words">{product.name}</h4>
+                                  {product.description && (
+                                    <p className="text-sm text-muted-foreground mb-2 whitespace-pre-wrap break-words">{product.description}</p>
+                                  )}
                                   <div className="flex flex-wrap gap-3 text-sm">
                                     {(product.priceMin || product.priceMax) && (
                                       <span className="flex items-center gap-1 text-primary font-medium">

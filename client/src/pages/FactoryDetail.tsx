@@ -79,6 +79,7 @@ export default function FactoryDetail() {
         region: factory.region,
         businessType: (factory as any).businessType ?? "factory",
         avatarUrl: (factory as any).avatarUrl ?? null,
+        avatarCrop: (factory as any).avatarCrop ?? null,
         avgRating: factory.avgRating,
         reviewCount: factory.reviewCount,
         viewedAt: Date.now(),

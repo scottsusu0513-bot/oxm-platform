@@ -8,6 +8,8 @@ import { trpc } from "@/lib/trpc";
 import { useIsMobile } from "@/hooks/useMobile";
 import { Star, MapPin, Heart, Trash2, Factory, Wrench, ChevronLeft, ChevronRight } from "lucide-react";
 import { toast } from "sonner";
+import { CroppedImage } from "@/components/CroppedImage";
+import type { ImageCropData } from "@shared/imageCrop";
 
 export const MOBILE_FAVORITES_PAGE_SIZE = 4;
 export const DESKTOP_FAVORITES_PAGE_SIZE = 8;
@@ -27,7 +29,9 @@ export function FactoryCard({ factory, onRemove, removeIcon }: {
         <div className="flex justify-between items-start mb-2">
           <div className="flex items-center gap-2 flex-1 min-w-0">
             {factory.avatarUrl ? (
-              <img src={factory.avatarUrl} alt={factory.name} className="w-8 h-8 rounded-full object-cover border shrink-0" loading="lazy" />
+              <div className="w-8 h-8 rounded-full border shrink-0 overflow-hidden">
+                <CroppedImage src={factory.avatarUrl} crop={(factory.avatarCrop ?? null) as ImageCropData | null} alt={factory.name} loading="lazy" />
+              </div>
             ) : (
               <div className="w-8 h-8 rounded-full bg-orange-100 flex items-center justify-center shrink-0">
                 {factory.businessType === "studio"

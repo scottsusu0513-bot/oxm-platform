@@ -40,6 +40,7 @@ import {
   type News, type InsertNews, type NewsAttachment,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
+import type { ImageCropData } from "../shared/imageCrop";
 import { ADJACENT_REGIONS, INDUSTRY_SLUGS, INDUSTRY_OPTIONS } from "../shared/constants";
 import { COMMUNITY_FEATURE_STATUS, COMMUNITY_CROSS_INDUSTRY_SLUG, NEWS_NEW_WINDOW_MS, ADVISOR_DISPLAY_NAME } from "../shared/const";
 import { sortBadgeIds, sanitizeBadgeAssignment, appendCertificationEvidenceImage } from "../shared/badges";
@@ -560,14 +561,14 @@ export async function searchFactories(params: {
 }
 
 // ===== Product helpers =====
-export async function createProduct(data: { factoryId: number; name: string; categoryId?: number | null; priceMin?: string; priceMax?: string; priceType?: "range" | "fixed" | "market"; acceptSmallOrder?: boolean; provideSample?: boolean; description?: string; images?: string[] }) {
+export async function createProduct(data: { factoryId: number; name: string; categoryId?: number | null; priceMin?: string; priceMax?: string; priceType?: "range" | "fixed" | "market"; acceptSmallOrder?: boolean; provideSample?: boolean; description?: string; images?: string[]; imageCrops?: (ImageCropData | null)[] }) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
   const result = await db.insert(products).values(data);
   return result[0].insertId;
 }
 
-export async function updateProduct(id: number, factoryId: number, data: Partial<{ name: string; categoryId: number | null; priceMin: string; priceMax: string; priceType: "range" | "fixed" | "market"; acceptSmallOrder: boolean; provideSample: boolean; description: string; images: string[] }>) {
+export async function updateProduct(id: number, factoryId: number, data: Partial<{ name: string; categoryId: number | null; priceMin: string; priceMax: string; priceType: "range" | "fixed" | "market"; acceptSmallOrder: boolean; provideSample: boolean; description: string; images: string[]; imageCrops: (ImageCropData | null)[] }>) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
   await db.update(products).set(data).where(and(eq(products.id, id), eq(products.factoryId, factoryId)));
@@ -1909,13 +1910,13 @@ export async function getPhotosByFactoryId(factoryId: number) {
     .orderBy(asc(factoryPhotos.sortOrder), asc(factoryPhotos.createdAt));
 }
 
-export async function addFactoryPhoto(factoryId: number, url: string, caption?: string) {
+export async function addFactoryPhoto(factoryId: number, url: string, caption?: string, crop?: ImageCropData | null) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
   const existing = await db.select({ id: factoryPhotos.id }).from(factoryPhotos).where(eq(factoryPhotos.factoryId, factoryId));
   if (existing.length >= 20) throw new Error("照片集最多 20 張");
   const sortOrder = existing.length;
-  const result = await db.insert(factoryPhotos).values({ factoryId, url, caption, sortOrder });
+  const result = await db.insert(factoryPhotos).values({ factoryId, url, caption, sortOrder, crop: crop ?? null });
   return result[0].insertId;
 }
 
@@ -1929,6 +1930,14 @@ export async function updateFactoryPhotoCaption(id: number, factoryId: number, c
   const db = await getDb();
   if (!db) throw new Error("DB not available");
   await db.update(factoryPhotos).set({ caption }).where(and(eq(factoryPhotos.id, id), eq(factoryPhotos.factoryId, factoryId)));
+}
+
+// 只更新這張相簿照片的顯示範圍中繼資料，不動 url／caption／sortOrder，滿足
+// 「已上傳的圖片可以再次編輯顯示範圍」且不需要重新上傳圖片本體。
+export async function updateFactoryPhotoCrop(id: number, factoryId: number, crop: ImageCropData | null) {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  await db.update(factoryPhotos).set({ crop }).where(and(eq(factoryPhotos.id, id), eq(factoryPhotos.factoryId, factoryId)));
 }
 
 // ===== 產品分類 =====
@@ -5933,7 +5942,7 @@ export const BASIC_DATA_FIELDS = [
   "name", "industry", "subIndustry", "mfgModes", "region", "description",
   "capitalLevel", "foundedYear", "ownerName", "contactPersonName", "phone",
   "website", "contactEmail", "address", "operationStatus",
-  "weekdayHours", "weekendHours", "businessNote", "avatarUrl",
+  "weekdayHours", "weekendHours", "businessNote", "avatarUrl", "avatarCrop",
   "certificationBadges", "certificationEvidence",
 ] as const;
 
@@ -5960,6 +5969,7 @@ export function extractBasicData(factory: Factory): Record<BasicDataField, any> 
     weekendHours: factory.weekendHours ?? null,
     businessNote: factory.businessNote ?? null,
     avatarUrl: factory.avatarUrl ?? null,
+    avatarCrop: (factory as any).avatarCrop ?? null,
     certificationBadges: (factory as any).certificationBadges ?? [],
     certificationEvidence: (factory as any).certificationEvidence ?? [],
   };

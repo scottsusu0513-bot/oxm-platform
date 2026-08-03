@@ -9,6 +9,8 @@ import { isNativeApp } from "@/lib/platform";
 import { performLogin } from "@/const";
 import { toast } from "sonner";
 import { BadgeRibbon } from "@/components/badges/BadgeRibbon";
+import { CroppedImage } from "@/components/CroppedImage";
+import type { ImageCropData } from "@shared/imageCrop";
 
 // 這個元件是搜尋結果工廠卡片的共用實作，供 Search.tsx／我的收藏／近期瀏覽等頁面使用。
 // （工廠管理後台的「預覽工廠頁面」改為使用 FactoryDetailView 呈現完整公開頁，不再用這個卡片元件。）
@@ -51,20 +53,6 @@ function FavButton({ factoryId, initialIsFav, onToggle, previewMode }: {
   );
 }
 
-function useImageAspectRatio(url: string | null | undefined): number | null {
-  const [ratio, setRatio] = useState<number | null>(null);
-  useEffect(() => {
-    if (!url) { setRatio(null); return; }
-    const img = new window.Image();
-    img.onload = () => {
-      if (img.naturalHeight > 0) setRatio(img.naturalWidth / img.naturalHeight);
-    };
-    img.onerror = () => setRatio(null);
-    img.src = url;
-  }, [url]);
-  return ratio;
-}
-
 export type FactoryCardProps = {
   factory: any;
   getFavState: (id: number) => boolean;
@@ -80,8 +68,12 @@ export type FactoryCardProps = {
 
 export function FactoryCard({ factory, getFavState, handleFavToggle, cartHas, cartAdd, cartRemove, setCartOpen, isMobile, previewMode }: FactoryCardProps) {
   const avatarUrl = factory.avatarUrl as string | null | undefined;
-  const ratio = useImageAspectRatio(avatarUrl);
-  const isWide = avatarUrl && ratio !== null && ratio >= 2.2;
+  // 工廠頭貼／Logo 全站統一用同一份 avatarCrop、統一 1:1 顯示範圍（見
+  // FactoryDashboard.tsx 的編輯器／FactoryDetailView 的公開頁頭貼），不再用
+  // 依圖片原始比例動態切換版面的 isWide 特例——那是舊版「只能 object-contain、
+  // 完全無法裁切」架構下的權宜設計；現在工廠主已經能在編輯器裡自行決定寬版
+  // Logo 要在 1:1 視窗裡顯示哪一段，不需要卡片再猜一次版面。
+  const avatarCrop = (factory.avatarCrop ?? null) as ImageCropData | null;
 
   const cartButton = (
     <div className="px-4 pt-2 pb-2 shrink-0" onClick={e => e.preventDefault()}>
@@ -120,43 +112,29 @@ export function FactoryCard({ factory, getFavState, handleFavToggle, cartHas, ca
   // 圖片各自的容器自己 overflow-hidden + 對應圓角，視覺上仍是方正的圖片角。
   const cardBody = (
     <Card className={`hover:shadow-md transition-shadow h-full flex flex-col overflow-visible ${previewMode ? "" : "cursor-pointer"}`}>
-      {isWide ? (
-        <>
-          <div className="relative h-28 shrink-0 bg-orange-50/40 flex items-center justify-center p-3 overflow-hidden rounded-t-xl">
-            <img src={avatarUrl!} alt={factory.name} className="w-full h-full object-contain" loading="lazy" />
-            <div className="absolute top-2 right-2" onClick={(e) => e.preventDefault()}>
-              <FavButton factoryId={factory.id} initialIsFav={getFavState(factory.id)} onToggle={handleFavToggle} previewMode={previewMode} />
+      <div className="flex flex-1 min-h-0 flex-row overflow-hidden rounded-xl">
+        {/* 頭貼／Logo：固定正方形容器，與編輯器 aspectRatio=1 的預覽窗完全
+            一致——工廠主在 FactoryDashboard 調整好的顯示範圍，這裡會如實
+            呈現，不會因為卡片版面而顯示成不同的裁切結果。 */}
+        <div className="relative w-24 h-24 md:w-32 md:h-32 shrink-0 bg-orange-50/40 overflow-hidden">
+          {avatarUrl ? (
+            <CroppedImage src={avatarUrl} crop={avatarCrop} alt={factory.name} loading="lazy" />
+          ) : (
+            <div className="w-full h-full flex items-center justify-center">
+              {factory.businessType === "studio"
+                ? <Wrench className="w-12 h-12 text-purple-200" />
+                : <Factory className="w-12 h-12 text-orange-200" />}
             </div>
+          )}
+          <div className="absolute top-2 right-2" onClick={(e) => e.preventDefault()}>
+            <FavButton factoryId={factory.id} initialIsFav={getFavState(factory.id)} onToggle={handleFavToggle} previewMode={previewMode} />
           </div>
-          <div className="flex-1 min-h-0 p-4 flex flex-col">
-            <FactoryCardContent factory={factory} isMobile={isMobile} />
-          </div>
-          {cartButton}
-        </>
-      ) : (
-        <>
-          <div className="flex flex-1 min-h-0 flex-col md:flex-row overflow-hidden rounded-xl">
-            <div className="relative h-32 md:h-auto md:w-[145px] shrink-0 bg-orange-50/40 flex items-center justify-center p-3">
-              {avatarUrl ? (
-                <img src={avatarUrl} alt={factory.name} className="max-h-full max-w-full object-contain" loading="lazy" />
-              ) : (
-                <div className="w-full h-full flex items-center justify-center">
-                  {factory.businessType === "studio"
-                    ? <Wrench className="w-12 h-12 text-purple-200" />
-                    : <Factory className="w-12 h-12 text-orange-200" />}
-                </div>
-              )}
-              <div className="absolute top-2 right-2" onClick={(e) => e.preventDefault()}>
-                <FavButton factoryId={factory.id} initialIsFav={getFavState(factory.id)} onToggle={handleFavToggle} previewMode={previewMode} />
-              </div>
-            </div>
-            <div className="flex-1 min-w-0 min-h-0 p-4 flex flex-col">
-              <FactoryCardContent factory={factory} isMobile={isMobile} />
-            </div>
-          </div>
-          {cartButton}
-        </>
-      )}
+        </div>
+        <div className="flex-1 min-w-0 min-h-0 p-4 flex flex-col">
+          <FactoryCardContent factory={factory} isMobile={isMobile} />
+        </div>
+      </div>
+      {cartButton}
     </Card>
   );
 

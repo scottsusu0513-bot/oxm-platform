@@ -10,6 +10,7 @@ import { FloatingBackButton } from "@/components/FloatingBackButton";
 import { FactoryCard, FavoriteFactoriesPanel } from "@/components/FavoriteFactoriesPanel";
 import { Heart, Clock, X } from "lucide-react";
 import { toast } from "sonner";
+import type { ImageCropData } from "@shared/imageCrop";
 
 const RECENT_KEY = "oxm_recent_viewed";
 
@@ -20,6 +21,7 @@ type RecentItem = {
   region: string;
   businessType: string;
   avatarUrl: string | null;
+  avatarCrop?: ImageCropData | null;
   avgRating: string | number;
   reviewCount: number;
   viewedAt: number;

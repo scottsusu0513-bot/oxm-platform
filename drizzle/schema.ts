@@ -1,6 +1,7 @@
 import { int, mysqlEnum, mysqlTable, text, timestamp, varchar, boolean, decimal, json, uniqueIndex, index, date } from "drizzle-orm/mysql-core";
 import type { AnyMySqlColumn } from "drizzle-orm/mysql-core";
 import { sql } from "drizzle-orm";
+import type { ImageCropData } from "../shared/imageCrop";
 
 // ===== 使用者表 =====
 export const users = mysqlTable("users", {
@@ -48,8 +49,15 @@ export const factories = mysqlTable("factories", {
   avgRating: decimal("avgRating", { precision: 3, scale: 2 }).default("0"),
   reviewCount: int("reviewCount").default(0),
   status: mysqlEnum("status", ["draft", "pending", "approved", "rejected"]).default("draft").notNull(),
-  avatarUrl: text("avatarUrl"), // 工廠大頭貼
+  avatarUrl: text("avatarUrl"), // 工廠頭貼／Logo
+  // 工廠頭貼／Logo 的顯示範圍中繼資料（見 shared/imageCrop.ts）。null 表示
+  // 既有圖片沒有設定過，前台 fallback 成置中顯示（與目前行為相同）。
+  avatarCrop: json("avatarCrop").$type<ImageCropData | null>(),
   coverImageUrl: text("coverImageUrl"), // 工廠封面背景圖 (16:5)
+  // 工廠封面的顯示範圍中繼資料。null 表示既有封面沒有設定過（migration 0071
+  // 之前上傳的封面已經是前端烘焙好的固定 16:5 圖片，此時 fallback 成置中
+  // 顯示等同於目前既有行為，不影響外觀）。
+  coverCrop: json("coverCrop").$type<ImageCropData | null>(),
   businessType: mysqlEnum("businessType", ["factory", "studio"]).default("factory").notNull(), // 代工廠或工作室
   operationStatus: mysqlEnum("operationStatus", ["normal", "busy", "full"]).default("normal").notNull(),
   certified: boolean("certified").default(false).notNull(),
@@ -103,6 +111,11 @@ export const products = mysqlTable("products", {
   description: text("description"),
   priceType: mysqlEnum("priceType", ["range", "fixed", "market"]).default("range").notNull(),
   images: json("images").$type<string[]>().default([]),
+  // 每張商品圖片各自的顯示範圍，陣列順序與長度與 images 對齊（第 i 筆對應
+  // images[i]）。重新排序 images 時，呼叫端必須把 imageCrops 用同一個順序
+  // 一起搬動，見 server/db.ts 的 reorder 相關函式。null 或長度不足時，對應
+  // 圖片 fallback 成置中顯示。
+  imageCrops: json("imageCrops").$type<(ImageCropData | null)[]>().default([]),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
@@ -619,6 +632,10 @@ export const factoryPhotos = mysqlTable("factoryPhotos", {
   url: text("url").notNull(),
   caption: varchar("caption", { length: 200 }),
   sortOrder: int("sortOrder").default(0).notNull(),
+  // 這張相簿照片的顯示範圍中繼資料，null 表示 fallback 成置中顯示。因為每張
+  // 照片本來就是自己的一列（不是陣列），不需要像 products.imageCrops 那樣
+  // 額外處理陣列對齊，重新排序只影響 sortOrder，這個欄位跟著該筆 row 走。
+  crop: json("crop").$type<ImageCropData | null>(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 
