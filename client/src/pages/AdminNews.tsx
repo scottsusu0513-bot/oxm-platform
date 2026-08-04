@@ -126,6 +126,11 @@ function AdminNewsContent() {
   const [rowExpirationType, setRowExpirationType] = useState<AttachmentExpirationType>("after_publish_30d");
   const [rowCustomDate, setRowCustomDate] = useState("");
   const [rowCustomTime, setRowCustomTime] = useState("23:59");
+  // 「同時發送 Email 通知」checkbox：只在新增消息（尚未有 editingId）時顯示與
+  // 生效，預設一律未勾選，每次開啟新增表單（resetForm）或切去編輯既有消息
+  // （handleEdit）都會被重置，不沿用上一次的勾選狀態。只有 createMut 的呼叫
+  // 會帶上這個值，updateMut 完全不會用到。
+  const [sendEmailNotification, setSendEmailNotification] = useState(false);
 
   // 尚未儲存草稿（沒有 newsId）時，選擇的封面/PDF 只暫存在前端記憶體，不會
   // 提前上傳；第一次「儲存草稿」成功拿到 newsId 後才依序自動上傳，見
@@ -202,6 +207,7 @@ function AdminNewsContent() {
     setStagedCoverPreviewUrl(null);
     setStagedPdfFiles([]);
     setFailedPdfFiles([]);
+    setSendEmailNotification(false);
   };
 
   const setContent = (next: string) => setForm(p => ({ ...p, content: next }));
@@ -228,6 +234,9 @@ function AdminNewsContent() {
     setStagedCoverPreviewUrl(null);
     setStagedPdfFiles([]);
     setFailedPdfFiles([]);
+    // 編輯既有消息一律不沿用上次的「同時發送 Email 通知」勾選狀態——這個
+    // checkbox 本來就只在新增表單生效，editingId 一旦有值就不會再顯示它。
+    setSendEmailNotification(false);
     setShowForm(true);
   };
 
@@ -238,10 +247,26 @@ function AdminNewsContent() {
     }));
   };
 
+  // 判斷依據必須是 firstPublishedAt（是否「真的從未發布過」），不能只看
+  // editingId 或目前的 status——編輯一則從未發布過的草稿（有 editingId，但
+  // firstPublishedAt 仍是 NULL）也算「尚未發布」，仍要能勾選 Email；已經
+  // 發布過的消息即使之後被下架，也永遠不再屬於這個狀態。editingItem 在
+  // 剛建立完、items 列表還沒 refetch 回來前可能暫時是 undefined，這裡視同
+  // 「還沒有已發布紀錄」，維持可勾選，不會誤判成已發布。
+  const neverPublished = !editingId || !editingItem?.firstPublishedAt;
+  // 只有「這則消息從未發布過」且「使用者這次確實勾選」，才可能在這次送出
+  // 後觸發 Email——文案必須跟後端實際會不會寄一致，不能讓管理員誤以為編輯
+  // 已發布消息按下「發布」還可能寄出 Email。
+  const willSendEmailOnPublish = neverPublished && sendEmailNotification;
   const confirmPublishMessage = () => {
     if (!estimate) return "確定要發布這則消息嗎？";
     if (estimate.inAppCount === 0) return "確定要發布這則消息嗎？目前沒有會員訂閱這則消息適用的看板，不會建立站內通知或寄送 Email／App 推播，只會顯示在網站上。";
-    return `確定要發布這則消息嗎？預計通知 ${estimate.inAppCount} 位會員：站內通知 ${estimate.inAppCount}、Email ${estimate.emailCount}、App 推播 ${estimate.pushCount}（僅在第一次發布時建立一次，之後編輯不會再次通知）。`;
+    const emailPart = !neverPublished
+      ? "不寄送 Email（這則消息已經發布過，不會補寄）"
+      : sendEmailNotification
+        ? `Email ${estimate.emailCount}`
+        : "不寄送 Email（未勾選「同時發送 Email 通知」）";
+    return `確定要發布這則消息嗎？預計通知 ${estimate.inAppCount} 位會員：站內通知 ${estimate.inAppCount}、${emailPart}、App 推播 ${estimate.pushCount}（僅在第一次發布時建立一次，之後編輯不會再次通知）。`;
   };
 
   const buildPayload = () => ({
@@ -524,7 +549,7 @@ function AdminNewsContent() {
     if (!validateRequired()) return;
     if (editingId) {
       setSavingProgress("儲存草稿中…");
-      updateMut.mutate({ id: editingId, ...buildPayload(), status: "draft" }, {
+      updateMut.mutate({ id: editingId, ...buildPayload(), status: "draft", sendEmailNotification }, {
         onSuccess: async () => {
           setSavedSlugPreview(form.slug.trim() || editingItem?.slug || savedSlugPreview);
           const { coverFailed, pdfFailedCount, pdfTotal } = await uploadStagedFilesAfterCreate(editingId);
@@ -534,7 +559,7 @@ function AdminNewsContent() {
       });
     } else {
       setSavingProgress("建立草稿中…");
-      createMut.mutate({ ...buildPayload(), status: "draft" }, {
+      createMut.mutate({ ...buildPayload(), status: "draft", sendEmailNotification }, {
         onSuccess: async (result) => {
           setEditingId(result.id);
           setSavedSlugPreview(result.slug || null);
@@ -551,7 +576,7 @@ function AdminNewsContent() {
     if (!confirm(confirmPublishMessage())) return;
     if (editingId) {
       setSavingProgress("發布中…");
-      updateMut.mutate({ id: editingId, ...buildPayload(), status: "published" }, {
+      updateMut.mutate({ id: editingId, ...buildPayload(), status: "published", sendEmailNotification }, {
         onSuccess: async () => {
           const { coverFailed, pdfFailedCount, pdfTotal } = await uploadStagedFilesAfterCreate(editingId);
           if (pdfFailedCount > 0 || coverFailed) {
@@ -565,7 +590,7 @@ function AdminNewsContent() {
       });
     } else {
       setSavingProgress("發布中…");
-      createMut.mutate({ ...buildPayload(), status: "published" }, {
+      createMut.mutate({ ...buildPayload(), status: "published", sendEmailNotification }, {
         onSuccess: async (result) => {
           setEditingId(result.id);
           setSavedSlugPreview(result.slug || null);
@@ -797,7 +822,7 @@ function AdminNewsContent() {
 
               <div className="text-xs rounded-md px-3 py-2 bg-muted/50 border">
                 {estimate && estimate.inAppCount > 0
-                  ? `此設定發布時（僅第一次發布）預計通知 ${estimate.inAppCount} 位會員：站內通知 ${estimate.inAppCount}、Email ${estimate.emailCount}、App 推播 ${estimate.pushCount}。看板訂閱者才會收到，不是所有會員。`
+                  ? `此設定發布時（僅第一次發布）預計通知 ${estimate.inAppCount} 位會員：站內通知 ${estimate.inAppCount}、Email ${willSendEmailOnPublish ? estimate.emailCount : 0}、App 推播 ${estimate.pushCount}。看板訂閱者才會收到，不是所有會員。${neverPublished && !sendEmailNotification ? "（未勾選「同時發送 Email 通知」，本次不會寄送 Email）" : ""}`
                   : "此設定目前沒有會員訂閱對應看板，發布後不會建立站內通知，也不會寄送 Email 或 App 推播（只會顯示在網站上）。"}
               </div>
 
@@ -1100,7 +1125,26 @@ function AdminNewsContent() {
                 </div>
               </div>
 
-              {/* 9. 儲存草稿／發布／取消 */}
+              {/* 9. 同時發送 Email 通知（新增消息／編輯從未發布過的草稿都顯示）／
+                  已發布過消息的唯讀 Email 狀態。判斷依據是 neverPublished
+                  （看 firstPublishedAt，不是 editingId 或目前 status）。 */}
+              {neverPublished ? (
+                <div>
+                  <label className="flex items-center gap-2 text-sm">
+                    <Checkbox checked={sendEmailNotification} onCheckedChange={v => setSendEmailNotification(v === true)} />
+                    同時發送 Email 通知
+                  </label>
+                  <p className="text-xs text-muted-foreground mt-1">未勾選時仍會正常發布站內消息。</p>
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  {editingItem?.emailNotificationSentAt
+                    ? "此消息發布時已排入 Email 寄送"
+                    : "此消息發布時未排入 Email 寄送；編輯不會補寄"}
+                </p>
+              )}
+
+              {/* 10. 儲存草稿／發布／取消 */}
               <div className="flex flex-wrap items-center gap-3">
                 <Button onClick={handleSaveDraft} disabled={isBusy} variant="outline">
                   {isBusy && savingProgress ? savingProgress : "儲存草稿"}

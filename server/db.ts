@@ -3394,6 +3394,21 @@ export async function markNewsNotificationFailed(id: number, error: string): Pro
 }
 
 /**
+ * 標記這則消息「Email 通知已成功排入既有寄送機制」，只在 dispatchNewsNotifications
+ * 的 Email 分支確定 createPendingNewsNotifications 建立出至少一筆待寄紀錄之後
+ * 才會被呼叫一次（見 server/routers.ts）。用 WHERE emailNotificationSentAt IS
+ * NULL 讓這支函式本身也具備冪等性：就算未來被重複呼叫，也不會覆寫掉第一次
+ * 寫入的時間，維持「只會被設定一次」的不變量，跟 news.create 才能觸發、
+ * news.update 完全不接受這個欄位的路由層限制形成雙重保險。
+ */
+export async function markNewsEmailNotificationSent(newsId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(news).set({ emailNotificationSentAt: new Date() })
+    .where(and(eq(news.id, newsId), isNull(news.emailNotificationSentAt)));
+}
+
+/**
  * 撈出這則消息「還沒有成功送達」的通知紀錄（pending 或 failed），供管理員
  * 手動觸發補寄——涵蓋「pending 建立後程序中斷、從未真正寄送」與「寄送失敗」
  * 兩種情況。查詢條件只有 pending／failed 這兩種狀態，status='sent' 的紀錄

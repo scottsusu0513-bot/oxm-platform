@@ -438,6 +438,13 @@ export const news = mysqlTable("news", {
   // 「第一次」從草稿轉為已發布的時間，之後永遠不再變動；分眾通知只在這個欄位
   // 從 NULL 變成有值的那一次觸發，下架重新發布不會再次寫入、也就不會再通知。
   firstPublishedAt: timestamp("firstPublishedAt"),
+  // 「這則消息是否已經寄送過 Email 通知」的唯一依據：只有 news.create 這個
+  // mutation 帶入 sendEmailNotification=true 且剛好是第一次發布（shouldNotify）
+  // 時才可能被寫入，寫入時機是 Email 已成功排入既有寄送機制之後（見
+  // server/routers.ts 的 dispatchNewsNotifications）。一旦有值就永遠不再改變
+  // ——update mutation 完全不接受、也不會觸發這個欄位，避免編輯已發布消息時
+  // 不小心補寄。null 代表「這則消息發布當下沒有寄送 Email」，不代表發送失敗。
+  emailNotificationSentAt: timestamp("emailNotificationSentAt"),
   createdBy: int("createdBy").references(() => users.id),
   // 封面圖片：選填，公開消息內容的一部分（訪客可見）。coverImageKey 保留供
   // 後端在移除／更換封面時精準刪除對應的 S3 object，避免只清 URL 留下孤兒
