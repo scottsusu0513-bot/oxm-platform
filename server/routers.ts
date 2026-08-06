@@ -15,6 +15,9 @@ import { notifyOwner } from "./_core/notification";
 import { storagePut, storagePresignedUrl, storageDelete } from "./storage";
 import { validateImageUpload } from "./_core/security";
 import { INDUSTRY_OPTIONS, TAIWAN_REGIONS, CAPITAL_OPTIONS, INDUSTRY_SLUGS } from "../shared/constants";
+import { SHORT_VIDEO_SERVICE_KEYS, SHORT_VIDEO_GOAL_KEYS, SHORT_VIDEO_PLATFORM_KEYS, SHORT_VIDEO_STATUS_TRANSITIONS, SHORT_VIDEO_STATUS_LABELS } from "../shared/shortVideoMarketing";
+import { CERTIFICATION_STATUS_TRANSITIONS, CERTIFICATION_STATUS_LABELS } from "../shared/certificationCase";
+import { ERP_NEED_TYPE_KEYS, ERP_STATUS_TRANSITIONS, ERP_STATUS_LABELS } from "../shared/erpOptimization";
 import { clampImageCrop } from "../shared/imageCrop";
 import { stripCertificationEvidence, stripCertificationEvidenceFromRevision, stripHiddenBadgesForPublic, isValidCertificationEvidenceKey, isValidBadgeId, CERTIFICATION_EVIDENCE_KEY_PREFIX, applyCertificationEvidenceDescriptions, summarizeCertificationEvidenceForOwner, sortBadgeIds } from "../shared/badges";
 import { nanoid } from "nanoid";
@@ -560,6 +563,74 @@ function extractMysqlErrorCode(err: unknown): string | undefined {
   if (e.cause && typeof e.cause === "object" && typeof e.cause.code === "string") return e.cause.code;
   return undefined;
 }
+
+/**
+ * ISO 與低碳認證專區服務項目的 badgeCode 輸入驗證：空白字串一律視為
+ * null（「無對應徽章」），非 null 時必須是 shared/badges.ts 既有的穩定
+ * 徽章代碼（isValidBadgeId，即 CERTIFICATION_BADGE_ID_SET 成員）——伺服器端
+ * 驗證，不只是前端下拉選單限制；不合法直接讓 zod parse 失敗，tRPC 預設就會
+ * 把輸入驗證失敗包成 BAD_REQUEST，不需要另外 catch。刻意不建立 DB 外鍵或
+ * 第二套徽章資料表，徽章清單本來就是程式碼常數而非資料表，這裡只是唯讀
+ * 參照。
+ */
+const certificationServiceBadgeCodeSchema = z.preprocess(
+  (val) => (typeof val === "string" && val.trim() === "" ? null : val),
+  z.string().trim().max(50).nullable(),
+).refine(
+  (val) => val === null || isValidBadgeId(val),
+  { message: "無效的徽章代碼：必須是既有徽章清單中的代碼，或選擇「無對應徽章」" },
+);
+
+/**
+ * 短影音與品牌內容行銷專區申請表 zod schema：獨立宣告成頂層 const 再傳入
+ * .input()，而不是寫成 .input(z.object({...})).refine(...)——tRPC 的
+ * ProcedureBuilder.input() 回傳值本身沒有 .refine() 方法，.refine() 必須在
+ * 呼叫 .input() 之前，直接鏈在 z.object({...}) 這個 ZodObject 上。
+ */
+const shortVideoApplicationSchema = z.object({
+  factoryId: z.number().int().positive(),
+  contactName: z.string().min(1).max(100),
+  phone: z.string().min(7).max(30).regex(/^[\d\-+() ]{7,20}$/, "電話格式不正確"),
+  contactTime: z.string().min(1).max(100),
+  servicesWanted: z.array(z.enum(SHORT_VIDEO_SERVICE_KEYS)).max(5),
+  isUnsure: z.boolean(),
+  primaryGoal: z.enum(SHORT_VIDEO_GOAL_KEYS),
+  platforms: z.array(z.enum(SHORT_VIDEO_PLATFORM_KEYS)).max(4),
+  noPlatformYet: z.boolean(),
+  additionalNotes: z.string().max(2000).optional(),
+  consentAgreed: z.literal(true),
+})
+  // 「不確定」與五項明確服務互斥：isUnsure=true 時 servicesWanted 必須是
+  // 空陣列；isUnsure=false 時至少要選一項，不能兩者都空白送出。
+  .refine(v => v.isUnsure ? v.servicesWanted.length === 0 : v.servicesWanted.length >= 1, {
+    message: "請選擇至少一項服務，或勾選「不確定，希望由顧問協助判斷」",
+    path: ["servicesWanted"],
+  })
+  // 「尚未經營」與其他平台互斥，理由同上。
+  .refine(v => v.noPlatformYet ? v.platforms.length === 0 : v.platforms.length >= 1, {
+    message: "請選擇目前經營的平台，或勾選「尚未經營」",
+    path: ["platforms"],
+  });
+
+/**
+ * ISO 與低碳認證專區申請表 zod schema：同樣獨立宣告成頂層 const（理由同
+ * shortVideoApplicationSchema），servicesWanted 的實際合法值集合是動態的
+ * （現有已上架認證服務目錄），這裡只驗證陣列型別與長度，真正的白名單比對
+ * 在 mutation 內對 db.listPublicCertificationServices() 即時查詢比對。
+ */
+const certificationApplicationSchema = z.object({
+  factoryId: z.number().int().positive(),
+  contactName: z.string().min(1).max(100),
+  phone: z.string().min(7).max(30).regex(/^[\d\-+() ]{7,20}$/, "電話格式不正確"),
+  contactTime: z.string().min(1).max(100),
+  servicesWanted: z.array(z.string().min(1).max(50)).max(20),
+  isUnsure: z.boolean(),
+  additionalNotes: z.string().max(2000).optional(),
+  consentAgreed: z.literal(true),
+}).refine(v => v.isUnsure ? v.servicesWanted.length === 0 : v.servicesWanted.length >= 1, {
+  message: "請選擇至少一項認證服務，或勾選「不確定，希望由顧問協助判斷」",
+  path: ["servicesWanted"],
+});
 
 export const appRouter = router({
   system: systemRouter,
@@ -4250,6 +4321,157 @@ export const appRouter = router({
           return { success: true };
         }),
     }),
+
+    // ===== ISO 與低碳認證專區：認證服務管理（僅管理員） =====
+    // 與既有徽章系統（factory.updateVisibleBadges／approveFactory 等）完全
+    // 獨立，這裡只管理「認證服務」行銷／諮詢入口資料，不觸碰任何工廠已獲得
+    // 徽章的擁有權資料。
+    certificationServices: router({
+      listCategories: adminProcedure.query(async () => {
+        return db.adminListCertificationCategories();
+      }),
+
+      createCategory: adminProcedure.input(z.object({
+        code: z.string().trim().min(1).max(50).regex(/^[a-z0-9-]+$/, "代碼只能包含小寫英文、數字與連字號"),
+        name: z.string().trim().min(1).max(100),
+      })).mutation(async ({ input }) => {
+        try {
+          const id = await db.adminCreateCertificationCategory(input);
+          return { id };
+        } catch (err: unknown) {
+          if (extractMysqlErrorCode(err) === "ER_DUP_ENTRY") {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "此分類代碼已存在" });
+          }
+          throw err;
+        }
+      }),
+
+      updateCategory: adminProcedure.input(z.object({
+        id: z.number().int().positive(),
+        name: z.string().trim().min(1).max(100).optional(),
+        isActive: z.boolean().optional(),
+      })).mutation(async ({ input }) => {
+        const { id, ...data } = input;
+        await db.adminUpdateCertificationCategory(id, data);
+        return { success: true };
+      }),
+
+      moveCategory: adminProcedure.input(z.object({
+        idA: z.number().int().positive(),
+        idB: z.number().int().positive(),
+      })).mutation(async ({ input }) => {
+        await db.adminSwapCertificationCategoryOrder(input.idA, input.idB);
+        return { success: true };
+      }),
+
+      listItems: adminProcedure.query(async () => {
+        return db.adminListCertificationServiceItems();
+      }),
+
+      createItem: adminProcedure.input(z.object({
+        code: z.string().trim().min(1).max(50).regex(/^[a-z0-9-]+$/, "代碼只能包含小寫英文、數字與連字號"),
+        badgeCode: certificationServiceBadgeCodeSchema,
+        categoryId: z.number().int().positive(),
+        name: z.string().trim().min(1).max(200),
+        type: z.string().trim().min(1).max(50),
+        shortDescription: z.string().trim().min(1).max(2000),
+        applicableNeeds: z.array(z.string().max(50)).max(20),
+        applicableIndustries: z.array(z.string().max(50)).max(20),
+        versionNote: z.string().trim().max(300).nullable(),
+        iconKey: z.string().trim().max(100).nullable().optional(),
+        serviceEnabled: z.boolean(),
+        consultEnabled: z.boolean(),
+      })).mutation(async ({ input }) => {
+        try {
+          const id = await db.adminCreateCertificationServiceItem({ ...input, iconKey: input.iconKey ?? null });
+          return { id };
+        } catch (err: unknown) {
+          if (extractMysqlErrorCode(err) === "ER_DUP_ENTRY") {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "此服務項目代碼已存在" });
+          }
+          throw err;
+        }
+      }),
+
+      updateItem: adminProcedure.input(z.object({
+        id: z.number().int().positive(),
+        badgeCode: certificationServiceBadgeCodeSchema.optional(),
+        categoryId: z.number().int().positive().optional(),
+        name: z.string().trim().min(1).max(200).optional(),
+        type: z.string().trim().min(1).max(50).optional(),
+        shortDescription: z.string().trim().min(1).max(2000).optional(),
+        applicableNeeds: z.array(z.string().max(50)).max(20).optional(),
+        applicableIndustries: z.array(z.string().max(50)).max(20).optional(),
+        versionNote: z.string().trim().max(300).nullable().optional(),
+        iconKey: z.string().trim().max(100).nullable().optional(),
+        serviceEnabled: z.boolean().optional(),
+        consultEnabled: z.boolean().optional(),
+      })).mutation(async ({ input }) => {
+        const { id, ...data } = input;
+        await db.adminUpdateCertificationServiceItem(id, data);
+        return { success: true };
+      }),
+
+      // 複製：讀取既有項目，另建一筆新草稿，代碼加上不重複的 -copy 後綴，
+      // 不影響原項目的狀態或資料。
+      duplicateItem: adminProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ input }) => {
+        const source = await db.getCertificationServiceItemById(input.id);
+        if (!source) throw new TRPCError({ code: "NOT_FOUND", message: "找不到此服務項目" });
+        const existing = await db.adminListCertificationServiceItems();
+        const existingCodes = new Set(existing.map(i => i.code));
+        let suffix = 1;
+        let newCode = `${source.code}-copy`;
+        while (existingCodes.has(newCode)) {
+          suffix += 1;
+          newCode = `${source.code}-copy-${suffix}`;
+        }
+        const id = await db.adminCreateCertificationServiceItem({
+          code: newCode,
+          badgeCode: source.badgeCode,
+          categoryId: source.categoryId,
+          name: `${source.name}（複製）`,
+          type: source.type,
+          shortDescription: source.shortDescription,
+          applicableNeeds: (source.applicableNeeds ?? []) as string[],
+          applicableIndustries: (source.applicableIndustries ?? []) as string[],
+          versionNote: source.versionNote,
+          iconKey: source.iconKey,
+          serviceEnabled: source.serviceEnabled,
+          consultEnabled: source.consultEnabled,
+        });
+        return { id };
+      }),
+
+      moveItem: adminProcedure.input(z.object({
+        idA: z.number().int().positive(),
+        idB: z.number().int().positive(),
+      })).mutation(async ({ input }) => {
+        await db.adminSwapCertificationServiceItemOrder(input.idA, input.idB);
+        return { success: true };
+      }),
+
+      setStatus: adminProcedure.input(z.object({
+        id: z.number().int().positive(),
+        status: z.enum(["draft", "published", "unpublished", "archived"]),
+      })).mutation(async ({ input }) => {
+        try {
+          await db.adminSetCertificationServiceItemStatus(input.id, input.status);
+          return { success: true };
+        } catch (err: unknown) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: err instanceof Error ? err.message : "狀態更新失敗" });
+        }
+      }),
+
+      // 只有草稿狀態可永久刪除，其餘狀態一律拒絕（見 db.adminDeleteCertificationServiceItem）。
+      deleteItem: adminProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ input }) => {
+        try {
+          await db.adminDeleteCertificationServiceItem(input.id);
+          return { success: true };
+        } catch (err: unknown) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: err instanceof Error ? err.message : "刪除失敗" });
+        }
+      }),
+    }),
   }),
 
   // ===== 廣告 =====
@@ -7524,6 +7746,905 @@ export const appRouter = router({
           actionUrl: "/admin/finance-applications",
           titleSnapshot: "財務優化顧問停用",
           dedupeKey: `finance_cascade_deactivate:${input.consultantId}:${Date.now()}`,
+        });
+      }
+      return { success: true };
+    }),
+  }),
+
+  // ===== 短影音與品牌內容行銷專區 =====
+  // 隱藏預覽頁 /short-video-marketing 專用 API，與企業升級中心／企業財務
+  // 優化／ISO 認證完全獨立的資料模型與權限。短影音案件不得混入其他服務
+  // 的看板或統計，見 shared/shortVideoMarketing.ts 狀態機。
+  shortVideoCenter: router({
+    submitApplication: protectedProcedure.input(shortVideoApplicationSchema)
+      .mutation(async ({ input, ctx }) => {
+        // 只能替自己有權管理（owner 或 co-manager）且已通過審核的工廠送出
+        // 申請，與 financeCenter.submitApplication 相同的驗證方式，伺服器端
+        // 強制檢查，不信任前端傳入的 factoryId 之外的任何工廠資料。
+        const [owned, coManaged] = await Promise.all([
+          db.getFactoryByOwnerId(ctx.user.id),
+          db.getCoManagedFactories(ctx.user.id),
+        ]);
+        const isOwner = owned?.id === input.factoryId;
+        const coManagedFactory = coManaged.find(f => f.factoryId === input.factoryId);
+        const isCoManaged = !!coManagedFactory;
+        if (!isOwner && !isCoManaged) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "無法代表此工廠送出申請" });
+        }
+        const factory = isOwner ? owned : await db.getFactoryById(input.factoryId);
+        if (!factory || factory.status !== "approved") {
+          throw new TRPCError({ code: "FORBIDDEN", message: "工廠通過審核後才能申請短影音與品牌內容行銷服務" });
+        }
+
+        // 重複申請防護：同一工廠若已有未結案的短影音案件，不得再次建立。這裡
+        // 先做一次友善的預先檢查；真正可靠的防線是 migration 0073 建立的
+        // svcase_open_factory_uq（VIRTUAL generated column + UNIQUE INDEX）。
+        if (await db.hasOpenShortVideoCase(input.factoryId)) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "此工廠已有進行中的短影音與品牌內容行銷案件，請至短影音專區查看目前進度" });
+        }
+
+        let id: number;
+        let consultant: Awaited<ReturnType<typeof db.createShortVideoCaseWithAutoAssign>>["assignedConsultant"];
+        try {
+          const result = await db.createShortVideoCaseWithAutoAssign({
+            factoryId: input.factoryId,
+            // 公司名稱／地址由 server 依 factoryId 重新讀取工廠資料寫入，不信任前端傳入值。
+            companyNameSnapshot: factory.name,
+            companyAddressSnapshot: factory.address,
+            contactName: input.contactName,
+            phone: input.phone,
+            contactTime: input.contactTime,
+            servicesWanted: input.servicesWanted,
+            isUnsure: input.isUnsure,
+            primaryGoal: input.primaryGoal,
+            platforms: input.platforms,
+            noPlatformYet: input.noPlatformYet,
+            additionalNotes: input.additionalNotes || null,
+            consentAgreed: true,
+            statusTimeline: { new: new Date().toISOString() },
+          });
+          id = result.id;
+          consultant = result.assignedConsultant;
+        } catch (err: unknown) {
+          if (extractMysqlErrorCode(err) === "ER_DUP_ENTRY") {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "此工廠已有進行中的短影音與品牌內容行銷案件，請至短影音專區查看目前進度" });
+          }
+          throw err;
+        }
+
+        // 站內通知申請人：已收到申請（不寄送 Email／Push，沿用現有通知機制）
+        notifyUser(ctx.user.id, {
+          eventType: "short_video_application_submitted",
+          eventGroup: "short_video",
+          message: `「${factory.name}」的短影音與品牌內容行銷免費初步諮詢申請已送出`,
+          actionUrl: "/short-video-marketing",
+          titleSnapshot: factory.name,
+          dedupeKey: `short_video_submitted:${id}`,
+        });
+
+        if (consultant?.userId) {
+          notifyUser(consultant.userId, {
+            eventType: "short_video_new_case",
+            eventGroup: "short_video",
+            message: `新短影音與品牌內容行銷案件「${factory.name}」已分派給您，請儘速查收`,
+            actionUrl: "/short-video-consultant/cases",
+            titleSnapshot: factory.name,
+            dedupeKey: `short_video_new_case:${id}`,
+          });
+        } else {
+          notifyAdmins({
+            eventType: "short_video_unassigned",
+            eventGroup: "short_video",
+            message: `新短影音與品牌內容行銷申請「${factory.name}」尚未指派顧問，請手動分派`,
+            actionUrl: "/short-video-consultant/cases",
+            titleSnapshot: factory.name,
+            dedupeKey: `short_video_unassigned:${id}`,
+          });
+        }
+
+        return { success: true, id };
+      }),
+
+    // 申請進度查詢：回傳目前使用者名下工廠的短影音案件，刻意不回傳 notes
+    // （顧問內部備註），避免洩漏給一般申請人。
+    myApplicationProgress: protectedProcedure.query(async ({ ctx }) => {
+      const [owned, coManaged] = await Promise.all([
+        db.getFactoryByOwnerId(ctx.user.id),
+        db.getCoManagedFactories(ctx.user.id),
+      ]);
+      const factoryIds: number[] = [];
+      if (owned?.id) factoryIds.push(owned.id);
+      for (const f of coManaged) {
+        if (!factoryIds.includes(f.factoryId)) factoryIds.push(f.factoryId);
+      }
+      if (factoryIds.length === 0) return { hasFactory: false, applications: [] };
+      const applications = await db.getShortVideoCasesByFactoryIds(factoryIds);
+      const sanitized = applications.map((a) => ({
+        id: a.id,
+        factoryId: a.factoryId,
+        companyNameSnapshot: a.companyNameSnapshot,
+        companyAddressSnapshot: a.companyAddressSnapshot,
+        contactName: a.contactName,
+        phone: a.phone,
+        contactTime: a.contactTime,
+        servicesWanted: a.servicesWanted,
+        isUnsure: a.isUnsure,
+        primaryGoal: a.primaryGoal,
+        platforms: a.platforms,
+        noPlatformYet: a.noPlatformYet,
+        additionalNotes: a.additionalNotes,
+        consentAgreed: a.consentAgreed,
+        status: a.status,
+        statusTimeline: a.statusTimeline,
+        createdAt: a.createdAt,
+        updatedAt: a.updatedAt,
+      }));
+      return { hasFactory: true, applications: sanitized };
+    }),
+
+    adminList: adminProcedure.input(z.object({
+      status: z.enum(["new", "evaluating", "proposal", "in_progress", "completed", "deferred", "no_interest", "archived", "unassigned"]).optional(),
+      limit: z.number().int().min(1).max(200).default(50),
+      offset: z.number().int().min(0).default(0),
+    })).query(async ({ input }) => {
+      const [items, total] = await Promise.all([
+        db.listShortVideoCasesAdmin({ status: input.status, limit: input.limit, offset: input.offset }),
+        db.countShortVideoCases(input.status),
+      ]);
+      return { items, total };
+    }),
+
+    adminGet: adminProcedure.input(z.object({ id: z.number() })).query(async ({ input }) => {
+      const item = await db.getShortVideoCaseById(input.id);
+      if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "找不到案件" });
+      return item;
+    }),
+  }),
+
+  // ===== 短影音顧問案件管理 =====
+  shortVideoConsultant: router({
+    // 目前登入者的短影音顧問身份（空陣列＝不是短影音顧問）
+    myProfiles: protectedProcedure.query(async ({ ctx }) => {
+      return db.getShortVideoConsultantsByUserId(ctx.user.id);
+    }),
+
+    // 顧問只能看見指派給自己的案件——依服務資格與（自動指派時比對的）
+    // serviceAreas 分派結果決定案件歸屬，不同顧問之間彼此看不到對方的案件；
+    // 管理員一律可查看全部（見 shortVideoCenter.adminList）。
+    myCases: protectedProcedure.input(z.object({
+      status: z.enum(["new", "evaluating", "proposal", "in_progress", "completed", "deferred", "no_interest", "archived", "unassigned"]).optional(),
+    })).query(async ({ ctx, input }) => {
+      if (ctx.user.isAdmin) {
+        return db.listShortVideoCasesAdmin({ status: input.status });
+      }
+      const consultants = await db.getShortVideoConsultantsByUserId(ctx.user.id);
+      const activeIds = consultants.filter(c => c.isActive).map(c => c.id);
+      if (activeIds.length === 0) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "您不是短影音顧問" });
+      }
+      return db.listShortVideoCasesForConsultant(activeIds, input.status);
+    }),
+
+    updateCaseStatus: protectedProcedure.input(z.object({
+      caseId: z.number().int().positive(),
+      nextStatus: z.enum(["new", "evaluating", "proposal", "in_progress", "completed", "deferred", "no_interest", "archived", "unassigned"]),
+    })).mutation(async ({ ctx, input }) => {
+      const item = await db.getShortVideoCaseById(input.caseId);
+      if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "找不到案件" });
+      if (!ctx.user.isAdmin) {
+        const consultants = await db.getShortVideoConsultantsByUserId(ctx.user.id);
+        const isAssignedToMe = consultants.some(c => c.isActive && c.id === item.assignedConsultantId);
+        if (!isAssignedToMe) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "您不是此案件的承辦顧問" });
+        }
+      }
+      if (!SHORT_VIDEO_STATUS_TRANSITIONS[item.status]?.includes(input.nextStatus)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: `目前狀態「${item.status}」不能推進至「${input.nextStatus}」` });
+      }
+      const updatedBy = { userId: ctx.user.id, name: db.resolveActorNameSnapshot(ctx.user) };
+      await db.updateShortVideoCaseStatus(input.caseId, input.nextStatus, updatedBy);
+
+      notifyFactoryMembers(item.factoryId, {
+        eventType: `short_video_status_${input.nextStatus}`,
+        eventGroup: "short_video",
+        message: `「${item.companyNameSnapshot}」短影音與品牌內容行銷案件狀態更新：${SHORT_VIDEO_STATUS_LABELS[input.nextStatus] ?? input.nextStatus}`,
+        actionUrl: "/short-video-marketing",
+        titleSnapshot: item.companyNameSnapshot,
+        dedupeKey: `short_video_status:${item.id}:${input.nextStatus}`,
+      });
+      return { success: true };
+    }),
+
+    // 顧問內部備註：僅授權顧問／管理員可讀寫，不回傳給一般申請人（見
+    // shortVideoCenter.myApplicationProgress 已排除 notes 欄位）。
+    updateCaseNotes: protectedProcedure.input(z.object({
+      caseId: z.number().int().positive(),
+      notes: z.string().max(5000),
+    })).mutation(async ({ ctx, input }) => {
+      const item = await db.getShortVideoCaseById(input.caseId);
+      if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "找不到案件" });
+      if (!ctx.user.isAdmin) {
+        const consultants = await db.getShortVideoConsultantsByUserId(ctx.user.id);
+        const isAssignedToMe = consultants.some(c => c.isActive && c.id === item.assignedConsultantId);
+        if (!isAssignedToMe) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "您不是此案件的承辦顧問" });
+        }
+      }
+      await db.updateShortVideoCaseNotes(input.caseId, input.notes || null, { userId: ctx.user.id, name: db.resolveActorNameSnapshot(ctx.user) });
+      return { success: true };
+    }),
+
+    // 管理員：手動指派／改派承辦顧問（含補派尚未指派顧問時建立的案件）。
+    adminAssignConsultant: adminProcedure.input(z.object({
+      caseId: z.number().int().positive(),
+      consultantId: z.number().int().positive().nullable(),
+    })).mutation(async ({ ctx, input }) => {
+      const item = await db.getShortVideoCaseById(input.caseId);
+      if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "找不到案件" });
+      if (input.consultantId != null) {
+        const consultant = await db.getShortVideoConsultantById(input.consultantId);
+        if (!consultant) throw new TRPCError({ code: "NOT_FOUND", message: "找不到顧問" });
+        if (!consultant.isActive) throw new TRPCError({ code: "BAD_REQUEST", message: "此顧問目前已停用，無法指派承辦" });
+        if (consultant.userId == null) throw new TRPCError({ code: "BAD_REQUEST", message: "此顧問尚未綁定使用者帳號，無法指派承辦" });
+      }
+      try {
+        await db.adminAssignShortVideoConsultant(input.caseId, input.consultantId, { userId: ctx.user!.id, name: db.resolveActorNameSnapshot(ctx.user!) });
+      } catch (err) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: err instanceof Error ? err.message : "指派失敗" });
+      }
+      return { success: true };
+    }),
+
+    // 管理員：顧問設定管理
+    adminListConsultants: adminProcedure.query(async () => {
+      return db.listAllShortVideoConsultants();
+    }),
+
+    adminCreateConsultant: adminProcedure.input(z.object({
+      name: z.string().min(1).max(100),
+      serviceAreas: z.array(z.enum(SHORT_VIDEO_SERVICE_KEYS)).max(5).default([]),
+    })).mutation(async ({ input }) => {
+      const id = await db.adminCreateShortVideoConsultant(input.name, input.serviceAreas);
+      return { success: true, id };
+    }),
+
+    adminBindUser: adminProcedure.input(z.object({
+      consultantId: z.number(),
+      userId: z.number().nullable(),
+    })).mutation(async ({ ctx, input }) => {
+      let reassignedCases: Awaited<ReturnType<typeof db.adminBindShortVideoConsultantUser>>["reassignedCases"] = [];
+      try {
+        const result = await db.adminBindShortVideoConsultantUser(
+          input.consultantId,
+          input.userId,
+          { userId: ctx.user!.id, name: db.resolveActorNameSnapshot(ctx.user!) },
+        );
+        reassignedCases = result.reassignedCases;
+      } catch (err) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: err instanceof Error ? err.message : "綁定失敗" });
+      }
+      if (reassignedCases.length > 0) {
+        notifyAdmins({
+          eventType: "short_video_cases_unassigned_cascade",
+          eventGroup: "short_video",
+          message: `解除短影音顧問綁定後，${reassignedCases.length} 筆案件已安全改為未指派，請重新分派`,
+          actionUrl: "/short-video-consultant/cases",
+          titleSnapshot: "短影音顧問解除綁定",
+          dedupeKey: `short_video_cascade_unbind:${input.consultantId}:${Date.now()}`,
+        });
+      }
+      return { success: true };
+    }),
+
+    adminSetActive: adminProcedure.input(z.object({
+      consultantId: z.number(),
+      isActive: z.boolean(),
+    })).mutation(async ({ ctx, input }) => {
+      const { reassignedCases } = await db.adminSetShortVideoConsultantActive(
+        input.consultantId,
+        input.isActive,
+        { userId: ctx.user!.id, name: db.resolveActorNameSnapshot(ctx.user!) },
+      );
+      if (reassignedCases.length > 0) {
+        notifyAdmins({
+          eventType: "short_video_cases_unassigned_cascade",
+          eventGroup: "short_video",
+          message: `短影音顧問已停用，${reassignedCases.length} 筆案件已安全改為未指派，請重新分派`,
+          actionUrl: "/short-video-consultant/cases",
+          titleSnapshot: "短影音顧問停用",
+          dedupeKey: `short_video_cascade_deactivate:${input.consultantId}:${Date.now()}`,
+        });
+      }
+      return { success: true };
+    }),
+  }),
+
+  // ===== ISO 與低碳認證專區：公開查詢 =====
+  // 隱藏預覽頁專用 API——刻意不含任何「送出諮詢」或建立案件的 mutation，
+  // 本輪只有唯讀查詢。回傳資料一律只包含分類已啟用、項目狀態為 published
+  // 且 serviceEnabled=true 的服務項目（見 db.listPublicCertificationServices
+  // 內的 where 條件），draft／unpublished／archived 或已停用的項目絕不會
+  // 出現在這裡的回傳結果。
+  certificationCenter: router({
+    listCategories: publicProcedure.query(async () => {
+      return db.listPublicCertificationCategories();
+    }),
+    listServices: publicProcedure.query(async () => {
+      return db.listPublicCertificationServices();
+    }),
+
+    submitApplication: protectedProcedure.input(certificationApplicationSchema)
+      .mutation(async ({ input, ctx }) => {
+        const [owned, coManaged] = await Promise.all([
+          db.getFactoryByOwnerId(ctx.user.id),
+          db.getCoManagedFactories(ctx.user.id),
+        ]);
+        const isOwner = owned?.id === input.factoryId;
+        const coManagedFactory = coManaged.find(f => f.factoryId === input.factoryId);
+        const isCoManaged = !!coManagedFactory;
+        if (!isOwner && !isCoManaged) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "無法代表此工廠送出申請" });
+        }
+        const factory = isOwner ? owned : await db.getFactoryById(input.factoryId);
+        if (!factory || factory.status !== "approved") {
+          throw new TRPCError({ code: "FORBIDDEN", message: "工廠通過審核後才能申請 ISO 與低碳認證服務" });
+        }
+
+        // servicesWanted 必須是目前實際上架（published + serviceEnabled）的
+        // 認證服務代碼，伺服器端重新查詢目錄驗證，不信任前端傳入值本身。
+        if (input.servicesWanted.length > 0) {
+          const catalog = await db.listPublicCertificationServices();
+          const validCodes = new Set(catalog.map(s => s.code));
+          const invalid = input.servicesWanted.filter(code => !validCodes.has(code));
+          if (invalid.length > 0) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: `以下服務目前不存在或已下架：${invalid.join("、")}` });
+          }
+        }
+
+        if (await db.hasOpenCertificationCase(input.factoryId)) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "此工廠已有進行中的 ISO 與低碳認證案件，請至認證專區查看目前進度" });
+        }
+
+        let id: number;
+        let consultant: Awaited<ReturnType<typeof db.createCertificationCaseWithAutoAssign>>["assignedConsultant"];
+        try {
+          const result = await db.createCertificationCaseWithAutoAssign({
+            factoryId: input.factoryId,
+            companyNameSnapshot: factory.name,
+            companyAddressSnapshot: factory.address,
+            contactName: input.contactName,
+            phone: input.phone,
+            contactTime: input.contactTime,
+            servicesWanted: input.servicesWanted,
+            isUnsure: input.isUnsure,
+            additionalNotes: input.additionalNotes || null,
+            consentAgreed: true,
+            statusTimeline: { new: new Date().toISOString() },
+          });
+          id = result.id;
+          consultant = result.assignedConsultant;
+        } catch (err: unknown) {
+          if (extractMysqlErrorCode(err) === "ER_DUP_ENTRY") {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "此工廠已有進行中的 ISO 與低碳認證案件，請至認證專區查看目前進度" });
+          }
+          throw err;
+        }
+
+        notifyUser(ctx.user.id, {
+          eventType: "certification_application_submitted",
+          eventGroup: "certification",
+          message: `「${factory.name}」的 ISO 與低碳認證免費初步諮詢申請已送出`,
+          actionUrl: "/certification-center",
+          titleSnapshot: factory.name,
+          dedupeKey: `certification_submitted:${id}`,
+        });
+
+        if (consultant?.userId) {
+          notifyUser(consultant.userId, {
+            eventType: "certification_new_case",
+            eventGroup: "certification",
+            message: `新 ISO 與低碳認證案件「${factory.name}」已分派給您，請儘速查收`,
+            actionUrl: "/certification-consultant/cases",
+            titleSnapshot: factory.name,
+            dedupeKey: `certification_new_case:${id}`,
+          });
+        } else {
+          notifyAdmins({
+            eventType: "certification_unassigned",
+            eventGroup: "certification",
+            message: `新 ISO 與低碳認證申請「${factory.name}」尚未指派顧問，請手動分派`,
+            actionUrl: "/certification-consultant/cases",
+            titleSnapshot: factory.name,
+            dedupeKey: `certification_unassigned:${id}`,
+          });
+        }
+
+        return { success: true, id };
+      }),
+
+    myApplicationProgress: protectedProcedure.query(async ({ ctx }) => {
+      const [owned, coManaged] = await Promise.all([
+        db.getFactoryByOwnerId(ctx.user.id),
+        db.getCoManagedFactories(ctx.user.id),
+      ]);
+      const factoryIds: number[] = [];
+      if (owned?.id) factoryIds.push(owned.id);
+      for (const f of coManaged) {
+        if (!factoryIds.includes(f.factoryId)) factoryIds.push(f.factoryId);
+      }
+      if (factoryIds.length === 0) return { hasFactory: false, applications: [] };
+      const applications = await db.getCertificationCasesByFactoryIds(factoryIds);
+      const sanitized = applications.map((a) => ({
+        id: a.id,
+        factoryId: a.factoryId,
+        companyNameSnapshot: a.companyNameSnapshot,
+        companyAddressSnapshot: a.companyAddressSnapshot,
+        contactName: a.contactName,
+        phone: a.phone,
+        contactTime: a.contactTime,
+        servicesWanted: a.servicesWanted,
+        isUnsure: a.isUnsure,
+        additionalNotes: a.additionalNotes,
+        consentAgreed: a.consentAgreed,
+        status: a.status,
+        statusTimeline: a.statusTimeline,
+        createdAt: a.createdAt,
+        updatedAt: a.updatedAt,
+      }));
+      return { hasFactory: true, applications: sanitized };
+    }),
+
+    adminList: adminProcedure.input(z.object({
+      status: z.enum(["new", "evaluating", "proposal", "in_progress", "completed", "deferred", "no_interest", "archived", "unassigned"]).optional(),
+      limit: z.number().int().min(1).max(200).default(50),
+      offset: z.number().int().min(0).default(0),
+    })).query(async ({ input }) => {
+      const [items, total] = await Promise.all([
+        db.listCertificationCasesAdmin({ status: input.status, limit: input.limit, offset: input.offset }),
+        db.countCertificationCases(input.status),
+      ]);
+      return { items, total };
+    }),
+
+    adminGet: adminProcedure.input(z.object({ id: z.number() })).query(async ({ input }) => {
+      const item = await db.getCertificationCaseById(input.id);
+      if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "找不到案件" });
+      return item;
+    }),
+  }),
+
+  // ===== ISO 與低碳認證顧問案件管理 =====
+  certificationConsultant: router({
+    myProfiles: protectedProcedure.query(async ({ ctx }) => {
+      return db.getCertificationConsultantsByUserId(ctx.user.id);
+    }),
+
+    myCases: protectedProcedure.input(z.object({
+      status: z.enum(["new", "evaluating", "proposal", "in_progress", "completed", "deferred", "no_interest", "archived", "unassigned"]).optional(),
+    })).query(async ({ ctx, input }) => {
+      if (ctx.user.isAdmin) {
+        return db.listCertificationCasesAdmin({ status: input.status });
+      }
+      const consultants = await db.getCertificationConsultantsByUserId(ctx.user.id);
+      const activeIds = consultants.filter(c => c.isActive).map(c => c.id);
+      if (activeIds.length === 0) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "您不是 ISO 認證顧問" });
+      }
+      return db.listCertificationCasesForConsultant(activeIds, input.status);
+    }),
+
+    updateCaseStatus: protectedProcedure.input(z.object({
+      caseId: z.number().int().positive(),
+      nextStatus: z.enum(["new", "evaluating", "proposal", "in_progress", "completed", "deferred", "no_interest", "archived", "unassigned"]),
+    })).mutation(async ({ ctx, input }) => {
+      const item = await db.getCertificationCaseById(input.caseId);
+      if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "找不到案件" });
+      if (!ctx.user.isAdmin) {
+        const consultants = await db.getCertificationConsultantsByUserId(ctx.user.id);
+        const isAssignedToMe = consultants.some(c => c.isActive && c.id === item.assignedConsultantId);
+        if (!isAssignedToMe) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "您不是此案件的承辦顧問" });
+        }
+      }
+      if (!CERTIFICATION_STATUS_TRANSITIONS[item.status]?.includes(input.nextStatus)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: `目前狀態「${item.status}」不能推進至「${input.nextStatus}」` });
+      }
+      const updatedBy = { userId: ctx.user.id, name: db.resolveActorNameSnapshot(ctx.user) };
+      await db.updateCertificationCaseStatus(input.caseId, input.nextStatus, updatedBy);
+
+      notifyFactoryMembers(item.factoryId, {
+        eventType: `certification_status_${input.nextStatus}`,
+        eventGroup: "certification",
+        message: `「${item.companyNameSnapshot}」ISO 與低碳認證案件狀態更新：${CERTIFICATION_STATUS_LABELS[input.nextStatus] ?? input.nextStatus}`,
+        actionUrl: "/certification-center",
+        titleSnapshot: item.companyNameSnapshot,
+        dedupeKey: `certification_status:${item.id}:${input.nextStatus}`,
+      });
+      return { success: true };
+    }),
+
+    updateCaseNotes: protectedProcedure.input(z.object({
+      caseId: z.number().int().positive(),
+      notes: z.string().max(5000),
+    })).mutation(async ({ ctx, input }) => {
+      const item = await db.getCertificationCaseById(input.caseId);
+      if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "找不到案件" });
+      if (!ctx.user.isAdmin) {
+        const consultants = await db.getCertificationConsultantsByUserId(ctx.user.id);
+        const isAssignedToMe = consultants.some(c => c.isActive && c.id === item.assignedConsultantId);
+        if (!isAssignedToMe) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "您不是此案件的承辦顧問" });
+        }
+      }
+      await db.updateCertificationCaseNotes(input.caseId, input.notes || null, { userId: ctx.user.id, name: db.resolveActorNameSnapshot(ctx.user) });
+      return { success: true };
+    }),
+
+    adminAssignConsultant: adminProcedure.input(z.object({
+      caseId: z.number().int().positive(),
+      consultantId: z.number().int().positive().nullable(),
+    })).mutation(async ({ ctx, input }) => {
+      const item = await db.getCertificationCaseById(input.caseId);
+      if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "找不到案件" });
+      if (input.consultantId != null) {
+        const consultant = await db.getCertificationConsultantById(input.consultantId);
+        if (!consultant) throw new TRPCError({ code: "NOT_FOUND", message: "找不到顧問" });
+        if (!consultant.isActive) throw new TRPCError({ code: "BAD_REQUEST", message: "此顧問目前已停用，無法指派承辦" });
+        if (consultant.userId == null) throw new TRPCError({ code: "BAD_REQUEST", message: "此顧問尚未綁定使用者帳號，無法指派承辦" });
+      }
+      try {
+        await db.adminAssignCertificationConsultant(input.caseId, input.consultantId, { userId: ctx.user!.id, name: db.resolveActorNameSnapshot(ctx.user!) });
+      } catch (err) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: err instanceof Error ? err.message : "指派失敗" });
+      }
+      return { success: true };
+    }),
+
+    adminListConsultants: adminProcedure.query(async () => {
+      return db.listAllCertificationConsultants();
+    }),
+
+    adminCreateConsultant: adminProcedure.input(z.object({
+      name: z.string().min(1).max(100),
+      serviceAreas: z.array(z.string().max(50)).max(20).default([]),
+    })).mutation(async ({ input }) => {
+      const id = await db.adminCreateCertificationConsultant(input.name, input.serviceAreas);
+      return { success: true, id };
+    }),
+
+    adminBindUser: adminProcedure.input(z.object({
+      consultantId: z.number(),
+      userId: z.number().nullable(),
+    })).mutation(async ({ ctx, input }) => {
+      let reassignedCases: Awaited<ReturnType<typeof db.adminBindCertificationConsultantUser>>["reassignedCases"] = [];
+      try {
+        const result = await db.adminBindCertificationConsultantUser(
+          input.consultantId,
+          input.userId,
+          { userId: ctx.user!.id, name: db.resolveActorNameSnapshot(ctx.user!) },
+        );
+        reassignedCases = result.reassignedCases;
+      } catch (err) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: err instanceof Error ? err.message : "綁定失敗" });
+      }
+      if (reassignedCases.length > 0) {
+        notifyAdmins({
+          eventType: "certification_cases_unassigned_cascade",
+          eventGroup: "certification",
+          message: `解除 ISO 認證顧問綁定後，${reassignedCases.length} 筆案件已安全改為未指派，請重新分派`,
+          actionUrl: "/certification-consultant/cases",
+          titleSnapshot: "ISO 認證顧問解除綁定",
+          dedupeKey: `certification_cascade_unbind:${input.consultantId}:${Date.now()}`,
+        });
+      }
+      return { success: true };
+    }),
+
+    adminSetActive: adminProcedure.input(z.object({
+      consultantId: z.number(),
+      isActive: z.boolean(),
+    })).mutation(async ({ ctx, input }) => {
+      const { reassignedCases } = await db.adminSetCertificationConsultantActive(
+        input.consultantId,
+        input.isActive,
+        { userId: ctx.user!.id, name: db.resolveActorNameSnapshot(ctx.user!) },
+      );
+      if (reassignedCases.length > 0) {
+        notifyAdmins({
+          eventType: "certification_cases_unassigned_cascade",
+          eventGroup: "certification",
+          message: `ISO 認證顧問已停用，${reassignedCases.length} 筆案件已安全改為未指派，請重新分派`,
+          actionUrl: "/certification-consultant/cases",
+          titleSnapshot: "ISO 認證顧問停用",
+          dedupeKey: `certification_cascade_deactivate:${input.consultantId}:${Date.now()}`,
+        });
+      }
+      return { success: true };
+    }),
+  }),
+
+  // ===== ERP 與產線優化專區 =====
+  // 隱藏預覽頁 /erp-optimization 專用 API，與其他服務完全獨立的資料模型與權限。
+  erpOptimization: router({
+    submitApplication: protectedProcedure.input(z.object({
+      factoryId: z.number().int().positive(),
+      contactName: z.string().min(1).max(100),
+      phone: z.string().min(7).max(30).regex(/^[\d\-+() ]{7,20}$/, "電話格式不正確"),
+      contactTime: z.string().min(1).max(100),
+      needType: z.enum(ERP_NEED_TYPE_KEYS),
+      additionalNotes: z.string().max(2000).optional(),
+      consentAgreed: z.literal(true),
+    })).mutation(async ({ input, ctx }) => {
+      const [owned, coManaged] = await Promise.all([
+        db.getFactoryByOwnerId(ctx.user.id),
+        db.getCoManagedFactories(ctx.user.id),
+      ]);
+      const isOwner = owned?.id === input.factoryId;
+      const coManagedFactory = coManaged.find(f => f.factoryId === input.factoryId);
+      const isCoManaged = !!coManagedFactory;
+      if (!isOwner && !isCoManaged) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "無法代表此工廠送出申請" });
+      }
+      const factory = isOwner ? owned : await db.getFactoryById(input.factoryId);
+      if (!factory || factory.status !== "approved") {
+        throw new TRPCError({ code: "FORBIDDEN", message: "工廠通過審核後才能申請 ERP 與產線優化服務" });
+      }
+
+      if (await db.hasOpenErpCase(input.factoryId)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "此工廠已有進行中的 ERP 與產線優化案件，請至 ERP 專區查看目前進度" });
+      }
+
+      let id: number;
+      let consultant: Awaited<ReturnType<typeof db.createErpCaseWithAutoAssign>>["assignedConsultant"];
+      try {
+        const result = await db.createErpCaseWithAutoAssign({
+          factoryId: input.factoryId,
+          companyNameSnapshot: factory.name,
+          companyAddressSnapshot: factory.address,
+          contactName: input.contactName,
+          phone: input.phone,
+          contactTime: input.contactTime,
+          needType: input.needType,
+          additionalNotes: input.additionalNotes || null,
+          consentAgreed: true,
+          statusTimeline: { new: new Date().toISOString() },
+        });
+        id = result.id;
+        consultant = result.assignedConsultant;
+      } catch (err: unknown) {
+        if (extractMysqlErrorCode(err) === "ER_DUP_ENTRY") {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "此工廠已有進行中的 ERP 與產線優化案件，請至 ERP 專區查看目前進度" });
+        }
+        throw err;
+      }
+
+      notifyUser(ctx.user.id, {
+        eventType: "erp_application_submitted",
+        eventGroup: "erp",
+        message: `「${factory.name}」的 ERP 與產線優化免費初步諮詢申請已送出`,
+        actionUrl: "/erp-optimization",
+        titleSnapshot: factory.name,
+        dedupeKey: `erp_submitted:${id}`,
+      });
+
+      if (consultant?.userId) {
+        notifyUser(consultant.userId, {
+          eventType: "erp_new_case",
+          eventGroup: "erp",
+          message: `新 ERP 與產線優化案件「${factory.name}」已分派給您，請儘速查收`,
+          actionUrl: "/erp-consultant/cases",
+          titleSnapshot: factory.name,
+          dedupeKey: `erp_new_case:${id}`,
+        });
+      } else {
+        notifyAdmins({
+          eventType: "erp_unassigned",
+          eventGroup: "erp",
+          message: `新 ERP 與產線優化申請「${factory.name}」尚未指派顧問，請手動分派`,
+          actionUrl: "/erp-consultant/cases",
+          titleSnapshot: factory.name,
+          dedupeKey: `erp_unassigned:${id}`,
+        });
+      }
+
+      return { success: true, id };
+    }),
+
+    myApplicationProgress: protectedProcedure.query(async ({ ctx }) => {
+      const [owned, coManaged] = await Promise.all([
+        db.getFactoryByOwnerId(ctx.user.id),
+        db.getCoManagedFactories(ctx.user.id),
+      ]);
+      const factoryIds: number[] = [];
+      if (owned?.id) factoryIds.push(owned.id);
+      for (const f of coManaged) {
+        if (!factoryIds.includes(f.factoryId)) factoryIds.push(f.factoryId);
+      }
+      if (factoryIds.length === 0) return { hasFactory: false, applications: [] };
+      const applications = await db.getErpCasesByFactoryIds(factoryIds);
+      const sanitized = applications.map((a) => ({
+        id: a.id,
+        factoryId: a.factoryId,
+        companyNameSnapshot: a.companyNameSnapshot,
+        companyAddressSnapshot: a.companyAddressSnapshot,
+        contactName: a.contactName,
+        phone: a.phone,
+        contactTime: a.contactTime,
+        needType: a.needType,
+        additionalNotes: a.additionalNotes,
+        consentAgreed: a.consentAgreed,
+        status: a.status,
+        statusTimeline: a.statusTimeline,
+        createdAt: a.createdAt,
+        updatedAt: a.updatedAt,
+      }));
+      return { hasFactory: true, applications: sanitized };
+    }),
+
+    adminList: adminProcedure.input(z.object({
+      status: z.enum(["new", "evaluating", "proposal", "in_progress", "completed", "deferred", "no_interest", "archived", "unassigned"]).optional(),
+      limit: z.number().int().min(1).max(200).default(50),
+      offset: z.number().int().min(0).default(0),
+    })).query(async ({ input }) => {
+      const [items, total] = await Promise.all([
+        db.listErpCasesAdmin({ status: input.status, limit: input.limit, offset: input.offset }),
+        db.countErpCases(input.status),
+      ]);
+      return { items, total };
+    }),
+
+    adminGet: adminProcedure.input(z.object({ id: z.number() })).query(async ({ input }) => {
+      const item = await db.getErpCaseById(input.id);
+      if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "找不到案件" });
+      return item;
+    }),
+  }),
+
+  // ===== ERP 顧問案件管理 =====
+  erpConsultant: router({
+    myProfiles: protectedProcedure.query(async ({ ctx }) => {
+      return db.getErpConsultantsByUserId(ctx.user.id);
+    }),
+
+    myCases: protectedProcedure.input(z.object({
+      status: z.enum(["new", "evaluating", "proposal", "in_progress", "completed", "deferred", "no_interest", "archived", "unassigned"]).optional(),
+    })).query(async ({ ctx, input }) => {
+      if (ctx.user.isAdmin) {
+        return db.listErpCasesAdmin({ status: input.status });
+      }
+      const consultants = await db.getErpConsultantsByUserId(ctx.user.id);
+      const activeIds = consultants.filter(c => c.isActive).map(c => c.id);
+      if (activeIds.length === 0) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "您不是 ERP 顧問" });
+      }
+      return db.listErpCasesForConsultant(activeIds, input.status);
+    }),
+
+    updateCaseStatus: protectedProcedure.input(z.object({
+      caseId: z.number().int().positive(),
+      nextStatus: z.enum(["new", "evaluating", "proposal", "in_progress", "completed", "deferred", "no_interest", "archived", "unassigned"]),
+    })).mutation(async ({ ctx, input }) => {
+      const item = await db.getErpCaseById(input.caseId);
+      if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "找不到案件" });
+      if (!ctx.user.isAdmin) {
+        const consultants = await db.getErpConsultantsByUserId(ctx.user.id);
+        const isAssignedToMe = consultants.some(c => c.isActive && c.id === item.assignedConsultantId);
+        if (!isAssignedToMe) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "您不是此案件的承辦顧問" });
+        }
+      }
+      if (!ERP_STATUS_TRANSITIONS[item.status]?.includes(input.nextStatus)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: `目前狀態「${item.status}」不能推進至「${input.nextStatus}」` });
+      }
+      const updatedBy = { userId: ctx.user.id, name: db.resolveActorNameSnapshot(ctx.user) };
+      await db.updateErpCaseStatus(input.caseId, input.nextStatus, updatedBy);
+
+      notifyFactoryMembers(item.factoryId, {
+        eventType: `erp_status_${input.nextStatus}`,
+        eventGroup: "erp",
+        message: `「${item.companyNameSnapshot}」ERP 與產線優化案件狀態更新：${ERP_STATUS_LABELS[input.nextStatus] ?? input.nextStatus}`,
+        actionUrl: "/erp-optimization",
+        titleSnapshot: item.companyNameSnapshot,
+        dedupeKey: `erp_status:${item.id}:${input.nextStatus}`,
+      });
+      return { success: true };
+    }),
+
+    updateCaseNotes: protectedProcedure.input(z.object({
+      caseId: z.number().int().positive(),
+      notes: z.string().max(5000),
+    })).mutation(async ({ ctx, input }) => {
+      const item = await db.getErpCaseById(input.caseId);
+      if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "找不到案件" });
+      if (!ctx.user.isAdmin) {
+        const consultants = await db.getErpConsultantsByUserId(ctx.user.id);
+        const isAssignedToMe = consultants.some(c => c.isActive && c.id === item.assignedConsultantId);
+        if (!isAssignedToMe) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "您不是此案件的承辦顧問" });
+        }
+      }
+      await db.updateErpCaseNotes(input.caseId, input.notes || null, { userId: ctx.user.id, name: db.resolveActorNameSnapshot(ctx.user) });
+      return { success: true };
+    }),
+
+    adminAssignConsultant: adminProcedure.input(z.object({
+      caseId: z.number().int().positive(),
+      consultantId: z.number().int().positive().nullable(),
+    })).mutation(async ({ ctx, input }) => {
+      const item = await db.getErpCaseById(input.caseId);
+      if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "找不到案件" });
+      if (input.consultantId != null) {
+        const consultant = await db.getErpConsultantById(input.consultantId);
+        if (!consultant) throw new TRPCError({ code: "NOT_FOUND", message: "找不到顧問" });
+        if (!consultant.isActive) throw new TRPCError({ code: "BAD_REQUEST", message: "此顧問目前已停用，無法指派承辦" });
+        if (consultant.userId == null) throw new TRPCError({ code: "BAD_REQUEST", message: "此顧問尚未綁定使用者帳號，無法指派承辦" });
+      }
+      try {
+        await db.adminAssignErpConsultant(input.caseId, input.consultantId, { userId: ctx.user!.id, name: db.resolveActorNameSnapshot(ctx.user!) });
+      } catch (err) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: err instanceof Error ? err.message : "指派失敗" });
+      }
+      return { success: true };
+    }),
+
+    adminListConsultants: adminProcedure.query(async () => {
+      return db.listAllErpConsultants();
+    }),
+
+    adminCreateConsultant: adminProcedure.input(z.object({
+      name: z.string().min(1).max(100),
+      serviceAreas: z.array(z.enum(ERP_NEED_TYPE_KEYS)).max(4).default([]),
+    })).mutation(async ({ input }) => {
+      const id = await db.adminCreateErpConsultant(input.name, input.serviceAreas);
+      return { success: true, id };
+    }),
+
+    adminBindUser: adminProcedure.input(z.object({
+      consultantId: z.number(),
+      userId: z.number().nullable(),
+    })).mutation(async ({ ctx, input }) => {
+      let reassignedCases: Awaited<ReturnType<typeof db.adminBindErpConsultantUser>>["reassignedCases"] = [];
+      try {
+        const result = await db.adminBindErpConsultantUser(
+          input.consultantId,
+          input.userId,
+          { userId: ctx.user!.id, name: db.resolveActorNameSnapshot(ctx.user!) },
+        );
+        reassignedCases = result.reassignedCases;
+      } catch (err) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: err instanceof Error ? err.message : "綁定失敗" });
+      }
+      if (reassignedCases.length > 0) {
+        notifyAdmins({
+          eventType: "erp_cases_unassigned_cascade",
+          eventGroup: "erp",
+          message: `解除 ERP 顧問綁定後，${reassignedCases.length} 筆案件已安全改為未指派，請重新分派`,
+          actionUrl: "/erp-consultant/cases",
+          titleSnapshot: "ERP 顧問解除綁定",
+          dedupeKey: `erp_cascade_unbind:${input.consultantId}:${Date.now()}`,
+        });
+      }
+      return { success: true };
+    }),
+
+    adminSetActive: adminProcedure.input(z.object({
+      consultantId: z.number(),
+      isActive: z.boolean(),
+    })).mutation(async ({ ctx, input }) => {
+      const { reassignedCases } = await db.adminSetErpConsultantActive(
+        input.consultantId,
+        input.isActive,
+        { userId: ctx.user!.id, name: db.resolveActorNameSnapshot(ctx.user!) },
+      );
+      if (reassignedCases.length > 0) {
+        notifyAdmins({
+          eventType: "erp_cases_unassigned_cascade",
+          eventGroup: "erp",
+          message: `ERP 顧問已停用，${reassignedCases.length} 筆案件已安全改為未指派，請重新分派`,
+          actionUrl: "/erp-consultant/cases",
+          titleSnapshot: "ERP 顧問停用",
+          dedupeKey: `erp_cascade_deactivate:${input.consultantId}:${Date.now()}`,
         });
       }
       return { success: true };

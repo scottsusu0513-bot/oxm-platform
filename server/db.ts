@@ -26,6 +26,10 @@ import {
   upgradeApplications, upgradeConsultants,
   financeApplications, financeConsultants,
   news, newsIndustries, newsNotifications, newsAttachments, newsReads, newsBoardSubscriptions,
+  certificationServiceCategories, certificationServiceItems,
+  shortVideoCases, shortVideoConsultants,
+  certificationCases, certificationConsultants,
+  erpCases, erpConsultants,
   type Factory, type InsertFactory, type Product, type InsertProduct, type Favorite, type InsertFavorite,
   type Conversation,
   type CommunityPost, type CommunityComment,
@@ -38,12 +42,20 @@ import {
   type FinanceConsultant,
   type Announcement,
   type News, type InsertNews, type NewsAttachment,
+  type CertificationServiceCategory, type CertificationServiceItem,
+  type ShortVideoCase, type InsertShortVideoCase,
+  type ShortVideoConsultant,
+  type CertificationCase, type InsertCertificationCase,
+  type CertificationConsultant,
+  type ErpCase, type InsertErpCase,
+  type ErpConsultant,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 import type { ImageCropData } from "../shared/imageCrop";
 import { ADJACENT_REGIONS, INDUSTRY_SLUGS, INDUSTRY_OPTIONS } from "../shared/constants";
 import { COMMUNITY_FEATURE_STATUS, COMMUNITY_CROSS_INDUSTRY_SLUG, NEWS_NEW_WINDOW_MS, ADVISOR_DISPLAY_NAME } from "../shared/const";
 import { sortBadgeIds, sanitizeBadgeAssignment, appendCertificationEvidenceImage } from "../shared/badges";
+import { CERTIFICATION_SERVICE_CATEGORY_SEEDS, CERTIFICATION_SERVICE_ITEM_SEEDS } from "../shared/certificationServices";
 import type { AISearchIntent } from './semantic-search';
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -9052,6 +9064,703 @@ export async function adminAssignFinanceConsultant(
   }));
 }
 
+// ===== 短影音與品牌內容行銷專區：顧問設定與申請案件 =====
+// 與企業升級中心／企業財務優化完全獨立的資料模型與權限：顧問授權只看
+// shortVideoConsultants 是否有一筆該 userId 的有效（isActive）紀錄。
+
+export async function getShortVideoConsultantsByUserId(userId: number): Promise<ShortVideoConsultant[]> {
+  const db_ = await getDb();
+  if (!db_) return [];
+  return db_.select().from(shortVideoConsultants).where(eq(shortVideoConsultants.userId, userId));
+}
+
+export async function getShortVideoConsultantById(id: number): Promise<ShortVideoConsultant | undefined> {
+  const db_ = await getDb();
+  if (!db_) return undefined;
+  const [row] = await db_.select().from(shortVideoConsultants).where(eq(shortVideoConsultants.id, id));
+  return row;
+}
+
+export async function listAllShortVideoConsultants(): Promise<ShortVideoConsultant[]> {
+  const db_ = await getDb();
+  if (!db_) return [];
+  return db_.select().from(shortVideoConsultants).orderBy(shortVideoConsultants.id);
+}
+
+export async function adminCreateShortVideoConsultant(name: string, serviceAreas: string[] = []): Promise<number> {
+  const db_ = await getDb();
+  if (!db_) throw new Error("DB not available");
+  const [result] = await db_.insert(shortVideoConsultants).values({ name, serviceAreas, isActive: true });
+  return result.insertId;
+}
+
+/**
+ * 顧問啟用／解除綁定／改派這幾個 transaction 都會對 shortVideoConsultants
+ * 目標列加上 row lock（FOR UPDATE），鎖定順序與 createShortVideoCaseWithAutoAssign
+ * 一致（一律先鎖 shortVideoConsultants），避免自動指派與這裡的異動同時發生時
+ * 產生 MySQL deadlock。與 financeConsultants 對應函式手法完全相同。
+ */
+export async function adminSetShortVideoConsultantActive(id: number, isActive: boolean, updatedBy?: CaseUpdatedBy): Promise<{ reassignedCases: ShortVideoCase[] }> {
+  const db_ = await getDb();
+  if (!db_) return { reassignedCases: [] };
+  return withDeadlockRetry(() => db_.transaction(async (tx) => {
+    await tx.select().from(shortVideoConsultants).where(eq(shortVideoConsultants.id, id)).for("update");
+    await tx.update(shortVideoConsultants).set({ isActive }).where(eq(shortVideoConsultants.id, id));
+    if (isActive) return { reassignedCases: [] };
+    return reassignOpenShortVideoCasesAwayFromConsultant(tx, id, updatedBy);
+  }));
+}
+
+async function reassignOpenShortVideoCasesAwayFromConsultant(
+  tx: any, // drizzle transaction handle — only called from within db_.transaction(async (tx) => ...) above
+  consultantId: number,
+  updatedBy?: CaseUpdatedBy,
+): Promise<{ reassignedCases: ShortVideoCase[] }> {
+  const openRows: ShortVideoCase[] = await tx.select().from(shortVideoCases)
+    .where(and(
+      eq(shortVideoCases.assignedConsultantId, consultantId),
+      inArray(shortVideoCases.status, SHORT_VIDEO_OPEN_STATUSES_DB),
+    ));
+  if (openRows.length === 0) return { reassignedCases: [] };
+  await tx.update(shortVideoCases).set({
+    assignedConsultantId: null,
+    status: "unassigned",
+    ...(updatedBy ? { lastUpdatedByUserId: updatedBy.userId, lastUpdatedByNameSnapshot: updatedBy.name } : {}),
+  }).where(and(
+    eq(shortVideoCases.assignedConsultantId, consultantId),
+    inArray(shortVideoCases.status, SHORT_VIDEO_OPEN_STATUSES_DB),
+  ));
+  return { reassignedCases: openRows };
+}
+
+export async function adminBindShortVideoConsultantUser(id: number, userId: number | null, updatedBy?: CaseUpdatedBy): Promise<{ reassignedCases: ShortVideoCase[] }> {
+  const db_ = await getDb();
+  if (!db_) return { reassignedCases: [] };
+  if (userId != null) {
+    const existing = await db_.select({ id: shortVideoConsultants.id })
+      .from(shortVideoConsultants)
+      .where(and(eq(shortVideoConsultants.userId, userId), ne(shortVideoConsultants.id, id)));
+    if (existing.length > 0) throw new Error("此使用者已綁定其他短影音顧問身份");
+  }
+  return withDeadlockRetry(() => db_.transaction(async (tx) => {
+    await tx.select().from(shortVideoConsultants).where(eq(shortVideoConsultants.id, id)).for("update");
+    await tx.update(shortVideoConsultants).set({ userId }).where(eq(shortVideoConsultants.id, id));
+    if (userId != null) return { reassignedCases: [] };
+    return reassignOpenShortVideoCasesAwayFromConsultant(tx, id, updatedBy);
+  }));
+}
+
+const SHORT_VIDEO_OPEN_STATUSES_DB = ["new", "evaluating", "proposal", "in_progress", "deferred", "unassigned"] as const;
+
+/**
+ * 自動指派候選人：必須同時符合 isActive=true、userId 已綁定，且
+ * serviceAreas 為空陣列（承接全部服務）或與本次 servicesWanted 有交集
+ * （isUnsure=true 時視為與任何 serviceAreas 都相符，因為此時案件本身還沒
+ * 決定要哪個服務，任何顧問都能先接手判斷）。只有「剛好一位」符合的顧問
+ * 才自動指派，避免多顧問情境下猜錯分派對象；沒有或有多位符合時回傳
+ * null，案件仍會建立為 unassigned，由管理員在後台手動指派。
+ */
+function matchesShortVideoConsultant(
+  consultant: ShortVideoConsultant,
+  servicesWanted: string[],
+  isUnsure: boolean,
+): boolean {
+  if (!consultant.isActive || consultant.userId == null) return false;
+  const areas = consultant.serviceAreas ?? [];
+  if (areas.length === 0) return true;
+  if (isUnsure) return true;
+  return servicesWanted.some(s => areas.includes(s));
+}
+
+export async function createShortVideoCaseWithAutoAssign(
+  data: Omit<InsertShortVideoCase, "assignedConsultantId" | "status"> & { servicesWanted: string[]; isUnsure: boolean },
+): Promise<{ id: number; assignedConsultant: ShortVideoConsultant | null }> {
+  const db_ = await getDb();
+  if (!db_) throw new Error("DB not available");
+  return withDeadlockRetry(() => db_.transaction(async (tx) => {
+    const allConsultants = await tx.select().from(shortVideoConsultants, { useIndex: "PRIMARY" })
+      .where(eq(shortVideoConsultants.isActive, true))
+      .for("update");
+    const candidates = allConsultants.filter(c => matchesShortVideoConsultant(c, data.servicesWanted, data.isUnsure));
+    const assignedConsultant = candidates.length === 1 ? candidates[0] : null;
+    const [result] = await tx.insert(shortVideoCases).values({
+      ...data,
+      assignedConsultantId: assignedConsultant?.id ?? null,
+      status: assignedConsultant ? "new" : "unassigned",
+    });
+    return { id: result.insertId, assignedConsultant };
+  }));
+}
+
+export async function hasOpenShortVideoCase(factoryId: number): Promise<boolean> {
+  const db_ = await getDb();
+  if (!db_) return false;
+  const [row] = await db_.select({ n: sql<number>`COUNT(*)` })
+    .from(shortVideoCases)
+    .where(and(
+      eq(shortVideoCases.factoryId, factoryId),
+      inArray(shortVideoCases.status, SHORT_VIDEO_OPEN_STATUSES_DB),
+    ));
+  return Number(row?.n ?? 0) > 0;
+}
+
+export async function getShortVideoCaseById(id: number): Promise<ShortVideoCase | undefined> {
+  const db_ = await getDb();
+  if (!db_) return undefined;
+  const [row] = await db_.select().from(shortVideoCases).where(eq(shortVideoCases.id, id));
+  return row;
+}
+
+export async function getShortVideoCasesByFactoryIds(factoryIds: number[]): Promise<ShortVideoCase[]> {
+  const db_ = await getDb();
+  if (!db_) return [];
+  if (factoryIds.length === 0) return [];
+  return db_.select().from(shortVideoCases)
+    .where(inArray(shortVideoCases.factoryId, factoryIds))
+    .orderBy(desc(shortVideoCases.createdAt));
+}
+
+// 顧問只能看見指派給自己（consultantIds 為其名下所有 shortVideoConsultants
+// id）的案件——與 financeApplications「單一顧問池、任一顧問看全部」不同，
+// 短影音顧問依服務資格分派，彼此不應互相看到對方負責的案件；管理員另外
+// 呼叫 listShortVideoCasesAdmin 取得全部案件。
+export async function listShortVideoCasesForConsultant(consultantIds: number[], status?: ShortVideoCase["status"]): Promise<ShortVideoCase[]> {
+  const db_ = await getDb();
+  if (!db_ || consultantIds.length === 0) return [];
+  const conditions = [inArray(shortVideoCases.assignedConsultantId, consultantIds)];
+  if (status) conditions.push(eq(shortVideoCases.status, status));
+  return db_.select().from(shortVideoCases)
+    .where(and(...conditions))
+    .orderBy(desc(shortVideoCases.createdAt), desc(shortVideoCases.id));
+}
+
+export async function listShortVideoCasesAdmin(opts?: {
+  status?: ShortVideoCase["status"];
+  limit?: number;
+  offset?: number;
+}): Promise<ShortVideoCase[]> {
+  const db_ = await getDb();
+  if (!db_) return [];
+  const conditions = opts?.status ? [eq(shortVideoCases.status, opts.status)] : [];
+  return db_.select().from(shortVideoCases)
+    .where(conditions.length ? and(...conditions) : undefined)
+    .orderBy(desc(shortVideoCases.createdAt), desc(shortVideoCases.id))
+    .limit(opts?.limit ?? 100)
+    .offset(opts?.offset ?? 0);
+}
+
+export async function countShortVideoCases(status?: ShortVideoCase["status"]): Promise<number> {
+  const db_ = await getDb();
+  if (!db_) return 0;
+  const conditions = status ? [eq(shortVideoCases.status, status)] : [];
+  const [row] = await db_.select({ n: sql<number>`COUNT(*)` })
+    .from(shortVideoCases)
+    .where(conditions.length ? and(...conditions) : undefined);
+  return Number(row?.n ?? 0);
+}
+
+export async function updateShortVideoCaseStatus(
+  id: number,
+  status: ShortVideoCase["status"],
+  updatedBy?: CaseUpdatedBy,
+): Promise<void> {
+  const db_ = await getDb();
+  if (!db_) return;
+  const [cur] = await db_.select({ tl: shortVideoCases.statusTimeline })
+    .from(shortVideoCases).where(eq(shortVideoCases.id, id));
+  const existing = (cur?.tl ?? {}) as Record<string, string>;
+  const newTl = { ...existing };
+  if (!newTl[status]) newTl[status] = new Date().toISOString();
+  await db_.update(shortVideoCases).set({
+    status, statusTimeline: newTl,
+    ...(updatedBy ? { lastUpdatedByUserId: updatedBy.userId, lastUpdatedByNameSnapshot: updatedBy.name } : {}),
+  }).where(eq(shortVideoCases.id, id));
+}
+
+export async function updateShortVideoCaseNotes(id: number, notes: string | null, updatedBy?: CaseUpdatedBy): Promise<void> {
+  const db_ = await getDb();
+  if (!db_) return;
+  await db_.update(shortVideoCases).set({
+    notes,
+    ...(updatedBy ? { lastUpdatedByUserId: updatedBy.userId, lastUpdatedByNameSnapshot: updatedBy.name } : {}),
+  }).where(eq(shortVideoCases.id, id));
+}
+
+export async function adminAssignShortVideoConsultant(
+  id: number,
+  consultantId: number | null,
+  updatedBy?: CaseUpdatedBy,
+): Promise<void> {
+  const db_ = await getDb();
+  if (!db_) return;
+  await withDeadlockRetry(() => db_.transaction(async (tx) => {
+    if (consultantId != null) {
+      const [consultant] = await tx.select().from(shortVideoConsultants)
+        .where(eq(shortVideoConsultants.id, consultantId))
+        .for("update");
+      if (!consultant) throw new Error("找不到顧問，無法指派承辦");
+      if (!consultant.isActive) throw new Error("此顧問目前已停用，無法指派承辦");
+      if (consultant.userId == null) throw new Error("此顧問尚未綁定使用者帳號，無法指派承辦");
+    }
+    await tx.update(shortVideoCases).set({
+      assignedConsultantId: consultantId,
+      ...(updatedBy ? { lastUpdatedByUserId: updatedBy.userId, lastUpdatedByNameSnapshot: updatedBy.name } : {}),
+    }).where(eq(shortVideoCases.id, id));
+  }));
+}
+
+// ===== ISO 與低碳認證專區：顧問設定與申請案件 =====
+// 與其他服務完全獨立的資料模型與權限。servicesWanted 存的是
+// certificationServiceItems.code，寫入前必須先驗證是既有目錄裡「已上架
+// （published + serviceEnabled）」的服務代碼，見 submitApplication 呼叫端
+// （server/routers.ts）搭配 listPublicCertificationServices 做的白名單檢查。
+
+export async function getCertificationConsultantsByUserId(userId: number): Promise<CertificationConsultant[]> {
+  const db_ = await getDb();
+  if (!db_) return [];
+  return db_.select().from(certificationConsultants).where(eq(certificationConsultants.userId, userId));
+}
+
+export async function getCertificationConsultantById(id: number): Promise<CertificationConsultant | undefined> {
+  const db_ = await getDb();
+  if (!db_) return undefined;
+  const [row] = await db_.select().from(certificationConsultants).where(eq(certificationConsultants.id, id));
+  return row;
+}
+
+export async function listAllCertificationConsultants(): Promise<CertificationConsultant[]> {
+  const db_ = await getDb();
+  if (!db_) return [];
+  return db_.select().from(certificationConsultants).orderBy(certificationConsultants.id);
+}
+
+export async function adminCreateCertificationConsultant(name: string, serviceAreas: string[] = []): Promise<number> {
+  const db_ = await getDb();
+  if (!db_) throw new Error("DB not available");
+  const [result] = await db_.insert(certificationConsultants).values({ name, serviceAreas, isActive: true });
+  return result.insertId;
+}
+
+const CERTIFICATION_OPEN_STATUSES_DB = ["new", "evaluating", "proposal", "in_progress", "deferred", "unassigned"] as const;
+
+async function reassignOpenCertificationCasesAwayFromConsultant(
+  tx: any, // drizzle transaction handle — only called from within db_.transaction(async (tx) => ...) below
+  consultantId: number,
+  updatedBy?: CaseUpdatedBy,
+): Promise<{ reassignedCases: CertificationCase[] }> {
+  const openRows: CertificationCase[] = await tx.select().from(certificationCases)
+    .where(and(
+      eq(certificationCases.assignedConsultantId, consultantId),
+      inArray(certificationCases.status, CERTIFICATION_OPEN_STATUSES_DB),
+    ));
+  if (openRows.length === 0) return { reassignedCases: [] };
+  await tx.update(certificationCases).set({
+    assignedConsultantId: null,
+    status: "unassigned",
+    ...(updatedBy ? { lastUpdatedByUserId: updatedBy.userId, lastUpdatedByNameSnapshot: updatedBy.name } : {}),
+  }).where(and(
+    eq(certificationCases.assignedConsultantId, consultantId),
+    inArray(certificationCases.status, CERTIFICATION_OPEN_STATUSES_DB),
+  ));
+  return { reassignedCases: openRows };
+}
+
+export async function adminSetCertificationConsultantActive(id: number, isActive: boolean, updatedBy?: CaseUpdatedBy): Promise<{ reassignedCases: CertificationCase[] }> {
+  const db_ = await getDb();
+  if (!db_) return { reassignedCases: [] };
+  return withDeadlockRetry(() => db_.transaction(async (tx) => {
+    await tx.select().from(certificationConsultants).where(eq(certificationConsultants.id, id)).for("update");
+    await tx.update(certificationConsultants).set({ isActive }).where(eq(certificationConsultants.id, id));
+    if (isActive) return { reassignedCases: [] };
+    return reassignOpenCertificationCasesAwayFromConsultant(tx, id, updatedBy);
+  }));
+}
+
+export async function adminBindCertificationConsultantUser(id: number, userId: number | null, updatedBy?: CaseUpdatedBy): Promise<{ reassignedCases: CertificationCase[] }> {
+  const db_ = await getDb();
+  if (!db_) return { reassignedCases: [] };
+  if (userId != null) {
+    const existing = await db_.select({ id: certificationConsultants.id })
+      .from(certificationConsultants)
+      .where(and(eq(certificationConsultants.userId, userId), ne(certificationConsultants.id, id)));
+    if (existing.length > 0) throw new Error("此使用者已綁定其他 ISO 認證顧問身份");
+  }
+  return withDeadlockRetry(() => db_.transaction(async (tx) => {
+    await tx.select().from(certificationConsultants).where(eq(certificationConsultants.id, id)).for("update");
+    await tx.update(certificationConsultants).set({ userId }).where(eq(certificationConsultants.id, id));
+    if (userId != null) return { reassignedCases: [] };
+    return reassignOpenCertificationCasesAwayFromConsultant(tx, id, updatedBy);
+  }));
+}
+
+function matchesCertificationConsultant(
+  consultant: CertificationConsultant,
+  servicesWanted: string[],
+  isUnsure: boolean,
+): boolean {
+  if (!consultant.isActive || consultant.userId == null) return false;
+  const areas = consultant.serviceAreas ?? [];
+  if (areas.length === 0) return true;
+  if (isUnsure) return true;
+  return servicesWanted.some(s => areas.includes(s));
+}
+
+export async function createCertificationCaseWithAutoAssign(
+  data: Omit<InsertCertificationCase, "assignedConsultantId" | "status"> & { servicesWanted: string[]; isUnsure: boolean },
+): Promise<{ id: number; assignedConsultant: CertificationConsultant | null }> {
+  const db_ = await getDb();
+  if (!db_) throw new Error("DB not available");
+  return withDeadlockRetry(() => db_.transaction(async (tx) => {
+    const allConsultants = await tx.select().from(certificationConsultants, { useIndex: "PRIMARY" })
+      .where(eq(certificationConsultants.isActive, true))
+      .for("update");
+    const candidates = allConsultants.filter(c => matchesCertificationConsultant(c, data.servicesWanted, data.isUnsure));
+    const assignedConsultant = candidates.length === 1 ? candidates[0] : null;
+    const [result] = await tx.insert(certificationCases).values({
+      ...data,
+      assignedConsultantId: assignedConsultant?.id ?? null,
+      status: assignedConsultant ? "new" : "unassigned",
+    });
+    return { id: result.insertId, assignedConsultant };
+  }));
+}
+
+export async function hasOpenCertificationCase(factoryId: number): Promise<boolean> {
+  const db_ = await getDb();
+  if (!db_) return false;
+  const [row] = await db_.select({ n: sql<number>`COUNT(*)` })
+    .from(certificationCases)
+    .where(and(
+      eq(certificationCases.factoryId, factoryId),
+      inArray(certificationCases.status, CERTIFICATION_OPEN_STATUSES_DB),
+    ));
+  return Number(row?.n ?? 0) > 0;
+}
+
+export async function getCertificationCaseById(id: number): Promise<CertificationCase | undefined> {
+  const db_ = await getDb();
+  if (!db_) return undefined;
+  const [row] = await db_.select().from(certificationCases).where(eq(certificationCases.id, id));
+  return row;
+}
+
+export async function getCertificationCasesByFactoryIds(factoryIds: number[]): Promise<CertificationCase[]> {
+  const db_ = await getDb();
+  if (!db_) return [];
+  if (factoryIds.length === 0) return [];
+  return db_.select().from(certificationCases)
+    .where(inArray(certificationCases.factoryId, factoryIds))
+    .orderBy(desc(certificationCases.createdAt));
+}
+
+export async function listCertificationCasesForConsultant(consultantIds: number[], status?: CertificationCase["status"]): Promise<CertificationCase[]> {
+  const db_ = await getDb();
+  if (!db_ || consultantIds.length === 0) return [];
+  const conditions = [inArray(certificationCases.assignedConsultantId, consultantIds)];
+  if (status) conditions.push(eq(certificationCases.status, status));
+  return db_.select().from(certificationCases)
+    .where(and(...conditions))
+    .orderBy(desc(certificationCases.createdAt), desc(certificationCases.id));
+}
+
+export async function listCertificationCasesAdmin(opts?: {
+  status?: CertificationCase["status"];
+  limit?: number;
+  offset?: number;
+}): Promise<CertificationCase[]> {
+  const db_ = await getDb();
+  if (!db_) return [];
+  const conditions = opts?.status ? [eq(certificationCases.status, opts.status)] : [];
+  return db_.select().from(certificationCases)
+    .where(conditions.length ? and(...conditions) : undefined)
+    .orderBy(desc(certificationCases.createdAt), desc(certificationCases.id))
+    .limit(opts?.limit ?? 100)
+    .offset(opts?.offset ?? 0);
+}
+
+export async function countCertificationCases(status?: CertificationCase["status"]): Promise<number> {
+  const db_ = await getDb();
+  if (!db_) return 0;
+  const conditions = status ? [eq(certificationCases.status, status)] : [];
+  const [row] = await db_.select({ n: sql<number>`COUNT(*)` })
+    .from(certificationCases)
+    .where(conditions.length ? and(...conditions) : undefined);
+  return Number(row?.n ?? 0);
+}
+
+export async function updateCertificationCaseStatus(
+  id: number,
+  status: CertificationCase["status"],
+  updatedBy?: CaseUpdatedBy,
+): Promise<void> {
+  const db_ = await getDb();
+  if (!db_) return;
+  const [cur] = await db_.select({ tl: certificationCases.statusTimeline })
+    .from(certificationCases).where(eq(certificationCases.id, id));
+  const existing = (cur?.tl ?? {}) as Record<string, string>;
+  const newTl = { ...existing };
+  if (!newTl[status]) newTl[status] = new Date().toISOString();
+  await db_.update(certificationCases).set({
+    status, statusTimeline: newTl,
+    ...(updatedBy ? { lastUpdatedByUserId: updatedBy.userId, lastUpdatedByNameSnapshot: updatedBy.name } : {}),
+  }).where(eq(certificationCases.id, id));
+}
+
+export async function updateCertificationCaseNotes(id: number, notes: string | null, updatedBy?: CaseUpdatedBy): Promise<void> {
+  const db_ = await getDb();
+  if (!db_) return;
+  await db_.update(certificationCases).set({
+    notes,
+    ...(updatedBy ? { lastUpdatedByUserId: updatedBy.userId, lastUpdatedByNameSnapshot: updatedBy.name } : {}),
+  }).where(eq(certificationCases.id, id));
+}
+
+export async function adminAssignCertificationConsultant(
+  id: number,
+  consultantId: number | null,
+  updatedBy?: CaseUpdatedBy,
+): Promise<void> {
+  const db_ = await getDb();
+  if (!db_) return;
+  await withDeadlockRetry(() => db_.transaction(async (tx) => {
+    if (consultantId != null) {
+      const [consultant] = await tx.select().from(certificationConsultants)
+        .where(eq(certificationConsultants.id, consultantId))
+        .for("update");
+      if (!consultant) throw new Error("找不到顧問，無法指派承辦");
+      if (!consultant.isActive) throw new Error("此顧問目前已停用，無法指派承辦");
+      if (consultant.userId == null) throw new Error("此顧問尚未綁定使用者帳號，無法指派承辦");
+    }
+    await tx.update(certificationCases).set({
+      assignedConsultantId: consultantId,
+      ...(updatedBy ? { lastUpdatedByUserId: updatedBy.userId, lastUpdatedByNameSnapshot: updatedBy.name } : {}),
+    }).where(eq(certificationCases.id, id));
+  }));
+}
+
+// ===== ERP 與產線優化專區：顧問設定與申請案件 =====
+// 與其他服務完全獨立的資料模型與權限。needType 是單選列舉值（不是陣列），
+// 見 drizzle/schema.ts erpCases 註解。
+
+export async function getErpConsultantsByUserId(userId: number): Promise<ErpConsultant[]> {
+  const db_ = await getDb();
+  if (!db_) return [];
+  return db_.select().from(erpConsultants).where(eq(erpConsultants.userId, userId));
+}
+
+export async function getErpConsultantById(id: number): Promise<ErpConsultant | undefined> {
+  const db_ = await getDb();
+  if (!db_) return undefined;
+  const [row] = await db_.select().from(erpConsultants).where(eq(erpConsultants.id, id));
+  return row;
+}
+
+export async function listAllErpConsultants(): Promise<ErpConsultant[]> {
+  const db_ = await getDb();
+  if (!db_) return [];
+  return db_.select().from(erpConsultants).orderBy(erpConsultants.id);
+}
+
+export async function adminCreateErpConsultant(name: string, serviceAreas: string[] = []): Promise<number> {
+  const db_ = await getDb();
+  if (!db_) throw new Error("DB not available");
+  const [result] = await db_.insert(erpConsultants).values({ name, serviceAreas, isActive: true });
+  return result.insertId;
+}
+
+const ERP_OPEN_STATUSES_DB = ["new", "evaluating", "proposal", "in_progress", "deferred", "unassigned"] as const;
+
+async function reassignOpenErpCasesAwayFromConsultant(
+  tx: any, // drizzle transaction handle — only called from within db_.transaction(async (tx) => ...) below
+  consultantId: number,
+  updatedBy?: CaseUpdatedBy,
+): Promise<{ reassignedCases: ErpCase[] }> {
+  const openRows: ErpCase[] = await tx.select().from(erpCases)
+    .where(and(
+      eq(erpCases.assignedConsultantId, consultantId),
+      inArray(erpCases.status, ERP_OPEN_STATUSES_DB),
+    ));
+  if (openRows.length === 0) return { reassignedCases: [] };
+  await tx.update(erpCases).set({
+    assignedConsultantId: null,
+    status: "unassigned",
+    ...(updatedBy ? { lastUpdatedByUserId: updatedBy.userId, lastUpdatedByNameSnapshot: updatedBy.name } : {}),
+  }).where(and(
+    eq(erpCases.assignedConsultantId, consultantId),
+    inArray(erpCases.status, ERP_OPEN_STATUSES_DB),
+  ));
+  return { reassignedCases: openRows };
+}
+
+export async function adminSetErpConsultantActive(id: number, isActive: boolean, updatedBy?: CaseUpdatedBy): Promise<{ reassignedCases: ErpCase[] }> {
+  const db_ = await getDb();
+  if (!db_) return { reassignedCases: [] };
+  return withDeadlockRetry(() => db_.transaction(async (tx) => {
+    await tx.select().from(erpConsultants).where(eq(erpConsultants.id, id)).for("update");
+    await tx.update(erpConsultants).set({ isActive }).where(eq(erpConsultants.id, id));
+    if (isActive) return { reassignedCases: [] };
+    return reassignOpenErpCasesAwayFromConsultant(tx, id, updatedBy);
+  }));
+}
+
+export async function adminBindErpConsultantUser(id: number, userId: number | null, updatedBy?: CaseUpdatedBy): Promise<{ reassignedCases: ErpCase[] }> {
+  const db_ = await getDb();
+  if (!db_) return { reassignedCases: [] };
+  if (userId != null) {
+    const existing = await db_.select({ id: erpConsultants.id })
+      .from(erpConsultants)
+      .where(and(eq(erpConsultants.userId, userId), ne(erpConsultants.id, id)));
+    if (existing.length > 0) throw new Error("此使用者已綁定其他 ERP 顧問身份");
+  }
+  return withDeadlockRetry(() => db_.transaction(async (tx) => {
+    await tx.select().from(erpConsultants).where(eq(erpConsultants.id, id)).for("update");
+    await tx.update(erpConsultants).set({ userId }).where(eq(erpConsultants.id, id));
+    if (userId != null) return { reassignedCases: [] };
+    return reassignOpenErpCasesAwayFromConsultant(tx, id, updatedBy);
+  }));
+}
+
+function matchesErpConsultant(consultant: ErpConsultant, needType: string): boolean {
+  if (!consultant.isActive || consultant.userId == null) return false;
+  const areas = consultant.serviceAreas ?? [];
+  if (areas.length === 0) return true;
+  if (needType === "unsure") return true;
+  return areas.includes(needType);
+}
+
+export async function createErpCaseWithAutoAssign(
+  data: Omit<InsertErpCase, "assignedConsultantId" | "status"> & { needType: string },
+): Promise<{ id: number; assignedConsultant: ErpConsultant | null }> {
+  const db_ = await getDb();
+  if (!db_) throw new Error("DB not available");
+  return withDeadlockRetry(() => db_.transaction(async (tx) => {
+    const allConsultants = await tx.select().from(erpConsultants, { useIndex: "PRIMARY" })
+      .where(eq(erpConsultants.isActive, true))
+      .for("update");
+    const candidates = allConsultants.filter(c => matchesErpConsultant(c, data.needType));
+    const assignedConsultant = candidates.length === 1 ? candidates[0] : null;
+    const [result] = await tx.insert(erpCases).values({
+      ...data,
+      assignedConsultantId: assignedConsultant?.id ?? null,
+      status: assignedConsultant ? "new" : "unassigned",
+    } as InsertErpCase);
+    return { id: result.insertId, assignedConsultant };
+  }));
+}
+
+export async function hasOpenErpCase(factoryId: number): Promise<boolean> {
+  const db_ = await getDb();
+  if (!db_) return false;
+  const [row] = await db_.select({ n: sql<number>`COUNT(*)` })
+    .from(erpCases)
+    .where(and(
+      eq(erpCases.factoryId, factoryId),
+      inArray(erpCases.status, ERP_OPEN_STATUSES_DB),
+    ));
+  return Number(row?.n ?? 0) > 0;
+}
+
+export async function getErpCaseById(id: number): Promise<ErpCase | undefined> {
+  const db_ = await getDb();
+  if (!db_) return undefined;
+  const [row] = await db_.select().from(erpCases).where(eq(erpCases.id, id));
+  return row;
+}
+
+export async function getErpCasesByFactoryIds(factoryIds: number[]): Promise<ErpCase[]> {
+  const db_ = await getDb();
+  if (!db_) return [];
+  if (factoryIds.length === 0) return [];
+  return db_.select().from(erpCases)
+    .where(inArray(erpCases.factoryId, factoryIds))
+    .orderBy(desc(erpCases.createdAt));
+}
+
+export async function listErpCasesForConsultant(consultantIds: number[], status?: ErpCase["status"]): Promise<ErpCase[]> {
+  const db_ = await getDb();
+  if (!db_ || consultantIds.length === 0) return [];
+  const conditions = [inArray(erpCases.assignedConsultantId, consultantIds)];
+  if (status) conditions.push(eq(erpCases.status, status));
+  return db_.select().from(erpCases)
+    .where(and(...conditions))
+    .orderBy(desc(erpCases.createdAt), desc(erpCases.id));
+}
+
+export async function listErpCasesAdmin(opts?: {
+  status?: ErpCase["status"];
+  limit?: number;
+  offset?: number;
+}): Promise<ErpCase[]> {
+  const db_ = await getDb();
+  if (!db_) return [];
+  const conditions = opts?.status ? [eq(erpCases.status, opts.status)] : [];
+  return db_.select().from(erpCases)
+    .where(conditions.length ? and(...conditions) : undefined)
+    .orderBy(desc(erpCases.createdAt), desc(erpCases.id))
+    .limit(opts?.limit ?? 100)
+    .offset(opts?.offset ?? 0);
+}
+
+export async function countErpCases(status?: ErpCase["status"]): Promise<number> {
+  const db_ = await getDb();
+  if (!db_) return 0;
+  const conditions = status ? [eq(erpCases.status, status)] : [];
+  const [row] = await db_.select({ n: sql<number>`COUNT(*)` })
+    .from(erpCases)
+    .where(conditions.length ? and(...conditions) : undefined);
+  return Number(row?.n ?? 0);
+}
+
+export async function updateErpCaseStatus(
+  id: number,
+  status: ErpCase["status"],
+  updatedBy?: CaseUpdatedBy,
+): Promise<void> {
+  const db_ = await getDb();
+  if (!db_) return;
+  const [cur] = await db_.select({ tl: erpCases.statusTimeline })
+    .from(erpCases).where(eq(erpCases.id, id));
+  const existing = (cur?.tl ?? {}) as Record<string, string>;
+  const newTl = { ...existing };
+  if (!newTl[status]) newTl[status] = new Date().toISOString();
+  await db_.update(erpCases).set({
+    status, statusTimeline: newTl,
+    ...(updatedBy ? { lastUpdatedByUserId: updatedBy.userId, lastUpdatedByNameSnapshot: updatedBy.name } : {}),
+  }).where(eq(erpCases.id, id));
+}
+
+export async function updateErpCaseNotes(id: number, notes: string | null, updatedBy?: CaseUpdatedBy): Promise<void> {
+  const db_ = await getDb();
+  if (!db_) return;
+  await db_.update(erpCases).set({
+    notes,
+    ...(updatedBy ? { lastUpdatedByUserId: updatedBy.userId, lastUpdatedByNameSnapshot: updatedBy.name } : {}),
+  }).where(eq(erpCases.id, id));
+}
+
+export async function adminAssignErpConsultant(
+  id: number,
+  consultantId: number | null,
+  updatedBy?: CaseUpdatedBy,
+): Promise<void> {
+  const db_ = await getDb();
+  if (!db_) return;
+  await withDeadlockRetry(() => db_.transaction(async (tx) => {
+    if (consultantId != null) {
+      const [consultant] = await tx.select().from(erpConsultants)
+        .where(eq(erpConsultants.id, consultantId))
+        .for("update");
+      if (!consultant) throw new Error("找不到顧問，無法指派承辦");
+      if (!consultant.isActive) throw new Error("此顧問目前已停用，無法指派承辦");
+      if (consultant.userId == null) throw new Error("此顧問尚未綁定使用者帳號，無法指派承辦");
+    }
+    await tx.update(erpCases).set({
+      assignedConsultantId: consultantId,
+      ...(updatedBy ? { lastUpdatedByUserId: updatedBy.userId, lastUpdatedByNameSnapshot: updatedBy.name } : {}),
+    }).where(eq(erpCases.id, id));
+  }));
+}
+
 // ── 首次接觸判斷：判斷兩個 userId 之間是否曾有任一方向的訊息紀錄
 // 必須在新訊息寫入前呼叫，否則新訊息本身會被誤判為歷史紀錄
 export async function hasContactBetweenUsers(userIdA: number, userIdB: number): Promise<boolean> {
@@ -9134,4 +9843,271 @@ export async function hasContactBetweenUsers(userIdA: number, userIdB: number): 
   if (r6) return true;
 
   return false;
+}
+
+// ===== ISO 與低碳認證專區：分類／服務項目目錄 =====
+// 與既有徽章系統（shared/badges.ts、factories.certificationBadges 等）完全
+// 獨立，一律不讀取、不寫入、不刪除任何既有徽章相關資料表或欄位。
+
+/** 冪等種子：先查詢 code 是否存在，不存在才插入，可安全重複呼叫（server 啟動時呼叫）。 */
+export async function ensureCertificationServiceCatalogSeeded(): Promise<void> {
+  const db_ = await getDb();
+  if (!db_) return;
+
+  const categoryIdByCode = new Map<string, number>();
+  for (const seed of CERTIFICATION_SERVICE_CATEGORY_SEEDS) {
+    const [existing] = await db_.select({ id: certificationServiceCategories.id })
+      .from(certificationServiceCategories)
+      .where(eq(certificationServiceCategories.code, seed.code))
+      .limit(1);
+    if (existing) {
+      categoryIdByCode.set(seed.code, existing.id);
+      continue;
+    }
+    const [result] = await db_.insert(certificationServiceCategories).values({
+      code: seed.code,
+      name: seed.name,
+      sortOrder: seed.sortOrder,
+      isActive: true,
+    });
+    categoryIdByCode.set(seed.code, result.insertId);
+    console.log(`[certification-services] seeded category: ${seed.code}`);
+  }
+
+  for (const seed of CERTIFICATION_SERVICE_ITEM_SEEDS) {
+    const [existing] = await db_.select({ id: certificationServiceItems.id })
+      .from(certificationServiceItems)
+      .where(eq(certificationServiceItems.code, seed.code))
+      .limit(1);
+    if (existing) continue;
+    const categoryId = categoryIdByCode.get(seed.categoryCode);
+    if (!categoryId) {
+      console.error(`[certification-services] seed skipped, unknown category: ${seed.categoryCode} (item ${seed.code})`);
+      continue;
+    }
+    await db_.insert(certificationServiceItems).values({
+      code: seed.code,
+      badgeCode: seed.badgeCode,
+      categoryId,
+      name: seed.name,
+      type: seed.type,
+      shortDescription: seed.shortDescription,
+      applicableNeeds: [...seed.applicableNeeds],
+      applicableIndustries: [...seed.applicableIndustries],
+      versionNote: seed.versionNote,
+      status: "published",
+      serviceEnabled: true,
+      consultEnabled: true,
+      sortOrder: seed.sortOrder,
+    });
+    console.log(`[certification-services] seeded item: ${seed.code}`);
+  }
+}
+
+export type PublicCertificationCategory = { id: number; code: string; name: string; sortOrder: number };
+export type PublicCertificationServiceItem = Omit<CertificationServiceItem, "createdAt" | "updatedAt"> & {
+  categoryCode: string;
+  categoryName: string;
+};
+
+/** 公開頁：只回傳已啟用的分類。 */
+export async function listPublicCertificationCategories(): Promise<PublicCertificationCategory[]> {
+  const db_ = await getDb();
+  if (!db_) return [];
+  return db_.select({
+    id: certificationServiceCategories.id,
+    code: certificationServiceCategories.code,
+    name: certificationServiceCategories.name,
+    sortOrder: certificationServiceCategories.sortOrder,
+  })
+    .from(certificationServiceCategories)
+    .where(eq(certificationServiceCategories.isActive, true))
+    .orderBy(asc(certificationServiceCategories.sortOrder));
+}
+
+/**
+ * 公開頁／公開 API：只回傳「分類已啟用」且「項目狀態為 published 且
+ * serviceEnabled=true」的服務項目，任何 draft／unpublished／archived 或
+ * serviceEnabled=false 的項目一律不會出現在這個查詢結果。
+ */
+export async function listPublicCertificationServices(): Promise<PublicCertificationServiceItem[]> {
+  const db_ = await getDb();
+  if (!db_) return [];
+  const rows = await db_.select({
+    ...getTableColumns(certificationServiceItems),
+    categoryCode: certificationServiceCategories.code,
+    categoryName: certificationServiceCategories.name,
+  })
+    .from(certificationServiceItems)
+    .innerJoin(certificationServiceCategories, eq(certificationServiceItems.categoryId, certificationServiceCategories.id))
+    .where(and(
+      eq(certificationServiceItems.status, "published"),
+      eq(certificationServiceItems.serviceEnabled, true),
+      eq(certificationServiceCategories.isActive, true),
+    ))
+    .orderBy(asc(certificationServiceCategories.sortOrder), asc(certificationServiceItems.sortOrder));
+  return rows.map(({ createdAt, updatedAt, ...rest }) => rest);
+}
+
+/** 管理後台：全部分類（含停用），依排序。 */
+export async function adminListCertificationCategories(): Promise<CertificationServiceCategory[]> {
+  const db_ = await getDb();
+  if (!db_) return [];
+  return db_.select().from(certificationServiceCategories).orderBy(asc(certificationServiceCategories.sortOrder));
+}
+
+export async function adminCreateCertificationCategory(data: { code: string; name: string }): Promise<number> {
+  const db_ = await getDb();
+  if (!db_) throw new Error("DB not available");
+  const [[maxRow]] = await Promise.all([
+    db_.select({ max: sql<number>`COALESCE(MAX(${certificationServiceCategories.sortOrder}), -1)` }).from(certificationServiceCategories),
+  ]);
+  const [result] = await db_.insert(certificationServiceCategories).values({
+    code: data.code,
+    name: data.name,
+    sortOrder: (maxRow?.max ?? -1) + 1,
+    isActive: true,
+  });
+  return result.insertId;
+}
+
+export async function adminUpdateCertificationCategory(
+  id: number,
+  data: { name?: string; isActive?: boolean },
+): Promise<void> {
+  const db_ = await getDb();
+  if (!db_) return;
+  const update: Partial<typeof certificationServiceCategories.$inferInsert> = {};
+  if (data.name !== undefined) update.name = data.name;
+  if (data.isActive !== undefined) update.isActive = data.isActive;
+  if (Object.keys(update).length === 0) return;
+  await db_.update(certificationServiceCategories).set(update).where(eq(certificationServiceCategories.id, id));
+}
+
+/** 交換兩個分類的 sortOrder，用於「上移／下移」排序操作。 */
+export async function adminSwapCertificationCategoryOrder(idA: number, idB: number): Promise<void> {
+  const db_ = await getDb();
+  if (!db_) return;
+  const rows = await db_.select({ id: certificationServiceCategories.id, sortOrder: certificationServiceCategories.sortOrder })
+    .from(certificationServiceCategories)
+    .where(inArray(certificationServiceCategories.id, [idA, idB]));
+  if (rows.length !== 2) return;
+  const [a, b] = rows;
+  await db_.update(certificationServiceCategories).set({ sortOrder: b.sortOrder }).where(eq(certificationServiceCategories.id, a.id));
+  await db_.update(certificationServiceCategories).set({ sortOrder: a.sortOrder }).where(eq(certificationServiceCategories.id, b.id));
+}
+
+/** 管理後台：全部服務項目（任何狀態），含分類資訊。 */
+export async function adminListCertificationServiceItems(): Promise<(CertificationServiceItem & { categoryCode: string; categoryName: string })[]> {
+  const db_ = await getDb();
+  if (!db_) return [];
+  return db_.select({
+    ...getTableColumns(certificationServiceItems),
+    categoryCode: certificationServiceCategories.code,
+    categoryName: certificationServiceCategories.name,
+  })
+    .from(certificationServiceItems)
+    .innerJoin(certificationServiceCategories, eq(certificationServiceItems.categoryId, certificationServiceCategories.id))
+    .orderBy(asc(certificationServiceCategories.sortOrder), asc(certificationServiceItems.sortOrder));
+}
+
+export async function getCertificationServiceItemById(id: number): Promise<CertificationServiceItem | undefined> {
+  const db_ = await getDb();
+  if (!db_) return undefined;
+  const [row] = await db_.select().from(certificationServiceItems).where(eq(certificationServiceItems.id, id));
+  return row;
+}
+
+export type CertificationServiceItemInput = {
+  code: string;
+  badgeCode: string | null;
+  categoryId: number;
+  name: string;
+  type: string;
+  shortDescription: string;
+  applicableNeeds: string[];
+  applicableIndustries: string[];
+  versionNote: string | null;
+  iconKey: string | null;
+  serviceEnabled: boolean;
+  consultEnabled: boolean;
+};
+
+export async function adminCreateCertificationServiceItem(data: CertificationServiceItemInput): Promise<number> {
+  const db_ = await getDb();
+  if (!db_) throw new Error("DB not available");
+  const [[maxRow]] = await Promise.all([
+    db_.select({ max: sql<number>`COALESCE(MAX(${certificationServiceItems.sortOrder}), -1)` })
+      .from(certificationServiceItems)
+      .where(eq(certificationServiceItems.categoryId, data.categoryId)),
+  ]);
+  const [result] = await db_.insert(certificationServiceItems).values({
+    ...data,
+    status: "draft",
+    sortOrder: (maxRow?.max ?? -1) + 1,
+  });
+  return result.insertId;
+}
+
+export async function adminUpdateCertificationServiceItem(
+  id: number,
+  data: Partial<CertificationServiceItemInput>,
+): Promise<void> {
+  const db_ = await getDb();
+  if (!db_) return;
+  if (Object.keys(data).length === 0) return;
+  await db_.update(certificationServiceItems).set(data).where(eq(certificationServiceItems.id, id));
+}
+
+const CERTIFICATION_SERVICE_STATUS_TRANSITIONS: Record<string, readonly string[]> = {
+  draft: ["published", "archived"],
+  published: ["unpublished", "archived"],
+  unpublished: ["published", "archived"],
+  // 復原（restore）固定回到 unpublished（下架但可再上架），需要管理員再次
+  // 明確按下「上架」才會公開，避免封存項目復原後未經檢視就直接曝光。
+  archived: ["unpublished"],
+};
+
+/** 依允許的狀態轉換表更新狀態；不允許的轉換直接拋出錯誤，不靜默忽略。 */
+export async function adminSetCertificationServiceItemStatus(
+  id: number,
+  nextStatus: "draft" | "published" | "unpublished" | "archived",
+): Promise<void> {
+  const db_ = await getDb();
+  if (!db_) throw new Error("DB not available");
+  const [row] = await db_.select({ status: certificationServiceItems.status }).from(certificationServiceItems).where(eq(certificationServiceItems.id, id));
+  if (!row) throw new Error("找不到此服務項目");
+  const allowed = CERTIFICATION_SERVICE_STATUS_TRANSITIONS[row.status] ?? [];
+  if (!allowed.includes(nextStatus)) {
+    throw new Error(`不允許從「${row.status}」轉換到「${nextStatus}」`);
+  }
+  await db_.update(certificationServiceItems).set({ status: nextStatus }).where(eq(certificationServiceItems.id, id));
+}
+
+/** 交換兩個服務項目的 sortOrder，用於「上移／下移」排序操作。 */
+export async function adminSwapCertificationServiceItemOrder(idA: number, idB: number): Promise<void> {
+  const db_ = await getDb();
+  if (!db_) return;
+  const rows = await db_.select({ id: certificationServiceItems.id, sortOrder: certificationServiceItems.sortOrder })
+    .from(certificationServiceItems)
+    .where(inArray(certificationServiceItems.id, [idA, idB]));
+  if (rows.length !== 2) return;
+  const [a, b] = rows;
+  await db_.update(certificationServiceItems).set({ sortOrder: b.sortOrder }).where(eq(certificationServiceItems.id, a.id));
+  await db_.update(certificationServiceItems).set({ sortOrder: a.sortOrder }).where(eq(certificationServiceItems.id, b.id));
+}
+
+/**
+ * 只有 draft 狀態才允許永久刪除；published／unpublished／archived 一律拒絕，
+ * 避免未來案件或紀錄的關聯資料（例如下一階段串接的諮詢表單）失去對應項目。
+ */
+export async function adminDeleteCertificationServiceItem(id: number): Promise<void> {
+  const db_ = await getDb();
+  if (!db_) throw new Error("DB not available");
+  const [row] = await db_.select({ status: certificationServiceItems.status }).from(certificationServiceItems).where(eq(certificationServiceItems.id, id));
+  if (!row) return;
+  if (row.status !== "draft") {
+    throw new Error("只有草稿狀態的項目可以永久刪除，已上架／下架／封存的項目請改用下架或封存");
+  }
+  await db_.delete(certificationServiceItems).where(eq(certificationServiceItems.id, id));
 }

@@ -44,6 +44,31 @@ export function setupSecurityHeaders(app: Express) {
 }
 
 /**
+ * 隱藏預覽頁 noindex header：只針對明確列出的 route 精準比對（req.path 完全
+ * 相等，不是前綴比對，避免波及其他頁面），加上
+ * X-Robots-Tag: noindex, nofollow, noarchive, nosnippet。這是除了頁面內
+ * `<meta name="robots">` 之外的第二層防線——即使爬蟲不執行 JS 也能看到這個
+ * HTTP header。刻意不透過 robots.txt Disallow 排除這些路徑：一旦被
+ * Disallow，爬蟲根本不會抓取頁面，也就看不到這裡的 noindex 指令，反而更難
+ * 讓已索引的頁面被移除索引。绝不可把這個清單擴大到整個網站（例如用萬用字元
+ * 比對 `/`），只能是明確列出的隱藏預覽頁 path。
+ */
+const NOINDEX_EXACT_PATHS = new Set<string>([
+  "/certification-center", "/certification-center/apply",
+  "/erp-optimization", "/erp-optimization/apply",
+  "/short-video-marketing", "/short-video-marketing/apply",
+]);
+
+export function setupNoIndexRoutes(app: Express) {
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    if (NOINDEX_EXACT_PATHS.has(req.path)) {
+      res.setHeader("X-Robots-Tag", "noindex, nofollow, noarchive, nosnippet");
+    }
+    next();
+  });
+}
+
+/**
  * Origin 檢查 middleware（CSRF 防護）
  */
 export function setupOriginCheck(app: Express) {

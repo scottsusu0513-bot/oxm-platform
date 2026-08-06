@@ -1332,3 +1332,248 @@ export const financeApplications = mysqlTable("financeApplications", {
 
 export type FinanceApplication = typeof financeApplications.$inferSelect;
 export type InsertFinanceApplication = typeof financeApplications.$inferInsert;
+
+// ===== ISO 與低碳認證專區：動態分類／服務項目目錄 =====
+// 與 shared/badges.ts 的 30 種既有徽章系統完全獨立、不共用資料表——這裡只是
+// 「認證服務」的行銷／諮詢入口資料（分類、顯示名稱、說明、適用需求／產業、
+// 上下架狀態），不是工廠已獲得的徽章擁有權紀錄。badgeCode 只在「該服務項目
+// 剛好對應一個既有徽章」時填入既有徽章 id（純字串參照，非 DB 外鍵——徽章清單
+// 是程式碼常數而非資料表），可為 NULL（例如 ISO/IEC 27001 目前沒有對應的
+// 既有徽章）。絕不透過這裡的資料反向新增、修改或刪除任何工廠已核准的徽章。
+export const certificationServiceCategories = mysqlTable("certificationServiceCategories", {
+  id: int("id").autoincrement().primaryKey(),
+  code: varchar("code", { length: 50 }).notNull().unique(),
+  name: varchar("name", { length: 100 }).notNull(),
+  sortOrder: int("sortOrder").notNull().default(0),
+  isActive: boolean("isActive").notNull().default(true),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export const certificationServiceItems = mysqlTable("certificationServiceItems", {
+  id: int("id").autoincrement().primaryKey(),
+  // 服務項目自己的穩定代碼——下一階段接正式諮詢表單時，CTA 會帶入這個值，
+  // 不依賴資料庫自增 id（id 只是內部關聯用，code 才是外部/未來表單引用的
+  // 穩定身分）。
+  code: varchar("code", { length: 50 }).notNull().unique(),
+  badgeCode: varchar("badgeCode", { length: 50 }),
+  categoryId: int("categoryId").notNull().references(() => certificationServiceCategories.id),
+  name: varchar("name", { length: 200 }).notNull(),
+  // 卡片類型標籤（例如「管理系統」「盤查與量化」「政府標籤」），與
+  // certificationServiceCategories 的分類是兩個獨立維度：分類決定篩選分組，
+  // type 只是卡片上顯示的性質標籤，避免把九項全部誤稱為同一種「ISO 認證」。
+  type: varchar("type", { length: 50 }).notNull(),
+  shortDescription: text("shortDescription").notNull(),
+  applicableNeeds: json("applicableNeeds").$type<string[]>().notNull().default([]),
+  applicableIndustries: json("applicableIndustries").$type<string[]>().notNull().default([]),
+  versionNote: varchar("versionNote", { length: 300 }),
+  iconKey: varchar("iconKey", { length: 100 }),
+  serviceEnabled: boolean("serviceEnabled").notNull().default(true),
+  consultEnabled: boolean("consultEnabled").notNull().default(true),
+  // draft(草稿) → published(上架，公開頁可見) ⇄ unpublished(下架，暫時隱藏，
+  // 可再次上架) → archived(封存，不再出現在管理列表的一般檢視，historical)。
+  // 只有 draft 狀態且未被任何資料引用時才可以被永久刪除（見 server 端刪除
+  // 檢查），published/unpublished/archived 一律只能改狀態，不能刪除，避免
+  // 未來案件或紀錄的關聯資料失去對應項目。
+  status: mysqlEnum("status", ["draft", "published", "unpublished", "archived"]).notNull().default("draft"),
+  sortOrder: int("sortOrder").notNull().default(0),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (t) => ({
+  categoryIdx: index("csi_category_idx").on(t.categoryId, t.status, t.sortOrder),
+  statusIdx: index("csi_status_idx").on(t.status, t.serviceEnabled),
+}));
+
+export type CertificationServiceCategory = typeof certificationServiceCategories.$inferSelect;
+export type InsertCertificationServiceCategory = typeof certificationServiceCategories.$inferInsert;
+export type CertificationServiceItem = typeof certificationServiceItems.$inferSelect;
+export type InsertCertificationServiceItem = typeof certificationServiceItems.$inferInsert;
+
+// ===== 短影音與品牌內容行銷專區：顧問設定 =====
+// 與 financeConsultants／upgradeConsultants 完全獨立的表，短影音案件不會
+// 因為既有顧問資料而意外取得存取權限。serviceAreas 為空陣列時視為「五項
+// 服務皆可承接」，非空陣列時只承接陣列內列出的服務——見
+// server/db.ts createShortVideoCaseWithAutoAssign 候選人篩選邏輯。
+export const shortVideoConsultants = mysqlTable("shortVideoConsultants", {
+  id: int("id").autoincrement().primaryKey(),
+  name: varchar("name", { length: 100 }).notNull(),
+  userId: int("userId").references(() => users.id, { onDelete: "set null" }),
+  serviceAreas: json("serviceAreas").$type<string[]>().notNull().default([]),
+  isActive: boolean("isActive").notNull().default(true),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (t) => ({
+  userIdUq: uniqueIndex("svc_user_id_uq").on(t.userId),
+}));
+
+export type ShortVideoConsultant = typeof shortVideoConsultants.$inferSelect;
+export type InsertShortVideoConsultant = typeof shortVideoConsultants.$inferInsert;
+
+// ===== 短影音與品牌內容行銷專區：申請案件 =====
+// 獨立於 upgradeApplications／financeApplications 的資料模型與狀態機，
+// 不得混入政府補助、財務或認證案件的看板或統計。
+export const shortVideoCases = mysqlTable("shortVideoCases", {
+  id: int("id").autoincrement().primaryKey(),
+  factoryId: int("factoryId").notNull().references(() => factories.id, { onDelete: "cascade" }),
+  // 公司名稱／地址由 server 依 factoryId 讀取工廠資料寫入的 snapshot，
+  // 不信任前端傳入值，沿用 financeApplications 慣例。
+  companyNameSnapshot: varchar("companyNameSnapshot", { length: 200 }).notNull(),
+  companyAddressSnapshot: varchar("companyAddressSnapshot", { length: 500 }).notNull(),
+  contactName: varchar("contactName", { length: 100 }).notNull(),
+  phone: varchar("phone", { length: 30 }).notNull(),
+  contactTime: varchar("contactTime", { length: 100 }).notNull(),
+  // 想了解的服務：可複選 shared/shortVideoMarketing.ts SHORT_VIDEO_SERVICE_KEYS，
+  // 與 isUnsure 互斥（isUnsure=true 時本欄位必須是空陣列，見 server 端 zod refine）。
+  servicesWanted: json("servicesWanted").$type<string[]>().notNull().default([]),
+  isUnsure: boolean("isUnsure").notNull().default(false),
+  // 主要目標：單選，shared/shortVideoMarketing.ts SHORT_VIDEO_GOAL_KEYS 之一。
+  primaryGoal: varchar("primaryGoal", { length: 30 }).notNull(),
+  // 目前經營平台：可複選，與 noPlatformYet 互斥（同 servicesWanted/isUnsure）。
+  platforms: json("platforms").$type<string[]>().notNull().default([]),
+  noPlatformYet: boolean("noPlatformYet").notNull().default(false),
+  additionalNotes: varchar("additionalNotes", { length: 2000 }),
+  consentAgreed: boolean("consentAgreed").notNull().default(true),
+  status: mysqlEnum("status", [
+    "new", "evaluating", "proposal", "in_progress", "completed",
+    "deferred", "no_interest", "archived", "unassigned",
+  ]).notNull().default("new"),
+  assignedConsultantId: int("assignedConsultantId").references(() => shortVideoConsultants.id, { onDelete: "set null" }),
+  notes: text("notes"), // 顧問內部備註，僅授權顧問／管理員可見
+  statusTimeline: json("statusTimeline").$type<Record<string, string>>(),
+  lastUpdatedByUserId: int("lastUpdatedByUserId").references(() => users.id, { onDelete: "set null" }),
+  lastUpdatedByNameSnapshot: varchar("lastUpdatedByNameSnapshot", { length: 100 }).notNull().default(""),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  // 未結案狀態（new/evaluating/proposal/in_progress/deferred/unassigned）時
+  // 等於 factoryId，否則為 NULL，MySQL UNIQUE INDEX 忽略 NULL——只限制「同一
+  // 工廠最多一筆未結案短影音案件」，結案（completed/no_interest/archived）
+  // 後可重新申請。沿用 financeApplications.openFactoryId 手法。
+  openFactoryId: int("openFactoryId").generatedAlwaysAs(
+    sql`CASE WHEN \`status\` IN ('new','evaluating','proposal','in_progress','deferred','unassigned') THEN \`factoryId\` ELSE NULL END`
+  ),
+}, (t) => ({
+  openFactoryUq: uniqueIndex("svcase_open_factory_uq").on(t.openFactoryId),
+  statusCreatedIdx: index("svcase_status_created_idx").on(t.status, t.createdAt),
+  consultantIdx: index("svcase_consultant_idx").on(t.assignedConsultantId, t.status, t.createdAt),
+  factoryIdx: index("svcase_factory_idx").on(t.factoryId),
+  lastUpdaterIdx: index("svcase_last_updater_idx").on(t.lastUpdatedByUserId),
+}));
+
+export type ShortVideoCase = typeof shortVideoCases.$inferSelect;
+export type InsertShortVideoCase = typeof shortVideoCases.$inferInsert;
+
+// ===== ISO 與低碳認證專區：顧問設定與申請案件 =====
+// 與 financeConsultants／shortVideoConsultants 等完全獨立的表，不共用資料或
+// 狀態機。servicesWanted 存的是 certificationServiceItems.code（現有認證服務
+// 目錄的穩定代碼），不是另建一套固定清單，確保選項永遠與 certificationCenter
+// 公開頁實際顯示的服務項目同步——見 server/db.ts
+// createCertificationCaseWithAutoAssign／submitApplication 的驗證邏輯。
+export const certificationConsultants = mysqlTable("certificationConsultants", {
+  id: int("id").autoincrement().primaryKey(),
+  name: varchar("name", { length: 100 }).notNull(),
+  userId: int("userId").references(() => users.id, { onDelete: "set null" }),
+  serviceAreas: json("serviceAreas").$type<string[]>().notNull().default([]),
+  isActive: boolean("isActive").notNull().default(true),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (t) => ({
+  userIdUq: uniqueIndex("cc_user_id_uq").on(t.userId),
+}));
+
+export type CertificationConsultant = typeof certificationConsultants.$inferSelect;
+export type InsertCertificationConsultant = typeof certificationConsultants.$inferInsert;
+
+export const certificationCases = mysqlTable("certificationCases", {
+  id: int("id").autoincrement().primaryKey(),
+  factoryId: int("factoryId").notNull().references(() => factories.id, { onDelete: "cascade" }),
+  companyNameSnapshot: varchar("companyNameSnapshot", { length: 200 }).notNull(),
+  companyAddressSnapshot: varchar("companyAddressSnapshot", { length: 500 }).notNull(),
+  contactName: varchar("contactName", { length: 100 }).notNull(),
+  phone: varchar("phone", { length: 30 }).notNull(),
+  contactTime: varchar("contactTime", { length: 100 }).notNull(),
+  // 想了解的認證服務：certificationServiceItems.code 陣列，與 isUnsure 互斥。
+  servicesWanted: json("servicesWanted").$type<string[]>().notNull().default([]),
+  isUnsure: boolean("isUnsure").notNull().default(false),
+  additionalNotes: varchar("additionalNotes", { length: 2000 }),
+  consentAgreed: boolean("consentAgreed").notNull().default(true),
+  status: mysqlEnum("status", [
+    "new", "evaluating", "proposal", "in_progress", "completed",
+    "deferred", "no_interest", "archived", "unassigned",
+  ]).notNull().default("new"),
+  assignedConsultantId: int("assignedConsultantId").references(() => certificationConsultants.id, { onDelete: "set null" }),
+  notes: text("notes"),
+  statusTimeline: json("statusTimeline").$type<Record<string, string>>(),
+  lastUpdatedByUserId: int("lastUpdatedByUserId").references(() => users.id, { onDelete: "set null" }),
+  lastUpdatedByNameSnapshot: varchar("lastUpdatedByNameSnapshot", { length: 100 }).notNull().default(""),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  openFactoryId: int("openFactoryId").generatedAlwaysAs(
+    sql`CASE WHEN \`status\` IN ('new','evaluating','proposal','in_progress','deferred','unassigned') THEN \`factoryId\` ELSE NULL END`
+  ),
+}, (t) => ({
+  openFactoryUq: uniqueIndex("ccase_open_factory_uq").on(t.openFactoryId),
+  statusCreatedIdx: index("ccase_status_created_idx").on(t.status, t.createdAt),
+  consultantIdx: index("ccase_consultant_idx").on(t.assignedConsultantId, t.status, t.createdAt),
+  factoryIdx: index("ccase_factory_idx").on(t.factoryId),
+  lastUpdaterIdx: index("ccase_last_updater_idx").on(t.lastUpdatedByUserId),
+}));
+
+export type CertificationCase = typeof certificationCases.$inferSelect;
+export type InsertCertificationCase = typeof certificationCases.$inferInsert;
+
+// ===== ERP 與產線優化專區：顧問設定與申請案件 =====
+// 與其他服務完全獨立的表。needType 是單選（不是陣列），與短影音／ISO 的
+// 複選＋isUnsure 互斥模式不同——"unsure" 本身就是列舉值之一，天生只會有一個值成立。
+export const erpConsultants = mysqlTable("erpConsultants", {
+  id: int("id").autoincrement().primaryKey(),
+  name: varchar("name", { length: 100 }).notNull(),
+  userId: int("userId").references(() => users.id, { onDelete: "set null" }),
+  // 承接的需求類型（對應 erpCases.needType 列舉值），空陣列＝全部需求類型皆可承接。
+  serviceAreas: json("serviceAreas").$type<string[]>().notNull().default([]),
+  isActive: boolean("isActive").notNull().default(true),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (t) => ({
+  userIdUq: uniqueIndex("ec_user_id_uq").on(t.userId),
+}));
+
+export type ErpConsultant = typeof erpConsultants.$inferSelect;
+export type InsertErpConsultant = typeof erpConsultants.$inferInsert;
+
+export const erpCases = mysqlTable("erpCases", {
+  id: int("id").autoincrement().primaryKey(),
+  factoryId: int("factoryId").notNull().references(() => factories.id, { onDelete: "cascade" }),
+  companyNameSnapshot: varchar("companyNameSnapshot", { length: 200 }).notNull(),
+  companyAddressSnapshot: varchar("companyAddressSnapshot", { length: 500 }).notNull(),
+  contactName: varchar("contactName", { length: 100 }).notNull(),
+  phone: varchar("phone", { length: 30 }).notNull(),
+  contactTime: varchar("contactTime", { length: 100 }).notNull(),
+  // 需求類型：單選，erp_adoption(ERP導入)／line_optimization(產線動線優化)／
+  // integrated(整合改善)／unsure(不確定由顧問判斷)。
+  needType: mysqlEnum("needType", ["erp_adoption", "line_optimization", "integrated", "unsure"]).notNull(),
+  additionalNotes: varchar("additionalNotes", { length: 2000 }),
+  consentAgreed: boolean("consentAgreed").notNull().default(true),
+  status: mysqlEnum("status", [
+    "new", "evaluating", "proposal", "in_progress", "completed",
+    "deferred", "no_interest", "archived", "unassigned",
+  ]).notNull().default("new"),
+  assignedConsultantId: int("assignedConsultantId").references(() => erpConsultants.id, { onDelete: "set null" }),
+  notes: text("notes"),
+  statusTimeline: json("statusTimeline").$type<Record<string, string>>(),
+  lastUpdatedByUserId: int("lastUpdatedByUserId").references(() => users.id, { onDelete: "set null" }),
+  lastUpdatedByNameSnapshot: varchar("lastUpdatedByNameSnapshot", { length: 100 }).notNull().default(""),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  openFactoryId: int("openFactoryId").generatedAlwaysAs(
+    sql`CASE WHEN \`status\` IN ('new','evaluating','proposal','in_progress','deferred','unassigned') THEN \`factoryId\` ELSE NULL END`
+  ),
+}, (t) => ({
+  openFactoryUq: uniqueIndex("ecase_open_factory_uq").on(t.openFactoryId),
+  statusCreatedIdx: index("ecase_status_created_idx").on(t.status, t.createdAt),
+  consultantIdx: index("ecase_consultant_idx").on(t.assignedConsultantId, t.status, t.createdAt),
+  factoryIdx: index("ecase_factory_idx").on(t.factoryId),
+  lastUpdaterIdx: index("ecase_last_updater_idx").on(t.lastUpdatedByUserId),
+}));
+
+export type ErpCase = typeof erpCases.$inferSelect;
+export type InsertErpCase = typeof erpCases.$inferInsert;

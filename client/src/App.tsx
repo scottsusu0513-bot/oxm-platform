@@ -43,6 +43,29 @@ const ConsultantHub            = lazy(() => import("./pages/ConsultantHub"));
 const FinanceConsultantCases   = lazy(() => import("./pages/FinanceConsultantCases"));
 const NotFound              = lazy(() => import("./pages/NotFound"));
 const OrderDetail           = lazy(() => import("./pages/OrderDetail"));
+// ISO 與低碳認證專區：隱藏預覽頁，刻意不在任何 Navbar／首頁／找資源／Footer／
+// APP 導覽／sitemap／prerender 清單中出現連結入口，只能直接輸入網址開啟
+// （同 /news 的慣例，見下方 Router 註解）。上線公開前不得新增任何入口連結。
+const CertificationCenter   = lazy(() => import("./pages/CertificationCenter"));
+const CertificationCenterApply = lazy(() => import("./pages/CertificationCenterApply"));
+// ISO 顧問案件看板：需登入且具顧問身份，不算公開隱藏預覽頁（同
+// /finance-consultant/cases 慣例，不在 NOINDEX_EXACT_PATHS 內單獨列出）。
+const CertificationConsultantCases = lazy(() => import("./pages/CertificationConsultantCases"));
+// ERP 與產線優化專區：同上，隱藏預覽頁，只能直接輸入網址開啟，不得新增任何
+// 入口連結（見 client/src/App.tsx 下方 Route 註解與
+// server/_core/security.ts NOINDEX_EXACT_PATHS）。
+const ErpOptimization       = lazy(() => import("./pages/ErpOptimization"));
+const ErpOptimizationApply  = lazy(() => import("./pages/ErpOptimizationApply"));
+const ErpConsultantCases    = lazy(() => import("./pages/ErpConsultantCases"));
+// 短影音與品牌內容行銷專區：同上，隱藏預覽頁，只能直接輸入網址開啟，不得
+// 新增任何入口連結（見下方 Route 註解與 server/_core/security.ts
+// NOINDEX_EXACT_PATHS）。申請表為真正可送出的表單（非佔位預覽），因此拆成
+// 兩個路由，與企業財務優化 /finance-optimization 的內容頁＋申請頁架構一致。
+const ShortVideoMarketing      = lazy(() => import("./pages/ShortVideoMarketing"));
+const ShortVideoMarketingApply = lazy(() => import("./pages/ShortVideoMarketingApply"));
+// 短影音顧問案件看板：需登入且具短影音顧問身份才能查看，不算公開隱藏預覽頁
+// （同 /finance-consultant/cases 慣例，不在 NOINDEX_EXACT_PATHS 內單獨列出）。
+const ShortVideoConsultantCases = lazy(() => import("./pages/ShortVideoConsultantCases"));
 
 // ── Admin 頁面（獨立 chunk，一般使用者不會載入）──────────────────────────
 const AdminDashboard        = lazy(() => import("./pages/AdminDashboard"));
@@ -65,6 +88,7 @@ const News                  = lazy(() => import("./pages/News"));
 const NewsDetail            = lazy(() => import("./pages/NewsDetail"));
 const AdminMessages         = lazy(() => import("./pages/AdminMessages"));
 const AdminMessageDetail    = lazy(() => import("./pages/AdminMessageDetail"));
+const AdminCertificationServices = lazy(() => import("./pages/AdminCertificationServices"));
 
 // ── App badge count syncer ────────────────────────────────────────────────────
 // 只在 Capacitor native app 執行，沿用 Navbar 相同紅點邏輯計算 badge 數字
@@ -339,6 +363,30 @@ function Router() {
             但路由本身必須完整存在，讓管理員／測試者可以直接輸入網址瀏覽。 */}
         <Route path="/news/:slug" component={NewsDetail} />
         <Route path="/news" component={News} />
+        {/* ISO 與低碳認證專區隱藏預覽頁：同上，只能直接輸入網址開啟，網站內
+            任何位置都不得加入連結入口；noindex／nofollow 見頁面 Helmet 與
+            server/_core/security.ts setupNoIndexRoutes 的 X-Robots-Tag。 */}
+        <Route path="/certification-center/apply" component={CertificationCenterApply} />
+        <Route path="/certification-center" component={CertificationCenter} />
+        <Route path="/certification-consultant/cases" component={CertificationConsultantCases} />
+        <Route path="/admin/certification-services" component={AdminCertificationServices} />
+        {/* ERP 與產線優化專區隱藏預覽頁：同上，只能直接輸入網址開啟，網站內
+            任何位置都不得加入連結入口；noindex／nofollow 見頁面 Helmet 與
+            server/_core/security.ts setupNoIndexRoutes 的 X-Robots-Tag。
+            /apply 為真正可送出的申請表單，同樣隱藏、同樣 noindex；
+            /erp-consultant/cases 需登入且具顧問身份，不算公開隱藏預覽頁。 */}
+        <Route path="/erp-optimization/apply" component={ErpOptimizationApply} />
+        <Route path="/erp-optimization" component={ErpOptimization} />
+        <Route path="/erp-consultant/cases" component={ErpConsultantCases} />
+        {/* 短影音與品牌內容行銷專區隱藏預覽頁：同上，只能直接輸入網址開啟，
+            網站內任何位置都不得加入連結入口；noindex／nofollow 見頁面 Helmet
+            與 server/_core/security.ts setupNoIndexRoutes 的 X-Robots-Tag。
+            /apply 為真正可送出的申請表單，同樣隱藏、同樣 noindex。
+            /short-video-consultant/cases 需登入且具顧問身份，不算公開隱藏
+            預覽頁，故不在 NOINDEX_EXACT_PATHS 內（同 /finance-consultant/cases 慣例）。 */}
+        <Route path="/short-video-marketing/apply" component={ShortVideoMarketingApply} />
+        <Route path="/short-video-marketing" component={ShortVideoMarketing} />
+        <Route path="/short-video-consultant/cases" component={ShortVideoConsultantCases} />
         <Route path="/announcements" component={Announcements} />
         <Route path="/manual" component={UserManual} />
         <Route path="/about" component={AboutOXM} />

@@ -7,12 +7,12 @@ import { registerDevLoginRoutes } from "./devLogin";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
-import { setupSecurityHeaders, setupOriginCheck } from "./security";
+import { setupSecurityHeaders, setupOriginCheck, setupNoIndexRoutes } from "./security";
 import { apiLimiter, loginLimiter, uploadLimiter, messageLimiter, submitReviewLimiter, adminLimiter, searchLimiter, reportLimiter } from "./rateLimit";
 import { COOKIE_NAME } from "@shared/const";
 import { INDUSTRY_SLUGS, PHASE1_SUB_INDUSTRY_PAGES } from "../../shared/constants";
 import { escapeXmlText } from "@shared/seo/xml";
-import { getDb, getApprovedFactoriesForSitemap, ensureConsultantsSeeded } from "../db";
+import { getDb, getApprovedFactoriesForSitemap, ensureConsultantsSeeded, ensureCertificationServiceCatalogSeeded } from "../db";
 import { runCollaborationOrderOverdueEmailCheck } from "../orderOverdueCheck";
 
 async function startServer() {
@@ -26,6 +26,7 @@ async function startServer() {
 
   console.log("[boot] applying security headers");
   setupSecurityHeaders(app);
+  setupNoIndexRoutes(app);
   console.log("[boot] applying origin check");
   setupOriginCheck(app);
 
@@ -247,6 +248,7 @@ async function startServer() {
   server.listen(port, "0.0.0.0", () => {
     console.log(`[boot] Server running on http://0.0.0.0:${port}/`);
     ensureConsultantsSeeded().catch(err => console.error("[boot] consultant seed failed:", err));
+    ensureCertificationServiceCatalogSeeded().catch(err => console.error("[boot] certification service catalog seed failed:", err));
   });
 }
 

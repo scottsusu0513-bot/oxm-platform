@@ -4,7 +4,7 @@ import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { AlertCircle, BarChart3, Users, Factory, Zap, MessageSquare, Star, ArrowLeft, HeadphonesIcon, Megaphone, Newspaper, Eye, Send, CheckCircle, XCircle, TrendingUp, PiggyBank } from "lucide-react";
+import { AlertCircle, BarChart3, Users, Factory, Zap, MessageSquare, Star, ArrowLeft, HeadphonesIcon, Megaphone, Newspaper, Eye, Send, CheckCircle, XCircle, TrendingUp, PiggyBank, ShieldCheck, FileCheck2, Cog, Clapperboard, ClipboardList, Landmark } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
@@ -290,6 +290,20 @@ function AdminDashboardContent() {
             </CardContent>
           </Card>
 
+          {/* 認證服務管理——ISO 與低碳認證專區公開頁（/certification-center）
+              目前刻意不對外開放入口，這裡是唯一的入口，只有管理員登入後台
+              才看得到，不代表公開頁在網站導覽中曝光。 */}
+          <Card className="cursor-pointer hover:shadow-lg transition-shadow" onClick={() => setLocation("/admin/certification-services")}>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-gray-600 flex items-center gap-2">
+                <ShieldCheck className="h-4 w-4" />認證服務管理
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold text-orange-500">→</div>
+            </CardContent>
+          </Card>
+
           <Card className="cursor-pointer hover:shadow-lg transition-shadow" onClick={() => setLocation("/admin/finance-applications")}>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-gray-600 flex items-center gap-2">
@@ -338,6 +352,80 @@ function AdminDashboardContent() {
               <div className="text-2xl font-bold text-orange-500">→</div>
             </CardContent>
           </Card>
+        </div>
+
+        {/* 服務案件管理——企業升級、企業財務優化，以及 ISO／低碳、ERP／產線
+            優化、短影音／品牌內容三個隱藏服務專區的顧問案件看板入口。企業升級
+            （/upgrade-consultant/cases）與企業財務優化（/finance-consultant/cases）
+            都是既有、admin 會看到全部案件（不只自己承辦）的顧問看板頁面，
+            與既有頂部統計卡片各自的 /admin/upgrade-applications、
+            /admin/finance-applications 是不同路徑但同一組資料；三個隱藏
+            服務頁本身仍維持 noindex／無公開導覽入口不變，這裡只是讓管理員
+            不用手動輸入網址，就能查看 unassigned 案件並手動指派顧問；不影響
+            一般使用者或顧問的既有權限。 */}
+        <div className="mb-8">
+          <h2 className="text-lg font-semibold text-gray-900 mb-3">服務案件管理</h2>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <Card className="cursor-pointer hover:shadow-lg transition-shadow" onClick={() => setLocation("/upgrade-consultant/cases")}>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-gray-600 flex items-center gap-2">
+                  <ClipboardList className="h-4 w-4" />企業升級案件管理
+                </CardTitle>
+                <CardDescription className="text-xs">查看政府補助申請案件與顧問承辦進度</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold text-orange-500">→</div>
+              </CardContent>
+            </Card>
+
+            <Card className="cursor-pointer hover:shadow-lg transition-shadow" onClick={() => setLocation("/finance-consultant/cases")}>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-gray-600 flex items-center gap-2">
+                  <Landmark className="h-4 w-4" />企業財務優化案件管理
+                </CardTitle>
+                <CardDescription className="text-xs">查看企業財務優化案件與顧問承辦進度</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold text-orange-500">→</div>
+              </CardContent>
+            </Card>
+
+            <Card className="cursor-pointer hover:shadow-lg transition-shadow" onClick={() => setLocation("/certification-consultant/cases")}>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-gray-600 flex items-center gap-2">
+                  <FileCheck2 className="h-4 w-4" />ISO／低碳案件管理
+                </CardTitle>
+                <CardDescription className="text-xs">查看認證服務案件與處理未指派案件</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold text-orange-500">→</div>
+              </CardContent>
+            </Card>
+
+            <Card className="cursor-pointer hover:shadow-lg transition-shadow" onClick={() => setLocation("/erp-consultant/cases")}>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-gray-600 flex items-center gap-2">
+                  <Cog className="h-4 w-4" />ERP／產線優化案件管理
+                </CardTitle>
+                <CardDescription className="text-xs">查看 ERP 與產線改善案件及處理未指派案件</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold text-orange-500">→</div>
+              </CardContent>
+            </Card>
+
+            <Card className="cursor-pointer hover:shadow-lg transition-shadow" onClick={() => setLocation("/short-video-consultant/cases")}>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-gray-600 flex items-center gap-2">
+                  <Clapperboard className="h-4 w-4" />短影音／品牌內容案件管理
+                </CardTitle>
+                <CardDescription className="text-xs">查看品牌內容案件與處理未指派案件</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold text-orange-500">→</div>
+              </CardContent>
+            </Card>
+          </div>
         </div>
 
         {/* 訪客統計圖表 */}
