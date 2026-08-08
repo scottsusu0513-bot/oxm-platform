@@ -19,10 +19,34 @@ import {
 import Navbar from "@/components/Navbar";
 import LoginDialog from "@/components/LoginDialog";
 import { FloatingBackButton } from "@/components/FloatingBackButton";
+import { CaseStatusOverview, type CaseStatusDef, type CaseStatusColor } from "@/components/CaseStatusOverview";
 import {
-  CERTIFICATION_STATUS_LABELS, CERTIFICATION_STATUS_TRANSITIONS, CERTIFICATION_EXCEPTION_STATUSES,
-  type CertificationCaseStatus,
+  CERTIFICATION_CASE_STATUSES, CERTIFICATION_STATUS_LABELS, CERTIFICATION_STATUS_TRANSITIONS,
+  CERTIFICATION_EXCEPTION_STATUSES, type CertificationCaseStatus,
 } from "@shared/certificationCase";
+
+// 狀態統計卡顏色僅供視覺分類，不影響狀態邏輯本身。
+const CERTIFICATION_STATUS_COLORS: Record<string, CaseStatusColor> = {
+  new: "blue",
+  needs_interview: "cyan",
+  scope_assessment: "cyan",
+  proposal: "violet",
+  in_progress: "amber",
+  pre_review: "amber",
+  verification: "teal",
+  completed: "emerald",
+  deferred: "orange",
+  no_interest: "rose",
+  not_applicable: "red",
+  archived: "slate",
+  unassigned: "slate",
+};
+
+const CERTIFICATION_STATUS_DEFS: CaseStatusDef[] = CERTIFICATION_CASE_STATUSES.map(key => ({
+  key,
+  label: CERTIFICATION_STATUS_LABELS[key],
+  color: CERTIFICATION_STATUS_COLORS[key] ?? "slate",
+}));
 
 function statusColor(s: string): string {
   const COLORS: Record<string, string> = {
@@ -286,6 +310,7 @@ function NoPermissionView({ message }: { message?: string }) {
 export default function CertificationConsultantCases() {
   const { user, loading: authLoading } = useAuth();
   const utils = trpc.useUtils();
+  const [selectedStatus, setSelectedStatus] = useState("all");
 
   const casesQuery = trpc.certificationConsultant.myCases.useQuery({}, { enabled: !!user, retry: false });
   const isAdmin = !!user?.isAdmin;
@@ -309,10 +334,17 @@ export default function CertificationConsultantCases() {
   // 篩選），且 admin 不會另外渲染下方的待取件區塊，故此處不需要再濾掉 unassigned，
   // 否則會讓 admin 完全看不到尚未指派顧問的案件。一般顧問則維持原本的「我的案件」
   // 定義，不應包含 unassigned（那些顯示在下方待取件區塊，需先取件才會進來）。
-  const items = isAdmin
+  const baseItems: any[] = isAdmin
     ? (casesQuery.data ?? [])
     : (casesQuery.data ?? []).filter((c: any) => c.status !== "unassigned");
   const unassignedItems = unassignedQuery.data ?? [];
+
+  const statusCounts: Record<string, number> = {};
+  for (const c of baseItems) statusCounts[c.status] = (statusCounts[c.status] ?? 0) + 1;
+  const statusDefs = isAdmin
+    ? CERTIFICATION_STATUS_DEFS
+    : CERTIFICATION_STATUS_DEFS.filter(s => s.key !== "unassigned");
+  const items = selectedStatus === "all" ? baseItems : baseItems.filter(c => c.status === selectedStatus);
 
   return (
     <div className="min-h-screen bg-background">
@@ -338,7 +370,14 @@ export default function CertificationConsultantCases() {
         )}
 
         <div className="space-y-3">
-          <h2 className="text-sm font-semibold text-muted-foreground">{isAdmin ? "全部案件" : "我的案件"}（{items.length}）</h2>
+          <h2 className="text-sm font-semibold text-muted-foreground">{isAdmin ? "全部案件" : "我的案件"}</h2>
+          <CaseStatusOverview
+            statuses={statusDefs}
+            counts={statusCounts}
+            totalCount={baseItems.length}
+            selectedStatus={selectedStatus}
+            onStatusChange={setSelectedStatus}
+          />
           {items.length === 0 ? (
             <p className="text-sm text-muted-foreground py-12 text-center">目前沒有案件。</p>
           ) : (

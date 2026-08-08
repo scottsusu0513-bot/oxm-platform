@@ -6,7 +6,6 @@ import { trpc } from "@/lib/trpc";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -19,6 +18,7 @@ import {
 import Navbar from "@/components/Navbar";
 import LoginDialog from "@/components/LoginDialog";
 import { FloatingBackButton } from "@/components/FloatingBackButton";
+import { CaseStatusOverview, type CaseStatusDef, type CaseStatusColor } from "@/components/CaseStatusOverview";
 import { resolveFinanceCasesViewState, selectAssignableConsultants } from "./financeConsultantCasesViewState";
 import {
   createInitialFinanceCasesPaginationState, financeCasesPaginationReducer, selectMergedFinanceCases,
@@ -43,6 +43,22 @@ const TAB_ORDER: { key: string; label: string }[] = [
   { key: "not_interested", label: "無意願" },
   { key: "won", label: "成交區" },
 ];
+
+// financeApplications.status enum 本身只有這 5 個值（無 unassigned／archived），
+// 見 drizzle/schema.ts；顏色僅供視覺分類，不影響狀態邏輯本身。
+const FINANCE_STATUS_COLORS: Record<string, CaseStatusColor> = {
+  new: "blue",
+  evaluating: "cyan",
+  deferred: "orange",
+  not_interested: "rose",
+  won: "emerald",
+};
+
+const FINANCE_STATUS_DEFS: CaseStatusDef[] = TAB_ORDER.map(t => ({
+  key: t.key,
+  label: t.label,
+  color: FINANCE_STATUS_COLORS[t.key] ?? "slate",
+}));
 
 // 每個狀態下允許推進的下一個狀態（與 server FINANCE_ALLOWED 一致）
 const NEXT_STATUS_OPTIONS: Record<string, { value: string; label: string }[]> = {
@@ -311,6 +327,13 @@ export default function FinanceConsultantCases() {
   const hasMore = total > items.length;
   const isAdmin = user?.role === "admin";
 
+  const statusCounts: Record<string, number> = {};
+  for (const c of items) {
+    const key = c.status as string;
+    statusCounts[key] = (statusCounts[key] ?? 0) + 1;
+  }
+  const filteredItems = tab === "all" ? items : items.filter(i => i.status === tab);
+
   return (
     <div className="min-h-screen bg-background">
       <Navbar />
@@ -328,29 +351,23 @@ export default function FinanceConsultantCases() {
             足夠，sm:mt-0 讓多餘留白消失，排列不受影響。 */}
         <h1 className="text-xl font-bold mt-14 sm:mt-0">財務優化顧問案件看板</h1>
 
-        <Tabs value={tab} onValueChange={setTab}>
-          <TabsList className="flex-wrap h-auto">
-            {TAB_ORDER.map(t => {
-              const count = items.filter(i => i.status === t.key).length;
-              return (
-                <TabsTrigger key={t.key} value={t.key}>
-                  {t.label} ({count})
-                </TabsTrigger>
-              );
-            })}
-          </TabsList>
-          {TAB_ORDER.map(t => (
-            <TabsContent key={t.key} value={t.key} className="space-y-4 mt-4">
-              {items.filter(i => i.status === t.key).length === 0 ? (
-                <p className="text-sm text-muted-foreground text-center py-10">目前沒有案件</p>
-              ) : (
-                items.filter(i => i.status === t.key).map(item => (
-                  <CaseCard key={item.id} item={item} isAdmin={isAdmin} onMutated={handleMutated} />
-                ))
-              )}
-            </TabsContent>
-          ))}
-        </Tabs>
+        <CaseStatusOverview
+          statuses={FINANCE_STATUS_DEFS}
+          counts={statusCounts}
+          totalCount={items.length}
+          selectedStatus={tab}
+          onStatusChange={setTab}
+        />
+
+        <div className="space-y-4">
+          {filteredItems.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-10">目前沒有案件</p>
+          ) : (
+            filteredItems.map(item => (
+              <CaseCard key={item.id} item={item} isAdmin={isAdmin} onMutated={handleMutated} />
+            ))
+          )}
+        </div>
 
         {hasMore && (
           <div className="flex flex-col items-center gap-2 pt-2">

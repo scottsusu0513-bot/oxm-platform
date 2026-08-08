@@ -6,7 +6,6 @@ import { trpc } from "@/lib/trpc";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
@@ -18,6 +17,7 @@ import {
 } from "lucide-react";
 import Navbar from "@/components/Navbar";
 import { FloatingBackButton } from "@/components/FloatingBackButton";
+import { CaseStatusOverview, type CaseStatusDef, type CaseStatusColor } from "@/components/CaseStatusOverview";
 
 // ── 狀態設定 ─────────────────────────────────────────────────────────────────
 
@@ -82,6 +82,25 @@ const TAB_ORDER = [
 
 // Terminal statuses: no next step
 const TERMINAL = new Set(["ineligible", "completed"]);
+
+// 對應原本各 StatCard 已使用的顏色，僅供視覺分類，不影響狀態邏輯本身。
+const UPGRADE_STATUS_COLORS: Record<string, CaseStatusColor> = {
+  new: "blue",
+  evaluating: "cyan",
+  ineligible: "red",
+  deferred: "orange",
+  accepted: "violet",
+  submitted: "amber",
+  rejected: "rose",
+  transforming: "teal",
+  completed: "emerald",
+};
+
+const UPGRADE_STATUS_DEFS: CaseStatusDef[] = TAB_ORDER.map(t => ({
+  key: t.key,
+  label: t.label,
+  color: UPGRADE_STATUS_COLORS[t.key] ?? "slate",
+}));
 
 const CAPITAL_LABELS: Record<string, string> = {
   under_500w: "500 萬以下",
@@ -294,30 +313,6 @@ function parseAmount(s: string): number | null {
   const v = parseInt(s.replace(/[^0-9]/g, ""), 10);
   if (isNaN(v) || v <= 0 || v > 100_000_000) return null;
   return v;
-}
-
-// ── 統計卡 ───────────────────────────────────────────────────────────────────
-
-const STAT_COLORS: Record<string, string> = {
-  blue:    "bg-blue-50 border-blue-100 text-blue-700",
-  cyan:    "bg-cyan-50 border-cyan-100 text-cyan-700",
-  red:     "bg-red-50 border-red-100 text-red-700",
-  orange:  "bg-orange-50 border-orange-100 text-orange-700",
-  violet:  "bg-violet-50 border-violet-100 text-violet-700",
-  amber:   "bg-amber-50 border-amber-100 text-amber-700",
-  rose:    "bg-rose-50 border-rose-100 text-rose-700",
-  green:   "bg-green-50 border-green-100 text-green-700",
-  teal:    "bg-teal-50 border-teal-100 text-teal-700",
-  emerald: "bg-emerald-50 border-emerald-100 text-emerald-700",
-};
-
-function StatCard({ label, count, color }: { label: string; count: number; color: keyof typeof STAT_COLORS }) {
-  return (
-    <div className={`rounded-xl border p-3 ${STAT_COLORS[color]}`}>
-      <div className="text-2xl font-bold leading-none">{count}</div>
-      <div className="text-xs mt-1 opacity-80">{label}</div>
-    </div>
-  );
 }
 
 // ── 新案件分區（依資本額） ──────────────────────────────────────────────────
@@ -1094,6 +1089,7 @@ export default function ConsultantCases() {
   const [, navigate] = useLocation();
   const searchString = useSearch();
   const targetCaseId = new URLSearchParams(searchString).get("caseId");
+  const [selectedStatus, setSelectedStatus] = useState("new");
 
   const isAdmin = user?.role === "admin";
 
@@ -1152,7 +1148,7 @@ export default function ConsultantCases() {
   };
 
   // 顧問中心不顯示待分派顧問（包含管理員身份）；待分派案件移至管理員後台
-  const allTabs = TAB_ORDER;
+  const selectedItems = selectedStatus === "all" ? allItems : tabItems(selectedStatus);
 
   return (
     <div className="min-h-screen bg-background">
@@ -1167,60 +1163,35 @@ export default function ConsultantCases() {
           <h1 className="text-xl font-bold">顧問中心</h1>
         </div>
 
-        {/* 統計卡（橫向捲動，不含待分派顧問） */}
-        <div className="overflow-x-auto pb-1">
-          <div className="flex gap-3 min-w-max">
-            <StatCard label="新案件"     count={stats.new}          color="blue" />
-            <StatCard label="評估中"     count={stats.evaluating}   color="cyan" />
-            <StatCard label="資格不符"   count={stats.ineligible}   color="red" />
-            <StatCard label="緩追區"     count={stats.deferred}     color="orange" />
-            <StatCard label="已立案處理" count={stats.accepted}     color="violet" />
-            <StatCard label="已送出審核" count={stats.submitted}    color="amber" />
-            <StatCard label="政府駁回"   count={stats.rejected}     color="rose" />
-            <StatCard label="企業轉型中" count={stats.transforming}  color="teal" />
-            <StatCard label="案件結案"   count={stats.completed}    color="emerald" />
-          </div>
-        </div>
+        {/* 狀態統計卡 + 分類 Tab（不含待分派顧問，見上方註解），單一
+            selectedStatus 同步統計卡與 Tab 的選取狀態。 */}
+        <CaseStatusOverview
+          statuses={UPGRADE_STATUS_DEFS}
+          counts={stats}
+          totalCount={allItems.length}
+          selectedStatus={selectedStatus}
+          onStatusChange={setSelectedStatus}
+        />
 
-        {/* Tabs */}
-        <Tabs defaultValue="new">
-          <div className="overflow-x-auto pb-1">
-            <TabsList className="flex h-auto gap-1 w-max lg:w-full">
-              {allTabs.map(t => (
-                <TabsTrigger key={t.key} value={t.key} className="text-xs whitespace-nowrap lg:flex-1">
-                  {t.label}
-                  {tabCount(t.key) > 0 && (
-                    <span className="ml-1.5 inline-flex items-center justify-center rounded-full bg-muted text-muted-foreground w-4 h-4 text-[10px] font-bold">
-                      {tabCount(t.key)}
-                    </span>
-                  )}
-                </TabsTrigger>
+        <div className="mt-4">
+          {allCasesQuery.isLoading ? (
+            <AppLoading />
+          ) : selectedStatus === "new" ? (
+            <NewCasesSplit items={tabItems("new")} targetCaseId={targetCaseId} />
+          ) : selectedItems.length === 0 ? (
+            <div className="text-center py-16 text-muted-foreground">
+              <Building2 className="w-10 h-10 mx-auto mb-3 opacity-30" />
+              <p className="text-sm">目前沒有{selectedStatus === "all" ? "" : (TAB_ORDER.find(t => t.key === selectedStatus)?.label ?? "")}案件</p>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <p className="text-xs text-muted-foreground">共 {selectedItems.length} 筆</p>
+              {selectedItems.map(item => (
+                <CaseCard key={item.id} item={item} defaultExpanded={String(item.id) === targetCaseId} />
               ))}
-            </TabsList>
-          </div>
-
-          {allTabs.map(t => (
-            <TabsContent key={t.key} value={t.key} className="mt-4">
-              {allCasesQuery.isLoading ? (
-                <AppLoading />
-              ) : t.key === "new" ? (
-                <NewCasesSplit items={tabItems("new")} targetCaseId={targetCaseId} />
-              ) : tabItems(t.key).length === 0 ? (
-                <div className="text-center py-16 text-muted-foreground">
-                  <Building2 className="w-10 h-10 mx-auto mb-3 opacity-30" />
-                  <p className="text-sm">目前沒有{t.label}案件</p>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  <p className="text-xs text-muted-foreground">共 {tabItems(t.key).length} 筆</p>
-                  {tabItems(t.key).map(item => (
-                    <CaseCard key={item.id} item={item} defaultExpanded={String(item.id) === targetCaseId} />
-                  ))}
-                </div>
-              )}
-            </TabsContent>
-          ))}
-        </Tabs>
+            </div>
+          )}
+        </div>
 
       </div>
     </div>
