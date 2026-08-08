@@ -4,7 +4,7 @@ import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { AlertCircle, BarChart3, Users, Factory, Zap, MessageSquare, Star, ArrowLeft, HeadphonesIcon, Megaphone, Newspaper, Eye, Send, CheckCircle, XCircle, TrendingUp, PiggyBank, ShieldCheck, FileCheck2, Cog, Clapperboard, ClipboardList, Landmark } from "lucide-react";
+import { AlertCircle, BarChart3, Users, Factory, Zap, MessageSquare, Star, ArrowLeft, HeadphonesIcon, Megaphone, Newspaper, Eye, Send, CheckCircle, XCircle, ShieldCheck, FileCheck2, Cog, Clapperboard, ClipboardList, Landmark, UserCog, ExternalLink } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
@@ -279,35 +279,14 @@ function AdminDashboardContent() {
             </CardContent>
           </Card>
 
-          <Card className="cursor-pointer hover:shadow-lg transition-shadow" onClick={() => setLocation("/admin/upgrade-applications")}>
+          {/* 顧問管理——五種顧問（政府補助／企業財務優化／ISO低碳認證／ERP產線優化／
+              短影音品牌內容）帳號綁定、啟用狀態與新增的統一入口，取代原本散落在
+              各服務管理頁的顧問身份綁定功能；不影響各服務案件管理頁的案件承辦／
+              派案操作，見 AdminConsultantManagement.tsx。 */}
+          <Card className="cursor-pointer hover:shadow-lg transition-shadow" onClick={() => setLocation("/admin/consultant-management")}>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-gray-600 flex items-center gap-2">
-                <TrendingUp className="h-4 w-4" />企業升級申請
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold text-orange-500">→</div>
-            </CardContent>
-          </Card>
-
-          {/* 認證服務管理——ISO 與低碳認證專區公開頁（/certification-center）
-              目前刻意不對外開放入口，這裡是唯一的入口，只有管理員登入後台
-              才看得到，不代表公開頁在網站導覽中曝光。 */}
-          <Card className="cursor-pointer hover:shadow-lg transition-shadow" onClick={() => setLocation("/admin/certification-services")}>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-gray-600 flex items-center gap-2">
-                <ShieldCheck className="h-4 w-4" />認證服務管理
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold text-orange-500">→</div>
-            </CardContent>
-          </Card>
-
-          <Card className="cursor-pointer hover:shadow-lg transition-shadow" onClick={() => setLocation("/admin/finance-applications")}>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-gray-600 flex items-center gap-2">
-                <PiggyBank className="h-4 w-4" />企業財務優化案件
+                <UserCog className="h-4 w-4" />顧問管理
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -366,15 +345,26 @@ function AdminDashboardContent() {
         <div className="mb-8">
           <h2 className="text-lg font-semibold text-gray-900 mb-3">服務案件管理</h2>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <Card className="cursor-pointer hover:shadow-lg transition-shadow" onClick={() => setLocation("/upgrade-consultant/cases")}>
+            <Card className="cursor-pointer hover:shadow-lg transition-shadow relative" onClick={() => setLocation("/upgrade-consultant/cases")}>
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm font-medium text-gray-600 flex items-center gap-2">
                   <ClipboardList className="h-4 w-4" />企業升級案件管理
                 </CardTitle>
                 <CardDescription className="text-xs">查看政府補助申請案件與顧問承辦進度</CardDescription>
               </CardHeader>
-              <CardContent>
+              <CardContent className="flex items-end justify-between">
                 <div className="text-2xl font-bold text-orange-500">→</div>
+                {/* 次要入口：企業升級申請管理員操作頁（狀態調整／案件明細），
+                    route 與功能維持原樣，只是把入口從上方獨立卡片搬到這裡；
+                    stopPropagation 避免整張卡片的 onClick 一起被觸發。 */}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 text-xs gap-1 shrink-0"
+                  onClick={(e) => { e.stopPropagation(); setLocation("/admin/upgrade-applications"); }}
+                >
+                  申請管理<ExternalLink className="h-3 w-3" />
+                </Button>
               </CardContent>
             </Card>
 
@@ -390,15 +380,26 @@ function AdminDashboardContent() {
               </CardContent>
             </Card>
 
-            <Card className="cursor-pointer hover:shadow-lg transition-shadow" onClick={() => setLocation("/certification-consultant/cases")}>
+            <Card className="cursor-pointer hover:shadow-lg transition-shadow relative" onClick={() => setLocation("/certification-consultant/cases")}>
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm font-medium text-gray-600 flex items-center gap-2">
                   <FileCheck2 className="h-4 w-4" />ISO／低碳案件管理
                 </CardTitle>
                 <CardDescription className="text-xs">查看認證服務案件與處理未指派案件</CardDescription>
               </CardHeader>
-              <CardContent>
+              <CardContent className="flex items-end justify-between">
                 <div className="text-2xl font-bold text-orange-500">→</div>
+                {/* 次要入口：認證服務目錄管理（服務項目上下架／編輯），route 與
+                    功能維持原樣，只是把入口從上方獨立卡片搬到這裡；
+                    stopPropagation 避免整張卡片的 onClick 一起被觸發。 */}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 text-xs gap-1 shrink-0"
+                  onClick={(e) => { e.stopPropagation(); setLocation("/admin/certification-services"); }}
+                >
+                  服務認證管理<ExternalLink className="h-3 w-3" />
+                </Button>
               </CardContent>
             </Card>
 

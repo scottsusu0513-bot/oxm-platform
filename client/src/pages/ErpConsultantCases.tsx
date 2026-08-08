@@ -297,7 +297,13 @@ export default function ErpConsultantCases() {
   if (casesQuery.isPending) return <AppLoading />;
   if (casesQuery.error) return <NoPermissionView message={casesQuery.error.message} />;
 
-  const items = (casesQuery.data ?? []).filter((c: any) => c.status !== "unassigned");
+  // Admin 的「全部案件」本來就包含 unassigned（後端 myCases 對 admin 無 status
+  // 篩選），且 admin 不會另外渲染下方的待取件區塊，故此處不需要再濾掉 unassigned，
+  // 否則會讓 admin 完全看不到尚未指派顧問的案件。一般顧問則維持原本的「我的案件」
+  // 定義，不應包含 unassigned（那些顯示在下方待取件區塊，需先取件才會進來）。
+  const items = isAdmin
+    ? (casesQuery.data ?? [])
+    : (casesQuery.data ?? []).filter((c: any) => c.status !== "unassigned");
   const unassignedItems = unassignedQuery.data ?? [];
 
   return (

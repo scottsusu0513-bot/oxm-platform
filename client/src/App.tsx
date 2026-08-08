@@ -89,6 +89,7 @@ const NewsDetail            = lazy(() => import("./pages/NewsDetail"));
 const AdminMessages         = lazy(() => import("./pages/AdminMessages"));
 const AdminMessageDetail    = lazy(() => import("./pages/AdminMessageDetail"));
 const AdminCertificationServices = lazy(() => import("./pages/AdminCertificationServices"));
+const AdminConsultantManagement = lazy(() => import("./pages/AdminConsultantManagement"));
 
 // ── App badge count syncer ────────────────────────────────────────────────────
 // 只在 Capacitor native app 執行，沿用 Navbar 相同紅點邏輯計算 badge 數字
@@ -370,6 +371,7 @@ function Router() {
         <Route path="/certification-center" component={CertificationCenter} />
         <Route path="/certification-consultant/cases" component={CertificationConsultantCases} />
         <Route path="/admin/certification-services" component={AdminCertificationServices} />
+        <Route path="/admin/consultant-management" component={AdminConsultantManagement} />
         {/* ERP 與產線優化專區隱藏預覽頁：同上，只能直接輸入網址開啟，網站內
             任何位置都不得加入連結入口；noindex／nofollow 見頁面 Helmet 與
             server/_core/security.ts setupNoIndexRoutes 的 X-Robots-Tag。

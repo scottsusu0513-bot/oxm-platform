@@ -8,7 +8,6 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import {
   ArrowLeft, ChevronDown, ChevronUp, Building2, Phone, Mail, MapPin,
@@ -568,110 +567,10 @@ function StatsTab() {
   );
 }
 
-// ── 顧問綁定分頁 ──────────────────────────────────────────────────────────────
-
-function ConsultantBindTab() {
-  const utils = trpc.useUtils();
-  const query = trpc.upgradeConsultant.adminListConsultants.useQuery();
-  const bindMutation = trpc.upgradeConsultant.adminBindUser.useMutation({
-    onSuccess: (data) => {
-      utils.upgradeConsultant.adminListConsultants.invalidate();
-      utils.upgradeConsultant.adminStats.invalidate();
-      utils.upgradeCenter.adminList.invalidate();
-      const count = data.backfilledCount ?? 0;
-      if (count > 0) {
-        toast.success(`顧問綁定成功，已自動補派 ${count} 筆待分派案件。`);
-      } else {
-        toast.success("顧問綁定成功，目前沒有待補派案件。");
-      }
-    },
-    onError: (err) => toast.error(err.message || "操作失敗"),
-  });
-
-  const [userIdInputs, setUserIdInputs] = useState<Record<number, string>>({});
-
-  if (query.isLoading) return <AppLoading />;
-  if (!query.data?.length) return <p className="text-sm text-muted-foreground py-8 text-center">無顧問資料</p>;
-
-  return (
-    <div className="space-y-4">
-      <p className="text-xs text-muted-foreground">設定每個地區顧問所對應的使用者帳號（輸入 userId）</p>
-      {query.data.map(consultant => (
-        <Card key={consultant.id}>
-          <CardContent className="p-4 space-y-3">
-            <div className="flex items-center gap-3">
-              <Users className="w-4 h-4 text-muted-foreground" />
-              <div>
-                <p className="font-medium text-sm">{consultant.name}</p>
-                <p className="text-xs text-muted-foreground">{REGION_LABELS[consultant.regionKey]} 地區</p>
-              </div>
-              <Badge className="ml-auto" variant={consultant.isActive ? "default" : "secondary"}>
-                {consultant.isActive ? "啟用" : "停用"}
-              </Badge>
-            </div>
-
-            <div className="text-xs text-muted-foreground">
-              服務縣市：{(consultant.serviceAreas as string[]).join("、")}
-            </div>
-
-            <div className="space-y-1.5">
-              {consultant.userId == null ? (
-                <p className="text-xs text-muted-foreground">目前尚未綁定使用者</p>
-              ) : (
-                <>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs shrink-0 text-muted-foreground">userId：</span>
-                    <span className="text-xs font-mono bg-muted px-2 py-0.5 rounded">{consultant.userId}</span>
-                  </div>
-                  {consultant.boundUser ? (
-                    <div className="text-xs text-muted-foreground space-y-0.5 pl-2 border-l-2 border-muted ml-1">
-                      <p>使用者名稱：{consultant.boundUser.name ?? "未提供名稱"}</p>
-                      <p className="break-all">Email：{consultant.boundUser.email ?? "—"}</p>
-                      <p>建立時間：{new Date(consultant.boundUser.createdAt).toLocaleString("zh-TW", {
-                        timeZone: "Asia/Taipei", year: "numeric", month: "2-digit",
-                        day: "2-digit", hour: "2-digit", minute: "2-digit",
-                      })}</p>
-                    </div>
-                  ) : (
-                    <p className="text-xs text-amber-600">查無此使用者資料，請確認 userId 是否正確</p>
-                  )}
-                </>
-              )}
-            </div>
-
-            <div className="flex gap-2">
-              <Input
-                className="h-8 text-xs"
-                placeholder="輸入 userId（數字）"
-                value={userIdInputs[consultant.id] ?? ""}
-                onChange={e => setUserIdInputs(prev => ({ ...prev, [consultant.id]: e.target.value }))}
-              />
-              <Button
-                size="sm"
-                className="h-8 text-xs shrink-0"
-                disabled={bindMutation.isPending}
-                onClick={() => {
-                  const val = userIdInputs[consultant.id]?.trim();
-                  const userId = val ? parseInt(val, 10) : null;
-                  if (val && (isNaN(userId!) || userId! <= 0)) {
-                    toast.error("請輸入有效的數字 userId");
-                    return;
-                  }
-                  bindMutation.mutate({ consultantId: consultant.id, userId });
-                  setUserIdInputs(prev => ({ ...prev, [consultant.id]: "" }));
-                }}
-              >
-                {userIdInputs[consultant.id]?.trim() ? "綁定" : "解除綁定"}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      ))}
-    </div>
-  );
-}
-
 // ── 主頁面 ────────────────────────────────────────────────────────────────────
+// 顧問身份綁定／啟停用已搬到獨立的「顧問管理」專區（/admin/consultant-management，
+// AdminConsultantManagement.tsx），這裡不再重複維護；本頁只負責案件層級的
+// 狀態管理／查看（見上方 ApplicationList／UnassignedTab／StatsTab）。
 
 export default function AdminUpgradeApplications() {
   const { user, loading } = useAuth();
@@ -709,10 +608,10 @@ export default function AdminUpgradeApplications() {
             <TabsTrigger value="transforming"className="text-xs whitespace-nowrap">企業轉型中</TabsTrigger>
             <TabsTrigger value="completed"   className="text-xs whitespace-nowrap">案件結案</TabsTrigger>
             <TabsTrigger value="archived"    className="text-xs whitespace-nowrap">封存</TabsTrigger>
-            {/* 管理工具（顧問總覽 → 待分派案件 → 顧問設定） */}
+            {/* 管理工具（顧問總覽 → 待分派案件）。顧問身份綁定／啟停用已搬到
+                獨立的「顧問管理」專區，不在這裡重複提供。 */}
             <TabsTrigger value="stats"       className="text-xs whitespace-nowrap font-semibold">顧問總覽</TabsTrigger>
             <TabsTrigger value="unassigned"  className="text-xs whitespace-nowrap font-semibold">待分派案件</TabsTrigger>
-            <TabsTrigger value="consultants" className="text-xs whitespace-nowrap font-semibold">顧問設定</TabsTrigger>
           </TabsList>
 
           <TabsContent value="all" className="mt-4">
@@ -728,9 +627,6 @@ export default function AdminUpgradeApplications() {
           </TabsContent>
           <TabsContent value="unassigned" className="mt-4">
             <UnassignedTab />
-          </TabsContent>
-          <TabsContent value="consultants" className="mt-4">
-            <ConsultantBindTab />
           </TabsContent>
         </Tabs>
       </div>

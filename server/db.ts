@@ -8188,12 +8188,31 @@ export function findConsultantForApplicationRegion(
  * 「這個使用者名下所有 isActive 顧問列」去比對案件地區，天生就支援一人
  * 綁定多個地區，不需要額外改動權限判斷邏輯。
  */
+// 注意：這裡刻意不像 financeConsultant／certificationConsultant 等其他四種
+// 顧問一樣擋「同一使用者已綁定其他席位」——upgradeConsultants 是唯一沒有
+// userId UNIQUE 索引的顧問表，見 server/upgradeConsultantRegion.test.ts
+// 「同一帳號可以同時綁定多個地區」：現實中存在北、南都有服務據點的顧問，
+// 這是刻意保留、已有回歸測試覆蓋的既有業務規則，不是遺漏，不要加驗證擋下。
 export async function bindConsultantUser(consultantId: number, userId: number | null): Promise<void> {
   const db_ = await getDb();
   if (!db_) return;
   await db_.update(upgradeConsultants)
     .set({ userId })
     .where(eq(upgradeConsultants.id, consultantId));
+}
+
+// 政府補助顧問啟停用：與 financeConsultant／certificationConsultant／
+// erpConsultant／shortVideoConsultant 的 adminSetXConsultantActive 不同，
+// 這裡刻意不做「停用時把 open 案件 cascade 改回 unassigned」——政府補助的
+// 顧問可視權限（myCases／acknowledge／updateCaseStatus）本來就是用
+// findConsultantForApplicationRegion 依「案件地區」比對「顧問目前有效的
+// active 區域身分」，不是看 upgradeApplications.assignedConsultantId；
+// 停用後該地區立刻沒有 active 顧問能操作案件，等同已經達到 cascade 的效果，
+// 不需要額外改寫案件列，也避免搬動 assignedConsultantId 這個歷史紀錄欄位。
+export async function adminSetConsultantActive(id: number, isActive: boolean): Promise<void> {
+  const db_ = await getDb();
+  if (!db_) return;
+  await db_.update(upgradeConsultants).set({ isActive }).where(eq(upgradeConsultants.id, id));
 }
 
 export async function getConsultantById(id: number): Promise<UpgradeConsultant | undefined> {
@@ -9116,10 +9135,27 @@ export async function getShortVideoConsultantById(id: number): Promise<ShortVide
   return row;
 }
 
-export async function listAllShortVideoConsultants(): Promise<ShortVideoConsultant[]> {
+export type ShortVideoConsultantWithBoundUser = ShortVideoConsultant & { boundUser: BoundUserInfo | null };
+
+export async function listAllShortVideoConsultants(): Promise<ShortVideoConsultantWithBoundUser[]> {
   const db_ = await getDb();
   if (!db_) return [];
-  return db_.select().from(shortVideoConsultants).orderBy(shortVideoConsultants.id);
+  const consultants = await db_.select().from(shortVideoConsultants).orderBy(shortVideoConsultants.id);
+  const userIds = consultants.map(c => c.userId).filter((id): id is number => id != null);
+  const userMap = new Map<number, BoundUserInfo>();
+  if (userIds.length > 0) {
+    const fetched = await db_
+      .select({
+        id: users.id,
+        name: users.name,
+        email: sql<string | null>`COALESCE(${users.primaryEmail}, ${users.email})`,
+        createdAt: users.createdAt,
+      })
+      .from(users)
+      .where(inArray(users.id, userIds));
+    fetched.forEach(u => userMap.set(u.id, u));
+  }
+  return consultants.map(c => ({ ...c, boundUser: c.userId != null ? (userMap.get(c.userId) ?? null) : null }));
 }
 
 export async function adminCreateShortVideoConsultant(name: string, serviceAreas: string[] = []): Promise<number> {
@@ -9407,10 +9443,27 @@ export async function getCertificationConsultantById(id: number): Promise<Certif
   return row;
 }
 
-export async function listAllCertificationConsultants(): Promise<CertificationConsultant[]> {
+export type CertificationConsultantWithBoundUser = CertificationConsultant & { boundUser: BoundUserInfo | null };
+
+export async function listAllCertificationConsultants(): Promise<CertificationConsultantWithBoundUser[]> {
   const db_ = await getDb();
   if (!db_) return [];
-  return db_.select().from(certificationConsultants).orderBy(certificationConsultants.id);
+  const consultants = await db_.select().from(certificationConsultants).orderBy(certificationConsultants.id);
+  const userIds = consultants.map(c => c.userId).filter((id): id is number => id != null);
+  const userMap = new Map<number, BoundUserInfo>();
+  if (userIds.length > 0) {
+    const fetched = await db_
+      .select({
+        id: users.id,
+        name: users.name,
+        email: sql<string | null>`COALESCE(${users.primaryEmail}, ${users.email})`,
+        createdAt: users.createdAt,
+      })
+      .from(users)
+      .where(inArray(users.id, userIds));
+    fetched.forEach(u => userMap.set(u.id, u));
+  }
+  return consultants.map(c => ({ ...c, boundUser: c.userId != null ? (userMap.get(c.userId) ?? null) : null }));
 }
 
 export async function adminCreateCertificationConsultant(name: string, serviceAreas: string[] = []): Promise<number> {
@@ -9686,10 +9739,27 @@ export async function getErpConsultantById(id: number): Promise<ErpConsultant | 
   return row;
 }
 
-export async function listAllErpConsultants(): Promise<ErpConsultant[]> {
+export type ErpConsultantWithBoundUser = ErpConsultant & { boundUser: BoundUserInfo | null };
+
+export async function listAllErpConsultants(): Promise<ErpConsultantWithBoundUser[]> {
   const db_ = await getDb();
   if (!db_) return [];
-  return db_.select().from(erpConsultants).orderBy(erpConsultants.id);
+  const consultants = await db_.select().from(erpConsultants).orderBy(erpConsultants.id);
+  const userIds = consultants.map(c => c.userId).filter((id): id is number => id != null);
+  const userMap = new Map<number, BoundUserInfo>();
+  if (userIds.length > 0) {
+    const fetched = await db_
+      .select({
+        id: users.id,
+        name: users.name,
+        email: sql<string | null>`COALESCE(${users.primaryEmail}, ${users.email})`,
+        createdAt: users.createdAt,
+      })
+      .from(users)
+      .where(inArray(users.id, userIds));
+    fetched.forEach(u => userMap.set(u.id, u));
+  }
+  return consultants.map(c => ({ ...c, boundUser: c.userId != null ? (userMap.get(c.userId) ?? null) : null }));
 }
 
 export async function adminCreateErpConsultant(name: string, serviceAreas: string[] = []): Promise<number> {

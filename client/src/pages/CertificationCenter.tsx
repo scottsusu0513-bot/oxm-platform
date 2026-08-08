@@ -255,7 +255,7 @@ export default function CertificationCenter() {
                 const Icon = CATEGORY_ICONS[item.categoryCode] ?? ShieldCheck;
                 return (
                   <Card key={item.id} className="flex flex-col bg-white/90 border-emerald-100 hover:shadow-md transition-shadow">
-                    <CardContent className="p-5 flex flex-col flex-1">
+                    <CardContent className="p-5 flex flex-col">
                       <div className="flex items-center gap-2 mb-2">
                         <span className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-gradient-to-br from-orange-100 to-purple-100 shrink-0">
                           <Icon className="w-4 h-4 text-orange-600" />
@@ -263,7 +263,7 @@ export default function CertificationCenter() {
                         <Badge variant="outline" className="text-[11px]">{item.type}</Badge>
                       </div>
                       <h3 className="font-semibold text-sm mb-1.5 leading-snug">{item.name}</h3>
-                      <p className="text-xs text-muted-foreground leading-relaxed mb-3 flex-1">{item.shortDescription}</p>
+                      <p className="text-xs text-muted-foreground leading-relaxed mb-3">{item.shortDescription}</p>
 
                       {item.applicableNeeds.length > 0 && (
                         <div className="mb-2">
@@ -286,16 +286,8 @@ export default function CertificationCenter() {
                         </div>
                       )}
                       {item.versionNote && (
-                        <p className="text-[11px] text-amber-600 mb-3">{item.versionNote}</p>
+                        <p className="text-[11px] text-amber-600">{item.versionNote}</p>
                       )}
-
-                      <Button
-                        size="sm"
-                        className="mt-2 w-full bg-gradient-to-r from-orange-500 to-purple-600 hover:opacity-90 text-white border-0"
-                        onClick={() => openConsultPreview(item.code)}
-                      >
-                        免費初步諮詢
-                      </Button>
                     </CardContent>
                   </Card>
                 );

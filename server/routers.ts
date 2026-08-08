@@ -7411,6 +7411,17 @@ export const appRouter = router({
     adminStats: adminProcedure.query(async () => {
       return db.adminGetUpgradeStats();
     }),
+
+    // 管理員：啟用／停用地區顧問席位（席位本身固定北中南三席，不可新增／
+    // 刪除，見 db.adminSetConsultantActive 內註解說明為何這裡不需要 cascade
+    // 重新指派案件）。
+    adminSetActive: adminProcedure.input(z.object({
+      consultantId: z.number(),
+      isActive: z.boolean(),
+    })).mutation(async ({ input }) => {
+      await db.adminSetConsultantActive(input.consultantId, input.isActive);
+      return { success: true };
+    }),
   }),
 
   // ===== 企業財務優化 =====
