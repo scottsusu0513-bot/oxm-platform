@@ -8320,6 +8320,41 @@ export function resolveActorNameSnapshot(user: { id: number; name: string | null
   return user.name ?? user.primaryEmail ?? user.email ?? `使用者 #${user.id}`;
 }
 
+/**
+ * ISO／ERP／短影音三個新服務共用的 append-only 狀態歷程項目——每次
+ * claimXCase／updateXCaseStatus／adminForceXCaseStatus 都會推入一筆，不覆蓋
+ * 先前紀錄。action 區分「一般狀態轉移」與「取件」，forced 標記管理員略過
+ * 轉移規則的強制修正（一律連同 reason 一起記錄，供事後稽核）。
+ */
+export type CaseStatusHistoryEntry = {
+  status: string;
+  at: string;
+  byUserId: number;
+  byName: string;
+  reason?: string;
+  forced?: boolean;
+  action?: "claim" | "status_update" | "admin_force";
+};
+
+function appendCaseStatusHistory(
+  existing: CaseStatusHistoryEntry[] | null | undefined,
+  entry: CaseStatusHistoryEntry,
+): CaseStatusHistoryEntry[] {
+  return [...(existing ?? []), entry];
+}
+
+/**
+ * 顧問嘗試自助取件（或系統重新查詢後）發現案件已被其他顧問搶先取件／
+ * 已被管理員指派時拋出。server/routers.ts 對應 mutation 會轉成 TRPCError
+ * CONFLICT，前端據此顯示「案件已由其他顧問承接」並重新整理列表。
+ */
+export class CaseAlreadyClaimedError extends Error {
+  constructor() {
+    super("案件已由其他顧問承接，請重新整理");
+    this.name = "CaseAlreadyClaimedError";
+  }
+}
+
 export async function acknowledgeUpgradeApplication(
   id: number,
   consultantId: number,
@@ -9150,7 +9185,12 @@ export async function adminBindShortVideoConsultantUser(id: number, userId: numb
   }));
 }
 
-const SHORT_VIDEO_OPEN_STATUSES_DB = ["new", "evaluating", "proposal", "in_progress", "deferred", "unassigned"] as const;
+// 含 'evaluating' 這個舊值：0075 是向後相容 additive migration，enum 仍保留舊九態，
+// 部署切換期間任何殘留舊值的資料列都必須繼續被視為未結案。
+const SHORT_VIDEO_OPEN_STATUSES_DB = [
+  "new", "evaluating", "proposal", "in_progress", "deferred", "unassigned",
+  "needs_interview", "pre_production", "script_review", "draft_review", "delivered", "ongoing_operation",
+] as const;
 
 /**
  * 自動指派候選人：必須同時符合 isActive=true、userId 已綁定，且
@@ -9263,18 +9303,57 @@ export async function updateShortVideoCaseStatus(
   id: number,
   status: ShortVideoCase["status"],
   updatedBy?: CaseUpdatedBy,
+  opts?: { reason?: string; forced?: boolean },
 ): Promise<void> {
   const db_ = await getDb();
   if (!db_) return;
-  const [cur] = await db_.select({ tl: shortVideoCases.statusTimeline })
+  const [cur] = await db_.select({ tl: shortVideoCases.statusTimeline, history: shortVideoCases.statusHistory })
     .from(shortVideoCases).where(eq(shortVideoCases.id, id));
   const existing = (cur?.tl ?? {}) as Record<string, string>;
   const newTl = { ...existing };
-  if (!newTl[status]) newTl[status] = new Date().toISOString();
+  const nowIso = new Date().toISOString();
+  if (!newTl[status]) newTl[status] = nowIso;
+  const newHistory = appendCaseStatusHistory(cur?.history as CaseStatusHistoryEntry[] | null, {
+    status, at: nowIso,
+    byUserId: updatedBy?.userId ?? 0, byName: updatedBy?.name ?? "",
+    reason: opts?.reason, forced: opts?.forced,
+    action: opts?.forced ? "admin_force" : "status_update",
+  });
   await db_.update(shortVideoCases).set({
-    status, statusTimeline: newTl,
+    status, statusTimeline: newTl, statusHistory: newHistory,
+    ...(opts?.reason ? { statusReason: opts.reason } : {}),
     ...(updatedBy ? { lastUpdatedByUserId: updatedBy.userId, lastUpdatedByNameSnapshot: updatedBy.name } : {}),
   }).where(eq(shortVideoCases.id, id));
+}
+
+/** 短影音版自助取件，邏輯與 claimCertificationCase 完全對稱，見該處註解。 */
+export async function claimShortVideoCase(caseId: number, consultantId: number, updatedBy: CaseUpdatedBy): Promise<ShortVideoCase> {
+  const db_ = await getDb();
+  if (!db_) throw new Error("DB not available");
+  return withDeadlockRetry(() => db_.transaction(async (tx) => {
+    const [item] = await tx.select().from(shortVideoCases).where(eq(shortVideoCases.id, caseId)).for("update");
+    if (!item) throw new Error("找不到案件");
+    if (item.status !== "unassigned" || item.assignedConsultantId != null) {
+      throw new CaseAlreadyClaimedError();
+    }
+    const nowIso = new Date().toISOString();
+    const existingTl = (item.statusTimeline ?? {}) as Record<string, string>;
+    const newTl = { ...existingTl };
+    if (!newTl.new) newTl.new = nowIso;
+    const newHistory = appendCaseStatusHistory(item.statusHistory as CaseStatusHistoryEntry[] | null, {
+      status: "new", at: nowIso, byUserId: updatedBy.userId, byName: updatedBy.name, action: "claim",
+    });
+    await tx.update(shortVideoCases).set({
+      assignedConsultantId: consultantId,
+      status: "new",
+      claimedAt: new Date(),
+      statusTimeline: newTl,
+      statusHistory: newHistory,
+      lastUpdatedByUserId: updatedBy.userId,
+      lastUpdatedByNameSnapshot: updatedBy.name,
+    }).where(eq(shortVideoCases.id, caseId));
+    return { ...item, assignedConsultantId: consultantId, status: "new" as const, statusTimeline: newTl, statusHistory: newHistory };
+  }));
 }
 
 export async function updateShortVideoCaseNotes(id: number, notes: string | null, updatedBy?: CaseUpdatedBy): Promise<void> {
@@ -9341,7 +9420,12 @@ export async function adminCreateCertificationConsultant(name: string, serviceAr
   return result.insertId;
 }
 
-const CERTIFICATION_OPEN_STATUSES_DB = ["new", "evaluating", "proposal", "in_progress", "deferred", "unassigned"] as const;
+// 含 'evaluating' 這個舊值：0075 是向後相容 additive migration，enum 仍保留舊九態，
+// 部署切換期間任何殘留舊值的資料列都必須繼續被視為未結案。
+const CERTIFICATION_OPEN_STATUSES_DB = [
+  "new", "evaluating", "proposal", "in_progress", "deferred", "unassigned",
+  "needs_interview", "scope_assessment", "pre_review", "verification",
+] as const;
 
 async function reassignOpenCertificationCasesAwayFromConsultant(
   tx: any, // drizzle transaction handle — only called from within db_.transaction(async (tx) => ...) below
@@ -9492,18 +9576,65 @@ export async function updateCertificationCaseStatus(
   id: number,
   status: CertificationCase["status"],
   updatedBy?: CaseUpdatedBy,
+  opts?: { reason?: string; forced?: boolean },
 ): Promise<void> {
   const db_ = await getDb();
   if (!db_) return;
-  const [cur] = await db_.select({ tl: certificationCases.statusTimeline })
+  const [cur] = await db_.select({ tl: certificationCases.statusTimeline, history: certificationCases.statusHistory })
     .from(certificationCases).where(eq(certificationCases.id, id));
   const existing = (cur?.tl ?? {}) as Record<string, string>;
   const newTl = { ...existing };
-  if (!newTl[status]) newTl[status] = new Date().toISOString();
+  const nowIso = new Date().toISOString();
+  if (!newTl[status]) newTl[status] = nowIso;
+  const newHistory = appendCaseStatusHistory(cur?.history as CaseStatusHistoryEntry[] | null, {
+    status, at: nowIso,
+    byUserId: updatedBy?.userId ?? 0, byName: updatedBy?.name ?? "",
+    reason: opts?.reason, forced: opts?.forced,
+    action: opts?.forced ? "admin_force" : "status_update",
+  });
   await db_.update(certificationCases).set({
-    status, statusTimeline: newTl,
+    status, statusTimeline: newTl, statusHistory: newHistory,
+    ...(opts?.reason ? { statusReason: opts.reason } : {}),
     ...(updatedBy ? { lastUpdatedByUserId: updatedBy.userId, lastUpdatedByNameSnapshot: updatedBy.name } : {}),
   }).where(eq(certificationCases.id, id));
+}
+
+/**
+ * 顧問自助取件：以 transaction + `.for("update")` 鎖定該筆案件所在資料列，
+ * 重新確認鎖定當下仍是 status='unassigned' 且 assignedConsultantId 為
+ * NULL——只有第一個成功鎖定並通過這個再次檢查的請求會成功，第二位（不論
+ * 是另一位顧問或同一位重複點擊）一律拋出 CaseAlreadyClaimedError，不會
+ * 產生「兩位顧問同時取件都成功」的競態。成功後寫入 assignedConsultantId、
+ * status（'unassigned'→'new'）、claimedAt、statusTimeline／statusHistory
+ * 與最後更新者快照。
+ */
+export async function claimCertificationCase(caseId: number, consultantId: number, updatedBy: CaseUpdatedBy): Promise<CertificationCase> {
+  const db_ = await getDb();
+  if (!db_) throw new Error("DB not available");
+  return withDeadlockRetry(() => db_.transaction(async (tx) => {
+    const [item] = await tx.select().from(certificationCases).where(eq(certificationCases.id, caseId)).for("update");
+    if (!item) throw new Error("找不到案件");
+    if (item.status !== "unassigned" || item.assignedConsultantId != null) {
+      throw new CaseAlreadyClaimedError();
+    }
+    const nowIso = new Date().toISOString();
+    const existingTl = (item.statusTimeline ?? {}) as Record<string, string>;
+    const newTl = { ...existingTl };
+    if (!newTl.new) newTl.new = nowIso;
+    const newHistory = appendCaseStatusHistory(item.statusHistory as CaseStatusHistoryEntry[] | null, {
+      status: "new", at: nowIso, byUserId: updatedBy.userId, byName: updatedBy.name, action: "claim",
+    });
+    await tx.update(certificationCases).set({
+      assignedConsultantId: consultantId,
+      status: "new",
+      claimedAt: new Date(),
+      statusTimeline: newTl,
+      statusHistory: newHistory,
+      lastUpdatedByUserId: updatedBy.userId,
+      lastUpdatedByNameSnapshot: updatedBy.name,
+    }).where(eq(certificationCases.id, caseId));
+    return { ...item, assignedConsultantId: consultantId, status: "new" as const, statusTimeline: newTl, statusHistory: newHistory };
+  }));
 }
 
 export async function updateCertificationCaseNotes(id: number, notes: string | null, updatedBy?: CaseUpdatedBy): Promise<void> {
@@ -9568,7 +9699,12 @@ export async function adminCreateErpConsultant(name: string, serviceAreas: strin
   return result.insertId;
 }
 
-const ERP_OPEN_STATUSES_DB = ["new", "evaluating", "proposal", "in_progress", "deferred", "unassigned"] as const;
+// 含 'evaluating' 這個舊值：0075 是向後相容 additive migration，enum 仍保留舊九態，
+// 部署切換期間任何殘留舊值的資料列都必須繼續被視為未結案。
+const ERP_OPEN_STATUSES_DB = [
+  "new", "evaluating", "proposal", "in_progress", "deferred", "unassigned",
+  "needs_triage", "diagnosis", "solution_design", "pilot_adjustment", "acceptance",
+] as const;
 
 async function reassignOpenErpCasesAwayFromConsultant(
   tx: any, // drizzle transaction handle — only called from within db_.transaction(async (tx) => ...) below
@@ -9715,18 +9851,57 @@ export async function updateErpCaseStatus(
   id: number,
   status: ErpCase["status"],
   updatedBy?: CaseUpdatedBy,
+  opts?: { reason?: string; forced?: boolean },
 ): Promise<void> {
   const db_ = await getDb();
   if (!db_) return;
-  const [cur] = await db_.select({ tl: erpCases.statusTimeline })
+  const [cur] = await db_.select({ tl: erpCases.statusTimeline, history: erpCases.statusHistory })
     .from(erpCases).where(eq(erpCases.id, id));
   const existing = (cur?.tl ?? {}) as Record<string, string>;
   const newTl = { ...existing };
-  if (!newTl[status]) newTl[status] = new Date().toISOString();
+  const nowIso = new Date().toISOString();
+  if (!newTl[status]) newTl[status] = nowIso;
+  const newHistory = appendCaseStatusHistory(cur?.history as CaseStatusHistoryEntry[] | null, {
+    status, at: nowIso,
+    byUserId: updatedBy?.userId ?? 0, byName: updatedBy?.name ?? "",
+    reason: opts?.reason, forced: opts?.forced,
+    action: opts?.forced ? "admin_force" : "status_update",
+  });
   await db_.update(erpCases).set({
-    status, statusTimeline: newTl,
+    status, statusTimeline: newTl, statusHistory: newHistory,
+    ...(opts?.reason ? { statusReason: opts.reason } : {}),
     ...(updatedBy ? { lastUpdatedByUserId: updatedBy.userId, lastUpdatedByNameSnapshot: updatedBy.name } : {}),
   }).where(eq(erpCases.id, id));
+}
+
+/** ERP 版自助取件，邏輯與 claimCertificationCase 完全對稱，見該處註解。 */
+export async function claimErpCase(caseId: number, consultantId: number, updatedBy: CaseUpdatedBy): Promise<ErpCase> {
+  const db_ = await getDb();
+  if (!db_) throw new Error("DB not available");
+  return withDeadlockRetry(() => db_.transaction(async (tx) => {
+    const [item] = await tx.select().from(erpCases).where(eq(erpCases.id, caseId)).for("update");
+    if (!item) throw new Error("找不到案件");
+    if (item.status !== "unassigned" || item.assignedConsultantId != null) {
+      throw new CaseAlreadyClaimedError();
+    }
+    const nowIso = new Date().toISOString();
+    const existingTl = (item.statusTimeline ?? {}) as Record<string, string>;
+    const newTl = { ...existingTl };
+    if (!newTl.new) newTl.new = nowIso;
+    const newHistory = appendCaseStatusHistory(item.statusHistory as CaseStatusHistoryEntry[] | null, {
+      status: "new", at: nowIso, byUserId: updatedBy.userId, byName: updatedBy.name, action: "claim",
+    });
+    await tx.update(erpCases).set({
+      assignedConsultantId: consultantId,
+      status: "new",
+      claimedAt: new Date(),
+      statusTimeline: newTl,
+      statusHistory: newHistory,
+      lastUpdatedByUserId: updatedBy.userId,
+      lastUpdatedByNameSnapshot: updatedBy.name,
+    }).where(eq(erpCases.id, caseId));
+    return { ...item, assignedConsultantId: consultantId, status: "new" as const, statusTimeline: newTl, statusHistory: newHistory };
+  }));
 }
 
 export async function updateErpCaseNotes(id: number, notes: string | null, updatedBy?: CaseUpdatedBy): Promise<void> {

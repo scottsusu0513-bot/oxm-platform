@@ -1433,23 +1433,40 @@ export const shortVideoCases = mysqlTable("shortVideoCases", {
   noPlatformYet: boolean("noPlatformYet").notNull().default(false),
   additionalNotes: varchar("additionalNotes", { length: 2000 }),
   consentAgreed: boolean("consentAgreed").notNull().default(true),
+  // 短影音／品牌內容專屬流程（見 shared/shortVideoMarketing.ts SHORT_VIDEO_STATUS_TRANSITIONS）：
+  // new(新案件／待聯繫) → needs_interview(需求訪談) → proposal(方案確認) →
+  // pre_production(前期企劃) → script_review(腳本待確認) → in_progress(拍攝／製作中)
+  // → draft_review(初稿審核／修改) → delivered(已交付) → [ongoing_operation(持續代營運)
+  // 長期方案分支，可選] → completed(案件完成)。例外：deferred／no_interest／
+  // not_applicable(不適合承接)／archived，進入例外狀態一律要求 statusReason。
+  // unassigned＝待取件。
+  //
+  // enum 額外保留 'evaluating' 這個目前程式已不再寫入的舊值：drizzle/0075_service_
+  // status_flows.sql 是 additive、向後相容 migration（正式庫已套用 0070/0073/0074，
+  // 本表在正式站上線當下就是舊版九態），保留舊值只是為了部署切換期間新舊版本程式碼
+  // 都能正常讀寫，不代表新版程式邏輯會使用這個值；正式清理舊值另開後續 migration。
   status: mysqlEnum("status", [
-    "new", "evaluating", "proposal", "in_progress", "completed",
-    "deferred", "no_interest", "archived", "unassigned",
+    "new", "evaluating", "proposal", "in_progress", "completed", "deferred", "no_interest", "archived", "unassigned",
+    "needs_interview", "pre_production", "script_review", "draft_review", "delivered", "ongoing_operation", "not_applicable",
   ]).notNull().default("new"),
   assignedConsultantId: int("assignedConsultantId").references(() => shortVideoConsultants.id, { onDelete: "set null" }),
   notes: text("notes"), // 顧問內部備註，僅授權顧問／管理員可見
   statusTimeline: json("statusTimeline").$type<Record<string, string>>(),
+  statusHistory: json("statusHistory").$type<Array<{
+    status: string; at: string; byUserId: number; byName: string; reason?: string; forced?: boolean; action?: string;
+  }>>(),
+  statusReason: varchar("statusReason", { length: 500 }),
+  claimedAt: timestamp("claimedAt"),
   lastUpdatedByUserId: int("lastUpdatedByUserId").references(() => users.id, { onDelete: "set null" }),
   lastUpdatedByNameSnapshot: varchar("lastUpdatedByNameSnapshot", { length: 100 }).notNull().default(""),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-  // 未結案狀態（new/evaluating/proposal/in_progress/deferred/unassigned）時
-  // 等於 factoryId，否則為 NULL，MySQL UNIQUE INDEX 忽略 NULL——只限制「同一
-  // 工廠最多一筆未結案短影音案件」，結案（completed/no_interest/archived）
-  // 後可重新申請。沿用 financeApplications.openFactoryId 手法。
+  // 未結案狀態時等於 factoryId，否則為 NULL，MySQL UNIQUE INDEX 忽略 NULL——只
+  // 限制「同一工廠最多一筆未結案短影音案件」，結案後可重新申請。同時辨識舊九態與
+  // 新增細分狀態中的未結案狀態聯集，新舊資料都能正確算出未結案工廠 id。沿用
+  // financeApplications.openFactoryId 手法。
   openFactoryId: int("openFactoryId").generatedAlwaysAs(
-    sql`CASE WHEN \`status\` IN ('new','evaluating','proposal','in_progress','deferred','unassigned') THEN \`factoryId\` ELSE NULL END`
+    sql`CASE WHEN \`status\` IN ('new','evaluating','proposal','in_progress','deferred','unassigned','needs_interview','pre_production','script_review','draft_review','delivered','ongoing_operation') THEN \`factoryId\` ELSE NULL END`
   ),
 }, (t) => ({
   openFactoryUq: uniqueIndex("svcase_open_factory_uq").on(t.openFactoryId),
@@ -1496,19 +1513,42 @@ export const certificationCases = mysqlTable("certificationCases", {
   isUnsure: boolean("isUnsure").notNull().default(false),
   additionalNotes: varchar("additionalNotes", { length: 2000 }),
   consentAgreed: boolean("consentAgreed").notNull().default(true),
+  // ISO／低碳認證專屬流程（見 shared/certificationCase.ts CERTIFICATION_STATUS_TRANSITIONS
+  // 取得合法轉移規則，drizzle/0075_service_status_flows.sql 由通用九態擴充而來）：
+  // new(新案件／待聯繫) → needs_interview(需求訪談) → scope_assessment(適用性與範圍評估)
+  // → proposal(方案與報價確認) → in_progress(輔導執行中) → pre_review(預審與改善，可視
+  // 服務跳過) → verification(驗證／成果確認) → completed(輔導完成)。
+  // 例外：deferred(緩追)／no_interest(無意願)／not_applicable(不適用／無法承接)／
+  // archived(已封存)，進入例外狀態一律要求 statusReason。unassigned＝待取件。
+  //
+  // enum 額外保留 'evaluating' 這個目前程式已不再寫入的舊值：0075 是 additive、向後
+  // 相容 migration（正式庫已套用 0070/0073/0074，本表上線當下就是舊版九態），保留
+  // 舊值只是為了部署切換期間新舊版本程式碼都能正常讀寫，正式清理舊值另開後續 migration。
   status: mysqlEnum("status", [
-    "new", "evaluating", "proposal", "in_progress", "completed",
-    "deferred", "no_interest", "archived", "unassigned",
+    "new", "evaluating", "proposal", "in_progress", "completed", "deferred", "no_interest", "archived", "unassigned",
+    "needs_interview", "scope_assessment", "pre_review", "verification", "not_applicable",
   ]).notNull().default("new"),
   assignedConsultantId: int("assignedConsultantId").references(() => certificationConsultants.id, { onDelete: "set null" }),
   notes: text("notes"),
+  // 舊版「每個狀態第一次進入時間」map，保留供既有讀取路徑相容；完整操作歷程
+  // （含操作者、備註／原因、是否為管理員強制修正）一律看 statusHistory。
   statusTimeline: json("statusTimeline").$type<Record<string, string>>(),
+  // 完整狀態歷程，append-only，每次 updateCaseStatus／claim／adminForceStatus
+  // 都會推入一筆，不覆蓋先前紀錄——見 server/db.ts CaseStatusHistoryEntry。
+  statusHistory: json("statusHistory").$type<Array<{
+    status: string; at: string; byUserId: number; byName: string; reason?: string; forced?: boolean; action?: string;
+  }>>(),
+  // 進入例外狀態（deferred/no_interest/not_applicable/archived）時的必填原因，
+  // 隨狀態更新覆蓋為最新一次例外原因（歷史原因仍完整保留在 statusHistory）。
+  statusReason: varchar("statusReason", { length: 500 }),
+  // 顧問成功取件（自助取件或管理員指派後第一次進入非 unassigned 狀態）的時間。
+  claimedAt: timestamp("claimedAt"),
   lastUpdatedByUserId: int("lastUpdatedByUserId").references(() => users.id, { onDelete: "set null" }),
   lastUpdatedByNameSnapshot: varchar("lastUpdatedByNameSnapshot", { length: 100 }).notNull().default(""),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   openFactoryId: int("openFactoryId").generatedAlwaysAs(
-    sql`CASE WHEN \`status\` IN ('new','evaluating','proposal','in_progress','deferred','unassigned') THEN \`factoryId\` ELSE NULL END`
+    sql`CASE WHEN \`status\` IN ('new','evaluating','proposal','in_progress','deferred','unassigned','needs_interview','scope_assessment','pre_review','verification') THEN \`factoryId\` ELSE NULL END`
   ),
 }, (t) => ({
   openFactoryUq: uniqueIndex("ccase_open_factory_uq").on(t.openFactoryId),
@@ -1553,19 +1593,34 @@ export const erpCases = mysqlTable("erpCases", {
   needType: mysqlEnum("needType", ["erp_adoption", "line_optimization", "integrated", "unsure"]).notNull(),
   additionalNotes: varchar("additionalNotes", { length: 2000 }),
   consentAgreed: boolean("consentAgreed").notNull().default(true),
+  // ERP／產線優化專屬流程（見 shared/erpOptimization.ts ERP_STATUS_TRANSITIONS）：
+  // new(新案件／待聯繫) → needs_triage(需求分流：確認屬於ERP/產線/整合改善/待判斷)
+  // → diagnosis(現場診斷／流程盤點) → solution_design(改善方案設計) →
+  // proposal(範圍與報價確認) → in_progress(導入執行中) → pilot_adjustment(試行與調整)
+  // → acceptance(驗收中) → completed(專案完成)。例外：deferred／no_interest／
+  // not_applicable／archived，進入例外狀態一律要求 statusReason。unassigned＝待取件。
+  //
+  // enum 額外保留 'evaluating' 這個目前程式已不再寫入的舊值：0075 是 additive、向後
+  // 相容 migration（正式庫已套用 0070/0073/0074，本表上線當下就是舊版九態），保留
+  // 舊值只是為了部署切換期間新舊版本程式碼都能正常讀寫，正式清理舊值另開後續 migration。
   status: mysqlEnum("status", [
-    "new", "evaluating", "proposal", "in_progress", "completed",
-    "deferred", "no_interest", "archived", "unassigned",
+    "new", "evaluating", "proposal", "in_progress", "completed", "deferred", "no_interest", "archived", "unassigned",
+    "needs_triage", "diagnosis", "solution_design", "pilot_adjustment", "acceptance", "not_applicable",
   ]).notNull().default("new"),
   assignedConsultantId: int("assignedConsultantId").references(() => erpConsultants.id, { onDelete: "set null" }),
   notes: text("notes"),
   statusTimeline: json("statusTimeline").$type<Record<string, string>>(),
+  statusHistory: json("statusHistory").$type<Array<{
+    status: string; at: string; byUserId: number; byName: string; reason?: string; forced?: boolean; action?: string;
+  }>>(),
+  statusReason: varchar("statusReason", { length: 500 }),
+  claimedAt: timestamp("claimedAt"),
   lastUpdatedByUserId: int("lastUpdatedByUserId").references(() => users.id, { onDelete: "set null" }),
   lastUpdatedByNameSnapshot: varchar("lastUpdatedByNameSnapshot", { length: 100 }).notNull().default(""),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   openFactoryId: int("openFactoryId").generatedAlwaysAs(
-    sql`CASE WHEN \`status\` IN ('new','evaluating','proposal','in_progress','deferred','unassigned') THEN \`factoryId\` ELSE NULL END`
+    sql`CASE WHEN \`status\` IN ('new','evaluating','proposal','in_progress','deferred','unassigned','needs_triage','diagnosis','solution_design','pilot_adjustment','acceptance') THEN \`factoryId\` ELSE NULL END`
   ),
 }, (t) => ({
   openFactoryUq: uniqueIndex("ecase_open_factory_uq").on(t.openFactoryId),

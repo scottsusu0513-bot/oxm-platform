@@ -15,9 +15,16 @@ import { notifyOwner } from "./_core/notification";
 import { storagePut, storagePresignedUrl, storageDelete } from "./storage";
 import { validateImageUpload } from "./_core/security";
 import { INDUSTRY_OPTIONS, TAIWAN_REGIONS, CAPITAL_OPTIONS, INDUSTRY_SLUGS } from "../shared/constants";
-import { SHORT_VIDEO_SERVICE_KEYS, SHORT_VIDEO_GOAL_KEYS, SHORT_VIDEO_PLATFORM_KEYS, SHORT_VIDEO_STATUS_TRANSITIONS, SHORT_VIDEO_STATUS_LABELS } from "../shared/shortVideoMarketing";
-import { CERTIFICATION_STATUS_TRANSITIONS, CERTIFICATION_STATUS_LABELS } from "../shared/certificationCase";
-import { ERP_NEED_TYPE_KEYS, ERP_STATUS_TRANSITIONS, ERP_STATUS_LABELS } from "../shared/erpOptimization";
+import {
+  SHORT_VIDEO_SERVICE_KEYS, SHORT_VIDEO_GOAL_KEYS, SHORT_VIDEO_PLATFORM_KEYS,
+  SHORT_VIDEO_CASE_STATUSES, SHORT_VIDEO_STATUS_TRANSITIONS, SHORT_VIDEO_STATUS_LABELS, SHORT_VIDEO_EXCEPTION_STATUSES,
+} from "../shared/shortVideoMarketing";
+import {
+  CERTIFICATION_CASE_STATUSES, CERTIFICATION_STATUS_TRANSITIONS, CERTIFICATION_STATUS_LABELS, CERTIFICATION_EXCEPTION_STATUSES,
+} from "../shared/certificationCase";
+import {
+  ERP_NEED_TYPE_KEYS, ERP_CASE_STATUSES, ERP_STATUS_TRANSITIONS, ERP_STATUS_LABELS, ERP_EXCEPTION_STATUSES,
+} from "../shared/erpOptimization";
 import { clampImageCrop } from "../shared/imageCrop";
 import { stripCertificationEvidence, stripCertificationEvidenceFromRevision, stripHiddenBadgesForPublic, isValidCertificationEvidenceKey, isValidBadgeId, CERTIFICATION_EVIDENCE_KEY_PREFIX, applyCertificationEvidenceDescriptions, summarizeCertificationEvidenceForOwner, sortBadgeIds } from "../shared/badges";
 import { nanoid } from "nanoid";
@@ -7884,7 +7891,7 @@ export const appRouter = router({
     }),
 
     adminList: adminProcedure.input(z.object({
-      status: z.enum(["new", "evaluating", "proposal", "in_progress", "completed", "deferred", "no_interest", "archived", "unassigned"]).optional(),
+      status: z.enum(SHORT_VIDEO_CASE_STATUSES).optional(),
       limit: z.number().int().min(1).max(200).default(50),
       offset: z.number().int().min(0).default(0),
     })).query(async ({ input }) => {
@@ -7913,7 +7920,7 @@ export const appRouter = router({
     // serviceAreas 分派結果決定案件歸屬，不同顧問之間彼此看不到對方的案件；
     // 管理員一律可查看全部（見 shortVideoCenter.adminList）。
     myCases: protectedProcedure.input(z.object({
-      status: z.enum(["new", "evaluating", "proposal", "in_progress", "completed", "deferred", "no_interest", "archived", "unassigned"]).optional(),
+      status: z.enum(SHORT_VIDEO_CASE_STATUSES).optional(),
     })).query(async ({ ctx, input }) => {
       if (ctx.user.isAdmin) {
         return db.listShortVideoCasesAdmin({ status: input.status });
@@ -7926,9 +7933,51 @@ export const appRouter = router({
       return db.listShortVideoCasesForConsultant(activeIds, input.status);
     }),
 
+    // 待取件看板：任何啟用中的短影音顧問都能看到。
+    unassignedCases: protectedProcedure.query(async ({ ctx }) => {
+      if (!ctx.user.isAdmin) {
+        const consultants = await db.getShortVideoConsultantsByUserId(ctx.user.id);
+        if (!consultants.some(c => c.isActive)) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "您不是短影音顧問" });
+        }
+      }
+      return db.listShortVideoCasesAdmin({ status: "unassigned" });
+    }),
+
+    // 顧問自助取件，原子性見 db.claimShortVideoCase 內註解。
+    claimCase: protectedProcedure.input(z.object({
+      caseId: z.number().int().positive(),
+    })).mutation(async ({ ctx, input }) => {
+      const consultants = await db.getShortVideoConsultantsByUserId(ctx.user.id);
+      const myConsultant = consultants.find(c => c.isActive);
+      if (!myConsultant) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "您不是短影音顧問" });
+      }
+      const updatedBy = { userId: ctx.user.id, name: db.resolveActorNameSnapshot(ctx.user) };
+      let item: Awaited<ReturnType<typeof db.claimShortVideoCase>>;
+      try {
+        item = await db.claimShortVideoCase(input.caseId, myConsultant.id, updatedBy);
+      } catch (err) {
+        if (err instanceof db.CaseAlreadyClaimedError) {
+          throw new TRPCError({ code: "CONFLICT", message: err.message });
+        }
+        throw new TRPCError({ code: "NOT_FOUND", message: err instanceof Error ? err.message : "取件失敗" });
+      }
+      notifyFactoryMembers(item.factoryId, {
+        eventType: "short_video_status_new",
+        eventGroup: "short_video",
+        message: `「${item.companyNameSnapshot}」短影音與品牌內容行銷案件已由顧問取件，準備聯繫`,
+        actionUrl: "/short-video-marketing",
+        titleSnapshot: item.companyNameSnapshot,
+        dedupeKey: `short_video_claim:${item.id}`,
+      });
+      return { success: true, case: item };
+    }),
+
     updateCaseStatus: protectedProcedure.input(z.object({
       caseId: z.number().int().positive(),
-      nextStatus: z.enum(["new", "evaluating", "proposal", "in_progress", "completed", "deferred", "no_interest", "archived", "unassigned"]),
+      nextStatus: z.enum(SHORT_VIDEO_CASE_STATUSES),
+      reason: z.string().trim().max(500).optional(),
     })).mutation(async ({ ctx, input }) => {
       const item = await db.getShortVideoCaseById(input.caseId);
       if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "找不到案件" });
@@ -7942,8 +7991,11 @@ export const appRouter = router({
       if (!SHORT_VIDEO_STATUS_TRANSITIONS[item.status]?.includes(input.nextStatus)) {
         throw new TRPCError({ code: "BAD_REQUEST", message: `目前狀態「${item.status}」不能推進至「${input.nextStatus}」` });
       }
+      if (SHORT_VIDEO_EXCEPTION_STATUSES.includes(input.nextStatus) && !input.reason) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: `進入「${SHORT_VIDEO_STATUS_LABELS[input.nextStatus]}」必須填寫原因` });
+      }
       const updatedBy = { userId: ctx.user.id, name: db.resolveActorNameSnapshot(ctx.user) };
-      await db.updateShortVideoCaseStatus(input.caseId, input.nextStatus, updatedBy);
+      await db.updateShortVideoCaseStatus(input.caseId, input.nextStatus, updatedBy, { reason: input.reason });
 
       notifyFactoryMembers(item.factoryId, {
         eventType: `short_video_status_${input.nextStatus}`,
@@ -7952,6 +8004,27 @@ export const appRouter = router({
         actionUrl: "/short-video-marketing",
         titleSnapshot: item.companyNameSnapshot,
         dedupeKey: `short_video_status:${item.id}:${input.nextStatus}`,
+      });
+      return { success: true };
+    }),
+
+    // 管理員例外修正：略過轉移規則，強制要求 reason，並標記 forced。
+    adminForceStatus: adminProcedure.input(z.object({
+      caseId: z.number().int().positive(),
+      nextStatus: z.enum(SHORT_VIDEO_CASE_STATUSES),
+      reason: z.string().trim().min(1).max(500),
+    })).mutation(async ({ ctx, input }) => {
+      const item = await db.getShortVideoCaseById(input.caseId);
+      if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "找不到案件" });
+      const updatedBy = { userId: ctx.user!.id, name: db.resolveActorNameSnapshot(ctx.user!) };
+      await db.updateShortVideoCaseStatus(input.caseId, input.nextStatus, updatedBy, { reason: input.reason, forced: true });
+      notifyFactoryMembers(item.factoryId, {
+        eventType: `short_video_status_${input.nextStatus}`,
+        eventGroup: "short_video",
+        message: `「${item.companyNameSnapshot}」短影音與品牌內容行銷案件狀態更新：${SHORT_VIDEO_STATUS_LABELS[input.nextStatus] ?? input.nextStatus}`,
+        actionUrl: "/short-video-marketing",
+        titleSnapshot: item.companyNameSnapshot,
+        dedupeKey: `short_video_status:${item.id}:${input.nextStatus}:forced:${Date.now()}`,
       });
       return { success: true };
     }),
@@ -8196,7 +8269,7 @@ export const appRouter = router({
     }),
 
     adminList: adminProcedure.input(z.object({
-      status: z.enum(["new", "evaluating", "proposal", "in_progress", "completed", "deferred", "no_interest", "archived", "unassigned"]).optional(),
+      status: z.enum(CERTIFICATION_CASE_STATUSES).optional(),
       limit: z.number().int().min(1).max(200).default(50),
       offset: z.number().int().min(0).default(0),
     })).query(async ({ input }) => {
@@ -8221,7 +8294,7 @@ export const appRouter = router({
     }),
 
     myCases: protectedProcedure.input(z.object({
-      status: z.enum(["new", "evaluating", "proposal", "in_progress", "completed", "deferred", "no_interest", "archived", "unassigned"]).optional(),
+      status: z.enum(CERTIFICATION_CASE_STATUSES).optional(),
     })).query(async ({ ctx, input }) => {
       if (ctx.user.isAdmin) {
         return db.listCertificationCasesAdmin({ status: input.status });
@@ -8234,9 +8307,54 @@ export const appRouter = router({
       return db.listCertificationCasesForConsultant(activeIds, input.status);
     }),
 
+    // 待取件看板：任何啟用中的 ISO 顧問都能看到，不受目前案件承辦人篩選限制
+    // （待取件定義即為尚無承辦人）。權限判斷與 myCases 相同——必須存在至少
+    // 一筆 isActive 的顧問設定，否則 FORBIDDEN。
+    unassignedCases: protectedProcedure.query(async ({ ctx }) => {
+      if (!ctx.user.isAdmin) {
+        const consultants = await db.getCertificationConsultantsByUserId(ctx.user.id);
+        if (!consultants.some(c => c.isActive)) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "您不是 ISO 認證顧問" });
+        }
+      }
+      return db.listCertificationCasesAdmin({ status: "unassigned" });
+    }),
+
+    // 顧問自助取件：原子操作，只有第一位成功鎖定 unassigned 案件的顧問會
+    // 成功，見 db.claimCertificationCase 內的 transaction + for(update) 說明。
+    claimCase: protectedProcedure.input(z.object({
+      caseId: z.number().int().positive(),
+    })).mutation(async ({ ctx, input }) => {
+      const consultants = await db.getCertificationConsultantsByUserId(ctx.user.id);
+      const myConsultant = consultants.find(c => c.isActive);
+      if (!myConsultant) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "您不是 ISO 認證顧問" });
+      }
+      const updatedBy = { userId: ctx.user.id, name: db.resolveActorNameSnapshot(ctx.user) };
+      let item: Awaited<ReturnType<typeof db.claimCertificationCase>>;
+      try {
+        item = await db.claimCertificationCase(input.caseId, myConsultant.id, updatedBy);
+      } catch (err) {
+        if (err instanceof db.CaseAlreadyClaimedError) {
+          throw new TRPCError({ code: "CONFLICT", message: err.message });
+        }
+        throw new TRPCError({ code: "NOT_FOUND", message: err instanceof Error ? err.message : "取件失敗" });
+      }
+      notifyFactoryMembers(item.factoryId, {
+        eventType: "certification_status_new",
+        eventGroup: "certification",
+        message: `「${item.companyNameSnapshot}」ISO 與低碳認證案件已由顧問取件，準備聯繫`,
+        actionUrl: "/certification-center",
+        titleSnapshot: item.companyNameSnapshot,
+        dedupeKey: `certification_claim:${item.id}`,
+      });
+      return { success: true, case: item };
+    }),
+
     updateCaseStatus: protectedProcedure.input(z.object({
       caseId: z.number().int().positive(),
-      nextStatus: z.enum(["new", "evaluating", "proposal", "in_progress", "completed", "deferred", "no_interest", "archived", "unassigned"]),
+      nextStatus: z.enum(CERTIFICATION_CASE_STATUSES),
+      reason: z.string().trim().max(500).optional(),
     })).mutation(async ({ ctx, input }) => {
       const item = await db.getCertificationCaseById(input.caseId);
       if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "找不到案件" });
@@ -8250,8 +8368,11 @@ export const appRouter = router({
       if (!CERTIFICATION_STATUS_TRANSITIONS[item.status]?.includes(input.nextStatus)) {
         throw new TRPCError({ code: "BAD_REQUEST", message: `目前狀態「${item.status}」不能推進至「${input.nextStatus}」` });
       }
+      if (CERTIFICATION_EXCEPTION_STATUSES.includes(input.nextStatus) && !input.reason) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: `進入「${CERTIFICATION_STATUS_LABELS[input.nextStatus]}」必須填寫原因` });
+      }
       const updatedBy = { userId: ctx.user.id, name: db.resolveActorNameSnapshot(ctx.user) };
-      await db.updateCertificationCaseStatus(input.caseId, input.nextStatus, updatedBy);
+      await db.updateCertificationCaseStatus(input.caseId, input.nextStatus, updatedBy, { reason: input.reason });
 
       notifyFactoryMembers(item.factoryId, {
         eventType: `certification_status_${input.nextStatus}`,
@@ -8260,6 +8381,28 @@ export const appRouter = router({
         actionUrl: "/certification-center",
         titleSnapshot: item.companyNameSnapshot,
         dedupeKey: `certification_status:${item.id}:${input.nextStatus}`,
+      });
+      return { success: true };
+    }),
+
+    // 管理員例外修正：略過 CERTIFICATION_STATUS_TRANSITIONS 轉移規則，但同樣
+    // 一律要求 reason，並在 statusHistory 標記 forced/admin_force，供事後稽核。
+    adminForceStatus: adminProcedure.input(z.object({
+      caseId: z.number().int().positive(),
+      nextStatus: z.enum(CERTIFICATION_CASE_STATUSES),
+      reason: z.string().trim().min(1).max(500),
+    })).mutation(async ({ ctx, input }) => {
+      const item = await db.getCertificationCaseById(input.caseId);
+      if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "找不到案件" });
+      const updatedBy = { userId: ctx.user!.id, name: db.resolveActorNameSnapshot(ctx.user!) };
+      await db.updateCertificationCaseStatus(input.caseId, input.nextStatus, updatedBy, { reason: input.reason, forced: true });
+      notifyFactoryMembers(item.factoryId, {
+        eventType: `certification_status_${input.nextStatus}`,
+        eventGroup: "certification",
+        message: `「${item.companyNameSnapshot}」ISO 與低碳認證案件狀態更新：${CERTIFICATION_STATUS_LABELS[input.nextStatus] ?? input.nextStatus}`,
+        actionUrl: "/certification-center",
+        titleSnapshot: item.companyNameSnapshot,
+        dedupeKey: `certification_status:${item.id}:${input.nextStatus}:forced:${Date.now()}`,
       });
       return { success: true };
     }),
@@ -8483,7 +8626,7 @@ export const appRouter = router({
     }),
 
     adminList: adminProcedure.input(z.object({
-      status: z.enum(["new", "evaluating", "proposal", "in_progress", "completed", "deferred", "no_interest", "archived", "unassigned"]).optional(),
+      status: z.enum(ERP_CASE_STATUSES).optional(),
       limit: z.number().int().min(1).max(200).default(50),
       offset: z.number().int().min(0).default(0),
     })).query(async ({ input }) => {
@@ -8508,7 +8651,7 @@ export const appRouter = router({
     }),
 
     myCases: protectedProcedure.input(z.object({
-      status: z.enum(["new", "evaluating", "proposal", "in_progress", "completed", "deferred", "no_interest", "archived", "unassigned"]).optional(),
+      status: z.enum(ERP_CASE_STATUSES).optional(),
     })).query(async ({ ctx, input }) => {
       if (ctx.user.isAdmin) {
         return db.listErpCasesAdmin({ status: input.status });
@@ -8521,9 +8664,51 @@ export const appRouter = router({
       return db.listErpCasesForConsultant(activeIds, input.status);
     }),
 
+    // 待取件看板：任何啟用中的 ERP 顧問都能看到。
+    unassignedCases: protectedProcedure.query(async ({ ctx }) => {
+      if (!ctx.user.isAdmin) {
+        const consultants = await db.getErpConsultantsByUserId(ctx.user.id);
+        if (!consultants.some(c => c.isActive)) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "您不是 ERP 顧問" });
+        }
+      }
+      return db.listErpCasesAdmin({ status: "unassigned" });
+    }),
+
+    // 顧問自助取件，原子性見 db.claimErpCase 內註解。
+    claimCase: protectedProcedure.input(z.object({
+      caseId: z.number().int().positive(),
+    })).mutation(async ({ ctx, input }) => {
+      const consultants = await db.getErpConsultantsByUserId(ctx.user.id);
+      const myConsultant = consultants.find(c => c.isActive);
+      if (!myConsultant) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "您不是 ERP 顧問" });
+      }
+      const updatedBy = { userId: ctx.user.id, name: db.resolveActorNameSnapshot(ctx.user) };
+      let item: Awaited<ReturnType<typeof db.claimErpCase>>;
+      try {
+        item = await db.claimErpCase(input.caseId, myConsultant.id, updatedBy);
+      } catch (err) {
+        if (err instanceof db.CaseAlreadyClaimedError) {
+          throw new TRPCError({ code: "CONFLICT", message: err.message });
+        }
+        throw new TRPCError({ code: "NOT_FOUND", message: err instanceof Error ? err.message : "取件失敗" });
+      }
+      notifyFactoryMembers(item.factoryId, {
+        eventType: "erp_status_new",
+        eventGroup: "erp",
+        message: `「${item.companyNameSnapshot}」ERP 與產線優化案件已由顧問取件，準備聯繫`,
+        actionUrl: "/erp-optimization",
+        titleSnapshot: item.companyNameSnapshot,
+        dedupeKey: `erp_claim:${item.id}`,
+      });
+      return { success: true, case: item };
+    }),
+
     updateCaseStatus: protectedProcedure.input(z.object({
       caseId: z.number().int().positive(),
-      nextStatus: z.enum(["new", "evaluating", "proposal", "in_progress", "completed", "deferred", "no_interest", "archived", "unassigned"]),
+      nextStatus: z.enum(ERP_CASE_STATUSES),
+      reason: z.string().trim().max(500).optional(),
     })).mutation(async ({ ctx, input }) => {
       const item = await db.getErpCaseById(input.caseId);
       if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "找不到案件" });
@@ -8537,8 +8722,11 @@ export const appRouter = router({
       if (!ERP_STATUS_TRANSITIONS[item.status]?.includes(input.nextStatus)) {
         throw new TRPCError({ code: "BAD_REQUEST", message: `目前狀態「${item.status}」不能推進至「${input.nextStatus}」` });
       }
+      if (ERP_EXCEPTION_STATUSES.includes(input.nextStatus) && !input.reason) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: `進入「${ERP_STATUS_LABELS[input.nextStatus]}」必須填寫原因` });
+      }
       const updatedBy = { userId: ctx.user.id, name: db.resolveActorNameSnapshot(ctx.user) };
-      await db.updateErpCaseStatus(input.caseId, input.nextStatus, updatedBy);
+      await db.updateErpCaseStatus(input.caseId, input.nextStatus, updatedBy, { reason: input.reason });
 
       notifyFactoryMembers(item.factoryId, {
         eventType: `erp_status_${input.nextStatus}`,
@@ -8547,6 +8735,27 @@ export const appRouter = router({
         actionUrl: "/erp-optimization",
         titleSnapshot: item.companyNameSnapshot,
         dedupeKey: `erp_status:${item.id}:${input.nextStatus}`,
+      });
+      return { success: true };
+    }),
+
+    // 管理員例外修正：略過轉移規則，強制要求 reason，並標記 forced。
+    adminForceStatus: adminProcedure.input(z.object({
+      caseId: z.number().int().positive(),
+      nextStatus: z.enum(ERP_CASE_STATUSES),
+      reason: z.string().trim().min(1).max(500),
+    })).mutation(async ({ ctx, input }) => {
+      const item = await db.getErpCaseById(input.caseId);
+      if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "找不到案件" });
+      const updatedBy = { userId: ctx.user!.id, name: db.resolveActorNameSnapshot(ctx.user!) };
+      await db.updateErpCaseStatus(input.caseId, input.nextStatus, updatedBy, { reason: input.reason, forced: true });
+      notifyFactoryMembers(item.factoryId, {
+        eventType: `erp_status_${input.nextStatus}`,
+        eventGroup: "erp",
+        message: `「${item.companyNameSnapshot}」ERP 與產線優化案件狀態更新：${ERP_STATUS_LABELS[input.nextStatus] ?? input.nextStatus}`,
+        actionUrl: "/erp-optimization",
+        titleSnapshot: item.companyNameSnapshot,
+        dedupeKey: `erp_status:${item.id}:${input.nextStatus}:forced:${Date.now()}`,
       });
       return { success: true };
     }),

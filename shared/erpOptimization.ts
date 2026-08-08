@@ -33,35 +33,67 @@ export function erpNeedTypeLabel(key: string): string {
   return ERP_NEED_TYPES.find(n => n.key === key)?.label ?? key;
 }
 
-// 案件狀態機：與短影音／ISO 專區狀態值相同但各自獨立宣告，不跨專區耦合。
+// 案件狀態機：ERP／產線優化專屬流程，與短影音／ISO 專區狀態值各自獨立宣告，
+// 不跨專區耦合。主流程：new(新案件／待聯繫) → needs_triage(需求分流：確認屬於
+// ERP導入／產線優化／整合改善／不確定由顧問判斷) → diagnosis(現場診斷／流程
+// 盤點) → solution_design(改善方案設計) → proposal(範圍與報價確認) →
+// in_progress(導入執行中) → pilot_adjustment(試行與調整) → acceptance(驗收中)
+// → completed(專案完成)。例外狀態（進入時一律要求 statusReason）：
+// deferred(緩追)／no_interest(無意願)／not_applicable(不適用／無法承接)／
+// archived(已封存)。unassigned＝待取件，尚未指派顧問。
 export const ERP_CASE_STATUSES = [
-  "new", "evaluating", "proposal", "in_progress", "completed",
-  "deferred", "no_interest", "archived", "unassigned",
+  "new", "needs_triage", "diagnosis", "solution_design", "proposal", "in_progress",
+  "pilot_adjustment", "acceptance", "completed",
+  "deferred", "no_interest", "not_applicable", "archived", "unassigned",
 ] as const;
 
 export type ErpCaseStatus = (typeof ERP_CASE_STATUSES)[number];
 
 export const ERP_STATUS_LABELS: Record<ErpCaseStatus, string> = {
-  new: "新案件",
-  evaluating: "評估中",
-  proposal: "提案中",
-  in_progress: "執行中",
-  completed: "已完成",
-  deferred: "緩追區",
+  new: "新案件／待聯繫",
+  needs_triage: "需求分流",
+  diagnosis: "現場診斷／流程盤點",
+  solution_design: "改善方案設計",
+  proposal: "範圍與報價確認",
+  in_progress: "導入執行中",
+  pilot_adjustment: "試行與調整",
+  acceptance: "驗收中",
+  completed: "專案完成",
+  deferred: "緩追",
   no_interest: "無意願",
+  not_applicable: "不適用／無法承接",
   archived: "已封存",
-  unassigned: "未指派",
+  unassigned: "待取件",
 };
 
+// 未結案狀態：必須與 drizzle/schema.ts erpCases.openFactoryId 的 CASE WHEN
+// 條件、server/db.ts ERP_OPEN_STATUSES_DB 完全一致。
 export const ERP_OPEN_STATUSES: ErpCaseStatus[] = [
-  "new", "evaluating", "proposal", "in_progress", "deferred", "unassigned",
+  "new", "needs_triage", "diagnosis", "solution_design", "proposal", "in_progress",
+  "pilot_adjustment", "acceptance", "deferred", "unassigned",
 ];
 
+// 進入時一律要求 statusReason 的例外狀態，供 server 驗證與前端表單共用。
+export const ERP_EXCEPTION_STATUSES: ErpCaseStatus[] = [
+  "deferred", "no_interest", "not_applicable", "archived",
+];
+
+// 合法狀態轉移白名單：避免任意從「新案件」直接跳到「專案完成」。
+// Key 型別刻意放寬為 string，理由同 shared/certificationCase.ts（0075 向後相容
+// migration 保留 'evaluating' 等舊值，查表安全 fallback，轉移目的地仍限定新版狀態）。
 export const ERP_STATUS_TRANSITIONS: Record<string, ErpCaseStatus[]> = {
-  new: ["evaluating", "unassigned", "archived"],
-  evaluating: ["proposal", "deferred", "no_interest", "archived"],
+  unassigned: ["new", "archived"],
+  new: ["needs_triage", "deferred", "no_interest", "not_applicable", "archived"],
+  needs_triage: ["diagnosis", "not_applicable", "deferred", "archived"],
+  diagnosis: ["solution_design", "deferred", "archived"],
+  solution_design: ["proposal", "deferred", "archived"],
   proposal: ["in_progress", "deferred", "no_interest", "archived"],
-  in_progress: ["completed", "deferred", "no_interest", "archived"],
-  deferred: ["evaluating", "no_interest", "archived"],
-  unassigned: ["evaluating", "archived"],
+  in_progress: ["pilot_adjustment", "deferred", "archived"],
+  pilot_adjustment: ["acceptance", "deferred", "archived"],
+  acceptance: ["completed", "deferred", "archived"],
+  completed: ["archived"],
+  deferred: ["new", "no_interest", "archived"],
+  no_interest: ["archived"],
+  not_applicable: ["archived"],
+  archived: [],
 };

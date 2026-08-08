@@ -278,7 +278,7 @@ describe("顧問案件看板：只能看見指派給自己的案件", () => {
 
   it("顧問乙嘗試更新顧問甲的案件狀態 → FORBIDDEN", async () => {
     const caller = appRouter.createCaller(userCtx(otherConsultantUserId, "顧問乙"));
-    await expect(caller.erpConsultant.updateCaseStatus({ caseId: caseAId, nextStatus: "evaluating" })).rejects.toThrow(/不是此案件的承辦顧問/);
+    await expect(caller.erpConsultant.updateCaseStatus({ caseId: caseAId, nextStatus: "needs_triage" })).rejects.toThrow(/不是此案件的承辦顧問/);
   });
 
   it("狀態轉移白名單：new 不能直接跳到 completed", async () => {
@@ -286,12 +286,12 @@ describe("顧問案件看板：只能看見指派給自己的案件", () => {
     await expect(caller.erpConsultant.updateCaseStatus({ caseId: caseAId, nextStatus: "completed" })).rejects.toThrow(/不能推進/);
   });
 
-  it("狀態轉移白名單：new → evaluating 合法", async () => {
+  it("狀態轉移白名單：new → needs_triage 合法", async () => {
     const caller = appRouter.createCaller(userCtx(lineConsultantUserId, "顧問甲"));
-    const result = await caller.erpConsultant.updateCaseStatus({ caseId: caseAId, nextStatus: "evaluating" });
+    const result = await caller.erpConsultant.updateCaseStatus({ caseId: caseAId, nextStatus: "needs_triage" });
     expect(result.success).toBe(true);
     const item = await db.getErpCaseById(caseAId);
-    expect(item?.status).toBe("evaluating");
+    expect(item?.status).toBe("needs_triage");
   });
 
   // 管理員後台新增的三張入口卡片（見 AdminDashboard.tsx）連到既有頁面，

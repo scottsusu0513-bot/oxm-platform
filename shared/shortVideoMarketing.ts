@@ -94,42 +94,71 @@ export function shortVideoPlatformLabel(key: string): string {
   return SHORT_VIDEO_PLATFORMS.find(p => p.key === key)?.label ?? key;
 }
 
-// 案件狀態：new → evaluating → proposal → in_progress → completed 為主流程；
-// deferred／no_interest／archived／unassigned 為例外狀態。獨立於
-// upgradeApplications／financeApplications 的狀態機，不共用列舉值。
+// 案件狀態：短影音／品牌內容專屬流程，獨立於 upgradeApplications／
+// financeApplications／certificationCases／erpCases 的狀態機，不共用列舉值。
+// 主流程：new(新案件／待聯繫) → needs_interview(需求訪談) → proposal(方案確認)
+// → pre_production(前期企劃) → script_review(腳本待確認) →
+// in_progress(拍攝／製作中) → draft_review(初稿審核／修改) → delivered(已交付)
+// → [ongoing_operation(持續代營運，長期方案分支，可選)] → completed(案件完成)。
+// 例外狀態（進入時一律要求 statusReason）：deferred(緩追)／no_interest(無意願)／
+// not_applicable(不適合承接)／archived(已封存)。unassigned＝待取件。
 export const SHORT_VIDEO_CASE_STATUSES = [
-  "new", "evaluating", "proposal", "in_progress", "completed",
-  "deferred", "no_interest", "archived", "unassigned",
+  "new", "needs_interview", "proposal", "pre_production", "script_review", "in_progress",
+  "draft_review", "delivered", "ongoing_operation", "completed",
+  "deferred", "no_interest", "not_applicable", "archived", "unassigned",
 ] as const;
 
 export type ShortVideoCaseStatus = (typeof SHORT_VIDEO_CASE_STATUSES)[number];
 
 export const SHORT_VIDEO_STATUS_LABELS: Record<ShortVideoCaseStatus, string> = {
-  new: "新案件",
-  evaluating: "評估中",
-  proposal: "提案中",
-  in_progress: "執行中",
-  completed: "已完成",
-  deferred: "緩追區",
+  new: "新案件／待聯繫",
+  needs_interview: "需求訪談",
+  proposal: "方案確認",
+  pre_production: "前期企劃",
+  script_review: "腳本待確認",
+  in_progress: "拍攝／製作中",
+  draft_review: "初稿審核／修改",
+  delivered: "已交付",
+  ongoing_operation: "持續代營運",
+  completed: "案件完成",
+  deferred: "緩追",
   no_interest: "無意願",
+  not_applicable: "不適合承接",
   archived: "已封存",
-  unassigned: "未指派",
+  unassigned: "待取件",
 };
 
 // 案件未結案狀態：影響「同一工廠是否已有進行中案件」判斷與顧問看板篩選，
-// 與 drizzle/schema.ts shortVideoCases.openFactoryId 的 CASE WHEN 條件必須
-// 完全一致。
+// 與 drizzle/schema.ts shortVideoCases.openFactoryId 的 CASE WHEN 條件、
+// server/db.ts SHORT_VIDEO_OPEN_STATUSES_DB 必須完全一致。
 export const SHORT_VIDEO_OPEN_STATUSES: ShortVideoCaseStatus[] = [
-  "new", "evaluating", "proposal", "in_progress", "deferred", "unassigned",
+  "new", "needs_interview", "proposal", "pre_production", "script_review", "in_progress",
+  "draft_review", "delivered", "ongoing_operation", "deferred", "unassigned",
+];
+
+// 進入時一律要求 statusReason 的例外狀態，供 server 驗證與前端表單共用。
+export const SHORT_VIDEO_EXCEPTION_STATUSES: ShortVideoCaseStatus[] = [
+  "deferred", "no_interest", "not_applicable", "archived",
 ];
 
 // 合法狀態轉移白名單，供 server 與顧問看板 UI 共用同一份資料，避免前後端
-// 兜不起來。no_interest／completed／archived 為結案狀態，不再轉移。
+// 兜不起來。completed／no_interest／not_applicable／archived 為結案狀態。
+// Key 型別刻意放寬為 string，理由同 shared/certificationCase.ts（0075 向後相容
+// migration 保留 'evaluating' 等舊值，查表安全 fallback，轉移目的地仍限定新版狀態）。
 export const SHORT_VIDEO_STATUS_TRANSITIONS: Record<string, ShortVideoCaseStatus[]> = {
-  new: ["evaluating", "unassigned", "archived"],
-  evaluating: ["proposal", "deferred", "no_interest", "archived"],
-  proposal: ["in_progress", "deferred", "no_interest", "archived"],
-  in_progress: ["completed", "deferred", "no_interest", "archived"],
-  deferred: ["evaluating", "no_interest", "archived"],
-  unassigned: ["evaluating", "archived"],
+  unassigned: ["new", "archived"],
+  new: ["needs_interview", "deferred", "no_interest", "not_applicable", "archived"],
+  needs_interview: ["proposal", "deferred", "no_interest", "not_applicable", "archived"],
+  proposal: ["pre_production", "deferred", "no_interest", "archived"],
+  pre_production: ["script_review", "deferred", "archived"],
+  script_review: ["in_progress", "deferred", "archived"],
+  in_progress: ["draft_review", "deferred", "archived"],
+  draft_review: ["delivered", "in_progress", "deferred", "archived"],
+  delivered: ["ongoing_operation", "completed", "archived"],
+  ongoing_operation: ["completed", "archived"],
+  completed: ["archived"],
+  deferred: ["new", "no_interest", "archived"],
+  no_interest: ["archived"],
+  not_applicable: ["archived"],
+  archived: [],
 };
