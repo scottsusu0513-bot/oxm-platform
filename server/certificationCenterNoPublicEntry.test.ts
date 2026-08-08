@@ -20,13 +20,9 @@ function readSource(...segments: string[]): string {
 }
 
 describe("/certification-center 沒有資源總覽以外的主要導覽直達連結", () => {
-  it("client/src/components/Navbar.tsx 只在「找資源」下拉選單內含 certification-center 連結，其餘位置沒有", () => {
+  it("client/src/components/Navbar.tsx 完全沒有 certification-center 連結（含找資源下拉選單也暫時隱藏）", () => {
     const source = readSource("client", "src", "components", "Navbar.tsx");
-    const resourceBlockMatch = source.match(/key: "resource",[\s\S]*?key: "talent",/);
-    expect(resourceBlockMatch).toBeTruthy();
-    const resourceBlock = resourceBlockMatch![0];
-    expect(resourceBlock).toMatch(/certification-center/i);
-    expect(source.replace(resourceBlock, "")).not.toMatch(/certification-center/i);
+    expect(source).not.toMatch(/certification-center/i);
   });
 
   it("client/src/pages/Home.tsx（含首頁 Footer）沒有任何 certification-center 連結或字樣", () => {

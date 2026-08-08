@@ -6,7 +6,6 @@ import {
   UserPlus, Search, Settings, UserCircle, ChevronDown,
   FileText, ScrollText, Bell, Briefcase, Lock,
   Rocket, Users, Package, BookOpen, MessageSquare, Lightbulb,
-  BarChart3, ShieldCheck, Clapperboard,
 } from "lucide-react";
 import UnverifiedEmailHint from "@/components/UnverifiedEmailHint";
 import { useState, useEffect, useRef } from "react";
@@ -107,10 +106,13 @@ const HUB_ITEMS: HubItem[] = [
   },
   {
     key: "resource",
-    label: "資源服務中心", short: "找資源", href: "/resources", soon: false,
-    // 找資源已是正式開放入口，桌面版下拉觸發鈕與找消息共用同一套 renderDesktopHub，
-    // 讀 card／cardHover／ring／triggerIconCls，這裡改用清楚可辨識的藍紫色，避免跟
-    // 找人才／找形象等「即將開放」的低透明度 muted 樣式混淆。
+    label: "資源服務中心", short: "找資源", soon: false,
+    // 找資源目前只作為下拉選單觸發器：不設定 href，點擊主入口只切換下拉／
+    // Accordion 開關，不會導頁到 /resources（該總覽頁 route／component 仍完整
+    // 保留，已知網址的人可以直接輸入進入，只是暫時不從導覽列公開曝光）。
+    // 桌面版下拉觸發鈕與找消息共用同一套 renderDesktopHub，讀 card／cardHover／
+    // ring／triggerIconCls，這裡改用清楚可辨識的藍紫色，避免跟找人才／找形象等
+    // 「即將開放」的低透明度 muted 樣式混淆。
     Icon: Rocket, iconCls: "text-blue-600", triggerIconCls: "text-blue-500", ring: "focus-visible:ring-blue-400",
     card: "bg-gradient-to-br from-blue-600/10 to-violet-600/10 border-blue-300/40 text-blue-700",
     cardHover: "hover:from-blue-600/20 hover:to-violet-600/20 hover:border-blue-400/60 hover:shadow-sm hover:shadow-blue-500/10 hover:-translate-y-px",
@@ -122,30 +124,12 @@ const HUB_ITEMS: HubItem[] = [
         href: "/upgrade-center",
         Icon: Lightbulb,
       },
-      {
-        title: "企業財務優化",
-        description: "財務健檢、融資準備與管理改善",
-        href: "/finance-optimization",
-        Icon: BarChart3,
-      },
-      {
-        title: "ISO 與低碳認證",
-        description: "管理系統、碳盤查與查驗準備",
-        href: "/certification-center",
-        Icon: ShieldCheck,
-      },
-      {
-        title: "ERP、MES 與產線優化",
-        description: "流程盤點、系統導入與產線改善",
-        href: "/erp-optimization",
-        Icon: Factory,
-      },
-      {
-        title: "短影音與品牌內容",
-        description: "影音企劃、社群內容與品牌行銷",
-        href: "/short-video-marketing",
-        Icon: Clapperboard,
-      },
+      // 其餘四項既有服務（財務優化／認證／ERP／短影音相關專區）公開入口暫時
+      // 隱藏：對應 route／component／API／資料庫與既有登入／工廠資格權限限制
+      // 全部維持不變，只是不再出現在桌面下拉選單／手機 Accordion 這個共用的
+      // dropdownItems 資料來源裡。已知網址的人仍可直接輸入進入；管理員後台與
+      // 顧問中心的權限內入口不受影響。noindex／sitemap exclusion 規則（見
+      // server/_core/security.ts NOINDEX_EXACT_PATHS）維持不變。
     ],
   },
   {

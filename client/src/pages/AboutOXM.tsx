@@ -77,7 +77,7 @@ const SERVICES: AboutService[] = [
     title: ABOUT_CONTENT.serviceNames[1],
     description: "從資金、認證、系統到品牌行銷\n依企業目前問題選擇專業服務\n在同一入口找到清楚的改善方向",
     statusLabel: "已開放",
-    action: { label: "前往找資源", href: "/resources" },
+    action: { label: "前往政府補助專區", href: "/upgrade-center" },
     theme: {
       section: "bg-gradient-to-br from-purple-50/80 via-white to-indigo-50",
       icon: "bg-purple-100 text-purple-700",
