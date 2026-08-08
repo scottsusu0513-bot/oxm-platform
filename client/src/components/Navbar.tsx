@@ -6,6 +6,7 @@ import {
   UserPlus, Search, Settings, UserCircle, ChevronDown,
   FileText, ScrollText, Bell, Briefcase, Lock,
   Rocket, Users, Package, BookOpen, MessageSquare, Lightbulb,
+  BarChart3, ShieldCheck, Clapperboard,
 } from "lucide-react";
 import UnverifiedEmailHint from "@/components/UnverifiedEmailHint";
 import { useState, useEffect, useRef } from "react";
@@ -106,7 +107,7 @@ const HUB_ITEMS: HubItem[] = [
   },
   {
     key: "resource",
-    label: "企業升級中心", short: "找資源", soon: false,
+    label: "資源服務中心", short: "找資源", href: "/resources", soon: false,
     // 找資源已是正式開放入口，桌面版下拉觸發鈕與找消息共用同一套 renderDesktopHub，
     // 讀 card／cardHover／ring／triggerIconCls，這裡改用清楚可辨識的藍紫色，避免跟
     // 找人才／找形象等「即將開放」的低透明度 muted 樣式混淆。
@@ -121,9 +122,30 @@ const HUB_ITEMS: HubItem[] = [
         href: "/upgrade-center",
         Icon: Lightbulb,
       },
-      // 財務優化相關公開入口暫時隱藏：對應 route 與既有登入／工廠資格權限
-      // 限制維持不變，只是不再出現在桌面下拉選單／手機 Accordion 這個共用的
-      // dropdownItems 資料來源裡。管理員後台與顧問中心的權限內入口不受影響。
+      {
+        title: "企業財務優化",
+        description: "財務健檢、融資準備與管理改善",
+        href: "/finance-optimization",
+        Icon: BarChart3,
+      },
+      {
+        title: "ISO 與低碳認證",
+        description: "管理系統、碳盤查與查驗準備",
+        href: "/certification-center",
+        Icon: ShieldCheck,
+      },
+      {
+        title: "ERP、MES 與產線優化",
+        description: "流程盤點、系統導入與產線改善",
+        href: "/erp-optimization",
+        Icon: Factory,
+      },
+      {
+        title: "短影音與品牌內容",
+        description: "影音企劃、社群內容與品牌行銷",
+        href: "/short-video-marketing",
+        Icon: Clapperboard,
+      },
     ],
   },
   {

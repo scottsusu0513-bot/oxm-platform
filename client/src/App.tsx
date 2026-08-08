@@ -29,6 +29,7 @@ const Announcements         = lazy(() => import("./pages/Announcements"));
 const BlogList              = lazy(() => import("./pages/BlogList"));
 const BlogPost              = lazy(() => import("./pages/BlogPost"));
 const AboutOXM              = lazy(() => import("./pages/AboutOXM"));
+const ResourceCenter        = lazy(() => import("./pages/ResourceCenter"));
 const PrivacyPolicyPage     = lazy(() => import("./pages/PrivacyPolicyPage"));
 const TermsPage             = lazy(() => import("./pages/TermsPage"));
 const VerifyEmailPage       = lazy(() => import("./pages/VerifyEmailPage"));
@@ -43,23 +44,21 @@ const ConsultantHub            = lazy(() => import("./pages/ConsultantHub"));
 const FinanceConsultantCases   = lazy(() => import("./pages/FinanceConsultantCases"));
 const NotFound              = lazy(() => import("./pages/NotFound"));
 const OrderDetail           = lazy(() => import("./pages/OrderDetail"));
-// ISO 與低碳認證專區：隱藏預覽頁，刻意不在任何 Navbar／首頁／找資源／Footer／
-// APP 導覽／sitemap／prerender 清單中出現連結入口，只能直接輸入網址開啟
-// （同 /news 的慣例，見下方 Router 註解）。上線公開前不得新增任何入口連結。
+// ISO 與低碳認證專區：目前僅由 /resources 資源總覽提供受控入口，仍不列入
+// Navbar 直達項目、首頁、Footer、APP 導覽、sitemap 或 prerender；頁面的
+// noindex／noarchive 保護維持不變，待正式上線授權後再另行調整。
 const CertificationCenter   = lazy(() => import("./pages/CertificationCenter"));
 const CertificationCenterApply = lazy(() => import("./pages/CertificationCenterApply"));
 // ISO 顧問案件看板：需登入且具顧問身份，不算公開隱藏預覽頁（同
 // /finance-consultant/cases 慣例，不在 NOINDEX_EXACT_PATHS 內單獨列出）。
 const CertificationConsultantCases = lazy(() => import("./pages/CertificationConsultantCases"));
-// ERP 與產線優化專區：同上，隱藏預覽頁，只能直接輸入網址開啟，不得新增任何
-// 入口連結（見 client/src/App.tsx 下方 Route 註解與
-// server/_core/security.ts NOINDEX_EXACT_PATHS）。
+// ERP 與產線優化專區：同上，僅由 /resources 提供受控入口，搜尋引擎保護與
+// 其他主要導覽位置的限制維持不變。
 const ErpOptimization       = lazy(() => import("./pages/ErpOptimization"));
 const ErpOptimizationApply  = lazy(() => import("./pages/ErpOptimizationApply"));
 const ErpConsultantCases    = lazy(() => import("./pages/ErpConsultantCases"));
-// 短影音與品牌內容行銷專區：同上，隱藏預覽頁，只能直接輸入網址開啟，不得
-// 新增任何入口連結（見下方 Route 註解與 server/_core/security.ts
-// NOINDEX_EXACT_PATHS）。申請表為真正可送出的表單（非佔位預覽），因此拆成
+// 短影音與品牌內容行銷專區：同上，僅由 /resources 提供受控入口，搜尋引擎
+// 保護與其他主要導覽位置的限制維持不變。申請表為真正可送出的表單，因此拆成
 // 兩個路由，與企業財務優化 /finance-optimization 的內容頁＋申請頁架構一致。
 const ShortVideoMarketing      = lazy(() => import("./pages/ShortVideoMarketing"));
 const ShortVideoMarketingApply = lazy(() => import("./pages/ShortVideoMarketingApply"));
@@ -364,25 +363,23 @@ function Router() {
             但路由本身必須完整存在，讓管理員／測試者可以直接輸入網址瀏覽。 */}
         <Route path="/news/:slug" component={NewsDetail} />
         <Route path="/news" component={News} />
-        {/* ISO 與低碳認證專區隱藏預覽頁：同上，只能直接輸入網址開啟，網站內
-            任何位置都不得加入連結入口；noindex／nofollow 見頁面 Helmet 與
-            server/_core/security.ts setupNoIndexRoutes 的 X-Robots-Tag。 */}
+        {/* ISO 與低碳認證專區：/resources 是唯一受控的公開導覽入口；頁面仍
+            維持 noindex／nofollow（Helmet 與 X-Robots-Tag），也不加入 sitemap
+            或 prerender，直到另行授權正式公開。 */}
         <Route path="/certification-center/apply" component={CertificationCenterApply} />
         <Route path="/certification-center" component={CertificationCenter} />
         <Route path="/certification-consultant/cases" component={CertificationConsultantCases} />
         <Route path="/admin/certification-services" component={AdminCertificationServices} />
         <Route path="/admin/consultant-management" component={AdminConsultantManagement} />
-        {/* ERP 與產線優化專區隱藏預覽頁：同上，只能直接輸入網址開啟，網站內
-            任何位置都不得加入連結入口；noindex／nofollow 見頁面 Helmet 與
-            server/_core/security.ts setupNoIndexRoutes 的 X-Robots-Tag。
+        {/* ERP 與產線優化專區：同上，僅由 /resources 提供受控入口；
+            noindex／nofollow、sitemap 與 prerender 限制維持不變。
             /apply 為真正可送出的申請表單，同樣隱藏、同樣 noindex；
             /erp-consultant/cases 需登入且具顧問身份，不算公開隱藏預覽頁。 */}
         <Route path="/erp-optimization/apply" component={ErpOptimizationApply} />
         <Route path="/erp-optimization" component={ErpOptimization} />
         <Route path="/erp-consultant/cases" component={ErpConsultantCases} />
-        {/* 短影音與品牌內容行銷專區隱藏預覽頁：同上，只能直接輸入網址開啟，
-            網站內任何位置都不得加入連結入口；noindex／nofollow 見頁面 Helmet
-            與 server/_core/security.ts setupNoIndexRoutes 的 X-Robots-Tag。
+        {/* 短影音與品牌內容行銷專區：同上，僅由 /resources 提供受控入口；
+            noindex／nofollow、sitemap 與 prerender 限制維持不變。
             /apply 為真正可送出的申請表單，同樣隱藏、同樣 noindex。
             /short-video-consultant/cases 需登入且具顧問身份，不算公開隱藏
             預覽頁，故不在 NOINDEX_EXACT_PATHS 內（同 /finance-consultant/cases 慣例）。 */}
@@ -392,6 +389,7 @@ function Router() {
         <Route path="/announcements" component={Announcements} />
         <Route path="/manual" component={UserManual} />
         <Route path="/about" component={AboutOXM} />
+        <Route path="/resources" component={ResourceCenter} />
         <Route path="/privacy" component={PrivacyPolicyPage} />
         <Route path="/terms" component={TermsPage} />
         <Route path="/verify-email" component={VerifyEmailPage} />

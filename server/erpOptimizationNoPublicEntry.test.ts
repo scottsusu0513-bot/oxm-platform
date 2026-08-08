@@ -2,8 +2,8 @@
  * ERP 與產線優化專區（/erp-optimization）— 隱藏預覽頁靜態原始碼契約測試。
  *
  * 與 /certification-center（見 server/certificationCenterNoPublicEntry.test.ts）
- * 完全同一套慣例：本頁面刻意不在任何 Navbar／首頁／找資源／Footer／APP 底部
- * 導覽／sitemap／prerender 清單中出現連結入口，只能直接輸入網址開啟。這裡
+ * 完全同一套慣例：本頁面目前只允許由 /resources 資源總覽進入，不在 Navbar
+ * 直達項目／首頁／Footer／APP 底部導覽／sitemap／prerender 清單中出現。這裡
  * 一樣用純靜態原始碼字串比對（readFileSync + 字串比對），因為「某個檔案裡
  * 完全沒有某段文字」無法透過 import 常數後跑行為測試驗證。
  *
@@ -20,10 +20,14 @@ function readSource(...segments: string[]): string {
   return fs.readFileSync(path.resolve(import.meta.dirname, "..", ...segments), "utf-8");
 }
 
-describe("/erp-optimization 沒有任何公開入口連結", () => {
-  it("client/src/components/Navbar.tsx 沒有任何 erp-optimization 連結或字樣", () => {
+describe("/erp-optimization 沒有資源總覽以外的主要導覽直達連結", () => {
+  it("client/src/components/Navbar.tsx 只在「找資源」下拉選單內含 erp-optimization 連結，其餘位置沒有", () => {
     const source = readSource("client", "src", "components", "Navbar.tsx");
-    expect(source).not.toMatch(/erp-optimization/i);
+    const resourceBlockMatch = source.match(/key: "resource",[\s\S]*?key: "talent",/);
+    expect(resourceBlockMatch).toBeTruthy();
+    const resourceBlock = resourceBlockMatch![0];
+    expect(resourceBlock).toMatch(/erp-optimization/i);
+    expect(source.replace(resourceBlock, "")).not.toMatch(/erp-optimization/i);
   });
 
   it("client/src/pages/Home.tsx（含首頁 Footer）沒有任何 erp-optimization 連結或字樣", () => {
@@ -36,7 +40,7 @@ describe("/erp-optimization 沒有任何公開入口連結", () => {
     expect(source).not.toMatch(/erp-optimization/i);
   });
 
-  it("client/src/pages/Search.tsx（找資源／相關服務推薦等頁面）沒有任何 erp-optimization 連結或字樣", () => {
+  it("client/src/pages/Search.tsx（工廠搜尋／相關服務推薦）沒有任何 erp-optimization 連結或字樣", () => {
     const source = readSource("client", "src", "pages", "Search.tsx");
     expect(source).not.toMatch(/erp-optimization/i);
   });

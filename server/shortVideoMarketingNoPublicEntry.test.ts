@@ -3,8 +3,8 @@
  * 契約測試，與 /erp-optimization、/certification-center（見
  * server/erpOptimizationNoPublicEntry.test.ts、
  * server/certificationCenterNoPublicEntry.test.ts）完全同一套慣例：本頁面
- * 刻意不在任何 Navbar／首頁／找資源／Footer／APP 底部導覽／sitemap／
- * prerender 清單中出現連結入口，只能直接輸入網址開啟。
+ * 目前只允許由 /resources 資源總覽進入，不在 Navbar 直達項目／首頁／Footer／
+ * APP 底部導覽／sitemap／prerender 清單中出現。
  */
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
@@ -14,10 +14,14 @@ function readSource(...segments: string[]): string {
   return fs.readFileSync(path.resolve(import.meta.dirname, "..", ...segments), "utf-8");
 }
 
-describe("/short-video-marketing 沒有任何公開入口連結", () => {
-  it("client/src/components/Navbar.tsx 沒有任何 short-video-marketing 連結或字樣", () => {
+describe("/short-video-marketing 沒有資源總覽以外的主要導覽直達連結", () => {
+  it("client/src/components/Navbar.tsx 只在「找資源」下拉選單內含 short-video-marketing 連結，其餘位置沒有", () => {
     const source = readSource("client", "src", "components", "Navbar.tsx");
-    expect(source).not.toMatch(/short-video-marketing/i);
+    const resourceBlockMatch = source.match(/key: "resource",[\s\S]*?key: "talent",/);
+    expect(resourceBlockMatch).toBeTruthy();
+    const resourceBlock = resourceBlockMatch![0];
+    expect(resourceBlock).toMatch(/short-video-marketing/i);
+    expect(source.replace(resourceBlock, "")).not.toMatch(/short-video-marketing/i);
   });
 
   it("client/src/pages/Home.tsx（含首頁 Footer）沒有任何 short-video-marketing 連結或字樣", () => {
@@ -30,7 +34,7 @@ describe("/short-video-marketing 沒有任何公開入口連結", () => {
     expect(source).not.toMatch(/short-video-marketing/i);
   });
 
-  it("client/src/pages/Search.tsx（找資源／相關服務推薦等頁面）沒有任何 short-video-marketing 連結或字樣", () => {
+  it("client/src/pages/Search.tsx（工廠搜尋／相關服務推薦）沒有任何 short-video-marketing 連結或字樣", () => {
     const source = readSource("client", "src", "pages", "Search.tsx");
     expect(source).not.toMatch(/short-video-marketing/i);
   });
