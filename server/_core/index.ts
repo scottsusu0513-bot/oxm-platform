@@ -12,7 +12,7 @@ import { apiLimiter, loginLimiter, uploadLimiter, messageLimiter, submitReviewLi
 import { COOKIE_NAME } from "@shared/const";
 import { INDUSTRY_SLUGS, PHASE1_SUB_INDUSTRY_PAGES } from "../../shared/constants";
 import { escapeXmlText } from "@shared/seo/xml";
-import { getDb, getApprovedFactoriesForSitemap, ensureConsultantsSeeded, ensureCertificationServiceCatalogSeeded } from "../db";
+import { getDb, getApprovedFactoriesForSitemap, getPublishedNewsForSitemap, ensureConsultantsSeeded, ensureCertificationServiceCatalogSeeded } from "../db";
 import { runCollaborationOrderOverdueEmailCheck } from "../orderOverdueCheck";
 
 async function startServer() {
@@ -164,8 +164,10 @@ async function startServer() {
     urls.push(entry(`${BASE}/about`, "0.6", "monthly"));
     urls.push(entry(`${BASE}/search`, "0.9", "daily", today));
     urls.push(entry(`${BASE}/announcements`, "0.6", "weekly", today));
+    urls.push(entry(`${BASE}/news`, "0.6", "daily", today));
     urls.push(entry(`${BASE}/privacy`, "0.3", "monthly", today));
     urls.push(entry(`${BASE}/terms`, "0.3", "monthly", today));
+    urls.push(entry(`${BASE}/upgrade-center`, "0.6", "monthly"));
 
     // Blog / 找代工指南
     urls.push(entry(`${BASE}/blog`, "0.7", "weekly", today));
@@ -173,14 +175,16 @@ async function startServer() {
     urls.push(entry(`${BASE}/blog/what-is-moq`, "0.6", "weekly", today));
     urls.push(entry(`${BASE}/blog/first-time-factory-guide`, "0.6", "weekly", today));
 
-    // 主產業頁
+    // 主產業頁：內容來自 shared/constants.ts 的靜態文案，沒有逐頁真實更新
+    // 時間可查，比照 /about 的既有慣例省略 lastmod，不得每次產生 sitemap
+    // 都用當天日期偽造成「今天剛更新」。
     for (const slug of Object.values(INDUSTRY_SLUGS)) {
-      urls.push(entry(`${BASE}/industry/${slug}`, "0.8", "weekly", today));
+      urls.push(entry(`${BASE}/industry/${slug}`, "0.8", "weekly"));
     }
 
-    // 子產業頁（Phase 1）
+    // 子產業頁（Phase 1）：理由同主產業頁，省略 lastmod。
     for (const { industrySlug, subSlug } of PHASE1_SUB_INDUSTRY_PAGES) {
-      urls.push(entry(`${BASE}/industry/${industrySlug}/${subSlug}`, "0.7", "weekly", today));
+      urls.push(entry(`${BASE}/industry/${industrySlug}/${subSlug}`, "0.7", "weekly"));
     }
 
     // 已審核工廠頁
@@ -194,6 +198,19 @@ async function startServer() {
       }
     } catch {
       // DB 暫時不可用時跳過工廠 URL，仍回傳靜態部分
+    }
+
+    // 可公開索引消息（status === "published"），lastmod 用真實 updatedAt。
+    try {
+      const publishedNews = await getPublishedNewsForSitemap();
+      for (const n of publishedNews) {
+        const lastmod = n.updatedAt instanceof Date
+          ? n.updatedAt.toISOString().slice(0, 10)
+          : today;
+        urls.push(entry(`${BASE}/news/${n.slug}`, "0.6", "weekly", lastmod));
+      }
+    } catch {
+      // DB 暫時不可用時跳過消息 URL，仍回傳靜態部分
     }
 
     const xml =

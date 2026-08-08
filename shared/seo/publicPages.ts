@@ -40,6 +40,18 @@ export const PUBLIC_PAGE_SEO = {
     ogImage: OG_IMAGE,
     language: BRAND.language,
   },
+  // title/description 與 client/src/pages/EnterpriseUpgradeCenter.tsx 既有
+  // 的 Helmet 內容保持一致，這裡只是把同一份文案也用於伺服器端初始 HTML
+  // head 注入（該頁原本完全沒有 canonical，也沒有任何伺服器端注入）。
+  upgradeCenter: {
+    path: "/upgrade-center",
+    title: "企業升級中心｜OXM",
+    description: "OXM 企業升級中心，協助台灣企業取得政府補助與轉型資源，包含 SBIR、CITD、SIIR 等計畫媒合服務。",
+    canonical: `${BRAND.url}/upgrade-center`,
+    ogType: "website",
+    ogImage: OG_IMAGE,
+    language: BRAND.language,
+  },
 } as const satisfies Record<string, PublicPageSeo>;
 
 export type PublicPageKey = keyof typeof PUBLIC_PAGE_SEO;
@@ -49,5 +61,6 @@ export function getPublicPageSeoByPath(pathname: string): PublicPageSeo | null {
   const normalized = pathname.length > 1 && pathname.endsWith("/") ? pathname.slice(0, -1) : pathname;
   if (normalized === "" || normalized === "/") return PUBLIC_PAGE_SEO.home;
   if (normalized === "/about") return PUBLIC_PAGE_SEO.about;
+  if (normalized === "/upgrade-center") return PUBLIC_PAGE_SEO.upgradeCenter;
   return null;
 }

@@ -12,6 +12,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { INDUSTRIES, INDUSTRY_OPTIONS, TAIWAN_REGIONS } from "@shared/constants";
+import { buildSearchPageMeta } from "@shared/seo/searchPage";
 import { trpc } from "@/lib/trpc";
 import { useLocation, Link } from "wouter";
 import { useState, useMemo, useEffect, useRef } from "react";
@@ -416,18 +417,25 @@ export default function Search() {
   const totalPages = Math.ceil((data?.total ?? 0) / pageSize);
 
   const seoIndustry = industry.length > 0 ? industry[0] : null;
-  const pageTitle = seoIndustry
-    ? `${seoIndustry}｜台灣傳產供應商與工廠資源｜OXM`
-    : "搜尋台灣傳產廠商與資源｜OXM";
-  const pageDesc = seoIndustry
-    ? `在 OXM 尋找台灣${seoIndustry}相關廠商與供應鏈資源，包含工廠、OEM/ODM 代工、材料、設備與產業服務，快速比較並送出詢價。`
-    : "在 OXM 搜尋全台傳統產業廠商，涵蓋工廠、OEM/ODM 代工、工業設備、材料商、包裝印刷與設計工作室，可依產業、地區篩選，快速找到合適的合作對象。";
+  // title／description／noindex／canonical 公式與 server 端初始 HTML 注入
+  // （server/_core/vite.ts + shared/seo/searchPage.ts）共用同一份實作，不在
+  // 這裡各自重複一份。qs 用與「分享搜尋結果」相同的 buildParams（不含
+  // page，純 UI 分頁狀態不算內容變化），確保這裡看到的「有沒有查詢參數」
+  // 跟使用者當下實際生效的篩選條件同步，而不是只看瀏覽器第一次載入時的
+  // 網址快照。
+  const canonicalQs = buildParams({
+    mfgMode, industry, subIndustry, region,
+    keyword: committedKeyword, businessType, sortBy,
+  }).toString();
+  const searchMeta = buildSearchPageMeta(canonicalQs);
 
   return (
     <div className="min-h-screen bg-background">
       <Helmet>
-        <title>{pageTitle}</title>
-        <meta name="description" content={pageDesc} />
+        <title>{searchMeta.title}</title>
+        <meta name="description" content={searchMeta.description} />
+        <link rel="canonical" href={searchMeta.canonical} />
+        {searchMeta.noindex && <meta name="robots" content="noindex,follow" />}
       </Helmet>
       <Navbar />
       <FloatingBackButton fallbackHref="/" />

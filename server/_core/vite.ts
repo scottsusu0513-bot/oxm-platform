@@ -5,9 +5,11 @@ import { nanoid } from "nanoid";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import viteConfig from "../../vite.config";
-import { buildFactoryMeta, injectMetaIntoHtml, parseFactoryPath, stripQueryString } from "./ogMeta";
+import { buildFactoryMeta, injectMetaIntoHtml, parseFactoryPath, stripQueryString, extractQueryString, DEFAULT_OG_IMAGE } from "./ogMeta";
 import { injectPublicPageSeo } from "./publicPageMeta";
 import { injectPrerenderedBody } from "./prerenderedBody";
+import { parseIndustryPath, buildIndustryPageMeta } from "@shared/seo/industryPages";
+import { buildSearchPageMeta } from "@shared/seo/searchPage";
 
 export async function setupVite(app: Express, server: Server) {
   const serverOptions = {
@@ -66,25 +68,60 @@ export async function setupVite(app: Express, server: Server) {
       // req.originalUrl instead.
       const pathname = stripQueryString(req.originalUrl);
       const factoryPath = parseFactoryPath(pathname);
+      let statusCode = 200;
       if (factoryPath) {
         const meta = await buildFactoryMeta(factoryPath.rawId, pathname);
+        statusCode = meta.status;
         page = injectMetaIntoHtml(page, meta);
+      } else if (pathname === "/search") {
+        // /search：純字串查表（無 DB），無參數可索引並自我 canonical，帶任何
+        // 篩選參數一律 noindex,follow——原始 HTML 就要有這個結果，不能只靠
+        // client 端 Helmet（那樣 Googlebot 沒執行 JS 就看不到 noindex）。
+        // title／description／noindex 公式與 client 端 Search.tsx 共用同一份
+        // shared/seo/searchPage.ts，見該檔案內的說明。
+        const searchMeta = buildSearchPageMeta(extractQueryString(req.originalUrl));
+        page = injectMetaIntoHtml(page, {
+          title: searchMeta.title,
+          description: searchMeta.description,
+          image: DEFAULT_OG_IMAGE,
+          url: searchMeta.canonical,
+          status: 200,
+          noindex: searchMeta.noindex,
+        });
       } else {
-        // 固定公開頁（目前為 "/" 與 "/about"）：不查資料庫，直接用
-        // shared/seo 常數注入 title／description／canonical／OG／JSON-LD。
-        // 其他路由（沒有專屬 SEO 設定）保留原本的 index.html 預設值不變。
-        const seoPage = injectPublicPageSeo(page, pathname);
-        if (seoPage !== null) page = seoPage;
+        const industryPath = parseIndustryPath(pathname);
+        const industryMeta = industryPath ? buildIndustryPageMeta(industryPath.slug, industryPath.subSlug) : null;
+        if (industryMeta) {
+          // /industry/:slug(/:sub)：純資料查表（無 DB），與工廠頁共用同一套
+          // marker-based 注入函式，title／description／canonical 公式與
+          // client 端 IndustryPage.tsx 的 Helmet 保持一致。slug 對不到任何
+          // 已知產業時 industryMeta 為 null，落到下面的預設 index.html 不變。
+          page = injectMetaIntoHtml(page, {
+            title: industryMeta.title,
+            description: industryMeta.description,
+            image: DEFAULT_OG_IMAGE,
+            url: industryMeta.canonical,
+            status: 200,
+            noindex: false,
+          });
+        } else {
+          // 固定公開頁（目前為 "/"、"/about"、"/upgrade-center"）：不查資料庫，
+          // 直接用 shared/seo 常數注入 title／description／canonical／OG／
+          // JSON-LD。其他路由（沒有專屬 SEO 設定）保留原本的 index.html
+          // 預設值不變。
+          const seoPage = injectPublicPageSeo(page, pathname);
+          if (seoPage !== null) page = seoPage;
 
-        // GEO 第二階段 B：/about 額外把 build-time 產生的靜態正文片段塞進
-        // <div id="root">，讓爬蟲不執行 JS 也能讀到主要正文。dev 環境若還沒
-        // 跑過 pnpm build／pnpm prerender:about，片段檔案不存在時安全地回傳
-        // null，不影響其餘行為。
-        const bodyPage = injectPrerenderedBody(page, pathname);
-        if (bodyPage !== null) page = bodyPage;
+          // GEO 第二階段 B：/about 額外把 build-time 產生的靜態正文片段塞進
+          // <div id="root">，讓爬蟲不執行 JS 也能讀到主要正文。dev 環境若還沒
+          // 跑過 pnpm build／pnpm prerender:about，片段檔案不存在時安全地回傳
+          // null，不影響其餘行為。
+          const bodyPage = injectPrerenderedBody(page, pathname);
+          if (bodyPage !== null) page = bodyPage;
+        }
       }
 
-      res.status(200).set({ "Content-Type": "text/html" }).end(page);
+      res.status(statusCode).set({ "Content-Type": "text/html" }).end(page);
     } catch (e) {
       vite.ssrFixStacktrace(e as Error);
       next(e);
@@ -132,15 +169,21 @@ export function serveStatic(app: Express) {
 
     // /factory/:id: inject factory-specific OG/Twitter meta into the same
     // static index.html before sending, so social crawlers (which don't run
-    // the client bundle) see the business preview. Any failure here falls
-    // straight back to the plain SPA file — never a 500.
+    // the client bundle) see the business preview. Also sets the real HTTP
+    // status (200／404) from buildFactoryMeta so an invalid/missing/
+    // non-approved factory id is a genuine 404, not a 200 with generic
+    // fallback content (that combination is what Search Console reports as
+    // a soft 404 — see server/factoryPageStatus.test.ts). Any *unexpected*
+    // failure here (e.g. disk read error) still falls straight back to the
+    // plain SPA file at 200 — never a 500, and never confused with the
+    // intentional 404 path above.
     const factoryPath = parseFactoryPath(pathname);
     if (factoryPath) {
       try {
         const template = await getCachedTemplate();
         const meta = await buildFactoryMeta(factoryPath.rawId, pathname);
         const page = injectMetaIntoHtml(template, meta);
-        res.status(200).set({ "Content-Type": "text/html" }).end(page);
+        res.status(meta.status).set({ "Content-Type": "text/html" }).end(page);
       } catch (err) {
         console.error(
           "[ogMeta] serveStatic factory meta injection failed:",
@@ -151,11 +194,64 @@ export function serveStatic(app: Express) {
       return;
     }
 
-    // 固定公開頁（目前為 "/" 與 "/about"）：不查資料庫，直接用 shared/seo
-    // 常數注入 title／description／canonical／OG／JSON-LD。其餘所有路由
-    // （沒有專屬 SEO 設定的 SPA fallback）一律直接吐出同一份快取字串，不做
-    // 任何字串處理，也不再重新命中磁碟；任何失敗才退回 res.sendFile 當最後
-    // 保底。
+    // /search：無參數可索引並自我 canonical，帶任何篩選參數一律
+    // noindex,follow，原始 HTML（未執行 JS）就要有這個結果——見
+    // shared/seo/searchPage.ts 與 client 端 Search.tsx 共用同一份規則。
+    if (pathname === "/search") {
+      try {
+        const template = await getCachedTemplate();
+        const searchMeta = buildSearchPageMeta(extractQueryString(req.originalUrl));
+        const page = injectMetaIntoHtml(template, {
+          title: searchMeta.title,
+          description: searchMeta.description,
+          image: DEFAULT_OG_IMAGE,
+          url: searchMeta.canonical,
+          status: 200,
+          noindex: searchMeta.noindex,
+        });
+        res.status(200).set({ "Content-Type": "text/html" }).end(page);
+      } catch (err) {
+        console.error(
+          "[ogMeta] serveStatic search meta injection failed:",
+          err instanceof Error ? err.message : String(err)
+        );
+        res.sendFile(indexPath);
+      }
+      return;
+    }
+
+    // /industry/:slug(/:sub)：純資料查表（無 DB），與工廠頁共用同一套
+    // marker-based 注入函式；slug 對不到任何已知產業時 industryMeta 為
+    // null，落到下面的固定公開頁／SPA fallback 分支，行為不變。
+    const industryPath = parseIndustryPath(pathname);
+    const industryMeta = industryPath ? buildIndustryPageMeta(industryPath.slug, industryPath.subSlug) : null;
+    if (industryMeta) {
+      try {
+        const template = await getCachedTemplate();
+        const page = injectMetaIntoHtml(template, {
+          title: industryMeta.title,
+          description: industryMeta.description,
+          image: DEFAULT_OG_IMAGE,
+          url: industryMeta.canonical,
+          status: 200,
+          noindex: false,
+        });
+        res.status(200).set({ "Content-Type": "text/html" }).end(page);
+      } catch (err) {
+        console.error(
+          "[ogMeta] serveStatic industry meta injection failed:",
+          err instanceof Error ? err.message : String(err)
+        );
+        res.sendFile(indexPath);
+      }
+      return;
+    }
+
+    // 固定公開頁（目前為 "/"、"/about"、"/upgrade-center"）：不查資料庫，
+    // 直接用 shared/seo 常數注入 title／description／canonical／OG／
+    // JSON-LD。其餘所有路由（沒有專屬 SEO 設定的 SPA fallback）一律直接
+    // 吐出同一份快取字串，不做任何字串處理，也不再重新命中磁碟；任何失敗
+    // 才退回 res.sendFile 當最後保底。
     try {
       const template = await getCachedTemplate();
       let page = injectPublicPageSeo(template, pathname) ?? template;

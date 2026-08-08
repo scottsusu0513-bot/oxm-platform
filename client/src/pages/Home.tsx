@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Checkbox } from "@/components/ui/checkbox";
-import { INDUSTRIES, INDUSTRY_OPTIONS, TAIWAN_REGIONS } from "@shared/constants";
+import { INDUSTRIES, INDUSTRY_OPTIONS, INDUSTRY_SLUGS, TAIWAN_REGIONS } from "@shared/constants";
 import {
   Search, ArrowRight, Star, Shield, MessageCircle, Zap,
   Shirt, Wrench, Cpu, Box, TreePine, Package, UtensilsCrossed,
@@ -705,19 +705,22 @@ export default function Home() {
             {INDUSTRY_OPTIONS.map((ind) => {
               const Icon = INDUSTRY_ICONS[ind] || Box;
               const colorClass = INDUSTRY_COLORS[ind] || "from-gray-500 to-gray-400";
+              const slug = INDUSTRY_SLUGS[ind];
+              // 產業卡一律連到已驗證存在、回傳 200 的 /industry/{slug} landing
+              // page（而非 /search?industry=），且必須是可檢索的 <a href>——
+              // wouter 的 Link 預設就是真正的 <a> 標籤，不是只靠 onClick 導頁，
+              // 讓搜尋引擎爬蟲能直接從首頁發現並收錄產業頁內部連結。
               return (
-                <Card
-                  key={ind}
-                  className="hover:shadow-lg transition-all cursor-pointer group border-0 shadow-sm hover:-translate-y-1"
-                  onClick={() => navigate(`/search?industry=${encodeURIComponent(ind)}`)}
-                >
-                  <CardContent className="p-3 sm:p-5 text-center">
-                    <div className={`w-10 h-10 sm:w-14 sm:h-14 mx-auto mb-2 sm:mb-3 rounded-xl sm:rounded-2xl bg-gradient-to-br ${colorClass} flex items-center justify-center shadow-sm group-hover:scale-110 transition-transform`}>
-                      <Icon className="w-5 h-5 sm:w-7 sm:h-7 text-white" />
-                    </div>
-                    <p className="font-semibold text-xs sm:text-sm leading-tight">{ind}</p>
-                  </CardContent>
-                </Card>
+                <Link key={ind} href={slug ? `/industry/${slug}` : `/search?industry=${encodeURIComponent(ind)}`} className="block">
+                  <Card className="hover:shadow-lg transition-all cursor-pointer group border-0 shadow-sm hover:-translate-y-1">
+                    <CardContent className="p-3 sm:p-5 text-center">
+                      <div className={`w-10 h-10 sm:w-14 sm:h-14 mx-auto mb-2 sm:mb-3 rounded-xl sm:rounded-2xl bg-gradient-to-br ${colorClass} flex items-center justify-center shadow-sm group-hover:scale-110 transition-transform`}>
+                        <Icon className="w-5 h-5 sm:w-7 sm:h-7 text-white" />
+                      </div>
+                      <p className="font-semibold text-xs sm:text-sm leading-tight">{ind}</p>
+                    </CardContent>
+                  </Card>
+                </Link>
               );
             })}
           </div>

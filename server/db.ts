@@ -2519,6 +2519,15 @@ export async function listPublicNews(params: ListPublicNewsParams): Promise<{ it
   return { items: items.map(item => ({ ...item, isRead: readIds.has(item.id) })), total: Number(countResult?.count ?? 0) };
 }
 
+/** sitemap.xml 專用：只回傳 status === "published" 的消息 slug／updatedAt，不分頁（消息數量遠小於工廠）。 */
+export async function getPublishedNewsForSitemap(): Promise<{ slug: string; updatedAt: Date }[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select({ slug: news.slug, updatedAt: news.updatedAt })
+    .from(news)
+    .where(eq(news.status, "published"));
+}
+
 export async function getAdminNewsList(limit = 100): Promise<News[]> {
   const db = await getDb();
   if (!db) return [];
