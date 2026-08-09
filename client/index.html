@@ -44,14 +44,8 @@
       #app-loading.is-hidden { display: none; }
 
       .app-loading-logo {
-        font-family: Inter, "Noto Sans TC", system-ui, sans-serif;
-        font-size: 28px;
-        font-weight: 800;
-        letter-spacing: 0.02em;
-        background: linear-gradient(90deg, #f97316, #f59e0b, #a855f7);
-        -webkit-background-clip: text;
-        background-clip: text;
-        color: transparent;
+        height: 32px;
+        width: auto;
       }
       .app-loading-spinner {
         width: 42px;
@@ -77,7 +71,7 @@
 
   <body style="background-color: #FFF7ED;">
     <div id="app-loading">
-      <div class="app-loading-logo">OXM</div>
+      <img class="app-loading-logo" src="/logo-oxm.png" alt="OXM" />
       <div class="app-loading-spinner"></div>
       <div class="app-loading-text">載入中…</div>
     </div>

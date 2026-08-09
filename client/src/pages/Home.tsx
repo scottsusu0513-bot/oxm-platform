@@ -863,7 +863,7 @@ export default function Home() {
           <div>
             <div className="flex items-center justify-center gap-3 mb-2">
               <Factory className="w-5 h-5 text-orange-400" />
-              <p className="font-bold text-white text-lg">OXM</p>
+              <img src="/logo-oxm.png" alt="OXM" className="h-6 w-auto" />
               <Wrench className="w-5 h-5 text-purple-400" />
             </div>
             <p>台灣傳統產業資源媒合平台</p>

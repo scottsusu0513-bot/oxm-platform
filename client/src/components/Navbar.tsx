@@ -498,9 +498,9 @@ export default function Navbar() {
             }}
             aria-haspopup="true"
             aria-expanded={brandMenuOpen}
-            className="flex items-center gap-0.5 font-extrabold text-xl no-underline cursor-pointer"
+            className="flex items-center gap-1 no-underline cursor-pointer"
           >
-            <span className="bg-gradient-to-r from-orange-500 to-amber-500 bg-clip-text text-transparent text-2xl tracking-tight">OXM</span>
+            <img src="/logo-oxm.png" alt="OXM" className="h-7 w-auto shrink-0" />
             <ChevronDown className={`w-4 h-4 text-muted-foreground/70 transition-transform duration-150 ${brandMenuOpen ? "rotate-180" : ""}`} />
           </button>
         </div>
