@@ -4,8 +4,9 @@
  * 純讀原始碼字串比對（readFileSync + regex）。
  *
  * 涵蓋範圍：
- * - Navbar 主要入口順序（關於OXM／找工廠／找資源／找人才／找形象／找消息／
- *   找討論）與各入口的可進入性（全部七項都不再有「鎖定、點擊沒反應」的入口）
+ * - Navbar 右側六個功能入口順序（找工廠／找資源／找人才／找形象／找消息／
+ *   找討論）與各入口的可進入性（全部不再有「鎖定、點擊沒反應」的入口）；
+ *   關於OXM 改放在左上角 OXM 品牌下拉選單（首頁／關於OXM），不在 HUB_ITEMS 內
  * - 找人才／找形象／找討論的 Coming Soon 頁：route 註冊或既有 route 沿用、
  *   共用元件、noindex,follow
  * - sitemap／noindex 一致性：/resources 可索引且在 sitemap 內；/talent、
@@ -26,17 +27,25 @@ describe("Navbar 主要入口順序與可進入性（client/src/components/Navba
   const hubItemsMatch = source.match(/const HUB_ITEMS: HubItem\[\] = \[[\s\S]*?\n\];/);
   const hubItemsSource = hubItemsMatch ? hubItemsMatch[0] : "";
 
-  it("HUB_ITEMS 存在，且七個入口依序為 關於OXM／找工廠／找資源／找人才／找形象／找消息／找討論", () => {
+  it("HUB_ITEMS 存在，且六個功能入口依序為 找工廠／找資源／找人才／找形象／找消息／找討論（關於OXM 不在其中）", () => {
     expect(hubItemsSource.length).toBeGreaterThan(0);
     const keys = [...hubItemsSource.matchAll(/key: "(\w+)"/g)].map(m => m[1]);
-    expect(keys).toEqual(["about", "factory", "resource", "talent", "brand", "news", "discussion"]);
+    expect(keys).toEqual(["factory", "resource", "talent", "brand", "news", "discussion"]);
   });
 
-  it("關於OXM：soon:false，下拉有真實連結到 /about（桌機／手機共用同一份 dropdownItems）", () => {
-    const block = hubItemsSource.match(/key: "about"[\s\S]*?\n  \},/)?.[0] ?? "";
-    expect(block).toMatch(/soon: false/);
-    expect(block).toMatch(/href: "\/about"/);
-    expect(block).not.toMatch(/disabled: true/);
+  it("關於OXM 已移出 HUB_ITEMS，改放在左上角 OXM 品牌下拉選單，跟首頁同一份 dropdown，不是重建第二套", () => {
+    expect(hubItemsSource).not.toMatch(/key: "about"/);
+    const brandMenuMatch = source.match(/\{brandMenuOpen && brandMenuPos && createPortal\([\s\S]*?document\.body\s*\)\}/);
+    expect(brandMenuMatch, "找不到 OXM 品牌下拉選單區塊").not.toBeNull();
+    const brandMenu = brandMenuMatch![0];
+    expect(brandMenu).toMatch(/<Link href="\/" onClick=\{\(\) => setBrandMenuOpen\(false\)\}>/);
+    expect(brandMenu).toMatch(/首頁/);
+    expect(brandMenu).toMatch(/<Link href="\/about" onClick=\{\(\) => setBrandMenuOpen\(false\)\}>/);
+    expect(brandMenu).toMatch(/關於 OXM/);
+  });
+
+  it("Navbar 右側不再有獨立的「關於 OXM」主導航按鈕", () => {
+    expect(source).not.toMatch(/short: "關於 OXM"/);
   });
 
   it("找人才：soon:false（不再鎖定），下拉有真實連結到 /talent", () => {

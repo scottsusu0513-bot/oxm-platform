@@ -39,13 +39,14 @@ describe("Navbar.tsx: 手機版六入口 Accordion 使用單一 state", () => {
     );
   });
 
-  it("七個入口都定義了穩定 key，且與 MobileHubKey 一致（六大主入口＋找討論）", () => {
-    const keys = ["about", "factory", "resource", "talent", "brand", "news", "discussion"];
+  it("六個功能入口都定義了穩定 key，且與 MobileHubKey 一致（關於OXM 已移到品牌下拉選單，不再是 HUB_ITEMS 的一員）", () => {
+    const keys = ["factory", "resource", "talent", "brand", "news", "discussion"];
     for (const key of keys) {
       expect(source).toMatch(new RegExp(`key: "${key}"`));
     }
+    expect(source).not.toMatch(/key: "about"/);
     expect(source).toMatch(
-      /type MobileHubKey = "about" \| "factory" \| "resource" \| "talent" \| "brand" \| "news" \| "discussion";/
+      /type MobileHubKey = "factory" \| "resource" \| "talent" \| "brand" \| "news" \| "discussion";/
     );
   });
 

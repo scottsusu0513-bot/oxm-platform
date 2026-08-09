@@ -4,7 +4,7 @@ import { Link, useLocation } from "wouter";
 import {
   Factory, Mail, User, LogOut, LayoutDashboard, Menu, X,
   UserPlus, Search, Settings, UserCircle, ChevronDown,
-  FileText, ScrollText, Bell, Briefcase, Lock, Info,
+  FileText, ScrollText, Bell, Briefcase, Lock,
   Rocket, Users, Package, BookOpen, MessageSquare, Lightbulb,
 } from "lucide-react";
 import UnverifiedEmailHint from "@/components/UnverifiedEmailHint";
@@ -24,7 +24,7 @@ import {
 type NavIcon = ComponentType<SVGProps<SVGSVGElement> & { className?: string }>;
 
 /** 手機版 Accordion 用的穩定 key，主要入口各對應一個，不隨文案調整而改變 */
-type MobileHubKey = "about" | "factory" | "resource" | "talent" | "brand" | "news" | "discussion";
+type MobileHubKey = "factory" | "resource" | "talent" | "brand" | "news" | "discussion";
 
 interface HubDropdownItem {
   title: string;
@@ -93,21 +93,6 @@ const HUB_MENU_ITEM =
   "flex items-start gap-2.5 px-3.5 py-2.5 hover:bg-orange-50 transition-colors cursor-pointer focus-visible:outline-none focus-visible:bg-orange-50";
 
 const HUB_ITEMS: HubItem[] = [
-  {
-    key: "about",
-    label: "關於 OXM", short: "關於 OXM", soon: false,
-    // 關於OXM 目前完全沒有被 Navbar／Footer／首頁連結過（/about route／
-    // component／SEO metadata 都已存在，只是孤兒頁面）。跟找資源／找消息一樣
-    // 採「不設 href、下拉單一真實項目」模式：桌機與手機共用同一個
-    // dropdownItems 資料來源，兩邊都能點進去，不需要另外改互動程式。
-    Icon: Info, iconCls: "text-slate-600", triggerIconCls: "text-slate-600", ring: "focus-visible:ring-slate-400",
-    card: "bg-gradient-to-br from-slate-100 to-slate-200/80 border-slate-300/50 text-slate-700",
-    cardHover: "hover:from-slate-200 hover:to-slate-300/80 hover:border-slate-400/60 hover:shadow-sm hover:-translate-y-px",
-    mCard: "from-slate-100 to-slate-200/70 border-slate-300/50", mText: "text-slate-700",
-    dropdownItems: [
-      { title: "關於 OXM", description: "了解 OXM 如何整合工廠媒合、企業升級、產業人才與品牌資源", href: "/about", Icon: Info },
-    ],
-  },
   {
     key: "factory",
     label: "商機媒合中心", short: "找工廠", href: "/search", soon: false,
@@ -215,7 +200,8 @@ export default function Navbar() {
   const [menuClosing, setMenuClosing] = useState(false);
   const [loginDialogOpen, setLoginDialogOpen] = useState(false);
 
-  // OXM 品牌區下拉選單（左上角）：目前僅「首頁」一個項目。
+  // OXM 品牌區下拉選單（左上角）：目前有「首頁」／「關於 OXM」兩個項目，桌機／
+  // 手機共用同一份 DOM（沒有 breakpoint 拆兩套），不需要另外處理手機版。
   // Content 透過 createPortal 掛到 document.body、用 position:fixed + 手動算好的
   // 座標定位（brandMenuPos），而不是原本「absolute 相對 brandMenuRef 父層」的寫法：
   // <header> 本身是 position:sticky + z-50，會建立自己的 stacking context，裡面的
@@ -532,6 +518,11 @@ export default function Navbar() {
             <Link href="/" onClick={() => setBrandMenuOpen(false)}>
               <div className="px-3.5 py-2 text-sm font-medium text-foreground hover:bg-orange-50 hover:text-orange-700 transition-colors cursor-pointer">
                 首頁
+              </div>
+            </Link>
+            <Link href="/about" onClick={() => setBrandMenuOpen(false)}>
+              <div className="px-3.5 py-2 text-sm font-medium text-foreground hover:bg-orange-50 hover:text-orange-700 transition-colors cursor-pointer">
+                關於 OXM
               </div>
             </Link>
           </div>,
