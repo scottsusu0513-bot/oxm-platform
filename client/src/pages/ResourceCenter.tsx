@@ -3,12 +3,14 @@ import { Helmet } from "react-helmet-async";
 import { Link } from "wouter";
 import Navbar from "@/components/Navbar";
 import { FloatingBackButton } from "@/components/FloatingBackButton";
+import { useRemoveServerSeoHead } from "@/hooks/useRemoveServerSeoHead";
 import {
   ArrowRight,
   BadgeCheck,
   Banknote,
   BarChart3,
   Clapperboard,
+  Clock,
   Compass,
   Factory,
   FileCheck2,
@@ -27,6 +29,9 @@ type ResourceService = {
   subtitle: string;
   description: string;
   href: string;
+  /** 目前是否已正式開放並可點擊進入；false 時卡片顯示「敬請期待」，不可互動。
+   *  對應的 route／component 仍完整保留，已知網址的人可以直接輸入進入。 */
+  available: boolean;
   category: Exclude<ResourceCategory, "all">;
   icon: typeof Lightbulb;
   tags: string[];
@@ -52,6 +57,7 @@ const RESOURCE_SERVICES: ResourceService[] = [
     subtitle: "從適用計畫到申請準備",
     description: "協助企業了解 SBIR、CITD、SIIR 等補助方向，先釐清需求與資格，再媒合適合的顧問資源。",
     href: "/upgrade-center",
+    available: true,
     category: "funding",
     icon: Lightbulb,
     tags: ["政府補助", "資格初判", "顧問媒合"],
@@ -68,6 +74,7 @@ const RESOURCE_SERVICES: ResourceService[] = [
     subtitle: "看懂資金、成本與營運體質",
     description: "從財務現況盤點、融資準備到管理資訊整理，協助企業辨識問題並建立可執行的改善方向。",
     href: "/finance-optimization",
+    available: false,
     category: "funding",
     icon: BarChart3,
     tags: ["財務健檢", "融資準備", "管理改善"],
@@ -84,6 +91,7 @@ const RESOURCE_SERVICES: ResourceService[] = [
     subtitle: "從需求判斷到制度與查驗準備",
     description: "依企業需求協助判斷 ISO 管理系統、溫室氣體盤查、產品碳足跡與政府碳標籤等服務方向。",
     href: "/certification-center",
+    available: false,
     category: "operations",
     icon: ShieldCheck,
     tags: ["ISO", "碳盤查", "查驗協調"],
@@ -100,6 +108,7 @@ const RESOURCE_SERVICES: ResourceService[] = [
     subtitle: "先理順流程，再選擇系統與改善方式",
     description: "盤點訂單、採購、庫存、生產資訊與現場動線，協助判斷 ERP、MES、產線改善或整合導入方向。",
     href: "/erp-optimization",
+    available: false,
     category: "operations",
     icon: Factory,
     tags: ["ERP／MES", "流程盤點", "產線動線"],
@@ -116,6 +125,7 @@ const RESOURCE_SERVICES: ResourceService[] = [
     subtitle: "讓製造能力成為能被理解的品牌內容",
     description: "從短影音企劃、拍攝、社群內容到媒體與訪談製作，依企業目標選擇合適的品牌內容服務。",
     href: "/short-video-marketing",
+    available: false,
     category: "brand",
     icon: Clapperboard,
     tags: ["短影音", "品牌內容", "社群行銷"],
@@ -161,6 +171,7 @@ function ResourceCompassArtwork() {
 }
 
 export default function ResourceCenter() {
+  useRemoveServerSeoHead();
   const [activeCategory, setActiveCategory] = useState<ResourceCategory>("all");
   const visibleServices = useMemo(
     () => activeCategory === "all" ? RESOURCE_SERVICES : RESOURCE_SERVICES.filter(service => service.category === activeCategory),
@@ -170,8 +181,8 @@ export default function ResourceCenter() {
   return (
     <div className="min-h-screen bg-white">
       <Helmet>
-        <title>找資源｜OXM 企業服務入口</title>
-        <meta name="description" content="從政府補助、財務優化、ISO 與低碳認證、ERP 與產線改善，到短影音品牌內容，依企業需求選擇合適的 OXM 專業服務。" />
+        <title>找資源｜企業升級與傳統產業專業資源｜OXM</title>
+        <meta name="description" content="OXM 為企業整理的專業資源入口，目前提供政府補助與企業升級服務媒合；財務優化、ISO 與低碳認證、ERP 與產線優化、短影音與品牌行銷等服務準備中。" />
         <link rel="canonical" href="https://www.oxmmatch.com/resources" />
       </Helmet>
 
@@ -234,7 +245,13 @@ export default function ResourceCenter() {
                     <h3 className="mb-3 text-xl font-bold text-slate-900 sm:text-2xl">{service.title}</h3>
                     <p className="mb-5 text-sm leading-relaxed text-slate-600">{service.description}</p>
                     <div className="mb-6 flex flex-wrap gap-2">{service.tags.map(tag => <span key={tag} className="rounded-full border border-white bg-white/80 px-2.5 py-1 text-[11px] font-medium text-slate-600 shadow-sm">{tag}</span>)}</div>
-                    <Link href={service.href} className={`inline-flex items-center gap-2 text-sm font-bold ${service.tone.accent}`}>查看服務內容<ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" /></Link>
+                    {service.available ? (
+                      <Link href={service.href} className={`inline-flex items-center gap-2 text-sm font-bold ${service.tone.accent}`}>查看服務內容<ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" /></Link>
+                    ) : (
+                      <span aria-disabled="true" className="inline-flex cursor-not-allowed items-center gap-2 text-sm font-bold text-slate-400">
+                        <Clock className="h-4 w-4" />敬請期待
+                      </span>
+                    )}
                   </div>
                 </article>
               );

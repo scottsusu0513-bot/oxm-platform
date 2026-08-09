@@ -18,7 +18,10 @@ const NAVBAR_PATH = path.resolve(
 );
 
 describe("Navbar.tsx: 手機版六入口 Accordion 使用單一 state", () => {
-  const source = fs.readFileSync(NAVBAR_PATH, "utf-8");
+  // 正規化成 LF：Windows checkout 下 fs.readFileSync 讀到的是實際 CRLF 內容，
+  // 這裡的字串比對（尤其是 .indexOf 搭配內嵌 "\n" 的寫法）需要固定的換行符號，
+  // 不正規化的話同一份測試在 LF／CRLF 兩種 checkout 環境會有不同結果。
+  const source = fs.readFileSync(NAVBAR_PATH, "utf-8").replace(/\r\n/g, "\n");
 
   it("mobileOpenHub 是唯一的 Accordion 展開狀態，不存在六個各自的 boolean state", () => {
     expect(source).toMatch(
@@ -36,13 +39,13 @@ describe("Navbar.tsx: 手機版六入口 Accordion 使用單一 state", () => {
     );
   });
 
-  it("六個入口都定義了穩定 key，且與 MobileHubKey 一致", () => {
-    const keys = ["factory", "resource", "talent", "brand", "news", "discussion"];
+  it("七個入口都定義了穩定 key，且與 MobileHubKey 一致（六大主入口＋找討論）", () => {
+    const keys = ["about", "factory", "resource", "talent", "brand", "news", "discussion"];
     for (const key of keys) {
       expect(source).toMatch(new RegExp(`key: "${key}"`));
     }
     expect(source).toMatch(
-      /type MobileHubKey = "factory" \| "resource" \| "talent" \| "brand" \| "news" \| "discussion";/
+      /type MobileHubKey = "about" \| "factory" \| "resource" \| "talent" \| "brand" \| "news" \| "discussion";/
     );
   });
 
@@ -189,13 +192,12 @@ describe("Navbar.tsx: 手機版六入口 Accordion 使用單一 state", () => {
     expect(source).not.toMatch(/body\.inert\s*=/);
   });
 
-  it("找資源手機版不再使用低透明度 disabled 視覺，找人才等未開放入口仍維持低透明度", () => {
+  it("找資源／找人才／找形象／找討論手機版都不再使用低透明度 disabled 視覺（七大主入口全部開放）", () => {
     const resourceItemMatch = source.match(
       /key: "resource",[\s\S]*?dropdownItems: \[[\s\S]*?\],\s*\n\s*\},/
     );
     expect(resourceItemMatch, "找不到找資源的 HUB_ITEMS 定義").not.toBeNull();
     const resourceItem = resourceItemMatch![0];
-
     expect(resourceItem).not.toMatch(/text-blue-400\/60/);
     expect(resourceItem).not.toMatch(/text-blue-600\/40/);
     expect(resourceItem).toMatch(/mText: "text-blue-700"/);
@@ -203,12 +205,26 @@ describe("Navbar.tsx: 手機版六入口 Accordion 使用單一 state", () => {
 
     const talentItemMatch = source.match(/key: "talent",[\s\S]*?dropdownItems: \[[\s\S]*?\],\s*\n\s*\},/);
     expect(talentItemMatch, "找不到找人才的 HUB_ITEMS 定義").not.toBeNull();
-    expect(talentItemMatch![0]).toMatch(/text-teal-600\/40/);
+    expect(talentItemMatch![0]).not.toMatch(/text-teal-600\/40/);
+    expect(talentItemMatch![0]).toMatch(/mText: "text-teal-700"/);
+
+    const brandItemMatch = source.match(/key: "brand",[\s\S]*?dropdownItems: \[[\s\S]*?\],\s*\n\s*\},/);
+    expect(brandItemMatch, "找不到找形象的 HUB_ITEMS 定義").not.toBeNull();
+    expect(brandItemMatch![0]).not.toMatch(/text-amber-600\/40/);
+    expect(brandItemMatch![0]).toMatch(/mText: "text-amber-700"/);
+
+    const discussionItemMatch = source.match(/key: "discussion",[\s\S]*?dropdownItems: \[[\s\S]*?\],\s*\n\s*\},/);
+    expect(discussionItemMatch, "找不到找討論的 HUB_ITEMS 定義").not.toBeNull();
+    expect(discussionItemMatch![0]).not.toMatch(/text-rose-600\/40/);
+    expect(discussionItemMatch![0]).toMatch(/mText: "text-rose-700"/);
   });
 });
 
 describe("Navbar.tsx: 桌面版六大入口共用 hover dropdown 互動邏輯", () => {
-  const source = fs.readFileSync(NAVBAR_PATH, "utf-8");
+  // 正規化成 LF：Windows checkout 下 fs.readFileSync 讀到的是實際 CRLF 內容，
+  // 這裡的字串比對（尤其是 .indexOf 搭配內嵌 "\n" 的寫法）需要固定的換行符號，
+  // 不正規化的話同一份測試在 LF／CRLF 兩種 checkout 環境會有不同結果。
+  const source = fs.readFileSync(NAVBAR_PATH, "utf-8").replace(/\r\n/g, "\n");
 
   it("找工廠／找資源／找消息共用單一 openHubKey state，沒有各自獨立的 boolean state", () => {
     expect(source).toMatch(
@@ -267,7 +283,7 @@ describe("Navbar.tsx: 桌面版六大入口共用 hover dropdown 互動邏輯", 
   });
 
   it("有合法預設頁面的入口（找工廠）點擊會正常導頁，沒有的（找資源／找消息）點擊只切換選單", () => {
-    expect(source).toMatch(/href: "\/", soon: false,/); // 找工廠設了 href
+    expect(source).toMatch(/href: "\/search", soon: false,/); // 找工廠設了 href
     expect(source).toMatch(/const trigger = hub\.href \? \(/);
     expect(source).toMatch(/onClick=\{\(\) => toggleHub\(hub\.key\)\}/);
   });
@@ -299,7 +315,10 @@ describe("Navbar.tsx: 桌面版六大入口共用 hover dropdown 互動邏輯", 
 });
 
 describe("Navbar.tsx: 品牌「首頁 OXM」下拉選單 portal 到 document.body，逃離 header 的 stacking context", () => {
-  const source = fs.readFileSync(NAVBAR_PATH, "utf-8");
+  // 正規化成 LF：Windows checkout 下 fs.readFileSync 讀到的是實際 CRLF 內容，
+  // 這裡的字串比對（尤其是 .indexOf 搭配內嵌 "\n" 的寫法）需要固定的換行符號，
+  // 不正規化的話同一份測試在 LF／CRLF 兩種 checkout 環境會有不同結果。
+  const source = fs.readFileSync(NAVBAR_PATH, "utf-8").replace(/\r\n/g, "\n");
 
   it("手機 overlay 的實際範圍仍從 header 下方開始，維持上一輪的幾何範圍修正（不是 fixed inset-0）", () => {
     expect(source).toMatch(/className="lg:hidden fixed inset-x-0 bottom-0 z-\[60\]"/);

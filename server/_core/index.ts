@@ -168,6 +168,12 @@ async function startServer() {
     urls.push(entry(`${BASE}/privacy`, "0.3", "monthly", today));
     urls.push(entry(`${BASE}/terms`, "0.3", "monthly", today));
     urls.push(entry(`${BASE}/upgrade-center`, "0.6", "monthly"));
+    // 找資源六大主入口代表頁：內容完整（五項服務分類介紹），非 thin page，
+    // 維持可索引，見 shared/seo/publicPages.ts 的 resources 設定。找人才
+    // （/talent）與找形象（/brand）目前是 noindex,follow 的 Coming Soon 頁
+    // （見 server/_core/security.ts NOINDEX_FOLLOW_EXACT_PATHS），故意不放進
+    // sitemap，避免對同一頁面同時送出「請索引」跟「不要索引」的矛盾訊號。
+    urls.push(entry(`${BASE}/resources`, "0.6", "monthly"));
 
     // Blog / 找代工指南
     urls.push(entry(`${BASE}/blog`, "0.7", "weekly", today));

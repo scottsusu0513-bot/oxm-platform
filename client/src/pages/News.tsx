@@ -13,6 +13,7 @@ import { NEWS_NEW_WINDOW_MS } from "@shared/const";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { getGuestReadIds, isGuestNewsRead } from "@/lib/newsReadTracking";
 import LoginDialog from "@/components/LoginDialog";
+import { useRemoveServerSeoHead } from "@/hooks/useRemoveServerSeoHead";
 import { toast } from "sonner";
 import {
   Newspaper, Star, Trophy, Building2, Globe, Factory, FileText, BellPlus, BellRing, Loader2, Check, ChevronDown,
@@ -20,7 +21,7 @@ import {
 } from "lucide-react";
 
 const BASE = "https://www.oxmmatch.com";
-const pageTitle = "找消息｜OXM 傳產知識與情報中心";
+const pageTitle = "找消息｜台灣製造業與傳統產業情報｜OXM";
 const pageDesc = "整合產業動態、競賽資訊、展覽活動與重要消息，讓台灣傳產更快掌握市場機會。";
 
 // 「跨產業資訊」是獨立固定看板（boardKey="cross-industry"，跟 important／
@@ -374,6 +375,7 @@ function NewsHeroArt() {
 }
 
 export default function News() {
+  useRemoveServerSeoHead();
   const [, navigate] = useLocation();
   const { isAuthenticated } = useAuth();
   const [category, setCategory] = useState<CategoryValue>(() => parseCategoryFromSearch());

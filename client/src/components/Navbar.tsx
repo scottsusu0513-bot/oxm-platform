@@ -4,7 +4,7 @@ import { Link, useLocation } from "wouter";
 import {
   Factory, Mail, User, LogOut, LayoutDashboard, Menu, X,
   UserPlus, Search, Settings, UserCircle, ChevronDown,
-  FileText, ScrollText, Bell, Briefcase, Lock,
+  FileText, ScrollText, Bell, Briefcase, Lock, Info,
   Rocket, Users, Package, BookOpen, MessageSquare, Lightbulb,
 } from "lucide-react";
 import UnverifiedEmailHint from "@/components/UnverifiedEmailHint";
@@ -23,8 +23,8 @@ import {
 
 type NavIcon = ComponentType<SVGProps<SVGSVGElement> & { className?: string }>;
 
-/** 手機版 Accordion 用的穩定 key，六大入口各對應一個，不隨文案調整而改變 */
-type MobileHubKey = "factory" | "resource" | "talent" | "brand" | "news" | "discussion";
+/** 手機版 Accordion 用的穩定 key，主要入口各對應一個，不隨文案調整而改變 */
+type MobileHubKey = "about" | "factory" | "resource" | "talent" | "brand" | "news" | "discussion";
 
 interface HubDropdownItem {
   title: string;
@@ -94,25 +94,45 @@ const HUB_MENU_ITEM =
 
 const HUB_ITEMS: HubItem[] = [
   {
+    key: "about",
+    label: "關於 OXM", short: "關於 OXM", soon: false,
+    // 關於OXM 目前完全沒有被 Navbar／Footer／首頁連結過（/about route／
+    // component／SEO metadata 都已存在，只是孤兒頁面）。跟找資源／找消息一樣
+    // 採「不設 href、下拉單一真實項目」模式：桌機與手機共用同一個
+    // dropdownItems 資料來源，兩邊都能點進去，不需要另外改互動程式。
+    Icon: Info, iconCls: "text-slate-600", triggerIconCls: "text-slate-600", ring: "focus-visible:ring-slate-400",
+    card: "bg-gradient-to-br from-slate-100 to-slate-200/80 border-slate-300/50 text-slate-700",
+    cardHover: "hover:from-slate-200 hover:to-slate-300/80 hover:border-slate-400/60 hover:shadow-sm hover:-translate-y-px",
+    mCard: "from-slate-100 to-slate-200/70 border-slate-300/50", mText: "text-slate-700",
+    dropdownItems: [
+      { title: "關於 OXM", description: "了解 OXM 如何整合工廠媒合、企業升級、產業人才與品牌資源", href: "/about", Icon: Info },
+    ],
+  },
+  {
     key: "factory",
-    label: "商機媒合中心", short: "找工廠", href: "/", soon: false,
+    label: "商機媒合中心", short: "找工廠", href: "/search", soon: false,
+    // 找工廠主入口直接導向 /search（真正的搜尋／篩選／列表功能頁），不再是
+    // 品牌首頁 "/"——首頁與找工廠是兩個獨立角色（見 shared/seo/publicPages.ts
+    // 的 home 設定、client/src/pages/Search.tsx 的自我 canonical），首頁本身
+    // 仍可透過左上角 OXM 品牌 Logo 進入。dropdownItems 刻意留空：main href
+    // 本身已經直接指向搜尋功能頁，不需要再放一個目的地完全相同的下拉子項
+    // （桌機／手機共用的渲染邏輯已支援「有 href、無下拉」的單一直接入口，
+    // 見 hubHasDropdown 與桌機／手機各自的 trigger 分支）。
     Icon: Search, iconCls: "text-orange-500", triggerIconCls: "text-orange-500", ring: "focus-visible:ring-orange-400",
     card: "bg-gradient-to-br from-orange-500/10 to-purple-600/10 border-orange-300/40 text-orange-700",
     cardHover: "hover:from-orange-500/20 hover:to-purple-600/20 hover:border-orange-400/60 hover:shadow-sm hover:shadow-orange-500/10 hover:-translate-y-px",
     mCard: "from-orange-500/10 to-purple-600/10 border-orange-300/40", mText: "text-orange-700",
-    dropdownItems: [
-      { title: "搜尋工廠", description: "瀏覽台灣工廠與代工資源", href: "/search", Icon: Search },
-    ],
+    dropdownItems: [],
   },
   {
     key: "resource",
-    label: "資源服務中心", short: "找資源", soon: false,
-    // 找資源目前只作為下拉選單觸發器：不設定 href，點擊主入口只切換下拉／
-    // Accordion 開關，不會導頁到 /resources（該總覽頁 route／component 仍完整
-    // 保留，已知網址的人可以直接輸入進入，只是暫時不從導覽列公開曝光）。
-    // 桌面版下拉觸發鈕與找消息共用同一套 renderDesktopHub，讀 card／cardHover／
-    // ring／triggerIconCls，這裡改用清楚可辨識的藍紫色，避免跟找人才／找形象等
-    // 「即將開放」的低透明度 muted 樣式混淆。
+    label: "資源服務中心", short: "找資源", href: "/resources", soon: false,
+    // 找資源主入口直接導向 /resources 資源總覽頁；下拉選單額外提供目前唯一
+    // 已開放子服務「政府補助專區」的快速連結（模式與找工廠 href="/" +
+    // 「搜尋工廠」→/search 完全相同）。/resources 頁面本身列出的另外四項
+    // 服務目前是不可互動的「敬請期待」卡片（見 ResourceCenter.tsx），對應
+    // route／component／API／資料庫與既有登入／工廠資格權限限制維持不變，
+    // 已知網址的人仍可直接輸入進入。
     Icon: Rocket, iconCls: "text-blue-600", triggerIconCls: "text-blue-500", ring: "focus-visible:ring-blue-400",
     card: "bg-gradient-to-br from-blue-600/10 to-violet-600/10 border-blue-300/40 text-blue-700",
     cardHover: "hover:from-blue-600/20 hover:to-violet-600/20 hover:border-blue-400/60 hover:shadow-sm hover:shadow-blue-500/10 hover:-translate-y-px",
@@ -124,34 +144,33 @@ const HUB_ITEMS: HubItem[] = [
         href: "/upgrade-center",
         Icon: Lightbulb,
       },
-      // 其餘四項既有服務（財務優化／認證／ERP／短影音相關專區）公開入口暫時
-      // 隱藏：對應 route／component／API／資料庫與既有登入／工廠資格權限限制
-      // 全部維持不變，只是不再出現在桌面下拉選單／手機 Accordion 這個共用的
-      // dropdownItems 資料來源裡。已知網址的人仍可直接輸入進入；管理員後台與
-      // 顧問中心的權限內入口不受影響。noindex／sitemap exclusion 規則（見
-      // server/_core/security.ts NOINDEX_EXACT_PATHS）維持不變。
     ],
   },
   {
     key: "talent",
-    label: "人才與技術中心", short: "找人才", soon: true,
-    Icon: Users, iconCls: "text-teal-400/60", triggerIconCls: "text-teal-500", ring: "focus-visible:ring-teal-400",
-    card: "bg-gradient-to-br from-teal-500/8 to-cyan-600/8 border-teal-300/20 text-teal-900/30",
-    cardHover: "",
-    mCard: "from-teal-500/8 to-cyan-600/8 border-teal-300/20", mText: "text-teal-600/40",
+    label: "人才與技術中心", short: "找人才", soon: false,
+    // 找人才／找形象改為真正可進入的「準備開放中」Landing Page（見
+    // client/src/components/SectionComingSoon.tsx），不再是鎖定、點擊沒反應
+    // 的 disabled 樣式。跟找資源／找消息一樣採「不設 href、下拉單一真實項目」
+    // 模式，桌機與手機共用同一份 dropdownItems，不需要另外改互動程式。
+    Icon: Users, iconCls: "text-teal-600", triggerIconCls: "text-teal-600", ring: "focus-visible:ring-teal-400",
+    card: "bg-gradient-to-br from-teal-500/10 to-cyan-600/10 border-teal-300/40 text-teal-700",
+    cardHover: "hover:from-teal-500/20 hover:to-cyan-600/20 hover:border-teal-400/60 hover:shadow-sm hover:shadow-teal-500/10 hover:-translate-y-px",
+    mCard: "from-teal-500/15 to-cyan-600/15 border-teal-300/50", mText: "text-teal-700",
     dropdownItems: [
-      { title: "人才與技術媒合", description: "即將開放", disabled: true, Icon: Users },
+      { title: "找人才", description: "傳統產業專業人才與企業需求的媒合入口", href: "/talent", Icon: Users },
     ],
   },
   {
     key: "brand",
-    label: "產業採購與資源中心", short: "找形象", soon: true,
-    Icon: Package, iconCls: "text-amber-400/60", triggerIconCls: "text-amber-500", ring: "focus-visible:ring-amber-400",
-    card: "bg-gradient-to-br from-amber-500/8 to-orange-600/8 border-amber-300/20 text-amber-900/30",
-    cardHover: "",
-    mCard: "from-amber-500/8 to-orange-600/8 border-amber-300/20", mText: "text-amber-600/40",
+    label: "產業採購與資源中心", short: "找形象", soon: false,
+    // 說明同找人才：改為真正可進入的 Coming Soon 頁，不再鎖定。
+    Icon: Package, iconCls: "text-amber-600", triggerIconCls: "text-amber-600", ring: "focus-visible:ring-amber-400",
+    card: "bg-gradient-to-br from-amber-500/10 to-orange-600/10 border-amber-300/40 text-amber-700",
+    cardHover: "hover:from-amber-500/20 hover:to-orange-600/20 hover:border-amber-400/60 hover:shadow-sm hover:shadow-amber-500/10 hover:-translate-y-px",
+    mCard: "from-amber-500/15 to-orange-600/15 border-amber-300/50", mText: "text-amber-700",
     dropdownItems: [
-      { title: "品牌與形象升級", description: "即將開放", disabled: true, Icon: Package },
+      { title: "找形象", description: "企業品牌、內容與數位形象資源入口", href: "/brand", Icon: Package },
     ],
   },
   {
@@ -170,13 +189,20 @@ const HUB_ITEMS: HubItem[] = [
   },
   {
     key: "discussion",
-    label: "產業討論區", short: "找討論", soon: true,
-    Icon: MessageSquare, iconCls: "text-rose-400/60", triggerIconCls: "text-rose-500", ring: "focus-visible:ring-rose-400",
-    card: "bg-gradient-to-br from-rose-500/8 to-pink-600/8 border-rose-300/20 text-rose-900/30",
-    cardHover: "",
-    mCard: "from-rose-500/8 to-pink-600/8 border-rose-300/20", mText: "text-rose-600/40",
+    label: "產業討論區", short: "找討論", soon: false,
+    // 找討論正式納入七大主入口，改為真正可進入的「準備開放中」Coming Soon
+    // Landing Page，不再鎖定。沿用既有 /community route（該路由已有
+    // COMMUNITY_FEATURE_STATUS 開關與 canAccessCommunity 權限判斷，見
+    // client/src/pages/Community.tsx／client/src/components/community/
+    // CommunityComingSoon.tsx），不建立第二條概念重複的 route。跟找資源／
+    // 找消息一樣採「不設 href、下拉單一真實項目」模式，桌機與手機共用同一份
+    // dropdownItems，不需要另外改互動程式。
+    Icon: MessageSquare, iconCls: "text-rose-600", triggerIconCls: "text-rose-600", ring: "focus-visible:ring-rose-400",
+    card: "bg-gradient-to-br from-rose-500/10 to-pink-600/10 border-rose-300/40 text-rose-700",
+    cardHover: "hover:from-rose-500/20 hover:to-pink-600/20 hover:border-rose-400/60 hover:shadow-sm hover:shadow-rose-500/10 hover:-translate-y-px",
+    mCard: "from-rose-500/15 to-pink-600/15 border-rose-300/50", mText: "text-rose-700",
     dropdownItems: [
-      { title: "產業討論區", description: "即將開放", disabled: true, Icon: MessageSquare },
+      { title: "找討論", description: "讓傳統產業經驗、問題與合作需求有地方交流", href: "/community", Icon: MessageSquare },
     ],
   },
 ];
@@ -817,6 +843,27 @@ export default function Navbar() {
           <div className="flex flex-col gap-2">
             {HUB_ITEMS.map((hub) => {
               const isOpen = mobileOpenHub === hub.key;
+              // 有 href 但沒有真正下拉子項（例如找工廠 href="/search"、
+              // dropdownItems=[]）：直接用 <Link> 導頁，不渲染手風琴／
+              // chevron——手機版原本的 accordion 觸發鈕不看 hub.href、一律
+              // 只切換展開狀態，若 dropdownItems 是空陣列會展開出一個空白
+              // 面板、使用者永遠點不到目的地，所以這種「純直接連結」入口要
+              // 走獨立分支，不能沿用共用的 accordion 觸發鈕。
+              const hasDropdown = hubHasDropdown(hub);
+              if (!hasDropdown && hub.href) {
+                return (
+                  <Link
+                    key={hub.key}
+                    href={hub.href}
+                    onClick={() => { setBrandMenuOpen(false); setMobileOpen(false); }}
+                  >
+                    <div className={`w-full h-12 flex items-center gap-3 px-4 rounded-xl border bg-gradient-to-br ${hub.mCard} transition-colors active:opacity-80 cursor-pointer`}>
+                      <hub.Icon className={`w-5 h-5 shrink-0 ${hub.iconCls}`} />
+                      <span className={`text-sm font-semibold truncate ${hub.mText}`}>{hub.short}</span>
+                    </div>
+                  </Link>
+                );
+              }
               return (
                 <div key={hub.key}>
                   <button
@@ -834,7 +881,7 @@ export default function Navbar() {
                       <span className={`text-sm font-semibold truncate ${hub.mText}`}>{hub.short}</span>
                     </span>
                     <ChevronDown
-                      className={`w-4 h-4 shrink-0 transition-transform duration-200 ${isOpen ? "rotate-180" : ""} ${hub.key === "resource" ? "text-blue-600" : "opacity-60"}`}
+                      className={`w-4 h-4 shrink-0 transition-transform duration-200 ${isOpen ? "rotate-180" : ""} ${hub.soon ? "opacity-60" : hub.mText}`}
                     />
                   </button>
 

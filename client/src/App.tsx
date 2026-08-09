@@ -30,6 +30,8 @@ const BlogList              = lazy(() => import("./pages/BlogList"));
 const BlogPost              = lazy(() => import("./pages/BlogPost"));
 const AboutOXM              = lazy(() => import("./pages/AboutOXM"));
 const ResourceCenter        = lazy(() => import("./pages/ResourceCenter"));
+const Talent                = lazy(() => import("./pages/Talent"));
+const Brand                 = lazy(() => import("./pages/Brand"));
 const PrivacyPolicyPage     = lazy(() => import("./pages/PrivacyPolicyPage"));
 const TermsPage             = lazy(() => import("./pages/TermsPage"));
 const VerifyEmailPage       = lazy(() => import("./pages/VerifyEmailPage"));
@@ -390,6 +392,8 @@ function Router() {
         <Route path="/manual" component={UserManual} />
         <Route path="/about" component={AboutOXM} />
         <Route path="/resources" component={ResourceCenter} />
+        <Route path="/talent" component={Talent} />
+        <Route path="/brand" component={Brand} />
         <Route path="/privacy" component={PrivacyPolicyPage} />
         <Route path="/terms" component={TermsPage} />
         <Route path="/verify-email" component={VerifyEmailPage} />

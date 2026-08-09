@@ -612,12 +612,12 @@ describe("Navbar「找消息」入口：第五輪正式開放（下拉選單模�
     expect(mobileSection).not.toMatch(/hub\.key === "news"/);
   });
 
-  it("其他仍在「即將開放」的入口（找人才／找形象／找討論）維持 soon: true 不變", () => {
+  it("七大主入口 SEO 架構調整後：找人才／找形象／找討論都已改為開放中的 Coming Soon 頁（soon: false）", () => {
     const navbarSource = readNavbarSource();
     for (const key of ["talent", "brand", "discussion"]) {
       const m = navbarSource.match(new RegExp(`key: "${key}",\\s*\\n\\s*label: "[^"]*", short: "[^"]*", soon: (true|false)`));
       expect(m).not.toBeNull();
-      expect(m![1]).toBe("true");
+      expect(m![1]).toBe("false");
     }
   });
 
