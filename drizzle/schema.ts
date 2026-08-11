@@ -1333,6 +1333,36 @@ export const financeApplications = mysqlTable("financeApplications", {
 export type FinanceApplication = typeof financeApplications.$inferSelect;
 export type InsertFinanceApplication = typeof financeApplications.$inferInsert;
 
+// ===== 政府補助專區：公開方案目錄 =====
+// 純粹管理公開頁要展示的補助方案，與 upgradeApplications（企業送件案件）、
+// upgradeConsultants（顧問）及其狀態／分派流程完全獨立，刻意不建立任何外鍵。
+// 「刪除」採 archivedAt 軟封存，避免未來若新增案件引用時破壞歷史資料。
+export const upgradePrograms = mysqlTable("upgradePrograms", {
+  id: int("id").autoincrement().primaryKey(),
+  slug: varchar("slug", { length: 100 }).notNull().unique(),
+  title: varchar("title", { length: 200 }).notNull(),
+  shortTitle: varchar("shortTitle", { length: 100 }),
+  description: text("description").notNull(),
+  targetAudience: text("targetAudience"),
+  highlights: json("highlights").$type<string[]>().notNull().default([]),
+  badge: varchar("badge", { length: 80 }),
+  statusLabel: varchar("statusLabel", { length: 100 }),
+  visualKey: varchar("visualKey", { length: 50 }).notNull().default("funding"),
+  maxFundingLabel: varchar("maxFundingLabel", { length: 100 }),
+  imageUrl: text("imageUrl"),
+  ctaLabel: varchar("ctaLabel", { length: 80 }).notNull().default("免費評估資格"),
+  displayOrder: int("displayOrder").notNull().default(0),
+  enabled: boolean("enabled").notNull().default(true),
+  archivedAt: timestamp("archivedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (t) => ({
+  publicListIdx: index("up_public_list_idx").on(t.enabled, t.archivedAt, t.displayOrder),
+}));
+
+export type UpgradeProgram = typeof upgradePrograms.$inferSelect;
+export type InsertUpgradeProgram = typeof upgradePrograms.$inferInsert;
+
 // ===== ISO 與低碳認證專區：動態分類／服務項目目錄 =====
 // 與 shared/badges.ts 的 30 種既有徽章系統完全獨立、不共用資料表——這裡只是
 // 「認證服務」的行銷／諮詢入口資料（分類、顯示名稱、說明、適用需求／產業、

@@ -13,6 +13,7 @@ import { COOKIE_NAME } from "@shared/const";
 import { INDUSTRY_SLUGS, PHASE1_SUB_INDUSTRY_PAGES } from "../../shared/constants";
 import { escapeXmlText } from "@shared/seo/xml";
 import { getDb, getApprovedFactoriesForSitemap, getPublishedNewsForSitemap, ensureConsultantsSeeded, ensureCertificationServiceCatalogSeeded } from "../db";
+import { ensureUpgradeProgramsSeeded } from "../upgradePrograms";
 import { runCollaborationOrderOverdueEmailCheck } from "../orderOverdueCheck";
 
 async function startServer() {
@@ -272,6 +273,7 @@ async function startServer() {
     console.log(`[boot] Server running on http://0.0.0.0:${port}/`);
     ensureConsultantsSeeded().catch(err => console.error("[boot] consultant seed failed:", err));
     ensureCertificationServiceCatalogSeeded().catch(err => console.error("[boot] certification service catalog seed failed:", err));
+    ensureUpgradeProgramsSeeded().catch(err => console.error("[boot] upgrade program seed failed:", err));
   });
 }
 

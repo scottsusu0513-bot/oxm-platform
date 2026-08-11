@@ -13,13 +13,16 @@ import {
 } from "@/components/ui/dialog";
 import Navbar from "@/components/Navbar";
 import { trpc } from "@/lib/trpc";
-import { Fragment } from "react";
 import { Capacitor } from "@capacitor/core";
 import { cn } from "@/lib/utils";
 import {
+  UpgradeProgramCard,
+  UpgradeProgramSkeleton,
+} from "@/components/upgrade/UpgradeProgramCard";
+import {
   ArrowRight, CheckCircle, Building2, Users,
   ClipboardList, ClipboardCheck, FileText, Send,
-  TrendingUp, FileSearch, Loader2,
+  FileSearch, Loader2, Sparkles,
 } from "lucide-react";
 
 // ── 查詢進度：狀態 Badge 對照 ─────────────────────────────────────────────────
@@ -147,61 +150,6 @@ const floatingBtnBottom = isNativePlatform
   ? "calc(56px + 1.5rem + env(safe-area-inset-bottom, 0px))"
   : "calc(1.5rem + env(safe-area-inset-bottom, 0px))";
 
-// ── 補助方案 ──────────────────────────────────────────────────────────────────
-
-const SUBSIDY_PLANS = [
-  {
-    code: "SBIR",
-    title: "小型企業創新研發計畫",
-    desc: "針對中小企業創新研發活動提供補助，涵蓋前期研究、可行性評估及研發計畫三個階段。",
-    tags: ["研發費用補助", "可分期申請", "最廣適用"],
-    max: "3,000 萬元",
-    topBar: "from-orange-500 to-amber-500",
-    badgeCls: "bg-orange-100 text-orange-700",
-    maxCls: "from-orange-500 to-amber-500",
-  },
-  {
-    code: "CITD",
-    title: "協助傳統產業技術開發",
-    desc: "專為傳統製造業設計，補助技術升級、製程改善及智慧化轉型所需研發費用。",
-    tags: ["傳統產業適用", "製程技術升級", "智慧化補助"],
-    max: "1,000 萬元",
-    topBar: "from-amber-500 to-yellow-500",
-    badgeCls: "bg-amber-100 text-amber-700",
-    maxCls: "from-amber-500 to-yellow-500",
-  },
-  {
-    code: "SIIR",
-    title: "服務業創新研發計畫",
-    desc: "鼓勵服務業廠商投入創新研發，提升服務模式與數位轉型能力。",
-    tags: ["服務業適用", "數位轉型", "商業模式創新"],
-    max: "1,000 萬元",
-    topBar: "from-violet-500 to-indigo-500",
-    badgeCls: "bg-violet-100 text-violet-700",
-    maxCls: "from-violet-500 to-indigo-500",
-  },
-  {
-    code: "研發轉型補助",
-    title: "企業研發轉型與升級計畫",
-    desc: "協助企業投入產品開發、技術升級、研發流程優化與轉型布局，強化長期競爭力。",
-    tags: ["產品開發", "技術升級", "轉型布局"],
-    max: "4,000 萬元",
-    topBar: "from-teal-500 to-cyan-500",
-    badgeCls: "bg-teal-100 text-teal-700",
-    maxCls: "from-teal-500 to-cyan-500",
-  },
-  {
-    code: "海外通路計畫",
-    title: "海外市場拓展與通路布局",
-    desc: "協助企業布建海外展示據點、發貨倉庫、服務維修中心、海外分公司、子公司或代理經銷通路，強化海外市場落地能力。",
-    tags: ["海外據點", "通路布建", "代理經銷"],
-    max: "2,000 萬元",
-    topBar: "from-sky-500 to-blue-500",
-    badgeCls: "bg-sky-100 text-sky-700",
-    maxCls: "from-sky-500 to-blue-500",
-  },
-];
-
 // ── 申請流程 ──────────────────────────────────────────────────────────────────
 
 const PROCESS_STEPS = [
@@ -257,130 +205,166 @@ const PROCESS_STEPS = [
 
 const fmt = (n: number, digits: number) => String(n).padStart(digits, "0");
 
-// ── 七段數碼管數字 ────────────────────────────────────────────────────────────
-
-function SevenSegmentNumber({
-  value,
-  color,
-  size = "large",
-}: {
-  value: string;
-  color: string;
-  size?: "small" | "medium" | "large";
-}) {
-  const sizeClass = size === "large"
-    ? "text-3xl md:text-5xl"
-    : size === "medium"
-    ? "text-lg md:text-2xl"
-    : "text-base md:text-xl";
-  const glow = `0 0 6px ${color}, 0 0 14px ${color}99, 0 0 28px ${color}44`;
+function MetricTile({ label, value, unit, accent }: { label: string; value: string; unit: string; accent: string }) {
   return (
-    <span
-      className={`relative inline-block ${sizeClass} leading-none`}
-      style={{
-        fontFamily:
-          '"DSEG7 Classic","DS-Digital","Digital-7","Orbitron","Share Tech Mono","Courier New",ui-monospace,monospace',
-        fontWeight: 700,
-        letterSpacing: "0.10em",
-        fontVariantNumeric: "tabular-nums",
-      }}
-    >
-      {/* Dim ghost "8888…" simulates unlit segments */}
-      <span
-        aria-hidden
-        className="absolute top-0 left-0 select-none pointer-events-none"
-        style={{ color: `${color}15` }}
-      >
-        {"8".repeat(value.length)}
-      </span>
-      {/* Lit digits */}
-      <span className="relative" style={{ color, textShadow: glow }}>
-        {value}
-      </span>
-    </span>
+    <div className="min-w-0 border-l border-white/10 pl-4 first:border-l-0 first:pl-0 sm:pl-6">
+      <p className="text-[10px] font-semibold tracking-[.16em] text-slate-400">{label}</p>
+      <div className="mt-2 flex min-w-0 items-baseline gap-1.5">
+        <span className="truncate font-mono text-xl font-bold tabular-nums text-white sm:text-2xl" style={{ textShadow: `0 0 18px ${accent}40` }}>{value}</span>
+        <span className="text-[10px] font-semibold" style={{ color: accent }}>{unit}</span>
+      </div>
+    </div>
   );
 }
 
-// ── 平台數據卡片 ────────────────────────────────────────────────────────────
+type UpgradeMeaning = "resources" | "stages" | "transformation";
 
-function StatCard({
-  title,
-  icon: Icon,
-  color,
-  rows,
-  bar,
-}: {
+const UPGRADE_MEANING_ITEMS: {
+  kind: UpgradeMeaning;
+  number: string;
+  eyebrow: string;
   title: string;
-  icon: React.ElementType;
-  color: string;
-  rows: { label: string; value: string; unit: string }[];
-  bar?: number;
-}) {
+  text: string;
+  artClassName: string;
+}[] = [
+  {
+    kind: "resources",
+    number: "01",
+    eyebrow: "資訊整理",
+    title: "理解資源",
+    text: "將分散的政府方案整理成可閱讀的企業語言。",
+    artClassName: "border-orange-100 bg-gradient-to-br from-orange-50 via-white to-violet-50",
+  },
+  {
+    kind: "stages",
+    number: "02",
+    eyebrow: "路徑辨識",
+    title: "對應階段",
+    text: "從研發、製程、數位到市場布局辨識方向。",
+    artClassName: "border-sky-100 bg-gradient-to-br from-amber-50 via-white to-sky-50",
+  },
+  {
+    kind: "transformation",
+    number: "03",
+    eyebrow: "目標推進",
+    title: "推進轉型",
+    text: "讓補助評估與企業真正要完成的升級目標連結。",
+    artClassName: "border-emerald-100 bg-gradient-to-br from-emerald-50 via-white to-violet-50",
+  },
+];
+
+function UpgradeMeaningIllustration({ kind }: { kind: UpgradeMeaning }) {
+  if (kind === "resources") {
+    return (
+      <svg viewBox="0 0 300 150" className="h-auto w-full" aria-hidden="true">
+        <defs>
+          <linearGradient id="resource-folder" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stopColor="#fff7ed" />
+            <stop offset="1" stopColor="#f5f3ff" />
+          </linearGradient>
+          <linearGradient id="resource-flow" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0" stopColor="#fb923c" />
+            <stop offset="1" stopColor="#8b5cf6" />
+          </linearGradient>
+        </defs>
+        <ellipse cx="214" cy="130" rx="64" ry="8" fill="#cbd5e1" opacity=".28" />
+        <g transform="rotate(-8 42 52)">
+          <rect x="19" y="24" width="48" height="60" rx="8" fill="#fff" stroke="#fb923c" strokeWidth="2" />
+          <path d="M29 39h27M29 50h20M29 61h24" stroke="#fdba74" strokeWidth="3" strokeLinecap="round" />
+          <circle cx="55" cy="72" r="4" fill="#fb923c" />
+        </g>
+        <g transform="rotate(7 79 52)">
+          <rect x="57" y="14" width="48" height="60" rx="8" fill="#fff" stroke="#8b5cf6" strokeWidth="2" />
+          <path d="M67 30h27M67 41h18M67 52h23" stroke="#c4b5fd" strokeWidth="3" strokeLinecap="round" />
+          <path d="m86 63 4 4 8-10" fill="none" stroke="#8b5cf6" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+        </g>
+        <g transform="rotate(-4 67 102)">
+          <rect x="39" y="76" width="52" height="58" rx="8" fill="#fff" stroke="#38bdf8" strokeWidth="2" />
+          <path d="M50 92h28M50 103h21M50 114h25" stroke="#7dd3fc" strokeWidth="3" strokeLinecap="round" />
+        </g>
+        <path d="M108 52c25-2 35 13 49 25M104 101c23 2 34-7 50-15" fill="none" stroke="url(#resource-flow)" strokeWidth="2.5" strokeLinecap="round" strokeDasharray="4 6" />
+        <path d="m148 72 10 7-11 5M146 82l11 4-8 9" fill="none" stroke="#8b5cf6" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M168 47h91a12 12 0 0 1 12 12v59a12 12 0 0 1-12 12h-91a12 12 0 0 1-12-12V59a12 12 0 0 1 12-12Z" fill="url(#resource-folder)" stroke="#64748b" strokeWidth="2" />
+        <path d="M168 47V37h34l9 10" fill="#ffedd5" stroke="#fb923c" strokeWidth="2" strokeLinejoin="round" />
+        <path d="M171 65c16-5 30-2 42 7v42c-12-9-26-12-42-7V65Zm84 0c-16-5-30-2-42 7v42c12-9 26-12 42-7V65Z" fill="#fff" stroke="#8b5cf6" strokeWidth="2" strokeLinejoin="round" />
+        <path d="M182 78h18M182 88h21M182 98h15M226 78h18M223 88h21M229 98h15" stroke="#cbd5e1" strokeWidth="2.5" strokeLinecap="round" />
+        <path d="M213 72v42" stroke="#8b5cf6" strokeWidth="2" />
+        <path d="m239 42 4 7 7 4-7 4-4 7-4-7-7-4 7-4 4-7Z" fill="#fb923c" opacity=".9" />
+      </svg>
+    );
+  }
+
+  if (kind === "stages") {
+    return (
+      <svg viewBox="0 0 300 150" className="h-auto w-full" aria-hidden="true">
+        <defs>
+          <linearGradient id="stage-path" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0" stopColor="#fb923c" />
+            <stop offset=".48" stopColor="#8b5cf6" />
+            <stop offset="1" stopColor="#0ea5e9" />
+          </linearGradient>
+        </defs>
+        <path d="M30 109C63 109 67 82 101 82s38-31 71-31 45 13 92-18" fill="none" stroke="#e2e8f0" strokeWidth="10" strokeLinecap="round" />
+        <path d="M30 109C63 109 67 82 101 82s38-31 71-31 45 13 92-18" fill="none" stroke="url(#stage-path)" strokeWidth="4" strokeLinecap="round" />
+        <path d="m253 27 15 4-8 13" fill="none" stroke="#0ea5e9" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+        <g>
+          <circle cx="39" cy="107" r="22" fill="#fff7ed" stroke="#fb923c" strokeWidth="2" />
+          <path d="M39 94a9 9 0 0 0-5 16c2 1 2 3 2 5h6c0-2 0-4 2-5a9 9 0 0 0-5-16Z" fill="none" stroke="#f97316" strokeWidth="2.3" strokeLinecap="round" />
+          <path d="M35 120h8M37 115h4" stroke="#f97316" strokeWidth="2" strokeLinecap="round" />
+        </g>
+        <g>
+          <circle cx="104" cy="81" r="22" fill="#fffbeb" stroke="#f59e0b" strokeWidth="2" />
+          <circle cx="104" cy="81" r="7" fill="none" stroke="#d97706" strokeWidth="2.3" />
+          <path d="M104 67v4M104 91v4M90 81h4M114 81h4M94 71l3 3M111 88l3 3M114 71l-3 3M97 88l-3 3" stroke="#d97706" strokeWidth="2.3" strokeLinecap="round" />
+        </g>
+        <g>
+          <circle cx="172" cy="51" r="22" fill="#f5f3ff" stroke="#8b5cf6" strokeWidth="2" />
+          <rect x="163" y="42" width="18" height="18" rx="3" fill="none" stroke="#7c3aed" strokeWidth="2.3" />
+          <path d="M167 47h10v8h-10zM158 46h5M158 52h5M181 46h5M181 52h5M167 37v5M173 37v5M167 60v5M173 60v5" fill="none" stroke="#7c3aed" strokeWidth="2" strokeLinecap="round" />
+        </g>
+        <g>
+          <circle cx="245" cy="43" r="24" fill="#f0f9ff" stroke="#0ea5e9" strokeWidth="2" />
+          <circle cx="245" cy="43" r="12" fill="none" stroke="#0284c7" strokeWidth="2" />
+          <path d="M233 43h24M245 31c4 4 6 8 6 12s-2 8-6 12c-4-4-6-8-6-12s2-8 6-12Z" fill="none" stroke="#0284c7" strokeWidth="2" />
+          <circle cx="258" cy="29" r="5" fill="#fff" stroke="#0ea5e9" strokeWidth="2" />
+          <path d="m256 29 2 2 4-5" fill="none" stroke="#0ea5e9" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        </g>
+        <g fill="#64748b" fontFamily="ui-sans-serif,system-ui" fontSize="8" fontWeight="700" textAnchor="middle">
+          <text x="39" y="143">研發</text><text x="104" y="118">製程</text><text x="172" y="88">數位</text><text x="245" y="83">市場</text>
+        </g>
+      </svg>
+    );
+  }
+
   return (
-    <div
-      className="rounded-xl flex flex-col overflow-hidden shadow-lg"
-      style={{
-        background: "#07111f",
-        border: `1px solid ${color}22`,
-        boxShadow: `0 4px 20px rgba(0,0,0,0.45), 0 0 24px ${color}06`,
-      }}
-    >
-      {/* Header */}
-      <div
-        className="flex items-center justify-between px-3 pt-3 pb-2 md:px-5 md:pt-4 md:pb-3"
-        style={{ borderBottom: `1px solid ${color}10` }}
-      >
-        <div className="flex items-center gap-2">
-          <span className="relative flex h-2 w-2">
-            <span className="motion-safe:animate-ping absolute inline-flex h-full w-full rounded-full opacity-40" style={{ backgroundColor: color }} />
-            <span className="relative inline-flex rounded-full h-2 w-2" style={{ backgroundColor: color, boxShadow: `0 0 6px ${color}` }} />
-          </span>
-          <span className="text-[10px] font-mono tracking-[0.20em] uppercase font-semibold" style={{ color: `${color}90` }}>{title}</span>
-        </div>
-        <Icon className="w-3.5 h-3.5" style={{ color: `${color}50` }} />
-      </div>
-
-      {/* Body — 3-col for multi-row, big single for solo */}
-      {rows.length > 1 ? (
-        <div className="flex-1 flex">
-          {rows.map(({ label, value, unit }, idx) => (
-            <div
-              key={label}
-              className="flex-1 min-w-0 flex flex-col items-center justify-center text-center px-1 py-2.5 md:px-2 md:py-5"
-              style={idx > 0 ? { borderLeft: "1px solid rgba(148,163,184,0.18)" } : {}}
-            >
-              <div className="text-[8px] font-mono tracking-widest uppercase mb-2" style={{ color: "rgba(148,163,184,0.35)" }}>{label}</div>
-              <SevenSegmentNumber value={value} color={color} size="medium" />
-              <div className="text-[10px] font-mono mt-1.5 font-semibold" style={{ color: `${color}60` }}>{unit}</div>
-            </div>
-          ))}
-        </div>
-      ) : (
-        <div className="flex-1 flex flex-col justify-center px-3 py-3 md:px-5 md:py-5">
-          <div className="text-[8px] font-mono tracking-widest uppercase mb-2.5" style={{ color: "rgba(148,163,184,0.35)" }}>{rows[0].label}</div>
-          <div className="flex items-baseline gap-2.5">
-            <SevenSegmentNumber value={rows[0].value} color={color} size="large" />
-            <span className="font-mono font-bold text-sm" style={{ color: `${color}60` }}>{rows[0].unit}</span>
-          </div>
-        </div>
-      )}
-
-      {/* Footer */}
-      <div className="px-3 pb-3 pt-1.5 space-y-1.5 md:px-5 md:pb-4 md:pt-2 md:space-y-2">
-        {bar !== undefined && (
-          <div className="h-1.5 rounded-full" style={{ background: "rgba(30,41,59,0.8)" }}>
-            <div
-              className="h-full rounded-full"
-              style={{ width: `${bar}%`, backgroundColor: color, boxShadow: `0 0 6px ${color}` }}
-            />
-          </div>
-        )}
-        <div className="flex items-center gap-1.5">
-          <span className="w-1.5 h-1.5 rounded-full bg-green-400" style={{ boxShadow: "0 0 4px #4ade80" }} />
-          <span className="text-[7px] font-mono tracking-widest uppercase" style={{ color: "rgba(148,163,184,0.20)" }}>DATA PENDING LAUNCH</span>
-        </div>
-      </div>
-    </div>
+    <svg viewBox="0 0 300 150" className="h-auto w-full" aria-hidden="true">
+      <defs>
+        <linearGradient id="transform-rise" x1="0" y1="1" x2="1" y2="0">
+          <stop offset="0" stopColor="#14b8a6" />
+          <stop offset=".55" stopColor="#0ea5e9" />
+          <stop offset="1" stopColor="#8b5cf6" />
+        </linearGradient>
+        <linearGradient id="transform-building" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#f0fdfa" />
+          <stop offset="1" stopColor="#f5f3ff" />
+        </linearGradient>
+      </defs>
+      <ellipse cx="150" cy="132" rx="125" ry="9" fill="#cbd5e1" opacity=".3" />
+      <path d="M25 126h68V78H72V58H45v20H25v48Z" fill="#fff" stroke="#64748b" strokeWidth="2" strokeLinejoin="round" />
+      <path d="M45 58V43h20v15M37 91h13M64 91h13M37 105h13M64 105h13" fill="none" stroke="#fb923c" strokeWidth="3" strokeLinecap="round" />
+      <path d="M93 124h25v-19h25V86h25V67h25" fill="none" stroke="#cbd5e1" strokeWidth="9" strokeLinejoin="round" />
+      <path d="M94 118h25v-19h25V80h25V61h45" fill="none" stroke="url(#transform-rise)" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="m205 52 15 9-15 9" fill="none" stroke="#8b5cf6" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx="119" cy="99" r="5" fill="#14b8a6" stroke="#fff" strokeWidth="2" />
+      <circle cx="169" cy="61" r="5" fill="#0ea5e9" stroke="#fff" strokeWidth="2" />
+      <path d="M215 126V52h55v74" fill="url(#transform-building)" stroke="#64748b" strokeWidth="2" strokeLinejoin="round" />
+      <path d="M228 126V35h30v91M235 49h16M235 64h16M235 79h16M235 94h16" fill="none" stroke="#8b5cf6" strokeWidth="2.5" strokeLinecap="round" />
+      <path d="M231 35V24h22v11" fill="#ede9fe" stroke="#8b5cf6" strokeWidth="2" />
+      <circle cx="242" cy="23" r="15" fill="#fff" stroke="#8b5cf6" strokeWidth="2" />
+      <path d="m235 23 5 5 9-11" fill="none" stroke="#7c3aed" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="m278 38 3 6 6 3-6 3-3 6-3-6-6-3 6-3 3-6Z" fill="#fb923c" />
+      <path d="M19 126h265" stroke="#94a3b8" strokeWidth="2" strokeLinecap="round" />
+    </svg>
   );
 }
 
@@ -392,7 +376,6 @@ export default function EnterpriseUpgradeCenter() {
   const [showDialog, setShowDialog] = useState(false);
   const [showProgressDialog, setShowProgressDialog] = useState(false);
   const [progressDialogMode, setProgressDialogMode] = useState<"query" | "duplicate">("query");
-  const [selectedGrant, setSelectedGrant] = useState<typeof SUBSIDY_PLANS[number] | null>(null);
 
   const { data: ownedFactory, isLoading: ownedLoading } = trpc.factory.getMine.useQuery(undefined, {
     enabled: !!user,
@@ -407,6 +390,13 @@ export default function EnterpriseUpgradeCenter() {
     staleTime: 60_000,
   });
   const { data: rawStats } = trpc.upgradeCenter.publicStats.useQuery(undefined, {
+    staleTime: 5 * 60 * 1000,
+  });
+  const {
+    data: upgradePrograms = [],
+    isLoading: programsLoading,
+    isError: programsError,
+  } = trpc.upgradePrograms.listPublic.useQuery(undefined, {
     staleTime: 5 * 60 * 1000,
   });
 
@@ -457,240 +447,179 @@ export default function EnterpriseUpgradeCenter() {
 
       <Navbar />
 
-      {/* ── Hero Banner Card ───────────────────────────────────────────────── */}
-      <section className="py-4 md:py-6" style={{ backgroundColor: "#06090f" }}>
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <h1 className="sr-only">企業升級中心</h1>
-          <div className="relative rounded-2xl overflow-hidden shadow-2xl shadow-black/60">
-            <img
-              src="/images/upgrade-center/hero-bg.png"
-              alt="企業升級中心"
-              style={{
-                width: "100%",
-                height: "clamp(160px, 27vw, 400px)",
-                objectFit: "cover",
-                objectPosition: "center 30%",
-                display: "block",
-              }}
-            />
-            {/* Overlay CTA — x≈65% y≈85%: below UPGRADE card, above road trail */}
-            <div
-              className="absolute hidden sm:flex"
-              style={{ left: "65%", top: "85%", transform: "translate(-50%, -50%)" }}
-            >
-              <Button
-                size="default"
-                onClick={handleApplyClick}
-                disabled={accessChecking && !!user}
-                className="bg-orange-500 hover:bg-orange-600 text-white border-0 px-5 rounded-lg shadow-lg shadow-orange-500/40"
-              >
-                免費評估資格
-                <ArrowRight className="w-4 h-4 ml-2" />
-              </Button>
-            </div>
-          </div>
-          {/* Mobile-only CTA — overlaid at bottom of image */}
-          <div className="sm:hidden pt-3">
-            <Button
-              size="default"
-              onClick={handleApplyClick}
-              disabled={accessChecking && !!user}
-              className="w-full h-11 bg-orange-500 hover:bg-orange-600 text-white border-0 rounded-lg shadow-lg shadow-orange-500/30 font-semibold"
-            >
-              免費評估資格
-              <ArrowRight className="w-4 h-4 ml-2" />
-            </Button>
-          </div>
-        </div>
-      </section>
+      {/* ── Hero：沿用原版科技城市、光軌與資料流語彙 ────────────────── */}
+      <section className="relative overflow-hidden bg-[#050a14] text-white">
+        <div className="pointer-events-none absolute -left-40 top-16 h-80 w-80 rounded-full bg-orange-500/10 blur-3xl" aria-hidden="true" />
+        <div className="pointer-events-none absolute -right-32 top-0 h-96 w-96 rounded-full bg-blue-500/10 blur-3xl" aria-hidden="true" />
 
-      {/* ── 平台數據 ────────────────────────────────────────────────────── */}
-      <section className="bg-slate-50 py-5 md:py-8 lg:py-10">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="rounded-2xl bg-white shadow-sm border border-slate-100 p-4 md:p-6 lg:p-8">
-            <div className="flex flex-col md:flex-row gap-4 md:gap-8 items-start md:items-center">
-              {/* Left: title */}
-              <div className="md:w-44 shrink-0 flex flex-row md:flex-col items-center md:items-start gap-3 md:space-y-3">
-                <h2 className="text-xl md:text-2xl font-bold text-slate-900">平台數據</h2>
-                <div className="flex items-start gap-1.5">
-                  <span className="w-2 h-2 rounded-full bg-green-400 mt-0.5 shrink-0" style={{ boxShadow: "0 0 6px #4ade80" }} />
-                  <p className="text-xs md:text-sm text-slate-500 leading-relaxed">數據正式啟動後持續更新</p>
-                </div>
+        <div className="relative mx-auto max-w-7xl px-4 pb-8 pt-12 sm:px-6 md:pb-12 md:pt-16 lg:px-8 lg:pt-20">
+          <div className="grid items-center gap-4 lg:grid-cols-[1.05fr_.95fr] lg:gap-10">
+            <div className="relative z-10 max-w-2xl py-4 lg:py-10">
+              <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[.04] px-3 py-1.5 text-xs font-semibold tracking-[.14em] text-orange-300">
+                <Sparkles className="h-3.5 w-3.5" />OXM 企業升級中心
               </div>
-              {/* Right: 3 stat cards
-                  Mobile:  row1 = 申請廠商 (full width); row2 = 總申請金額 + 已結案數量
-                  sm+   :  3 cols equal */}
-              <div className="flex-1 grid grid-cols-2 sm:grid-cols-3 gap-3 md:gap-4">
-                {/* 申請廠商：手機佔滿整排，sm+ 正常 1/3 */}
-                <div className="col-span-2 sm:col-span-1">
-                  <StatCard
-                    title="申請廠商"
-                    icon={Building2}
-                    color="#4ade80"
-                    rows={[
-                      { label: "有送出申請", value: fmt(upgradeStats.appliedFactories, 5), unit: "家" },
-                      { label: "有過件",     value: fmt(upgradeStats.acceptedCases, 5),    unit: "家" },
-                      { label: "過件率",     value: fmt(upgradeStats.approvalRate, 2),     unit: "%" },
-                    ]}
-                    bar={upgradeStats.approvalRate}
-                  />
-                </div>
-                {/* 總申請金額：手機 1/2 欄，sm+ 正常 1/3 */}
-                <StatCard
-                  title="總申請金額"
-                  icon={TrendingUp}
-                  color="#fb923c"
-                  rows={[{ label: "累積補助金額", value: fmt(upgradeStats.totalGrantAmountWan, 5), unit: "萬元" }]}
-                  bar={0}
-                />
-                {/* 已結案數量：手機 1/2 欄，sm+ 正常 1/3 */}
-                <StatCard
-                  title="已結案數量"
-                  icon={CheckCircle}
-                  color="#c084fc"
-                  rows={[{ label: "已結案案件數", value: fmt(upgradeStats.completedCases, 5), unit: "件" }]}
-                  bar={0}
-                />
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* ── 多項政府補助方案 ───────────────────────────────────────────────── */}
-      <section className="py-8 md:py-14 lg:py-20">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-6 md:space-y-10">
-          <div className="text-center space-y-1.5 md:space-y-2">
-            <h2 className="text-xl md:text-2xl lg:text-3xl font-bold">多項政府補助方案</h2>
-            <div className="w-10 h-1 bg-gradient-to-r from-orange-500 to-amber-500 mx-auto rounded-full" />
-            <p className="text-sm md:text-base text-muted-foreground mt-2 md:mt-3">OXM 協助媒合適合企業階段的政府計畫</p>
-          </div>
-          <div className="grid grid-cols-2 md:grid-cols-2 xl:grid-cols-3 gap-3 md:gap-6 items-stretch">
-            {SUBSIDY_PLANS.map((plan, idx) => {
-              const isLastOdd = idx === SUBSIDY_PLANS.length - 1 && SUBSIDY_PLANS.length % 2 === 1;
-              return (
-                <div
-                  key={plan.code}
-                  className={`rounded-xl md:rounded-2xl border border-border bg-background flex flex-col overflow-hidden shadow-sm transition-shadow${isLastOdd ? " col-span-2 md:col-span-1" : ""} md:hover:shadow-md`}
-                >
-                  <div className={`h-1 md:h-1.5 bg-gradient-to-r ${plan.topBar}`} />
-
-                  {/* ── 手機版：可點擊的 compact 卡片 ── */}
-                  <button
-                    type="button"
-                    className="md:hidden p-3 flex flex-col gap-2 flex-1 text-left active:scale-[0.97] transition-transform cursor-pointer"
-                    onClick={() => setSelectedGrant(plan)}
-                  >
-                    <div className="flex items-center justify-between gap-1">
-                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold tracking-wide leading-tight ${plan.badgeCls}`}>{plan.code}</span>
-                      <span className="text-[9px] text-muted-foreground/60">點擊查看</span>
-                    </div>
-                    <div className="flex-1">
-                      <h3 className="font-bold text-[11px] leading-snug line-clamp-2">{plan.title}</h3>
-                    </div>
-                    <div className="flex items-center justify-between pt-2 border-t border-border">
-                      <span className="text-[9px] text-muted-foreground font-medium leading-tight">最高<br />補助</span>
-                      <span className={`text-sm font-extrabold bg-gradient-to-r ${plan.maxCls} bg-clip-text text-transparent`}>{plan.max}</span>
-                    </div>
-                  </button>
-
-                  {/* ── 桌機版：完整靜態卡片內容 ── */}
-                  <div className="hidden md:flex p-6 flex-col gap-4 flex-1">
-                    <div className="flex items-center justify-between gap-1">
-                      <span className={`px-3 py-1 rounded-full text-sm font-extrabold tracking-wide ${plan.badgeCls}`}>{plan.code}</span>
-                      <span className="text-xs text-muted-foreground shrink-0">政府補助計畫</span>
-                    </div>
-                    <div className="flex-1 space-y-1">
-                      <h3 className="font-bold text-lg leading-snug">{plan.title}</h3>
-                      <p className="text-sm text-muted-foreground leading-relaxed">{plan.desc}</p>
-                    </div>
-                    <div className="flex flex-wrap gap-1">
-                      {plan.tags.map((tag) => (
-                        <span key={tag} className="px-1.5 py-0.5 rounded bg-muted text-xs text-muted-foreground font-medium">{tag}</span>
-                      ))}
-                    </div>
-                    <div className="flex items-center justify-between pt-4 border-t border-border">
-                      <span className="text-xs text-muted-foreground font-medium">最高補助金額</span>
-                      <span className={`text-xl font-extrabold bg-gradient-to-r ${plan.maxCls} bg-clip-text text-transparent`}>{plan.max}</span>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </section>
-
-      {/* ── 申請流程 ──────────────────────────────────────────────────────── */}
-      <section className="py-8 md:py-14 lg:py-20 bg-muted/20">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-6 md:space-y-10">
-          <div className="text-center space-y-1.5 md:space-y-2">
-            <h2 className="text-xl md:text-2xl lg:text-3xl font-bold">申請流程</h2>
-            <p className="text-sm md:text-base text-muted-foreground">六個步驟，OXM 顧問全程陪跑</p>
-          </div>
-          {/* Desktop: horizontal */}
-          <div className="hidden lg:flex items-start">
-            {PROCESS_STEPS.map((step, i) => (
-              <Fragment key={step.num}>
-                <div className="flex-1 flex flex-col items-center text-center gap-3 min-w-0 px-2">
-                  <div className={`w-12 h-12 rounded-xl bg-gradient-to-br ${step.accent} flex items-center justify-center shadow-md shrink-0`}>
-                    <step.Icon className="w-5 h-5 text-white" />
-                  </div>
-                  <div className="space-y-1 w-full">
-                    <span className={`text-[10px] font-extrabold tracking-widest opacity-60 block ${step.stepCls}`}>STEP {step.num}</span>
-                    <p className="font-semibold text-sm leading-snug">{step.title}</p>
-                    <p className="text-[11px] text-muted-foreground leading-relaxed">{step.desc}</p>
-                  </div>
-                </div>
-                {i < PROCESS_STEPS.length - 1 && (
-                  <div className="flex items-start pt-4 shrink-0">
-                    <ArrowRight className="w-4 h-4 text-muted-foreground/30" />
-                  </div>
-                )}
-              </Fragment>
-            ))}
-          </div>
-          {/* Mobile / Tablet: compact 2-col vertical stepper */}
-          <div className="lg:hidden grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {PROCESS_STEPS.map((step) => (
-              <div key={step.num} className="flex items-start gap-3">
-                <div className={`w-8 h-8 rounded-lg bg-gradient-to-br ${step.accent} flex items-center justify-center shadow-md shrink-0`}>
-                  <step.Icon className="w-3.5 h-3.5 text-white" />
-                </div>
-                <div className="space-y-0.5 pt-0.5">
-                  <span className={`text-[9px] font-extrabold tracking-widest opacity-60 block ${step.stepCls}`}>STEP {step.num}</span>
-                  <p className="font-semibold text-xs">{step.title}</p>
-                  <p className="text-[11px] text-muted-foreground leading-relaxed">{step.desc}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* ── Bottom CTA ────────────────────────────────────────────────────── */}
-      <section className="py-8 md:py-14 lg:py-20">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="relative overflow-hidden rounded-2xl md:rounded-3xl bg-gradient-to-br from-orange-500 via-amber-500 to-violet-600 p-6 md:p-10 lg:p-16 text-white text-center space-y-4 md:space-y-6 shadow-xl shadow-orange-500/20">
-            <div
-              className="absolute inset-0 pointer-events-none opacity-10"
-              aria-hidden="true"
-              style={{ backgroundImage: "radial-gradient(circle,white 1px,transparent 1px)", backgroundSize: "24px 24px" }}
-            />
-            <div className="relative space-y-2.5 md:space-y-4">
-              <h2 className="text-xl md:text-2xl lg:text-3xl font-extrabold">不確定適合哪項補助？</h2>
-              <p className="text-white/80 text-sm md:text-base lg:text-lg">讓 OXM 協助免費評估，找到最適合您企業的計畫</p>
-              <div className="pt-1 md:pt-2">
-                <Button
-                  size="default"
-                  onClick={handleApplyClick}
-                  disabled={accessChecking && !!user}
-                  className="h-11 bg-white text-orange-600 hover:bg-orange-50 border-0 text-sm md:text-base px-6 md:px-8 font-bold shadow-lg"
-                >
-                  立即免費評估
-                  <ArrowRight className="w-4 h-4 ml-2" />
+              <h1 className="text-balance text-4xl font-black leading-[1.12] tracking-tight sm:text-5xl lg:text-6xl">
+                把政府補助，<br />轉成企業升級的<span className="whitespace-nowrap bg-gradient-to-r from-orange-400 to-violet-400 bg-clip-text text-transparent">下一步</span>
+              </h1>
+              <p className="mt-6 max-w-xl text-base leading-8 text-slate-300 sm:text-lg">
+                從研發、製程改善到海外布局，OXM 協助台灣企業辨識合適資源，媒合專業顧問，讓轉型計畫更有方向。
+              </p>
+              <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:items-center">
+                <Button onClick={handleApplyClick} disabled={accessChecking && !!user} className="h-12 rounded-full bg-orange-500 px-6 font-bold text-white shadow-lg shadow-orange-950/40 hover:bg-orange-600">
+                  免費評估資格<ArrowRight className="ml-2 h-4 w-4" />
                 </Button>
+                <a href="#upgrade-programs" className="inline-flex h-12 items-center justify-center rounded-full border border-white/15 px-6 text-sm font-semibold text-slate-200 transition hover:border-white/30 hover:bg-white/[.05]">
+                  查看補助方案
+                </a>
               </div>
+              <div className="mt-6 flex items-center gap-2 text-xs leading-5 text-slate-500">
+                <CheckCircle className="h-4 w-4 shrink-0 text-emerald-400" />依既有會員與工廠資格流程進行評估
+              </div>
+            </div>
+            <div className="relative mx-auto mt-3 w-full max-w-2xl overflow-hidden lg:mt-0 lg:max-w-none">
+              <div className="pointer-events-none absolute inset-y-0 left-0 z-10 w-1/5 bg-gradient-to-r from-[#050a14] to-transparent" aria-hidden="true" />
+              <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-1/4 bg-gradient-to-t from-[#050a14] to-transparent" aria-hidden="true" />
+              <img
+                src="/images/upgrade-center/hero-tech-city-v2.webp"
+                alt=""
+                className="aspect-[16/10] w-full object-cover object-[68%_center] opacity-95 sm:aspect-[16/9] lg:aspect-[4/3] xl:aspect-[16/11]"
+              />
+            </div>
+          </div>
+
+          <div className="mt-4 grid grid-cols-2 gap-x-4 gap-y-6 rounded-2xl border border-white/10 bg-slate-950/70 p-5 backdrop-blur-sm sm:grid-cols-5 sm:p-6">
+            <MetricTile label="送出申請" value={fmt(upgradeStats.appliedFactories, 5)} unit="家" accent="#4ade80" />
+            <MetricTile label="正式立案" value={fmt(upgradeStats.acceptedCases, 5)} unit="家" accent="#38bdf8" />
+            <MetricTile label="評估過件率" value={fmt(upgradeStats.approvalRate, 2)} unit="%" accent="#c084fc" />
+            <MetricTile label="累積補助金額" value={fmt(upgradeStats.totalGrantAmountWan, 5)} unit="萬元" accent="#fb923c" />
+            <MetricTile label="已結案案件" value={fmt(upgradeStats.completedCases, 5)} unit="件" accent="#facc15" />
+          </div>
+          <p className="mt-3 text-right text-[10px] tracking-wider text-slate-600">平台數據正式啟動後持續更新</p>
+        </div>
+      </section>
+
+      {/* ── 為什麼需要資源導覽 ───────────────────────────────────────── */}
+      <section className="border-b border-slate-200 bg-white py-14 md:py-20">
+        <div className="mx-auto grid max-w-7xl gap-10 px-4 sm:px-6 lg:grid-cols-[.9fr_1.1fr] lg:gap-20 lg:px-8">
+          <div>
+            <p className="text-xs font-bold tracking-[.2em] text-orange-500">WHY IT MATTERS</p>
+            <h2 className="mt-4 text-3xl font-black leading-tight text-slate-950 md:text-4xl">補助不是終點，<br className="hidden sm:block" />而是升級路徑的一部分</h2>
+            <p className="mt-5 max-w-xl text-sm leading-7 text-slate-600 md:text-base md:leading-8">
+              不同企業階段，對應的研發、技術與市場資源也不同。先看懂方案方向，再進入資格評估，能讓後續準備更聚焦。
+            </p>
+          </div>
+          <div className="grid gap-px overflow-hidden rounded-2xl border border-slate-200 bg-slate-200 sm:grid-cols-3">
+            {UPGRADE_MEANING_ITEMS.map(({ kind, number, eyebrow, title, text, artClassName }) => (
+              <div key={number} className="flex flex-col bg-white p-5 sm:min-h-[330px]">
+                <div className={`overflow-hidden rounded-2xl border p-2 ${artClassName}`}>
+                  <UpgradeMeaningIllustration kind={kind} />
+                </div>
+                <div className="mt-5 flex items-center justify-between gap-3">
+                  <span className="text-[10px] font-bold tracking-[.16em] text-violet-500">{eyebrow}</span>
+                  <span className="font-mono text-xs text-slate-400">{number}</span>
+                </div>
+                <h3 className="mt-4 text-lg font-black tracking-[-.01em] text-slate-950">{title}</h3>
+                <p className="mt-3 text-sm leading-6 text-slate-600">{text}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ── 資料庫驅動的政府補助方案 ─────────────────────────────────── */}
+      <section id="upgrade-programs" className="scroll-mt-20 bg-[#f5f6f8] py-14 md:py-20 lg:py-24">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+          <div className="mb-9 flex flex-col gap-4 md:mb-12 md:flex-row md:items-end md:justify-between">
+            <div className="max-w-3xl">
+              <p className="text-xs font-bold tracking-[.2em] text-violet-600">PROGRAM DIRECTORY</p>
+              <h2 className="mt-3 text-3xl font-black text-slate-950 md:text-4xl">政府補助方案</h2>
+              <p className="mt-4 text-sm leading-7 text-slate-600 md:text-base">OXM 協助媒合適合企業階段的政府計畫；實際資格與受理內容依主管機關公告及顧問評估為準。</p>
+            </div>
+            {!programsLoading && !programsError && (
+              <div className="flex items-baseline gap-2 border-l-2 border-orange-500 pl-4">
+                <span className="font-mono text-3xl font-black text-slate-900">{String(upgradePrograms.length).padStart(2, "0")}</span>
+                <span className="text-xs font-semibold tracking-wider text-slate-400">項方案</span>
+              </div>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 items-stretch gap-5 md:grid-cols-2 xl:grid-cols-3">
+            {programsLoading && Array.from({ length: 3 }).map((_, index) => <UpgradeProgramSkeleton key={index} />)}
+            {!programsLoading && upgradePrograms.map((program, index) => (
+              <UpgradeProgramCard key={program.id} program={program} index={index} />
+            ))}
+          </div>
+          {programsError && (
+            <div className="rounded-2xl border border-red-200 bg-white px-5 py-10 text-center text-sm text-red-700">方案資料暫時無法載入，請稍後再試。</div>
+          )}
+          {!programsLoading && !programsError && upgradePrograms.length === 0 && (
+            <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-5 py-12 text-center text-sm text-slate-500">目前沒有公開中的政府補助方案。</div>
+          )}
+        </div>
+      </section>
+
+      {/* ── 既有六步申請流程，僅重整視覺 ─────────────────────────────── */}
+      <section className="bg-white py-14 md:py-20 lg:py-24">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+          <div className="mb-10 max-w-2xl">
+            <p className="text-xs font-bold tracking-[.2em] text-orange-500">HOW IT WORKS</p>
+            <h2 className="mt-3 text-3xl font-black text-slate-950 md:text-4xl">六個步驟，讓評估有跡可循</h2>
+            <p className="mt-4 text-sm leading-7 text-slate-600 md:text-base">從資料填寫、資格初審到送出申請，OXM 顧問依既有流程全程陪跑。</p>
+          </div>
+          <div className="grid gap-px overflow-hidden rounded-2xl border border-slate-200 bg-slate-200 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+            {PROCESS_STEPS.map((step) => (
+              <div key={step.num} className="group relative min-h-52 bg-white p-5 transition hover:bg-slate-50">
+                <span className="font-mono text-3xl font-black text-slate-100 transition group-hover:text-slate-200">{step.num}</span>
+                <div className={`mt-5 flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br ${step.accent}`}>
+                  <step.Icon className="h-4 w-4 text-white" />
+                </div>
+                <h3 className="mt-4 text-sm font-bold leading-snug text-slate-900">{step.title}</h3>
+                <p className="mt-2 text-xs leading-5 text-slate-500">{step.desc}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ── OXM 如何協助 ──────────────────────────────────────────────── */}
+      <section className="bg-slate-950 py-14 text-white md:py-20">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+          <div className="grid gap-10 lg:grid-cols-[.75fr_1.25fr] lg:items-start lg:gap-20">
+            <div>
+              <p className="text-xs font-bold tracking-[.2em] text-orange-400">OXM SUPPORT</p>
+              <h2 className="mt-4 text-3xl font-black leading-tight md:text-4xl">把複雜的申請路徑，整理成清楚的行動</h2>
+              <p className="mt-5 text-sm leading-7 text-slate-400 md:text-base">OXM 串接企業需求與專業顧問，協助企業從初步判讀一路走到實際送件。</p>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-3">
+              {[
+                { Icon: FileSearch, title: "先釐清", text: "從企業現況與目標開始，聚焦適合評估的方案方向。" },
+                { Icon: Users, title: "再媒合", text: "依企業類型與計畫目標，銜接合適的政府計畫顧問團隊。" },
+                { Icon: ClipboardCheck, title: "持續陪跑", text: "從資料準備、計畫撰寫到送件，保留清楚的案件進度。" },
+              ].map(({ Icon, title, text }) => (
+                <div key={title} className="rounded-2xl border border-white/10 bg-white/[.035] p-5">
+                  <Icon className="h-5 w-5 text-violet-400" />
+                  <h3 className="mt-7 font-bold">{title}</h3>
+                  <p className="mt-3 text-sm leading-6 text-slate-400">{text}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ── Bottom CTA ───────────────────────────────────────────────── */}
+      <section className="bg-[#f5f6f8] py-12 md:py-16">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+          <div className="relative overflow-hidden rounded-3xl border border-slate-200 bg-white px-6 py-8 shadow-[0_24px_70px_-55px_rgba(15,23,42,.8)] md:px-10 md:py-10">
+            <div className="absolute inset-y-0 left-0 w-1.5 bg-gradient-to-b from-orange-500 to-violet-500" aria-hidden="true" />
+            <div className="relative flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
+              <div>
+                <h2 className="text-2xl font-black text-slate-950 md:text-3xl">不確定適合哪項補助？</h2>
+                <p className="mt-2 text-sm leading-6 text-slate-600 md:text-base">讓 OXM 協助免費評估，找到適合您企業階段的計畫方向。</p>
+              </div>
+              <Button onClick={handleApplyClick} disabled={accessChecking && !!user} className="h-12 shrink-0 rounded-full bg-slate-950 px-7 font-bold text-white hover:bg-orange-600">
+                立即免費評估<ArrowRight className="ml-2 h-4 w-4" />
+              </Button>
             </div>
           </div>
         </div>
@@ -717,60 +646,6 @@ export default function EnterpriseUpgradeCenter() {
               我知道了
             </Button>
           </div>
-        </DialogContent>
-      </Dialog>
-
-      {/* ── 補助方案詳情 Dialog（手機點擊小卡觸發） ──────────────────────── */}
-      <Dialog open={!!selectedGrant} onOpenChange={(open) => { if (!open) setSelectedGrant(null); }}>
-        <DialogContent className="w-[calc(100vw-32px)] max-w-sm max-h-[80vh] flex flex-col p-0 overflow-hidden">
-          {selectedGrant && (
-            <>
-              {/* 頂部色條 */}
-              <div className={`h-1.5 bg-gradient-to-r ${selectedGrant.topBar} shrink-0`} />
-              <div className="overflow-y-auto flex-1 p-5 space-y-4">
-                {/* Header */}
-                <DialogHeader className="space-y-1">
-                  <div className="flex items-center gap-2">
-                    <span className={`px-2.5 py-0.5 rounded-full text-xs font-extrabold tracking-wide ${selectedGrant.badgeCls}`}>
-                      {selectedGrant.code}
-                    </span>
-                    <span className="text-xs text-muted-foreground">政府補助計畫</span>
-                  </div>
-                  <DialogTitle className="text-base font-bold leading-snug pt-0.5">
-                    {selectedGrant.title}
-                  </DialogTitle>
-                </DialogHeader>
-
-                {/* Desc */}
-                <p className="text-sm text-muted-foreground leading-relaxed">{selectedGrant.desc}</p>
-
-                {/* Tags */}
-                <div className="flex flex-wrap gap-1.5">
-                  {selectedGrant.tags.map((tag) => (
-                    <span key={tag} className="px-2 py-0.5 rounded-md bg-muted text-xs text-muted-foreground font-medium">{tag}</span>
-                  ))}
-                </div>
-
-                {/* Max amount */}
-                <div className="flex items-center justify-between rounded-xl bg-muted/40 px-4 py-3 border border-border">
-                  <span className="text-xs text-muted-foreground font-medium">最高補助金額</span>
-                  <span className={`text-xl font-extrabold bg-gradient-to-r ${selectedGrant.maxCls} bg-clip-text text-transparent`}>
-                    {selectedGrant.max}
-                  </span>
-                </div>
-
-                {/* CTA */}
-                <Button
-                  className="w-full bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white border-0 h-11"
-                  onClick={() => { setSelectedGrant(null); handleApplyClick(); }}
-                  disabled={accessChecking && !!user}
-                >
-                  立即免費評估資格
-                  <ArrowRight className="w-4 h-4 ml-2" />
-                </Button>
-              </div>
-            </>
-          )}
         </DialogContent>
       </Dialog>
 

@@ -7,6 +7,7 @@ import { sendNewInquiryEmail, sendFactoryApprovedEmail, sendFactoryRejectedEmail
 import { sha256Hex, generateRawToken } from './_core/oauthHelpers';
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
+import { upgradeProgramsRouter } from "./upgradeProgramsRouter";
 import { publicProcedure, protectedProcedure, adminProcedure, badgeEvidenceUploadProcedure, router } from "./_core/trpc";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
@@ -641,6 +642,7 @@ const certificationApplicationSchema = z.object({
 
 export const appRouter = router({
   system: systemRouter,
+  upgradePrograms: upgradeProgramsRouter,
 
   analytics: router({
     record: publicProcedure.input(z.object({ visitorId: z.string().regex(/^[a-zA-Z0-9\-_]+$/).min(1).max(64) })).mutation(async ({ input }) => {

@@ -81,6 +81,7 @@ const FactoryReviewDetail   = lazy(() => import("./pages/FactoryReviewDetail"));
 const PendingFactoriesList  = lazy(() => import("./pages/PendingFactoriesList"));
 const AdminSupportCenter    = lazy(() => import("./pages/AdminSupportCenter"));
 const AdminUpgradeApplications = lazy(() => import("./pages/AdminUpgradeApplications"));
+const AdminUpgradePrograms    = lazy(() => import("./pages/AdminUpgradePrograms"));
 const ConsultantCases        = lazy(() => import("./pages/ConsultantCases"));
 const AdminFinanceApplications = lazy(() => import("./pages/FinanceConsultantCases"));
 const AdminAnnouncements    = lazy(() => import("./pages/AdminAnnouncements"));
@@ -354,6 +355,7 @@ function Router() {
         <Route path="/admin/pending-factories" component={PendingFactoriesList} />
         <Route path="/admin/support" component={AdminSupportCenter} />
         <Route path="/admin/upgrade-applications" component={AdminUpgradeApplications} />
+        <Route path="/admin/upgrade-programs" component={AdminUpgradePrograms} />
         <Route path="/admin/announcements" component={AdminAnnouncements} />
         <Route path="/admin/news" component={AdminNews} />
         <Route path="/admin/messages/:campaignId" component={AdminMessages} />

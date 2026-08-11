@@ -352,19 +352,27 @@ function AdminDashboardContent() {
                 </CardTitle>
                 <CardDescription className="text-xs">查看政府補助申請案件與顧問承辦進度</CardDescription>
               </CardHeader>
-              <CardContent className="flex items-end justify-between">
+              <CardContent className="flex items-end justify-between gap-3">
                 <div className="text-2xl font-bold text-orange-500">→</div>
-                {/* 次要入口：企業升級申請管理員操作頁（狀態調整／案件明細），
-                    route 與功能維持原樣，只是把入口從上方獨立卡片搬到這裡；
-                    stopPropagation 避免整張卡片的 onClick 一起被觸發。 */}
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-7 text-xs gap-1 shrink-0"
-                  onClick={(e) => { e.stopPropagation(); setLocation("/admin/upgrade-applications"); }}
-                >
-                  申請管理<ExternalLink className="h-3 w-3" />
-                </Button>
+                <div className="flex flex-wrap justify-end gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 shrink-0 gap-1 text-xs"
+                    onClick={(e) => { e.stopPropagation(); setLocation("/admin/upgrade-programs"); }}
+                  >
+                    方案管理<Cog className="h-3 w-3" />
+                  </Button>
+                  {/* 既有申請管理 route、行為與權限維持原樣。 */}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 shrink-0 gap-1 text-xs"
+                    onClick={(e) => { e.stopPropagation(); setLocation("/admin/upgrade-applications"); }}
+                  >
+                    申請管理<ExternalLink className="h-3 w-3" />
+                  </Button>
+                </div>
               </CardContent>
             </Card>
 
