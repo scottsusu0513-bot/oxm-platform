@@ -270,13 +270,65 @@ interface NewsListItemData {
   firstPublishedAt: string | Date | null;
   /** 登入會員才由後端計算（查 newsReads 表）；訪客一律是 false，實際已讀狀態由呼叫端另外查 localStorage。 */
   isRead: boolean;
+  isImportant: boolean;
+  isCompetition: boolean;
+  isExhibition: boolean;
+  isCrossIndustry: boolean;
+  industryNames: string[];
 }
 
-// 消息列：只有大標題、摘要、日期與 NEW，不顯示分類/產業標籤、不顯示
-// 「查看完整內容」，整列是真正的 Link。
+// 「全部最新消息」卡片用的消息類型標籤：只讀既有的四個分類欄位，不從標題文字
+// 猜測。四選一（優先序：重要 > 競賽 > 展覽 > 產業消息），因為卡片上只有空間
+// 放一個類型標籤；isImportant/isCompetition/isExhibition 在後台是各自獨立的
+// checkbox、理論上可能同時勾選多個，這裡固定取最高優先的那一個，不會同時顯示
+// 兩個類型標籤。跨產業資訊或有掛產業標籤但四個布林都是 false 時，歸類成「產業
+// 消息」（對應左側側欄「產業消息」區段同時涵蓋跨產業資訊與 12 個產業的概念）；
+// 完全沒有任何分類資料時回傳 null，不硬塞一個「產業消息」出來誤導使用者。
+function getNewsTypeTag(item: Pick<NewsListItemData, "isImportant" | "isCompetition" | "isExhibition" | "isCrossIndustry" | "industryNames">): string | null {
+  if (item.isImportant) return "重要消息";
+  if (item.isCompetition) return "競賽";
+  if (item.isExhibition) return "展覽";
+  if (item.isCrossIndustry || item.industryNames.length > 0) return "產業消息";
+  return null;
+}
+
+// 產業標籤最多顯示 2 個，超過用 "+N" 收尾，避免少數多產業消息把卡片撐得
+// 過寬；目前多數消息只掛 0~1 個產業，這個上限平常幾乎不會被觸發。
+const MAX_INDUSTRY_TAGS = 2;
+function getVisibleIndustryTags(names: string[]): { visible: string[]; overflowCount: number } {
+  if (names.length <= MAX_INDUSTRY_TAGS) return { visible: names, overflowCount: 0 };
+  return { visible: names.slice(0, MAX_INDUSTRY_TAGS), overflowCount: names.length - MAX_INDUSTRY_TAGS };
+}
+
+// 小型分類標籤：淡色底＋深色文字，刻意跟 NewsNewBadge 的醒目橘紅實心漸層區隔
+// 開來，不搶過標題。消息類型（橘紫漸層底、紫字）比產業標籤（純紫淡底、稍淺
+// 的紫字）視覺份量略重一階，對應「消息類型優先於產業」的資訊層級。
+function NewsTypeTag({ label }: { label: string }) {
+  return (
+    <span className="shrink-0 text-[10px] font-semibold leading-none text-purple-700 bg-gradient-to-r from-orange-50 to-purple-50 border border-purple-200/70 rounded-full px-2 py-[3px]">
+      {label}
+    </span>
+  );
+}
+function NewsIndustryTag({ label }: { label: string }) {
+  return (
+    <span className="shrink-0 text-[10px] font-medium leading-none text-violet-600 bg-violet-50/80 border border-violet-100 rounded-full px-2 py-[3px]">
+      {label}
+    </span>
+  );
+}
+
+// 消息列：大標題、摘要、日期與 NEW，整列是真正的 Link。
 // 卡片用接近白色的半透明底（bg-white/85）跟有色背景拉開層次，不是純白厚重
 // 方塊；hover 邊框/陰影轉為橘紫色調並微幅上移，不做大幅動畫。
-function NewsListItem({ item, isAuthenticated }: { item: NewsListItemData; isAuthenticated: boolean }) {
+// showTypeTags：只有「全部最新消息」（category === "all"）需要在標題上方加
+// 消息類型／產業標籤，其他分類頁（重要/競賽/展覽/跨產業/個別產業）本身就是
+// 單一分類的結果，不需要再重複標示分類，見呼叫端 category === "all" 判斷。
+function NewsListItem({ item, isAuthenticated, showTypeTags }: { item: NewsListItemData; isAuthenticated: boolean; showTypeTags: boolean }) {
+  const typeTag = showTypeTags ? getNewsTypeTag(item) : null;
+  const { visible: industryTags, overflowCount } = showTypeTags ? getVisibleIndustryTags(item.industryNames) : { visible: [], overflowCount: 0 };
+  const hasTags = !!typeTag || industryTags.length > 0;
+
   return (
     <Link
       href={`/news/${item.slug}`}
@@ -286,6 +338,17 @@ function NewsListItem({ item, isAuthenticated }: { item: NewsListItemData; isAut
         <CardContent className="p-5">
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0 flex-1">
+              {hasTags && (
+                <div className="flex items-center gap-1.5 mb-1.5 flex-wrap">
+                  {typeTag && <NewsTypeTag label={typeTag} />}
+                  {industryTags.map(name => <NewsIndustryTag key={name} label={name} />)}
+                  {overflowCount > 0 && (
+                    <span className="shrink-0 text-[10px] font-medium leading-none text-muted-foreground px-1">
+                      +{overflowCount}
+                    </span>
+                  )}
+                </div>
+              )}
               <div className="flex items-center gap-2 mb-1.5 flex-wrap">
                 <h3 className="text-base sm:text-lg font-bold truncate sm:whitespace-normal sm:line-clamp-1">{item.title}</h3>
                 {isUnreadNew(item, isAuthenticated) && <NewsNewBadge />}
@@ -736,7 +799,7 @@ export default function News() {
                 <>
                   <div className="space-y-3">
                     {items.map(item => (
-                      <NewsListItem key={item.id} item={item} isAuthenticated={isAuthenticated} />
+                      <NewsListItem key={item.id} item={item} isAuthenticated={isAuthenticated} showTypeTags={category === "all"} />
                     ))}
                   </div>
 

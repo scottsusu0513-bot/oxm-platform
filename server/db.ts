@@ -2479,7 +2479,11 @@ export interface ListPublicNewsParams {
   userId?: number;
 }
 
-export type PublicNewsItem = News & { isRead: boolean };
+/** industryNames 用途：目前只有「全部最新消息」（category === "all"）列表卡片需要顯示產業標籤，
+ * 但這裡固定回傳、不依 category 條件省略——單一分類本身已經隱含產業（industry:X）或不需要
+ * （important／competition／exhibition／cross-industry 各自的分類頁本來就不渲染這個欄位），
+ * 多回傳這個欄位不會造成誤用，換來的是不用為了單一 category 分支特別繞路，query 邏輯更簡單。 */
+export type PublicNewsItem = News & { isRead: boolean; industryNames: string[] };
 
 /** 只有 status === "published" 會出現；依 publishedAt DESC、id DESC 排序，避免同秒發布時排序不穩定。 */
 export async function listPublicNews(params: ListPublicNewsParams): Promise<{ items: PublicNewsItem[]; total: number }> {
@@ -2516,7 +2520,12 @@ export async function listPublicNews(params: ListPublicNewsParams): Promise<{ it
     readIds = new Set(readRows.map(r => r.newsId));
   }
 
-  return { items: items.map(item => ({ ...item, isRead: readIds.has(item.id) })), total: Number(countResult?.count ?? 0) };
+  const industryMap = items.length > 0 ? await getNewsIndustryNamesBatch(items.map(i => i.id)) : new Map<number, string[]>();
+
+  return {
+    items: items.map(item => ({ ...item, isRead: readIds.has(item.id), industryNames: industryMap.get(item.id) ?? [] })),
+    total: Number(countResult?.count ?? 0),
+  };
 }
 
 /** sitemap.xml 專用：只回傳 status === "published" 的消息 slug／updatedAt，不分頁（消息數量遠小於工廠）。 */

@@ -1036,11 +1036,11 @@ describe("News.tsx 第三輪 UI 微調：產業消息永遠展開、產業 icon 
 
   it("「產業消息」是靜態的 div 區段標題，不是 button，沒有 onClick", () => {
     const source = readNewsPageSource();
-    const idx = source.indexOf("產業消息");
-    // 找到桌面側欄那個標題（不是手機版 SelectItem 裡「產業消息：」那個），
-    // 往前找最近的開始標籤，確認是 <div ...> 不是 <button ...onClick...>。
-    const headerIdx = source.indexOf("產業消息\n", idx); // 桌面標題後面接著換行才是 icon+文字獨立一行
-    const searchFrom = headerIdx > -1 ? headerIdx : idx;
+    // 錨點用 "產業消息</span>"（桌面側欄標題的確切 JSX 片段）而不是裸字串
+    // "產業消息"——後者也會命中卡片分類標籤功能（getNewsTypeTag 的回傳值／
+    // 說明註解）裡同樣的三個字，位置更早，會讓下面「往前找最近 <div」失焦到
+    // 錯誤的區塊。
+    const searchFrom = source.indexOf("產業消息</span>");
     // 找最近的 <div ...> 開始標籤本身，不能只找最近的 "<"——中間還夾著
     // <Factory .../> 這個自結束 icon 標籤，它的 "<" 離文字更近。
     const tagStart = source.lastIndexOf("<div", searchFrom);
