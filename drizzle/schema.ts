@@ -1189,6 +1189,13 @@ export const upgradeApplications = mysqlTable("upgradeApplications", {
   contactName: varchar("contactName", { length: 100 }).notNull(),
   phone: varchar("phone", { length: 30 }).notNull(),
   email: varchar("email", { length: 320 }).notNull(),
+  // 決策者是否共同參與顧問洽談：前端必填單選（owner／manager／unavailable），
+  // 讓顧問在聯繫案件前就知道能否直接接觸到有決策權的人，避免透過窗口反覆
+  // 轉達、喬時間拖慢案件推進。DB 允許 NULL，理由同 annualRevenue——區分
+  // 「舊案件（新增本欄位前建立，從未被問過這題）」與「答案為 unavailable」，
+  // 不可用 unavailable 頂替舊資料的沉默，兩者語意不同。存穩定英文 code，不存
+  // 完整中文句子，中文顯示文字統一由前端依 code 對應。
+  decisionMakerParticipation: varchar("decisionMakerParticipation", { length: 20 }),
   location: varchar("location", { length: 100 }).notNull(),
   capitalAmount: varchar("capitalAmount", { length: 30 }).notNull(),
   // 年營收：前端必填單選（500萬以下／500~1000萬／1000萬以上），DB 允許 NULL

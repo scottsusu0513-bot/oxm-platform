@@ -32,6 +32,7 @@ type FormValues = {
   email: string;
   city: string;
   capitalLevel: string;
+  decisionMakerParticipation: "owner" | "manager" | "unavailable" | "";
   annualRevenue: string;
   employeeCount: string;
   factoryType: string;
@@ -55,6 +56,15 @@ const CAPITAL_LEVEL_OPTIONS = [
   { value: "500~2000萬",  label: "500～2,000 萬" },
   { value: "2000~5000萬", label: "2,000～5,000 萬" },
   { value: "5000萬以上",  label: "5,000 萬以上" },
+];
+
+// 決策者是否共同參與顧問洽談：值對應 drizzle/schema.ts
+// upgradeApplications.decisionMakerParticipation 存的穩定英文 code，
+// label 為使用者已核准文字，不得自行改寫。
+const DECISION_MAKER_OPTIONS: { value: "owner" | "manager" | "unavailable"; label: string }[] = [
+  { value: "owner", label: "可以，負責人將共同參與" },
+  { value: "manager", label: "可以，由具決策權主管共同參與" },
+  { value: "unavailable", label: "目前無法安排決策者參與" },
 ];
 
 const ANNUAL_REVENUE_OPTIONS = [
@@ -275,6 +285,7 @@ export default function EnterpriseUpgradeApply() {
   const hasPatent = watch("hasPatent");
   const agreeTerms = watch("agreeTerms");
   // Controlled Select values
+  const decisionMakerParticipationValue = watch("decisionMakerParticipation") ?? "";
   const capitalLevelValue = watch("capitalLevel") ?? "";
   const annualRevenueValue = watch("annualRevenue") ?? "";
   const employeeCountValue = watch("employeeCount") ?? "";
@@ -300,6 +311,7 @@ export default function EnterpriseUpgradeApply() {
       email: data.email,
       location: data.city,
       capitalAmount: data.capitalLevel,
+      decisionMakerParticipation: data.decisionMakerParticipation as "owner" | "manager" | "unavailable",
       annualRevenue: data.annualRevenue,
       employeeCount: data.employeeCount,
       factoryType: data.factoryType,
@@ -637,6 +649,35 @@ export default function EnterpriseUpgradeApply() {
               )}
               {autoFilled.city && <AutoFillHint factoryName={approvedFactory.name} editable={false} />}
             </div>
+          </fieldset>
+
+          {/* ── 顧問洽談安排 ── */}
+          <fieldset className="space-y-3 rounded-xl border border-border p-6">
+            <legend className="px-1 text-sm font-semibold text-muted-foreground">顧問洽談安排</legend>
+            <Label>
+              顧問洽談時，是否可安排公司決策者共同參與？ <span className="text-destructive">*</span>
+            </Label>
+            <RadioGroup
+              value={decisionMakerParticipationValue}
+              onValueChange={(v) => setValue("decisionMakerParticipation", v as "owner" | "manager" | "unavailable", { shouldValidate: true })}
+              className="space-y-2"
+            >
+              {DECISION_MAKER_OPTIONS.map((opt) => (
+                <div key={opt.value} className="flex items-center gap-2">
+                  <RadioGroupItem value={opt.value} id={`decisionMaker-${opt.value}`} />
+                  <Label htmlFor={`decisionMaker-${opt.value}`} className="font-normal cursor-pointer">
+                    {opt.label}
+                  </Label>
+                </div>
+              ))}
+            </RadioGroup>
+            <input
+              type="hidden"
+              {...register("decisionMakerParticipation", { required: "請選擇顧問洽談時是否可安排公司決策者共同參與" })}
+            />
+            {errors.decisionMakerParticipation && (
+              <p className="text-xs text-destructive">{errors.decisionMakerParticipation.message}</p>
+            )}
           </fieldset>
 
           {/* ── 企業規模 ── */}

@@ -6864,6 +6864,9 @@ export const appRouter = router({
       email: z.string().email().max(320),
       location: z.string().min(1).max(100),
       capitalAmount: z.string().min(1).max(30),
+      // 決策者是否共同參與顧問洽談：必填單選，穩定英文 code，見
+      // drizzle/schema.ts upgradeApplications.decisionMakerParticipation 說明。
+      decisionMakerParticipation: z.enum(["owner", "manager", "unavailable"]),
       annualRevenue: z.string().min(1).max(30),
       employeeCount: z.string().min(1).max(30),
       factoryType: z.string().min(1).max(30),
@@ -6920,6 +6923,7 @@ export const appRouter = router({
         email: input.email,
         location: input.location,
         capitalAmount: input.capitalAmount,
+        decisionMakerParticipation: input.decisionMakerParticipation,
         annualRevenue: input.annualRevenue,
         employeeCount: input.employeeCount,
         factoryType: input.factoryType,

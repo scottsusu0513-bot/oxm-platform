@@ -158,6 +158,23 @@ const CAPITAL_TIER_BADGE: Record<CapitalTier, { label: string; cls: string }> = 
   unknown:   { label: "資本額未標示", cls: "bg-slate-100 text-slate-500 border-slate-200" },
 };
 
+// ── 決策者參與 ───────────────────────────────────────────────────────────────
+// 讓顧問在聯繫案件前就知道能否直接接觸到有決策權的人。owner／manager 語意上
+// 都是「有機會接觸決策者」，用同一層級（藍色）樣式；unavailable 需要明確
+// 警示辨識度（紅色）。legacy（欄位新增前建立的舊案件，值為 null）顯示中性灰
+// 色「未填寫」，不可自動判定為 unavailable，兩者語意不同。
+const DECISION_MAKER_BADGE: Record<string, { label: string; cls: string }> = {
+  owner:       { label: "負責人可共同參與",   cls: "bg-blue-100 text-blue-700 border-blue-200" },
+  manager:     { label: "決策主管可共同參與", cls: "bg-blue-100 text-blue-700 border-blue-200" },
+  unavailable: { label: "無法安排決策者參與", cls: "bg-red-100 text-red-700 border-red-200" },
+};
+const DECISION_MAKER_LEGACY_BADGE = { label: "未填寫", cls: "bg-gray-100 text-gray-500 border-gray-200" };
+
+function decisionMakerBadge(value: string | null | undefined): { label: string; cls: string } {
+  if (value && DECISION_MAKER_BADGE[value]) return DECISION_MAKER_BADGE[value];
+  return DECISION_MAKER_LEGACY_BADGE;
+}
+
 // ── 型別 ─────────────────────────────────────────────────────────────────────
 
 type Case = {
@@ -168,6 +185,7 @@ type Case = {
   email: string;
   location: string;
   capitalAmount: string;
+  decisionMakerParticipation?: string | null;
   annualRevenue?: string | null;
   employeeCount: string;
   factoryType: string;
@@ -424,6 +442,7 @@ function CaseCard({ item, defaultExpanded }: { item: Case; defaultExpanded?: boo
   // Capital tier badge
   const tier = getCapitalTier(item.capitalAmount);
   const tierBadge = CAPITAL_TIER_BADGE[tier];
+  const dmBadge = decisionMakerBadge(item.decisionMakerParticipation);
 
   const invalidate = () => utils.upgradeConsultant.myCases.invalidate();
 
@@ -572,6 +591,14 @@ function CaseCard({ item, defaultExpanded }: { item: Case; defaultExpanded?: boo
                 最後更新：{item.lastUpdatedByNameSnapshot
                   ? `${item.lastUpdatedByNameSnapshot}｜${fmtTaipeiDateTime(item.updatedAt)}`
                   : "尚無更新紀錄"}
+              </span>
+            </div>
+            {/* 決策者參與：讓顧問在聯繫案件前就知道能否直接接觸決策者，放在
+                案件基本資訊／聯絡資訊附近、一眼可見的位置，不藏在展開詳情內。 */}
+            <div className="flex items-center gap-2 text-xs mt-1.5">
+              <span className="text-muted-foreground">決策者參與</span>
+              <span className={`inline-flex items-center px-2 py-0.5 rounded-full border text-[10px] font-medium ${dmBadge.cls}`}>
+                {dmBadge.label}
               </span>
             </div>
           </div>

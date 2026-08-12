@@ -534,6 +534,9 @@ export default function EnterpriseUpgradeCenter() {
               <p className="text-xs font-bold tracking-[.2em] text-violet-600">PROGRAM DIRECTORY</p>
               <h2 className="mt-3 text-3xl font-black text-slate-950 md:text-4xl">政府補助方案</h2>
               <p className="mt-4 text-sm leading-7 text-slate-600 md:text-base">OXM 協助媒合適合企業階段的政府計畫；實際資格與受理內容依主管機關公告及顧問評估為準。</p>
+              {/* 決策者參與提醒：小字紅色提示，緊接在說明文字下方，不使用警告框，
+                  不影響右側「XX 項方案」區塊（同一 flex 列的另一個子元素）。 */}
+              <p className="mt-2 text-xs leading-relaxed text-red-600 lg:whitespace-nowrap lg:text-[11px]">補助申請涉及公司投資、預算及執行決策，安排顧問洽談時，請盡量由公司負責人或具決策權之管理階層一同參與，以避免因資訊轉達造成申請進度延誤。</p>
             </div>
             {!programsLoading && !programsError && (
               <div className="flex items-baseline gap-2 border-l-2 border-orange-500 pl-4">
