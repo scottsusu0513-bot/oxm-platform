@@ -48,7 +48,7 @@ export const factories = mysqlTable("factories", {
   // 平均評分（快取欄位，定期從 reviews 計算更新）
   avgRating: decimal("avgRating", { precision: 3, scale: 2 }).default("0"),
   reviewCount: int("reviewCount").default(0),
-  status: mysqlEnum("status", ["draft", "pending", "approved", "rejected"]).default("draft").notNull(),
+  status: mysqlEnum("status", ["draft", "pending", "approved", "rejected", "delisted"]).default("draft").notNull(),
   avatarUrl: text("avatarUrl"), // 工廠頭貼／Logo
   // 工廠頭貼／Logo 的顯示範圍中繼資料（見 shared/imageCrop.ts）。null 表示
   // 既有圖片沒有設定過，前台 fallback 成置中顯示（與目前行為相同）。
@@ -80,6 +80,19 @@ export const factories = mysqlTable("factories", {
   businessNote: text("businessNote"),
   submittedAt: timestamp("submittedAt"), // 送出審核的時間
   rejectionReason: text("rejectionReason"), // 駁回理由
+  // ===== 管理員內部 CRM 欄位（電話開發追蹤用）=====
+  // 絕不可出現在任何公開 API／SSR／owner 視角回應——見 shared/badges.ts
+  // 的 stripCertificationEvidence（唯一公開輸出消毒點，一併移除這兩欄）。
+  // not_called＝灰色／尚未打過電話（既有工廠一律視為此狀態，見 migration
+  // 0078 的 DEFAULT），not_interested＝紅色／沒興趣，follow_up＝藍色／可追蹤。
+  contactStatus: mysqlEnum("contactStatus", ["not_called", "not_interested", "follow_up"]).default("not_called").notNull(),
+  adminNote: text("adminNote"), // 管理員專用備註，純後台資訊，絕不對外顯示
+  // 軟刪除標記：factories 被大量業務表（financeApplications／certificationCases／
+  // shortVideoCases／erpCases／collaborationOrders／reviews／favorites 等）
+  // FK 參照，見 migration 0078 說明，一律軟刪除避免 orphan data／FK 錯誤。
+  // 非 null 時該筆工廠一律視為已刪除：從管理員預設列表與所有公開端隱藏，
+  // 但資料庫紀錄本身保留。
+  deletedAt: timestamp("deletedAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });

@@ -246,6 +246,19 @@ describe("stripCertificationEvidence — 公開 API 回應絕不洩漏私密證�
     expect(JSON.stringify(publicFactory)).not.toContain("秘密說明");
     expect(JSON.stringify(publicFactory)).not.toContain("certification-evidence");
   });
+
+  it("同時移除 adminNote／contactStatus（管理員內部 CRM 欄位，絕不可外流到公開 API／owner 視角）", () => {
+    const factory = {
+      id: 1,
+      name: "測試工廠",
+      contactStatus: "follow_up",
+      adminNote: "8/13 已致電，老闆不在，下週再打",
+    };
+    const publicFactory = stripCertificationEvidence(factory);
+    expect(publicFactory).not.toHaveProperty("adminNote");
+    expect(publicFactory).not.toHaveProperty("contactStatus");
+    expect(JSON.stringify(publicFactory)).not.toContain("老闆不在");
+  });
 });
 
 /**

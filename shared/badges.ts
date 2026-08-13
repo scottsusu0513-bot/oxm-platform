@@ -170,10 +170,18 @@ export function sanitizeBadgeAssignment(
  * 呼叫這個 helper，不分身份）。任何公開 tRPC 回應（搜尋結果、公開工廠詳情、
  * 廣告輪播）也一律透過這個 helper 移除，只保留公開的 certificationBadges
  * id 清單。
+ *
+ * 同時移除 adminNote／contactStatus（管理員內部 CRM 欄位：電話開發備註與
+ * 聯絡狀態）——這兩個欄位絕不能出現在任何公開輸出或 owner／共管者視角，
+ * 而這支函式剛好是目前唯一「每一條會把 factories 資料列往外送的路徑都一定
+ * 會呼叫」的消毒點（見 server/badges.test.ts 的靜態合約測試），所以在這裡
+ * 一併處理，不用在四個呼叫點各自再包一層、多一個容易漏掉的地方。
  */
-export function stripCertificationEvidence<T extends Record<string, any>>(factory: T): Omit<T, "certificationEvidence"> {
-  const { certificationEvidence, ...rest } = factory;
-  return rest;
+export function stripCertificationEvidence<T extends Record<string, any>>(
+  factory: T,
+): Omit<T, "certificationEvidence" | "adminNote" | "contactStatus"> {
+  const { certificationEvidence, adminNote, contactStatus, ...rest } = factory as Record<string, any>;
+  return rest as Omit<T, "certificationEvidence" | "adminNote" | "contactStatus">;
 }
 
 /**

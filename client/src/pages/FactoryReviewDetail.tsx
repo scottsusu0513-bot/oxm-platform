@@ -10,7 +10,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Checkbox } from "@/components/ui/checkbox";
-import { ArrowLeft, Building2, MapPin, AlertCircle, Image, Package, User, ChevronDown, Pencil, Users, Award, X } from "lucide-react";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import { ArrowLeft, Building2, MapPin, AlertCircle, AlertTriangle, Image, Package, User, ChevronDown, Pencil, Users, Award, X, Trash2, EyeOff, RotateCcw } from "lucide-react";
 import { FloatingBackButton } from "@/components/FloatingBackButton";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -84,6 +88,8 @@ export default function FactoryReviewDetail() {
   const rejectMutation = trpc.admin.rejectFactory.useMutation();
   const approveRevisionMutation = trpc.admin.approveRevision.useMutation();
   const rejectRevisionMutation = trpc.admin.rejectRevision.useMutation();
+  const delistMutation = trpc.admin.delistFactory.useMutation();
+  const deleteMutation = trpc.admin.deleteFactory.useMutation();
   const updateIndustryMut = trpc.admin.updateFactoryIndustry.useMutation({
     onSuccess: () => {
       toast.success("產業分類已更新");
@@ -160,6 +166,45 @@ export default function FactoryReviewDetail() {
       window.location.href = "/admin";
     } catch (error: any) {
       toast.error(error?.message || "拒絕失敗");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleDelist = async () => {
+    try {
+      setIsSubmitting(true);
+      await delistMutation.mutateAsync({ factoryId });
+      toast.success("已下架該工廠");
+      window.location.href = "/admin";
+    } catch (error: any) {
+      toast.error(error?.message || "下架失敗");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleRelist = async () => {
+    try {
+      setIsSubmitting(true);
+      await approveMutation.mutateAsync({ factoryId });
+      toast.success("已重新上架該工廠");
+      window.location.href = "/admin";
+    } catch (error: any) {
+      toast.error(error?.message || "重新上架失敗");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    try {
+      setIsSubmitting(true);
+      await deleteMutation.mutateAsync({ factoryId });
+      toast.success("已刪除該工廠");
+      window.location.href = "/admin";
+    } catch (error: any) {
+      toast.error(error?.message || "刪除失敗");
     } finally {
       setIsSubmitting(false);
     }
@@ -629,31 +674,111 @@ export default function FactoryReviewDetail() {
         </Card>
 
         {/* 審核操作 */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-lg">
-              <AlertCircle className="h-5 w-5 text-orange-600" />
-              審核決定
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div>
-              <Label htmlFor="reason">拒絕原因（如選擇拒絕）</Label>
-              <Textarea
-                id="reason"
-                placeholder="請填寫拒絕該工廠的原因..."
-                value={rejectionReason}
-                onChange={(e) => setRejectionReason(e.target.value)}
-                rows={4}
-                className="mt-2"
-              />
-            </div>
-            <div className="flex gap-4 justify-end">
-              <Button variant="destructive" onClick={handleReject} disabled={isSubmitting}>拒絕</Button>
-              <Button onClick={handleApprove} disabled={isSubmitting}>批准</Button>
-            </div>
-          </CardContent>
-        </Card>
+        {/* 已批准工廠：不合理再顯示拒絕／批准，改為下架／刪除（見任務規則，
+            已上線工廠的審核流程已經結束，不應該再回到「批准/拒絕」框架）。
+            已下架工廠：提供重新上架／刪除。其餘狀態（草稿／待審核／已拒絕）
+            維持既有審核流程不變。修改申請模式（isRevisionMode）也維持不變。 */}
+        {!isRevisionMode && factory.status === 'approved' ? (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-lg">
+                <AlertCircle className="h-5 w-5 text-orange-600" />
+                工廠管理操作
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="flex gap-4 justify-end">
+              <Button variant="outline" className="border-amber-300 text-amber-700 hover:bg-amber-50" onClick={handleDelist} disabled={isSubmitting}>
+                <EyeOff className="h-4 w-4 mr-1" />下架工廠
+              </Button>
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button variant="destructive" disabled={isSubmitting}>
+                    <Trash2 className="h-4 w-4 mr-1" />刪除工廠
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle className="flex items-center gap-2">
+                      <AlertTriangle className="h-5 w-5 text-destructive" />確認刪除「{factory.name}」？
+                    </AlertDialogTitle>
+                    <AlertDialogDescription>
+                      這是刪除資料的操作。刪除後此工廠將從管理員列表與所有公開頁面消失，且無法由工廠端自行復原，如需恢復需請管理員協助。確定要繼續嗎？
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>取消</AlertDialogCancel>
+                    <AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90" onClick={handleDelete} disabled={isSubmitting}>
+                      確認刪除
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            </CardContent>
+          </Card>
+        ) : !isRevisionMode && factory.status === 'delisted' ? (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-lg">
+                <AlertCircle className="h-5 w-5 text-orange-600" />
+                工廠管理操作
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="flex gap-4 justify-end">
+              <Button onClick={handleRelist} disabled={isSubmitting}>
+                <RotateCcw className="h-4 w-4 mr-1" />重新上架
+              </Button>
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button variant="destructive" disabled={isSubmitting}>
+                    <Trash2 className="h-4 w-4 mr-1" />刪除工廠
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle className="flex items-center gap-2">
+                      <AlertTriangle className="h-5 w-5 text-destructive" />確認刪除「{factory.name}」？
+                    </AlertDialogTitle>
+                    <AlertDialogDescription>
+                      這是刪除資料的操作。刪除後此工廠將從管理員列表與所有公開頁面消失，且無法由工廠端自行復原，如需恢復需請管理員協助。確定要繼續嗎？
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>取消</AlertDialogCancel>
+                    <AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90" onClick={handleDelete} disabled={isSubmitting}>
+                      確認刪除
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            </CardContent>
+          </Card>
+        ) : (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-lg">
+                <AlertCircle className="h-5 w-5 text-orange-600" />
+                審核決定
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div>
+                <Label htmlFor="reason">拒絕原因（如選擇拒絕）</Label>
+                <Textarea
+                  id="reason"
+                  placeholder="請填寫拒絕該工廠的原因..."
+                  value={rejectionReason}
+                  onChange={(e) => setRejectionReason(e.target.value)}
+                  rows={4}
+                  className="mt-2"
+                />
+              </div>
+              <div className="flex gap-4 justify-end">
+                <Button variant="destructive" onClick={handleReject} disabled={isSubmitting}>拒絕</Button>
+                <Button onClick={handleApprove} disabled={isSubmitting}>批准</Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
       </div>
 
       {/* 圖片放大檢視：只有管理員能看到（本頁本來就是 adminProcedure 保護），

@@ -1217,11 +1217,13 @@ export async function getAdminStats() {
   };
 }
 
-export async function getAdminFactories(page = 1, pageSize = 20, search?: string, status?: 'approved' | 'pending' | 'rejected', region?: string, industry?: string) {
+export async function getAdminFactories(page = 1, pageSize = 20, search?: string, status?: 'approved' | 'pending' | 'rejected' | 'delisted', region?: string, industry?: string, contactStatus?: 'not_called' | 'not_interested' | 'follow_up') {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
 
-  const conditions: any[] = [];
+  // 軟刪除的工廠一律從管理員工廠資料庫隱藏（資料保留在 DB，只是不再出現在
+  // 一般管理員瀏覽／篩選結果），不論其他篩選條件為何。
+  const conditions: any[] = [isNull(factories.deletedAt)];
   if (search) {
     conditions.push(
       or(
@@ -1240,8 +1242,11 @@ export async function getAdminFactories(page = 1, pageSize = 20, search?: string
   if (industry) {
     conditions.push(sql`JSON_CONTAINS(${factories.industry}, ${JSON.stringify([industry])})`);
   }
+  if (contactStatus) {
+    conditions.push(eq(factories.contactStatus, contactStatus));
+  }
 
-  const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+  const whereClause = and(...conditions);
 
   let countQuery = db.select({ count: sql<number>`COUNT(*)` }).from(factories);
   if (whereClause) {
@@ -1528,6 +1533,62 @@ export async function getAdminApprovedFactories(page: number = 1, pageSize: numb
   const db = await getDb();
   if (!db) return { items: [], total: 0 };
   return queryAdminFactories(db, 'approved', page, pageSize);
+}
+
+/**
+ * 下架：只允許 approved → delisted（防禦性地限定 WHERE status='approved'，
+ * 就算呼叫端沒先檢查也不會把 draft/pending/rejected 工廠誤下架）。重新上架
+ * 沿用既有 approveFactoryWithBadgeSync（delisted → approved 在語意上就是
+ * 「讓這間工廠重新公開」，跟首次審核通過共用同一套「設為 approved」邏輯）。
+ * 回傳是否真的有更新到列（0 代表工廠當下不是 approved 狀態）。
+ */
+export async function delistFactory(factoryId: number): Promise<boolean> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  const [result]: any = await db.update(factories)
+    .set({ status: 'delisted' })
+    .where(and(eq(factories.id, factoryId), eq(factories.status, 'approved')));
+  return (result?.affectedRows ?? 0) > 0;
+}
+
+/**
+ * 管理員刪除工廠（軟刪除）：factories 被 financeApplications／
+ * certificationCases／shortVideoCases／erpCases（政府補助／認證／短影音／
+ * ERP 顧問案件）、collaborationOrders（買賣雙方交易紀錄）、reviews、
+ * favorites、factoryRevisions、factoryCoManagers 等大量業務表 FK 參照，
+ * 真正 DELETE FROM factories 會製造 orphan data 或撞上正式庫的 FK
+ * constraint，因此一律軟刪除：只標記 deletedAt／status，不動任何關聯資料，
+ * 也不清空 owner 的 isFactoryOwner（跟工廠主自行刪除的 factory.delete 語意
+ * 不同——那支是真正刪除自己僅有的一間工廠）。
+ * WHERE deletedAt IS NULL 確保重複呼叫不會覆蓋掉第一次刪除的時間戳記。
+ */
+export async function adminSoftDeleteFactory(factoryId: number): Promise<boolean> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  const [result]: any = await db.update(factories)
+    .set({ status: 'delisted', deletedAt: new Date() })
+    .where(and(eq(factories.id, factoryId), isNull(factories.deletedAt)));
+  return (result?.affectedRows ?? 0) > 0;
+}
+
+/**
+ * 管理員內部 CRM 欄位更新（聯絡狀態／備註）。兩者一律成對送出（呼叫端的
+ * Popover 編輯介面同時有這兩個欄位），undefined 代表「這次不更動這個欄位」，
+ * null 用於清空備註。不經過 updateFactory()——那支函式是給工廠基本資料用的
+ * （owner-scoped where 條件、徽章白名單清洗等都跟這裡無關），這裡只是單純
+ * 更新兩個管理員專用欄位。
+ */
+export async function updateFactoryContactInfo(
+  factoryId: number,
+  data: { contactStatus?: 'not_called' | 'not_interested' | 'follow_up'; adminNote?: string | null },
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  const setData: Record<string, any> = {};
+  if (data.contactStatus !== undefined) setData.contactStatus = data.contactStatus;
+  if (data.adminNote !== undefined) setData.adminNote = data.adminNote;
+  if (Object.keys(setData).length === 0) return;
+  await db.update(factories).set(setData).where(eq(factories.id, factoryId));
 }
 
 export async function getAdminProducts(page = 1, pageSize = 20, search?: string, industry?: string) {

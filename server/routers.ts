@@ -3581,11 +3581,12 @@ export const appRouter = router({
       page: z.number().int().min(1).default(1),
       pageSize: z.number().int().min(1).max(100).default(20),
       search: z.string().optional(),
-      status: z.enum(['approved', 'pending', 'rejected']).optional(),
+      status: z.enum(['approved', 'pending', 'rejected', 'delisted']).optional(),
       region: z.string().trim().min(1).optional(),
       industry: z.string().trim().min(1).optional(),
+      contactStatus: z.enum(['not_called', 'not_interested', 'follow_up']).optional(),
     })).query(async ({ input }) => {
-      return db.getAdminFactories(input.page, input.pageSize, input.search, input.status, input.region, input.industry);
+      return db.getAdminFactories(input.page, input.pageSize, input.search, input.status, input.region, input.industry, input.contactStatus);
     }),
 
     getUsers: adminProcedure.input(z.object({
@@ -3689,6 +3690,53 @@ export const appRouter = router({
           dedupeKey: `factory_rejected:${rejectedFactory.id}:${Date.now()}`,
         }]).catch(() => {});
       }
+      return { success: true };
+    }),
+
+    // 下架：只允許已批准工廠下架（拒絕／待審核工廠維持既有審核流程，不走這裡）。
+    // 資料保留、不刪除；重新上架沿用 approveFactory（delisted → approved 在
+    // 語意上就是「讓工廠重新公開」，跟首次審核通過共用同一套邏輯與通知）。
+    delistFactory: adminProcedure.input(z.object({ factoryId: z.number() })).mutation(async ({ input }) => {
+      const factory = await db.getFactoryById(input.factoryId);
+      if (!factory) throw new TRPCError({ code: 'NOT_FOUND', message: '找不到此工廠' });
+      if (factory.status !== 'approved') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: '只有已批准的工廠可以下架' });
+      }
+      const ok = await db.delistFactory(input.factoryId);
+      if (!ok) throw new TRPCError({ code: 'BAD_REQUEST', message: '下架失敗，工廠狀態可能已變更，請重新整理後再試' });
+      return { success: true };
+    }),
+
+    // 刪除工廠（軟刪除）：factories 被財務優化／認證／短影音／ERP 顧問案件、
+    // 合作確認單、評價、收藏等大量業務表 FK 參照，真正刪除會產生 orphan
+    // data 或撞上正式庫的 FK constraint，因此一律軟刪除（見 db.adminSoftDeleteFactory
+    // 的說明）——資料庫紀錄保留，只是從管理員預設列表與所有公開端隱藏。
+    // 只允許從已批准或已下架的工廠刪除（待審核／草稿／已拒絕工廠沒有這個
+    // UI 入口，這裡防禦性地再擋一次）。
+    deleteFactory: adminProcedure.input(z.object({ factoryId: z.number() })).mutation(async ({ input }) => {
+      const factory = await db.getFactoryById(input.factoryId);
+      if (!factory) throw new TRPCError({ code: 'NOT_FOUND', message: '找不到此工廠' });
+      if (factory.status !== 'approved' && factory.status !== 'delisted') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: '只有已批准或已下架的工廠可以刪除' });
+      }
+      const ok = await db.adminSoftDeleteFactory(input.factoryId);
+      if (!ok) throw new TRPCError({ code: 'BAD_REQUEST', message: '刪除失敗，此工廠可能已被刪除' });
+      return { success: true };
+    }),
+
+    // 管理員內部 CRM 欄位（聯絡狀態／備註）更新，純後台資料，見
+    // shared/badges.ts stripCertificationEvidence 確保絕不外流到公開 API。
+    updateFactoryContactInfo: adminProcedure.input(z.object({
+      factoryId: z.number(),
+      contactStatus: z.enum(['not_called', 'not_interested', 'follow_up']).optional(),
+      adminNote: z.string().max(2000).nullable().optional(),
+    })).mutation(async ({ input }) => {
+      const factory = await db.getFactoryById(input.factoryId);
+      if (!factory) throw new TRPCError({ code: 'NOT_FOUND', message: '找不到此工廠' });
+      await db.updateFactoryContactInfo(input.factoryId, {
+        contactStatus: input.contactStatus,
+        adminNote: input.adminNote,
+      });
       return { success: true };
     }),
 

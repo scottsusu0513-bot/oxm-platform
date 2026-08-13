@@ -7,10 +7,112 @@ import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ArrowLeft, Search, MapPin, Building2, Phone, Globe, Star, Clock, User, Users, X } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { ArrowLeft, Search, MapPin, Building2, Phone, Globe, Star, Clock, User, Users, X, Pencil } from "lucide-react";
 import { FloatingBackButton } from "@/components/FloatingBackButton";
 import { TAIWAN_REGIONS, INDUSTRY_OPTIONS } from "@shared/constants";
+import { toast } from "sonner";
+
+type ContactStatus = 'not_called' | 'not_interested' | 'follow_up';
+
+const CONTACT_STATUS_META: Record<ContactStatus, { dot: string; text: string; label: string }> = {
+  not_called: { dot: "bg-gray-400", text: "text-gray-500", label: "尚未聯絡" },
+  not_interested: { dot: "bg-red-500", text: "text-red-600", label: "沒興趣" },
+  follow_up: { dot: "bg-blue-500", text: "text-blue-600", label: "可追蹤" },
+};
+
+// 工廠開發 CRM 備註列：低調呈現，點擊開啟小型編輯 Popover。刻意不染色整張
+// 卡片、不用大面積背景色——只在這一行呈現狀態顏色，避免搶走工廠資料本身
+// 的視覺層級（見任務規則）。
+function ContactStatusRow({
+  factoryId,
+  contactStatus,
+  adminNote,
+}: {
+  factoryId: number;
+  contactStatus: ContactStatus;
+  adminNote: string | null;
+}) {
+  const utils = trpc.useUtils();
+  const [open, setOpen] = useState(false);
+  const [draftStatus, setDraftStatus] = useState<ContactStatus>(contactStatus);
+  const [draftNote, setDraftNote] = useState(adminNote ?? "");
+
+  const updateMut = trpc.admin.updateFactoryContactInfo.useMutation({
+    onSuccess: () => {
+      toast.success("已更新聯絡狀態");
+      setOpen(false);
+      utils.admin.getFactories.invalidate();
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const meta = CONTACT_STATUS_META[contactStatus] ?? CONTACT_STATUS_META.not_called;
+
+  return (
+    <Popover open={open} onOpenChange={(next) => {
+      setOpen(next);
+      if (next) { setDraftStatus(contactStatus); setDraftNote(adminNote ?? ""); }
+    }}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="w-full flex items-center gap-1.5 min-w-0 text-left mt-1.5 pt-1.5 border-t border-gray-100 group"
+        >
+          <span className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${meta.dot}`} />
+          <span className={`text-[11px] shrink-0 ${meta.text}`}>{meta.label}</span>
+          {adminNote && (
+            <span className="text-[11px] text-gray-400 truncate min-w-0">{adminNote}</span>
+          )}
+          <Pencil className="h-3 w-3 text-gray-300 shrink-0 ml-auto opacity-0 group-hover:opacity-100" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="w-80" onClick={(e) => e.stopPropagation()}>
+        <div className="space-y-3">
+          <div>
+            <Label className="text-sm">聯絡狀態</Label>
+            <RadioGroup value={draftStatus} onValueChange={(v) => setDraftStatus(v as ContactStatus)} className="mt-2 gap-2">
+              {(Object.keys(CONTACT_STATUS_META) as ContactStatus[]).map((key) => (
+                <div key={key} className="flex items-center gap-2">
+                  <RadioGroupItem value={key} id={`cs-${factoryId}-${key}`} />
+                  <label htmlFor={`cs-${factoryId}-${key}`} className="text-sm flex items-center gap-1.5 cursor-pointer">
+                    <span className={`inline-block w-1.5 h-1.5 rounded-full ${CONTACT_STATUS_META[key].dot}`} />
+                    {CONTACT_STATUS_META[key].label}
+                  </label>
+                </div>
+              ))}
+            </RadioGroup>
+          </div>
+          <div>
+            <Label htmlFor={`note-${factoryId}`} className="text-sm">備註</Label>
+            <Textarea
+              id={`note-${factoryId}`}
+              value={draftNote}
+              onChange={(e) => setDraftNote(e.target.value)}
+              placeholder="例如：8/13 已致電，老闆不在，下週再打"
+              rows={3}
+              className="mt-2"
+            />
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button size="sm" variant="outline" onClick={() => setOpen(false)}>取消</Button>
+            <Button
+              size="sm"
+              disabled={updateMut.isPending}
+              onClick={() => updateMut.mutate({ factoryId, contactStatus: draftStatus, adminNote: draftNote.trim() ? draftNote : null })}
+            >
+              {updateMut.isPending ? "儲存中..." : "儲存"}
+            </Button>
+          </div>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 export default function FactoriesList() {
   const { user, loading: authLoading } = useAuth();
@@ -18,9 +120,10 @@ export default function FactoriesList() {
   const [searchTerm, setSearchTerm] = useState("");
   const debouncedSearchTerm = useDebounce(searchTerm, 400);
   const [page, setPage] = useState(1);
-  const [status, setStatus] = useState<'all' | 'approved' | 'pending' | 'rejected'>('all');
+  const [status, setStatus] = useState<'all' | 'approved' | 'pending' | 'rejected' | 'delisted'>('all');
   const [region, setRegion] = useState<string>('all');
   const [industry, setIndustry] = useState<string>('all');
+  const [contactStatus, setContactStatus] = useState<'all' | ContactStatus>('all');
 
   const isAdmin = user?.role === 'admin';
   const hasLocationFilter = region !== 'all' || industry !== 'all';
@@ -32,6 +135,7 @@ export default function FactoriesList() {
       status: status === 'all' ? undefined : status,
       region: region === 'all' ? undefined : region,
       industry: industry === 'all' ? undefined : industry,
+      contactStatus: contactStatus === 'all' ? undefined : contactStatus,
     },
     { enabled: isAdmin }
   );
@@ -53,6 +157,7 @@ export default function FactoriesList() {
       approved: { bg: "bg-green-100", text: "text-green-800", label: "已批准" },
       pending: { bg: "bg-yellow-100", text: "text-yellow-800", label: "待審核" },
       rejected: { bg: "bg-red-100", text: "text-red-800", label: "已駁回" },
+      delisted: { bg: "bg-gray-200", text: "text-gray-700", label: "已下架" },
     };
     const info = statusMap[s] || { bg: "bg-gray-100", text: "text-gray-800", label: s };
     return <span className={`px-2 py-1 rounded text-xs font-semibold ${info.bg} ${info.text}`}>{info.label}</span>;
@@ -77,13 +182,13 @@ export default function FactoriesList() {
 
         {/* 狀態篩選 */}
         <div className="mb-6 flex flex-wrap gap-2">
-          {(["all", "approved", "pending", "rejected"] as const).map((s) => (
+          {(["all", "approved", "pending", "rejected", "delisted"] as const).map((s) => (
             <Button
               key={s}
               variant={status === s ? "default" : "outline"}
               onClick={() => { setStatus(s); setPage(1); }}
             >
-              {s === "all" ? "全部" : s === "approved" ? "已審核" : s === "pending" ? "待審核" : "已駁回"}
+              {s === "all" ? "全部" : s === "approved" ? "已審核" : s === "pending" ? "待審核" : s === "rejected" ? "已駁回" : "已下架"}
             </Button>
           ))}
         </div>
@@ -100,7 +205,7 @@ export default function FactoriesList() {
                 className="pl-10"
               />
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <Select value={region} onValueChange={(v) => { setRegion(v); setPage(1); }}>
                 <SelectTrigger><SelectValue placeholder="地區" /></SelectTrigger>
                 <SelectContent>
@@ -116,6 +221,17 @@ export default function FactoriesList() {
                   <SelectItem value="all">全部產業</SelectItem>
                   {INDUSTRY_OPTIONS.map((i) => (
                     <SelectItem key={i} value={i}>{i}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select value={contactStatus} onValueChange={(v) => { setContactStatus(v as typeof contactStatus); setPage(1); }}>
+                <SelectTrigger><SelectValue placeholder="聯絡狀態" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">聯絡狀態：全部</SelectItem>
+                  {(Object.keys(CONTACT_STATUS_META) as ContactStatus[]).map((key) => (
+                    <SelectItem key={key} value={key}>
+                      {CONTACT_STATUS_META[key].label}
+                    </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -260,6 +376,11 @@ export default function FactoriesList() {
                           查看詳情
                         </Button>
                       </div>
+                      <ContactStatusRow
+                        factoryId={factory.id}
+                        contactStatus={(f.contactStatus as ContactStatus) ?? "not_called"}
+                        adminNote={f.adminNote ?? null}
+                      />
                     </div>
                   );
                 })}
