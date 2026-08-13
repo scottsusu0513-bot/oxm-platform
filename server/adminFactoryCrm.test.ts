@@ -2,7 +2,7 @@
  * 管理員工廠審核操作（下架／刪除）＋工廠聯絡備註 CRM 功能整合測試。
  * 對應任務規則：已批准工廠不可再出現拒絕／批准、下架與刪除的語意差異、
  * contactStatus／adminNote 的預設值／CRUD／篩選、以及 admin-only 權限保護
- * （尤其是 public API 絕不能洩漏 adminNote／contactStatus）。
+ * （尤其是 public API 絕不能洩漏 adminNote／contactStatus／deletedAt）。
  *
  * 走真實本機測試 DB（見 server/test-db-guard.ts，只允許 oxm_test），透過
  * appRouter.createCaller 直接呼叫 tRPC procedure，不啟動實際 HTTP server。
@@ -233,22 +233,24 @@ describe("聯絡狀態 contactStatus 與管理員備註 adminNote", () => {
     await expect(userCaller.admin.deleteFactory({ factoryId: fContactCrmId })).rejects.toThrow();
   });
 
-  it("公開 factory.getById 絕不包含 adminNote／contactStatus", async () => {
+  it("公開 factory.getById 絕不包含 adminNote／contactStatus／deletedAt", async () => {
     const result: any = await publicCaller.factory.getById({ id: fContactCrmId });
     expect(result).not.toBeNull();
     expect(result).not.toHaveProperty("adminNote");
     expect(result).not.toHaveProperty("contactStatus");
+    expect(result).not.toHaveProperty("deletedAt");
   });
 
-  it("公開 factory.search 結果絕不包含 adminNote／contactStatus", async () => {
+  it("公開 factory.search 結果絕不包含 adminNote／contactStatus／deletedAt", async () => {
     const result = await publicCaller.factory.search({ keyword: `CRM聯絡備註-${runId}`, page: 1, pageSize: 10 });
     const match = result.items.find((f: any) => f.id === fContactCrmId) as any;
     expect(match).toBeDefined();
     expect(match).not.toHaveProperty("adminNote");
     expect(match).not.toHaveProperty("contactStatus");
+    expect(match).not.toHaveProperty("deletedAt");
   });
 
-  it("工廠 owner 自己的 factory.getMine 也絕不包含 adminNote／contactStatus", async () => {
+  it("工廠 owner 自己的 factory.getMine 也絕不包含 adminNote／contactStatus／deletedAt", async () => {
     const factory = await db.getFactoryById(fContactCrmId);
     expect(factory).not.toBeUndefined();
     const ownerCtx = createAuthContext({ id: factory!.ownerId, role: "user" });
@@ -257,11 +259,13 @@ describe("聯絡狀態 contactStatus 與管理員備註 adminNote", () => {
     expect(result).not.toBeNull();
     expect(result).not.toHaveProperty("adminNote");
     expect(result).not.toHaveProperty("contactStatus");
+    expect(result).not.toHaveProperty("deletedAt");
   });
 
-  it("admin.getFactoryDetail（管理員專用）可以看到 adminNote／contactStatus", async () => {
+  it("admin.getFactoryDetail（管理員專用）可以看到 adminNote／contactStatus／deletedAt", async () => {
     const result: any = await adminCaller.admin.getFactoryDetail({ id: fContactCrmId });
     expect(result).toHaveProperty("adminNote");
     expect(result).toHaveProperty("contactStatus");
+    expect(result).toHaveProperty("deletedAt");
   });
 });

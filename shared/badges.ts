@@ -171,17 +171,20 @@ export function sanitizeBadgeAssignment(
  * 廣告輪播）也一律透過這個 helper 移除，只保留公開的 certificationBadges
  * id 清單。
  *
- * 同時移除 adminNote／contactStatus（管理員內部 CRM 欄位：電話開發備註與
- * 聯絡狀態）——這兩個欄位絕不能出現在任何公開輸出或 owner／共管者視角，
- * 而這支函式剛好是目前唯一「每一條會把 factories 資料列往外送的路徑都一定
- * 會呼叫」的消毒點（見 server/badges.test.ts 的靜態合約測試），所以在這裡
- * 一併處理，不用在四個呼叫點各自再包一層、多一個容易漏掉的地方。
+ * 同時移除 adminNote／contactStatus／deletedAt（管理員內部欄位：電話開發
+ * 備註、聯絡狀態、軟刪除時間戳記）——這三個欄位絕不能出現在任何公開輸出或
+ * owner／共管者視角，而這支函式剛好是目前唯一「每一條會把 factories 資料列
+ * 往外送的路徑都一定會呼叫」的消毒點（見 server/badges.test.ts 的靜態合約
+ * 測試），所以在這裡一併處理，不用在四個呼叫點各自再包一層、多一個容易漏掉
+ * 的地方。deletedAt 對非 approved 工廠雖然本來就不會被公開端回傳（見
+ * factory.getById／factory.search 一律先過濾 status），但這裡仍防禦性地
+ * 移除，不讓內部軟刪除時間戳記的欄位存在本身被公開回應間接暴露。
  */
 export function stripCertificationEvidence<T extends Record<string, any>>(
   factory: T,
-): Omit<T, "certificationEvidence" | "adminNote" | "contactStatus"> {
-  const { certificationEvidence, adminNote, contactStatus, ...rest } = factory as Record<string, any>;
-  return rest as Omit<T, "certificationEvidence" | "adminNote" | "contactStatus">;
+): Omit<T, "certificationEvidence" | "adminNote" | "contactStatus" | "deletedAt"> {
+  const { certificationEvidence, adminNote, contactStatus, deletedAt, ...rest } = factory as Record<string, any>;
+  return rest as Omit<T, "certificationEvidence" | "adminNote" | "contactStatus" | "deletedAt">;
 }
 
 /**

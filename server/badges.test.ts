@@ -259,6 +259,16 @@ describe("stripCertificationEvidence — 公開 API 回應絕不洩漏私密證�
     expect(publicFactory).not.toHaveProperty("contactStatus");
     expect(JSON.stringify(publicFactory)).not.toContain("老闆不在");
   });
+
+  it("同時移除 deletedAt（軟刪除時間戳記，內部欄位，不該讓公開回應暴露這個欄位的存在）", () => {
+    const factory = {
+      id: 1,
+      name: "測試工廠",
+      deletedAt: new Date("2026-08-13T02:00:00Z"),
+    };
+    const publicFactory = stripCertificationEvidence(factory);
+    expect(publicFactory).not.toHaveProperty("deletedAt");
+  });
 });
 
 /**
