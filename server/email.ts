@@ -1,5 +1,6 @@
 import { Resend } from 'resend';
 import { renderAnnouncementEmailHtml } from './announcementMarkdown';
+import { ENV } from './_core/env';
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY ?? '';
 const FROM_EMAIL = process.env.FROM_EMAIL ?? '';
@@ -11,7 +12,36 @@ const getResend = () => {
   return new Resend(RESEND_API_KEY);
 };
 
-const isEmailEnabled = () => !!RESEND_API_KEY;
+/**
+ * 三層寄信安全規則（見對話中「一、Email：Vitest 防護正確，但 dev browser
+ * 仍然不安全」）：
+ * - test（Vitest）：一律禁止真實寄信，不管 .env 裡是否真的有 RESEND_API_KEY。
+ *   process.env.VITEST 是 Vitest 執行期間自動設定的旗標，不需要每個測試檔案
+ *   自己記得 mock server/email.ts。
+ * - production（NODE_ENV=production，沿用既有 ENV.isProduction，見
+ *   server/_core/env.ts、package.json 的 `start` script）：只要有
+ *   RESEND_API_KEY 就正常寄，維持既有正式環境行為不變。
+ * - development（`pnpm dev`，NODE_ENV=development，本機手動用瀏覽器測試）：
+ *   預設也禁止真實寄信——即使 .env 裡剛好留著一組真實可用的 RESEND_API_KEY
+ *   （例如同一把 key 給正式環境與本機共用），本機開發環境不能因為這樣就
+ *   自動真的寄出付費信件。只有明確在 .env 加上 ALLOW_DEV_EMAIL=true 這個
+ *   opt-in 旗標，才會在本機開發環境真的寄信（例如真的要驗收信件內容/版型
+ *   時才手動打開，平常應該保持關閉）。
+ */
+// 見對話中「Email Safety Regression」：對外 export 只是為了讓
+// server/email.test.ts 能直接對這個純函式做隔離單元測試（見那裡的
+// CASE E1～E5），不改變任何行為——三層規則本身仍然只在這個檔案內部生效，
+// 呼叫端（所有 sendXxxEmail）一律透過 isEmailEnabled()，不會有第二套邏輯。
+export function getEmailDisabledReason(): string | null {
+  if (!RESEND_API_KEY) return '未設定 RESEND_API_KEY';
+  if (process.env.VITEST) return '自動化測試（Vitest）環境已停用外部寄信';
+  if (!ENV.isProduction && process.env.ALLOW_DEV_EMAIL !== 'true') {
+    return '開發環境預設停用外部寄信（如需在本機測試真實寄信，請在 .env 設定 ALLOW_DEV_EMAIL=true）';
+  }
+  return null;
+}
+
+const isEmailEnabled = () => getEmailDisabledReason() === null;
 
 // ===== 寄信給工廠：收到新詢問 =====
 export async function sendNewInquiryEmail(params: {
@@ -23,7 +53,7 @@ export async function sendNewInquiryEmail(params: {
   inquiryType?: "normal" | "batch";
 }) {
   if (!isEmailEnabled()) {
-    console.log('[Email] 未設定 RESEND_API_KEY，跳過寄信');
+    console.log(`[Email] ${getEmailDisabledReason()}，跳過寄信`);
     return;
   }
 
@@ -74,7 +104,7 @@ export async function sendFactoryRejectedEmail(params: {
   reason?: string;
 }) {
   if (!isEmailEnabled()) {
-    console.log('[Email] 未設定 RESEND_API_KEY，跳過寄信');
+    console.log(`[Email] ${getEmailDisabledReason()}，跳過寄信`);
     return;
   }
 
@@ -116,7 +146,7 @@ export async function sendFactoryApprovedEmail(params: {
   factoryEmail: string;
 }) {
   if (!isEmailEnabled()) {
-    console.log('[Email] 未設定 RESEND_API_KEY，跳過寄信');
+    console.log(`[Email] ${getEmailDisabledReason()}，跳過寄信`);
     return;
   }
 
@@ -154,7 +184,7 @@ export async function sendFactorySubmittedEmail(params: {
   ownerEmail?: string | null;
 }) {
   if (!isEmailEnabled()) {
-    console.log('[Email] 未設定 RESEND_API_KEY，跳過寄信');
+    console.log(`[Email] ${getEmailDisabledReason()}，跳過寄信`);
     return;
   }
   if (!ADMIN_EMAIL) {
@@ -197,7 +227,7 @@ export async function sendReportEmail(params: {
   reason: string;
 }) {
   if (!isEmailEnabled()) {
-    console.log('[Email] 未設定 RESEND_API_KEY，跳過寄信');
+    console.log(`[Email] ${getEmailDisabledReason()}，跳過寄信`);
     return;
   }
   if (!ADMIN_EMAIL) {
@@ -245,7 +275,7 @@ export async function sendSupportTicketEmail(params: {
   description: string;
 }) {
   if (!isEmailEnabled()) {
-    console.log('[Email] 未設定 RESEND_API_KEY，跳過寄信');
+    console.log(`[Email] ${getEmailDisabledReason()}，跳過寄信`);
     return;
   }
   if (!ADMIN_EMAIL) {
@@ -290,7 +320,7 @@ export async function sendReviewReplyEmail(params: {
   factoryId: number;
 }) {
   if (!isEmailEnabled()) {
-    console.log('[Email] 未設定 RESEND_API_KEY，跳過寄信');
+    console.log(`[Email] ${getEmailDisabledReason()}，跳過寄信`);
     return;
   }
 
@@ -338,7 +368,7 @@ export async function sendNewMessageNotificationEmail(params: {
   conversationId: number;
 }) {
   if (!isEmailEnabled()) {
-    console.log('[Email] 未設定 RESEND_API_KEY，跳過寄信');
+    console.log(`[Email] ${getEmailDisabledReason()}，跳過寄信`);
     return;
   }
 
@@ -388,7 +418,7 @@ export async function sendReportStatusUpdateEmail(params: {
   status: string;
 }) {
   if (!isEmailEnabled()) {
-    console.log('[Email] 未設定 RESEND_API_KEY，跳過寄信');
+    console.log(`[Email] ${getEmailDisabledReason()}，跳過寄信`);
     return;
   }
 
@@ -431,7 +461,7 @@ export async function sendTicketStatusUpdateEmail(params: {
   status: string;
 }) {
   if (!isEmailEnabled()) {
-    console.log('[Email] 未設定 RESEND_API_KEY，跳過寄信');
+    console.log(`[Email] ${getEmailDisabledReason()}，跳過寄信`);
     return;
   }
 
@@ -475,7 +505,7 @@ export async function sendMessageReplyNotificationEmail(params: {
   campaignId: number;
 }) {
   if (!isEmailEnabled()) {
-    console.log('[Email] 未設定 RESEND_API_KEY，跳過寄信');
+    console.log(`[Email] ${getEmailDisabledReason()}，跳過寄信`);
     return;
   }
   if (!ADMIN_EMAIL) {
@@ -522,7 +552,7 @@ export async function sendAdminBroadcastEmail(params: {
   campaignContent: string;
   campaignId: number;
 }) {
-  if (!isEmailEnabled()) throw new Error('[Email] 未設定 RESEND_API_KEY，無法寄送站內信廣播信');
+  if (!isEmailEnabled()) throw new Error(`[Email] ${getEmailDisabledReason()}，無法寄送站內信廣播信`);
   if (!FROM_EMAIL) throw new Error('[Email] 未設定 FROM_EMAIL，無法寄送 Email');
   const resend = getResend()!;
   const appUrl = process.env.VITE_APP_URL ?? 'http://localhost:3000';
@@ -559,7 +589,7 @@ export async function sendEmailVerificationEmail(params: {
   verifyUrl: string;
 }) {
   if (!isEmailEnabled()) {
-    console.log('[Email] 未設定 RESEND_API_KEY，跳過寄送驗證信');
+    console.log(`[Email] ${getEmailDisabledReason()}，跳過寄送驗證信`);
     return;
   }
   const resend = getResend();
@@ -723,7 +753,7 @@ export async function sendUpgradeNewCaseConsultantEmail(params: {
   appliedAt: string;
 }) {
   if (!isEmailEnabled()) {
-    console.log('[Email] 未設定 RESEND_API_KEY，跳過顧問新案通知');
+    console.log(`[Email] ${getEmailDisabledReason()}，跳過顧問新案通知`);
     return;
   }
   const resend = getResend();
@@ -774,7 +804,7 @@ export async function sendUpgradeApplicationEmail(params: {
   applicationId: number;
 }) {
   if (!isEmailEnabled()) {
-    console.log('[Email] 未設定 RESEND_API_KEY，跳過升級中心通知信');
+    console.log(`[Email] ${getEmailDisabledReason()}，跳過升級中心通知信`);
     return;
   }
   const resend = getResend();
@@ -821,7 +851,7 @@ export async function sendPlatformAnnouncementEmail(params: {
   announcementTitle: string;
   announcementContent: string;
 }) {
-  if (!isEmailEnabled()) throw new Error('[Email] 未設定 RESEND_API_KEY，無法寄送平台公告信');
+  if (!isEmailEnabled()) throw new Error(`[Email] ${getEmailDisabledReason()}，無法寄送平台公告信`);
   if (!FROM_EMAIL) throw new Error('[Email] 未設定 FROM_EMAIL，無法寄送 Email');
   const resend = getResend()!;
   const appUrl = process.env.VITE_APP_URL ?? 'http://localhost:3000';
@@ -864,7 +894,7 @@ export async function sendNewsEmail(params: {
   newsSummary: string;
   newsSlug: string;
 }) {
-  if (!isEmailEnabled()) throw new Error('[Email] 未設定 RESEND_API_KEY，無法寄送找消息通知信');
+  if (!isEmailEnabled()) throw new Error(`[Email] ${getEmailDisabledReason()}，無法寄送找消息通知信`);
   if (!FROM_EMAIL) throw new Error('[Email] 未設定 FROM_EMAIL，無法寄送 Email');
   const resend = getResend()!;
   const appUrl = process.env.VITE_APP_URL ?? 'http://localhost:3000';
@@ -909,7 +939,7 @@ export async function sendOrderOverdueEmail(params: {
   side: string;
 }) {
   if (!isEmailEnabled()) {
-    console.log('[Email] 未設定 RESEND_API_KEY，跳過訂單逾期通知');
+    console.log(`[Email] ${getEmailDisabledReason()}，跳過訂單逾期通知`);
     return;
   }
   try {
@@ -956,7 +986,7 @@ export async function sendFirstContactEmail(params: {
   conversationId: number;
 }) {
   if (!isEmailEnabled()) {
-    console.log('[Email] 未設定 RESEND_API_KEY，跳過首次聯繫通知');
+    console.log(`[Email] ${getEmailDisabledReason()}，跳過首次聯繫通知`);
     return;
   }
   try {
