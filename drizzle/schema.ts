@@ -1682,3 +1682,294 @@ export const erpCases = mysqlTable("erpCases", {
 
 export type ErpCase = typeof erpCases.$inferSelect;
 export type InsertErpCase = typeof erpCases.$inferInsert;
+
+// ===== OXM AI（企業需求診斷與資源分流）對話 =====
+// 刻意跟上面買家↔工廠的 conversations／messages 完全獨立，不共用：那是人對人
+// 詢價聊天，這是使用者跟 AI 的診斷對話。
+//
+// 生命週期（取代原本「保存 30 天」的規則）：aiConversations／aiMessages 只是
+// 「當次互動的暫存工作區」，不是歷史紀錄——同一次使用階段（同頁面內收合/
+// 重開）延續同一筆。收尾（收尾＝產生摘要、merge 進 aiEnterpriseMemories，
+// 成功才刪除這筆 conversation 與底下所有 aiMessages，見 server/ai/memory.ts
+// 的 endConversationAndSummarize()）有兩條觸發路徑：
+// 1. 主要：inactivity finalizer（server/jobs/finalizeInactiveAiConversations.ts）
+//    —— lastMessageAt 超過 30 分鐘沒有新訊息就視為這次互動已結束。
+// 2. 保底：使用者開新的使用階段時（refresh／重新進頁），如果發現上一筆還
+//    active，一律先收尾再建立新的 conversation（見
+//    server/ai/chatService.ts 的 resolveConversationForTurn()），避免任何
+//    漏網的 conversation 永久卡在 active 狀態。
+// 跨對話的長期記憶只透過 aiEnterpriseMemories 承接，不會再讀取上一段的逐字
+// 內容。
+export const aiConversations = mysqlTable("aiConversations", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull().references(() => users.id, { onDelete: "cascade" }),
+  // 僅企業 context snapshot／關聯用途，不是權限依據——讀取權限永遠只看
+  // aiConversations.userId（見 server/ai/conversationService.ts）。
+  factoryId: int("factoryId").references(() => factories.id, { onDelete: "set null" }),
+  // active：這次使用階段還在進行中，可以繼續 append 訊息。
+  // failed：收尾時摘要產生或寫入失敗，原文暫時保留待重試（見
+  // server/jobs/retryFailedAiSummaries.ts）；正常收尾成功的對話直接整筆刪除，
+  // 不會有第三種「已完成」的持久狀態。
+  status: mysqlEnum("status", ["active", "failed"]).notNull().default("active"),
+  // Current Conversation State：短期、結構化、只屬於這一段對話（不是長期
+  // Enterprise Memory），格式見 server/ai/conversationState.ts 的 ConversationState。
+  currentStateJson: json("currentStateJson").$type<Record<string, unknown>>(),
+  // Phase 2 保留欄位，暫不使用；未來 AI handoff 正式送件流程的暫存資料。
+  pendingActionJson: json("pendingActionJson").$type<Record<string, unknown>>(),
+  // 收尾失敗時的重試次數與最後一次錯誤訊息，只有 status='failed' 時才有意義。
+  retryCount: int("retryCount").notNull().default(0),
+  lastSummaryError: text("lastSummaryError"),
+  lastMessageAt: timestamp("lastMessageAt").defaultNow().notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (t) => ({
+  // 找「這個使用者目前 active 的對話」的主要查詢路徑；也用來讓收尾重試 job
+  // 找出所有 status='failed' 的對話。
+  userStatusIdx: index("aic_user_status_idx").on(t.userId, t.status),
+}));
+
+export type AiConversation = typeof aiConversations.$inferSelect;
+export type InsertAiConversation = typeof aiConversations.$inferInsert;
+
+export const aiMessages = mysqlTable("aiMessages", {
+  id: int("id").autoincrement().primaryKey(),
+  conversationId: int("conversationId").notNull().references(() => aiConversations.id, { onDelete: "cascade" }),
+  role: mysqlEnum("role", ["user", "assistant"]).notNull(),
+  content: text("content").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  conversationIdx: index("aim_conversation_idx").on(t.conversationId, t.createdAt),
+}));
+
+export type AiMessage = typeof aiMessages.$inferSelect;
+export type InsertAiMessage = typeof aiMessages.$inferInsert;
+
+// ===== OXM AI Enterprise Memory（跨對話唯一的長期記憶來源）=====
+// 每個 conversation 正常收尾時都會產生一筆「這次對話」的摘要，但那份摘要
+// 絕對不能直接 blind overwrite 這個 user 的既有長期記憶——summaryText 是
+// 「目前最新、最精簡的企業狀態」，由 server/ai/memory.ts 的
+// mergeEnterpriseMemory() 把既有 summaryText 與這次對話摘要合併/取代/更新
+// 產生，不是單純覆寫也不是逐次 append 成日誌。沒有新資訊時（這次對話沒講
+// 出任何企業重點），summaryText 完全不變，只更新 lastInteractionAt／
+// lastInteractionHadMeaningfulInfo 這兩個欄位，讓 AI 之後仍能誠實回答「最近
+// 一次互動有沒有新資訊」，而不會誤把「最近沒講重點」跟「完全沒有任何長期
+// 記憶」混為一談。
+export const aiEnterpriseMemories = mysqlTable("aiEnterpriseMemories", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull().references(() => users.id, { onDelete: "cascade" }),
+  // 跟 aiConversations 一樣，僅企業 context 關聯用途；一個 user 事實上最多
+  // 只會對應到一間工廠（owner 或 co-manager 身分互斥，見 Phase 0 盤點）。
+  factoryId: int("factoryId").references(() => factories.id, { onDelete: "set null" }),
+  // 極短摘要，電報式短句，是「目前最新狀態」不是歷史日誌；沒有取得任何有
+  // 價值資訊時，固定寫入「本次未提供可形成企業判斷的關鍵資訊。」，不能留
+  // 空——區分「聊過但從來沒有取得過有效資訊」跟「從來沒聊過」（memory 這筆
+  // row 完全不存在）。
+  summaryText: varchar("summaryText", { length: 500 }).notNull(),
+  // 這個欄位描述的是「summaryText 本身有沒有實質內容」，一旦曾經合併進任何
+  // 真正的企業資訊就會是 true，即使最近一次互動沒有新增內容也不會變回
+  // false（那件事由 lastInteractionHadMeaningfulInfo 另外描述）。
+  hasMeaningfulBusinessInfo: boolean("hasMeaningfulBusinessInfo").notNull().default(false),
+  // 這兩個欄位描述的是「最近一次互動」本身，跟上面 summaryText／
+  // hasMeaningfulBusinessInfo（長期累積狀態）是兩件獨立的事：即使最近一次
+  // 互動完全沒有新資訊（lastInteractionHadMeaningfulInfo=false），
+  // summaryText 仍然保留更早以前真正重要的企業記憶，不會被清空。
+  lastInteractionAt: timestamp("lastInteractionAt").defaultNow().notNull(),
+  lastInteractionHadMeaningfulInfo: boolean("lastInteractionHadMeaningfulInfo").notNull().default(false),
+  // 純資訊性欄位，最後一次更新這筆記憶的 conversation id；那筆 conversation
+  // 摘要成功後會被刪除，所以這裡故意不建 FK constraint（一定很快就會變成
+  // 指向不存在的 row，只是留個歷史線索，不做參照完整性）。
+  sourceConversationId: int("sourceConversationId"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (t) => ({
+  // 一個 user 一筆——每次收尾都是 upsert（merge 後寫入合併結果），不是新增
+  // 一筆新記錄，也不是無條件覆寫。
+  userIdUq: uniqueIndex("aem_user_id_uq").on(t.userId),
+}));
+
+export type AiEnterpriseMemory = typeof aiEnterpriseMemories.$inferSelect;
+export type InsertAiEnterpriseMemory = typeof aiEnterpriseMemories.$inferInsert;
+
+// ===== OXM AI Handoff Context（Phase 4：AI 對話 → 既有真人服務表單）=====
+// 使用者在 AI 對話裡點【幫你送出詢問】時，server 才建立這筆短效 snapshot
+// （不是 AI 一判斷出服務就自動建立，見 server/routers.ts 的 ai.createHandoff
+// 註解）——把「這次對話中使用者明確確認過的資料」凍結成一份獨立快照，交給
+// 既有表單（EnterpriseUpgradeApply.tsx 等）在使用者抵達時預填。
+//
+// 這筆資料必須在建立當下就完整 snapshot 好 prefillData／handoffSummary，不能
+// 依賴「表單開啟時再回頭讀 aiMessages」——因為 conversation 隨時可能被
+// Phase 3 的 lifecycle 收尾（摘要成功後逐字內容會被刪除），handoff context
+// 必須能在原始對話已經不存在之後，仍然獨立支援表單預填。
+export const aiHandoffContexts = mysqlTable("aiHandoffContexts", {
+  id: int("id").autoincrement().primaryKey(),
+  // 外部（URL query string／表單頁）一律用這個不可猜測的隨機字串引用，不直接
+  // 曝露自增 id——即使擁有權檢查（userId 比對）已經是主要防線，token 是額外
+  // 一層 defense-in-depth，避免自增 id 被列舉嘗試。
+  token: varchar("token", { length: 64 }).notNull(),
+  userId: int("userId").notNull().references(() => users.id, { onDelete: "cascade" }),
+  factoryId: int("factoryId").references(() => factories.id, { onDelete: "set null" }),
+  // gov_subsidy / erp / certification / short_video / finance（見
+  // shared/ai/handoffServices.ts HANDOFF_ELIGIBLE_SERVICE_KEYS）。
+  serviceKey: varchar("serviceKey", { length: 50 }).notNull(),
+  // 只包含「這次對話中已經存在於 ConversationState.confirmedFacts、且被
+  // service-specific field spec 白名單驗證通過」的欄位（見
+  // server/ai/handoffPrefill.ts 的 buildHandoffPrefillFromConfirmedFacts），
+  // key 對應目標表單的欄位名稱，value 已經是表單期待的型別（enum
+  // code／boolean／number），不是自然語言，也絕對不是重新讀對話逐字稿猜出來的。
+  prefillDataJson: json("prefillDataJson").$type<Record<string, unknown>>().notNull(),
+  // prefillDataJson 裡每個 key 對應的最小 provenance：這個欄位是從哪一個
+  // confirmedFacts key 來的（目前的 deterministic mapping 設計下，
+  // sourceFact 恆等於欄位本身的 key，因為完全是同名同型別直接比對，沒有
+  // 語意轉換這一步）——保留這個結構是為了讓「這個值不是憑空來的」這件事
+  // 可以在 server 端被追溯，不是只有一個值卻不知道從哪裡來。
+  confirmedFieldsJson: json("confirmedFieldsJson").$type<Record<string, { sourceFact: string }>>().notNull(),
+  // 極短、只描述這次 handoff 真正需求的摘要，Phase 4 只先 snapshot，不接
+  // 顧問中心顯示、不做正式 AI 初判 UI（那是 Phase 5 的事，見對話中「二十八」）。
+  handoffSummary: varchar("handoffSummary", { length: 500 }).notNull(),
+  // 純資訊性欄位，來源 conversation 的 id；那筆 conversation 可能在這之後就
+  // 被收尾刪除，所以不建 FK constraint（同 aiEnterpriseMemories.sourceConversationId
+  // 的理由）。
+  sourceConversationId: int("sourceConversationId"),
+  // 短效：預設 45 分鐘（30 分鐘～1 小時建議區間的中間值），不是長期 memory；
+  // 過期後不得再用來預填，使用者需要從 AI 重新發起一次 handoff。
+  expiresAt: timestamp("expiresAt").notNull(),
+  // Blocking Modal「好，繼續填寫」按下的時間——用來判斷 refresh 時要不要
+  // 重新顯示 Modal：尚未 acknowledge 就 refresh，同一筆有效 handoff 可以再顯示
+  // 一次；已經 acknowledge 過就不用每次 refresh 都再煩使用者一次。
+  acknowledgedAt: timestamp("acknowledgedAt"),
+  // 可靠性修正（Handoff submission linkage）後的語意：consumedAt 代表「這個
+  // AI Handoff 已經成功用來提交正式案件」，不是「assessment pending row 建立
+  // 成功」——AI 初判是否成功是後續獨立流程，不得反過來影響這裡。標記後不會
+  // 被物理刪除（保留供 Phase 5 建 AI 初判參考／recovery 使用），只受
+  // expiresAt／本地 cleanup job 影響。
+  consumedAt: timestamp("consumedAt"),
+  // 正式案件成立當下由 server 寫入，跟 serviceKey 一起構成 polymorphic case
+  // reference（五個服務案件表各自獨立，故意不建 FK，同 aiCaseAssessments.caseId
+  // 的理由）。這是「這個 handoff 最後產生的是哪一筆正式案件」唯一 durable 記錄
+  // ——即使 assessment pending row 建立完全失敗，這裡仍然保留，讓 recovery job
+  // 可以之後補建 assessment（見對話中「二、Handoff 必須保存正式案件 linkage」）。
+  submittedCaseId: int("submittedCaseId"),
+  submittedAt: timestamp("submittedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  tokenUq: uniqueIndex("ahc_token_uq").on(t.token),
+  userIdIdx: index("ahc_user_id_idx").on(t.userId),
+  submittedCaseIdx: index("ahc_submitted_case_idx").on(t.serviceKey, t.submittedCaseId),
+}));
+
+export type AiHandoffContext = typeof aiHandoffContexts.$inferSelect;
+export type InsertAiHandoffContext = typeof aiHandoffContexts.$inferInsert;
+
+// ===== OXM AI Phase 5：AI 導件案件的 AI 初判（Case Assessment）=====
+// 五個服務案件表（upgradeApplications／erpCases／certificationCases／
+// shortVideoCases／financeApplications）各自獨立、狀態機不同，刻意不在每張
+// 表各自加一包 AI assessment 欄位——改用單一共用表，serviceKey + caseId 做
+// polymorphic reference（沿用 aiHandoffContexts.sourceConversationId 同一種
+// 「跨表引用故意不建 FK」慣例，因為 caseId 對應的實際表在五個服務間不同，
+// 建一個指向錯誤表的 FK 比不建 FK 更危險）。見對話中「六、建議共用 AI Case
+// Assessment table」。
+export const aiCaseAssessments = mysqlTable("aiCaseAssessments", {
+  id: int("id").autoincrement().primaryKey(),
+  // 送出正式申請表單的使用者，純稽核用途，不是權限判斷依據（權限一律沿用
+  // 原案件本身的顧問／admin 權限查詢，見對話中「二十二、權限」）。
+  userId: int("userId").references(() => users.id, { onDelete: "set null" }),
+  factoryId: int("factoryId").references(() => factories.id, { onDelete: "set null" }),
+  // gov_subsidy / erp / certification / short_video / finance（見
+  // shared/ai/handoffServices.ts HandoffEligibleServiceKey）。finance 本輪
+  // 不會實際產生任何 row（表單無業務欄位，見對話中「三十一」呼應 Phase 4
+  // 的既有結論），欄位型別仍涵蓋五個值以求完整。
+  serviceKey: varchar("serviceKey", { length: 50 }).notNull(),
+  // 對應服務自己案件表的主鍵（upgradeApplications.id／erpCases.id／...），
+  // 不同服務各自獨立編號，因此永遠要跟 serviceKey 一起解讀，單獨看
+  // caseId 沒有意義。
+  caseId: int("caseId").notNull(),
+  // 來源 handoff context 的 id，供追溯；那筆 context 可能之後被 cleanup job
+  // 清除，因此 nullable + onDelete set null，不建立會被清除的強依賴。
+  handoffContextId: int("handoffContextId").references(() => aiHandoffContexts.id, { onDelete: "set null" }),
+  status: mysqlEnum("status", ["pending", "completed", "failed"]).notNull().default("pending"),
+  // 服務專屬結構：gov_subsidy 是固定 8 欄物件，其餘四個服務是 { summary: string }
+  // （見 server/ai/caseAssessment.ts 的服務別 type），刻意不用同一套 universal
+  // template（見對話中「七、不要做一套 Universal Assessment Template」）。
+  assessmentJson: json("assessmentJson").$type<Record<string, unknown>>(),
+  // assessmentJson 的純文字攤平版本（deterministic 組出來，不是第二次 LLM
+  // 輸出），方便顧問中心或未來通知類功能不需要各自知道五種 JSON 形狀。
+  assessmentText: text("assessmentText"),
+  retryCount: int("retryCount").notNull().default(0),
+  lastError: text("lastError"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (t) => ({
+  // 同一 service + case 最多只有一份正式 assessment（見對話中「二十六、不要
+  // 因重試造成重複 assessment」）：retry 一律 UPDATE 既有這筆，不會 INSERT
+  // 新 row。
+  serviceCaseUq: uniqueIndex("aica_service_case_uq").on(t.serviceKey, t.caseId),
+  statusIdx: index("aica_status_idx").on(t.status),
+  handoffContextIdx: index("aica_handoff_context_idx").on(t.handoffContextId),
+}));
+
+export type AiCaseAssessment = typeof aiCaseAssessments.$inferSelect;
+export type InsertAiCaseAssessment = typeof aiCaseAssessments.$inferInsert;
+
+// ===== OXM AI Phase 6A.1：Factory Search 人工協尋（不是顧問 Handoff）=====
+// 找工廠是 Hard Filter（region/mainIndustry）決定候選集合、AI Ranking
+// Signals 只決定排序（見 server/ai/factorySearchAction.ts）——本表記錄的是
+// 「科技搜尋沒有真正找到使用者要的東西」時，OXM 承接的人工協尋需求快照。
+// 刻意獨立於 aiHandoffContexts／aiCaseAssessments 之外：不是顧問流程，不經
+// 過任何服務表單，只是「使用者找工廠 → 系統誠實承認搜尋能力有極限 → 交給
+// 人工」。狀態機沿用 aiHandoffContexts.consumedAt 那種「nullable timestamp
+// 當 CAS 鎖」的既有慣例（見 server/ai/handoffContextService.ts
+// claimHandoffForSubmission）：notificationClaimedAt 是 notify 的原子鎖，
+// cancelledAt／notifiedAt 是終止狀態的時間戳，兩者互斥。
+export const aiFactorySearchRequests = mysqlTable("aiFactorySearchRequests", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull().references(() => users.id, { onDelete: "cascade" }),
+  factoryId: int("factoryId").references(() => factories.id, { onDelete: "set null" }),
+  // 同一 conversation 最多一筆 active（pending）request（見對話中「十」）：
+  // 查詢路徑用 conversationId，不建 partial unique index（MySQL 不支援條件式
+  // unique），改由 server/ai/factorySearchRequestService.ts 的應用層邏輯保證
+  // 「找到既有 pending 就更新，沒有才新增」。故意不建 FK：這筆 request 快照
+  // 完成後要能獨立於 conversation 存在（conversation 收尾成功後逐字內容會被
+  // 刪除，見 aiConversations 的既有慣例，跟 sourceConversationId 同一種
+  // 「跨表引用故意不建 FK」設計）。
+  conversationId: int("conversationId"),
+  status: mysqlEnum("status", ["pending", "cancelled", "notifying", "notified", "notification_failed"])
+    .notNull().default("pending"),
+  // Hard Filters（region/mainIndustry）快照，只用來讓 Admin 看得懂需求範圍，
+  // 不是給程式重新查詢用。
+  hardFiltersJson: json("hardFiltersJson").$type<{ mainIndustries: string[]; regions: string[] }>().notNull(),
+  // Ranking Signals 全量快照（供 Admin 參考）。
+  rankingSignalsJson: json("rankingSignalsJson").$type<string[]>().notNull(),
+  // Core Capabilities：本輪 V1 直接等於 rankingSignals（見 server/ai/
+  // factorySearchRequestService.ts 的說明，不新增第二次 LLM 抽取），獨立成
+  // 一個欄位是為了未來如果要跟 rankingSignals 分開演化時不必再改 schema。
+  coreCapabilitiesJson: json("coreCapabilitiesJson").$type<string[]>().notNull(),
+  // Deterministic 組出的人類可讀摘要（不是 raw conversation），例如「尋找
+  // 台中金屬加工廠，核心需求為 CNC／五軸加工；平台目前可明確確認 1 家，
+  // 使用者希望至少 3 家。」
+  requestSummary: varchar("requestSummary", { length: 500 }).notNull(),
+  // Hard Filter 候選集合筆數（不是「AI 覺得相關」的數量）。
+  candidateCount: int("candidateCount").notNull().default(0),
+  // 候選集合中，公開資料明確符合「全部」coreCapabilities 的工廠數——用來判斷
+  // Trigger B（核心能力 direct evidence 缺口）與 Trigger C（使用者指定數量
+  // 不足），見 factorySearchRequestService.ts。
+  directCapabilityMatchCount: int("directCapabilityMatchCount").notNull().default(0),
+  // 使用者「主動」明確提出的需求家數（見 Phase 6A.1 補充規格「一」：AI 不得
+  // 主動詢問），null 代表使用者從未指定過。
+  requestedMatchCount: int("requestedMatchCount"),
+  notifiedAt: timestamp("notifiedAt"),
+  cancelledAt: timestamp("cancelledAt"),
+  // notify 的原子鎖（CAS：UPDATE ... WHERE status='pending'/'notification_failed'），
+  // 沿用 aiHandoffContexts.consumedAt 的「nullable timestamp 當鎖」設計。
+  notificationClaimedAt: timestamp("notificationClaimedAt"),
+  notificationRetryCount: int("notificationRetryCount").notNull().default(0),
+  lastNotificationError: text("lastNotificationError"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (t) => ({
+  userIdIdx: index("afsr_user_id_idx").on(t.userId),
+  conversationIdIdx: index("afsr_conversation_id_idx").on(t.conversationId),
+  statusIdx: index("afsr_status_idx").on(t.status),
+}));
+
+export type AiFactorySearchRequest = typeof aiFactorySearchRequests.$inferSelect;
+export type InsertAiFactorySearchRequest = typeof aiFactorySearchRequests.$inferInsert;

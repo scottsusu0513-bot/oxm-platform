@@ -19,6 +19,7 @@ import Navbar from "@/components/Navbar";
 import LoginDialog from "@/components/LoginDialog";
 import { FloatingBackButton } from "@/components/FloatingBackButton";
 import { CaseStatusOverview, type CaseStatusDef, type CaseStatusColor } from "@/components/CaseStatusOverview";
+import { AiOriginBadge, AiAssessmentDialogTrigger } from "@/components/AiAssessmentBadge";
 import { resolveFinanceCasesViewState, selectAssignableConsultants } from "./financeConsultantCasesViewState";
 import {
   createInitialFinanceCasesPaginationState, financeCasesPaginationReducer, selectMergedFinanceCases,
@@ -159,16 +160,18 @@ function CaseCard({ item, isAdmin, onMutated }: { item: any; isAdmin: boolean; o
       <CardContent className="p-5 space-y-3">
         <div className="flex items-start justify-between gap-3 flex-wrap">
           <div className="space-y-1 min-w-0">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <Building2 className="w-4 h-4 text-muted-foreground shrink-0" />
               <span className="font-semibold truncate">{item.companyNameSnapshot}</span>
               <Badge className={info.color}>{info.label}</Badge>
+              {item.aiAssessment && <AiOriginBadge />}
             </div>
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <MapPin className="w-3 h-3 shrink-0" />
               <span className="truncate">{item.companyAddressSnapshot}</span>
             </div>
           </div>
+          {item.aiAssessment && <AiAssessmentDialogTrigger serviceKey="finance" assessment={item.aiAssessment} />}
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-sm">

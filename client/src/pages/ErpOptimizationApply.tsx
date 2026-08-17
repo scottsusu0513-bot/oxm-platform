@@ -20,6 +20,8 @@ import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
 import { resolveAnyFactoryStatus } from "./financeOptimizationApplyStatus";
 import { ERP_NEED_TYPES, ERP_OPEN_STATUSES, ERP_STATUS_LABELS, type ErpNeedTypeKey } from "@shared/erpOptimization";
+import { useAiHandoff } from "@/hooks/useAiHandoff";
+import { AiHandoffModal } from "@/components/ai/AiHandoffModal";
 
 const OPEN_STATUSES = new Set<string>(ERP_OPEN_STATUSES);
 
@@ -81,6 +83,7 @@ export default function ErpOptimizationApply() {
   const [loginOpen, setLoginOpen] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [selectedFactoryId, setSelectedFactoryId] = useState<number | null>(null);
+  const aiHandoff = useAiHandoff("erp");
 
   const { data: ownedFactory, isLoading: ownedLoading } = trpc.factory.getMine.useQuery(undefined, { enabled: !!user });
   const { data: coManaged, isLoading: coManagedLoading } = trpc.factory.getCoManagedFactories.useQuery(undefined, { enabled: !!user });
@@ -142,6 +145,15 @@ export default function ErpOptimizationApply() {
     }
   }, [eligibleFactories, selectedFactoryId]);
 
+  // AI handoff 預填：只有使用者的敘述精確對應到 needType 其中一個選項時才會
+  // 有值（見 server/ai/handoffPrefill.ts erpFieldSpecs 的保守規則，不猜測）。
+  useEffect(() => {
+    if (!aiHandoff.hasHandoff) return;
+    const needType = aiHandoff.prefillData.needType;
+    if (typeof needType === "string") setValue("needType", needType as ErpNeedTypeKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aiHandoff.hasHandoff, aiHandoff.prefillData, setValue]);
+
   const selectedFactory = eligibleFactories.find(f => f.id === selectedFactoryId) ?? null;
   const selectedOpenCase = selectedFactoryId != null ? openCaseByFactory.get(selectedFactoryId) : undefined;
 
@@ -158,6 +170,7 @@ export default function ErpOptimizationApply() {
       needType: data.needType,
       additionalNotes: data.additionalNotes || undefined,
       consentAgreed: true,
+      aiHandoffToken: aiHandoff.token ?? undefined,
     });
   };
 
@@ -294,6 +307,7 @@ export default function ErpOptimizationApply() {
 
   return (
     <div className="min-h-screen bg-background">
+      <AiHandoffModal open={aiHandoff.showModal} onConfirm={aiHandoff.acknowledge} isConfirming={aiHandoff.isAcknowledging} />
       <Helmet>
         <title>ERP 與產線優化免費初步諮詢｜OXM</title>
         <meta name="description" content="填寫聯絡資料與需求類型，OXM 合作顧問將為您安排免費初步諮詢。" />

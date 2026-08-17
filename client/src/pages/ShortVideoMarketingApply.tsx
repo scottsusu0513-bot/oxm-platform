@@ -24,6 +24,8 @@ import {
   SHORT_VIDEO_OPEN_STATUSES, SHORT_VIDEO_STATUS_LABELS,
   type ShortVideoServiceKey, type ShortVideoPlatformKey, type ShortVideoGoalKey,
 } from "@shared/shortVideoMarketing";
+import { useAiHandoff } from "@/hooks/useAiHandoff";
+import { AiHandoffModal } from "@/components/ai/AiHandoffModal";
 
 const OPEN_STATUSES = new Set<string>(SHORT_VIDEO_OPEN_STATUSES);
 
@@ -101,6 +103,7 @@ export default function ShortVideoMarketingApply() {
   const [isUnsure, setIsUnsure] = useState(false);
   const [platforms, setPlatforms] = useState<ShortVideoPlatformKey[]>([]);
   const [noPlatformYet, setNoPlatformYet] = useState(false);
+  const aiHandoff = useAiHandoff("short_video");
 
   const { data: ownedFactory, isLoading: ownedLoading } = trpc.factory.getMine.useQuery(undefined, { enabled: !!user });
   const { data: coManaged, isLoading: coManagedLoading } = trpc.factory.getCoManagedFactories.useQuery(undefined, { enabled: !!user });
@@ -162,6 +165,25 @@ export default function ShortVideoMarketingApply() {
     }
   }, [eligibleFactories, selectedFactoryId]);
 
+  // AI handoff 預填：每個欄位都只在使用者敘述精確對應到固定選項時才會有值
+  // （見 server/ai/handoffPrefill.ts shortVideoFieldSpecs）。
+  useEffect(() => {
+    if (!aiHandoff.hasHandoff) return;
+    const d = aiHandoff.prefillData;
+    if (Array.isArray(d.servicesWanted) && d.servicesWanted.length > 0) {
+      setServicesWanted(d.servicesWanted.filter((v): v is ShortVideoServiceKey => typeof v === "string"));
+    } else if (d.isUnsure === true) {
+      setIsUnsure(true);
+    }
+    if (typeof d.primaryGoal === "string") setValue("primaryGoal", d.primaryGoal as ShortVideoGoalKey);
+    if (Array.isArray(d.platforms) && d.platforms.length > 0) {
+      setPlatforms(d.platforms.filter((v): v is ShortVideoPlatformKey => typeof v === "string"));
+    } else if (d.noPlatformYet === true) {
+      setNoPlatformYet(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aiHandoff.hasHandoff, aiHandoff.prefillData, setValue]);
+
   const selectedFactory = eligibleFactories.find(f => f.id === selectedFactoryId) ?? null;
   const selectedOpenCase = selectedFactoryId != null ? openCaseByFactory.get(selectedFactoryId) : undefined;
 
@@ -206,6 +228,7 @@ export default function ShortVideoMarketingApply() {
       noPlatformYet,
       additionalNotes: data.additionalNotes || undefined,
       consentAgreed: true,
+      aiHandoffToken: aiHandoff.token ?? undefined,
     });
   };
 
@@ -381,6 +404,7 @@ export default function ShortVideoMarketingApply() {
   // ── 主表單 ──
   return (
     <div className="min-h-screen bg-background">
+      <AiHandoffModal open={aiHandoff.showModal} onConfirm={aiHandoff.acknowledge} isConfirming={aiHandoff.isAcknowledging} />
       <Helmet>
         <title>短影音與品牌內容免費初步諮詢｜OXM</title>
         <meta name="description" content="填寫聯絡資料與需求，OXM 合作顧問將為您安排免費初步諮詢。" />

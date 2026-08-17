@@ -19,7 +19,11 @@
     "cleanup:expired-pdfs": "tsx scripts/cleanup-expired-pdfs.ts",
     "cleanup:community-images": "tsx scripts/cleanup-community-images.ts",
     "cleanup:expired-news-attachments": "node dist/jobs/cleanupExpiredNewsAttachments.js",
-    "cleanup:expired-news-attachments:dev": "tsx server/jobs/cleanupExpiredNewsAttachments.ts"
+    "cleanup:expired-news-attachments:dev": "tsx server/jobs/cleanupExpiredNewsAttachments.ts",
+    "retry:failed-ai-summaries:dev": "tsx server/jobs/retryFailedAiSummaries.ts",
+    "finalize:inactive-ai-conversations:dev": "tsx server/jobs/finalizeInactiveAiConversations.ts",
+    "cleanup:expired-ai-handoff-contexts:dev": "tsx server/jobs/cleanupExpiredAiHandoffContexts.ts",
+    "retry:pending-factory-search-notifications:dev": "tsx server/jobs/retryPendingFactorySearchNotifications.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.89.0",

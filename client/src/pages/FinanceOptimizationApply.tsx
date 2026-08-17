@@ -21,6 +21,8 @@ import { ArrowLeft, CheckCircle2, Loader2, Building2, LogIn, Clock, XCircle, Ale
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
 import { resolveAnyFactoryStatus } from "./financeOptimizationApplyStatus";
+import { useAiHandoff } from "@/hooks/useAiHandoff";
+import { AiHandoffModal } from "@/components/ai/AiHandoffModal";
 
 // 財務優化案件未結案狀態：new(新案件)／evaluating(評估中)／deferred(緩追區)
 const OPEN_STATUSES = new Set(["new", "evaluating", "deferred"]);
@@ -100,6 +102,9 @@ export default function FinanceOptimizationApply() {
   const [loginOpen, setLoginOpen] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [selectedFactoryId, setSelectedFactoryId] = useState<number | null>(null);
+  // 財務表單沒有業務欄位可預填（見對話中「二十一」），這裡只用來控制
+  // Blocking Modal 與 submit 時的 token 傳遞，不做任何 setValue 預填。
+  const aiHandoff = useAiHandoff("finance");
 
   const { data: ownedFactory, isLoading: ownedLoading } = trpc.factory.getMine.useQuery(undefined, { enabled: !!user });
   const { data: coManaged, isLoading: coManagedLoading } = trpc.factory.getCoManagedFactories.useQuery(undefined, { enabled: !!user });
@@ -179,6 +184,7 @@ export default function FinanceOptimizationApply() {
       contactTime: data.contactTime,
       consentAgreed: true,
       factoryId: selectedFactory.id,
+      aiHandoffToken: aiHandoff.token ?? undefined,
     });
   };
 
@@ -354,6 +360,7 @@ export default function FinanceOptimizationApply() {
   // ── 主表單 ──
   return (
     <div className="min-h-screen bg-background">
+      <AiHandoffModal open={aiHandoff.showModal} onConfirm={aiHandoff.acknowledge} isConfirming={aiHandoff.isAcknowledging} />
       <Helmet>
         <title>免費申請企業財務健檢｜OXM</title>
         <meta name="description" content="填寫聯絡資料，OXM 合作財務顧問將為您安排免費企業財務健檢。" />

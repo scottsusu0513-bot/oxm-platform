@@ -372,6 +372,40 @@ function computeMatchTier(
   return 0;
 }
 
+/**
+ * Hard Filter / Ranking Signal 責任分離（見對話中「Phase 6A 搜尋邏輯修正：
+ * Hard Filters + AI Ranking」）：rankingSignals（例如「CNC」「五軸加工」這類
+ * 能力／技術詞）只用來排序，絕對不能拿來排除候選——candidates 已經是通過
+ * SQL 層 hard filters（industry/subIndustry/region/businessType/...）篩過的
+ * 集合，這裡只是決定「誰排前面」，不是「誰能不能出現」。
+ *
+ * 3 層：
+ * 2（高度相關）：rankingSignal 明確出現在工廠 description 或任一商品文字。
+ * 1（可能相關）：沒有明確文字命中，但工廠的 subIndustry 落在
+ *    relatedSubIndustries（通常是聊天端既有 intent.subIndustries，帶著「這個
+ *    能力詞語意上屬於哪個子產業」的關聯性，非使用者明講、不能當 hard filter，
+ *    但可以當排序的次要訊號）。
+ * 0（其他符合條件）：只符合 hard filters，公開資料無法確認能力相關性——仍然
+ *    保留在結果內，不得被刪除（見「不要顯示不適合，只是資料不足以判斷」）。
+ */
+function computeRankingTier(
+  factory: Factory,
+  productTexts: string[],
+  rankingSignals: string[],
+  relatedSubIndustries: string[],
+): 0 | 1 | 2 {
+  if (rankingSignals.length === 0) return 1;
+  const lowerSignals = rankingSignals.map(s => s.toLowerCase()).filter(Boolean);
+  if (lowerSignals.length === 0) return 1;
+  const haystack = `${factory.description ?? ''} ${productTexts.join(' ')}`.toLowerCase();
+  const explicitMatch = lowerSignals.some(sig => haystack.includes(sig));
+  if (explicitMatch) return 2;
+  const relatedMatch = relatedSubIndustries.length > 0 &&
+    ((factory.subIndustry ?? []) as string[]).some(s => relatedSubIndustries.includes(s));
+  if (relatedMatch) return 1;
+  return 0;
+}
+
 export async function searchFactories(params: {
   industry?: string[];
   subIndustry?: string[];
@@ -385,13 +419,32 @@ export async function searchFactories(params: {
   sortBy?: string;
   intent?: AISearchIntent | null;
   userHasSelectedIndustry?: boolean;
-}) {
+  /**
+   * 能力／技術詞（例如「CNC」「五軸加工」），只用來在 hard-filter 候選集合內
+   * 排序，絕對不會出現在 SQL WHERE 排除條件裡——跟 keyword 語意不同：keyword
+   * 是既有 /search 手動關鍵字框「沒有其他 hard filter 時，關鍵字本身就是唯一
+   * 篩選依據」的既有行為，維持不變；rankingSignals 是 Phase 6A「Hard Filter
+   * 決定候選集合、AI Ranking 決定排序」新增的、絕不排除候選的排序訊號。呼叫端
+   * 不應該同時傳 keyword 又傳 rankingSignals（見 server/ai/factorySearchAction.ts
+   * 與 routers.ts 的 factory.search 的 q 參數）。
+   */
+  rankingSignals?: string[];
+}): Promise<{
+  items: Factory[];
+  total: number;
+  tiers?: (0 | 1 | 2)[];
+  /** 候選集合（未分頁前，最多 AI_CANDIDATE_LIMIT 筆）中，公開資料明確符合
+   * 「全部」rankingSignals 的工廠數——Phase 6A.1 判斷是否需要人工協尋的依據。 */
+  directCapabilityMatchCount?: number;
+  /** rankingSignals 裡，全部候選都找不到任何明確文字證據的能力詞。 */
+  missingCapabilities?: string[];
+}> {
   const db = await getDb();
   if (!db) return { items: [], total: 0 };
   const {
     industry, subIndustry, region, capitalLevel, mfgMode, keyword,
     businessType, page = 1, pageSize = 20, sortBy,
-    intent, userHasSelectedIndustry = false,
+    intent, userHasSelectedIndustry = false, rankingSignals,
   } = params;
 
   // 使用者手動篩選條件（最高優先，永遠在 SQL WHERE 層處理）
@@ -406,6 +459,84 @@ export async function searchFactories(params: {
   if (region && region.length > 0)       conditions.push(inArray(factories.region, region));
   if (capitalLevel && capitalLevel.length > 0) conditions.push(inArray(factories.capitalLevel, capitalLevel));
   if (mfgMode)                           conditions.push(sql`JSON_CONTAINS(${factories.mfgModes}, ${JSON.stringify([mfgMode])})`);
+
+  // === Hard Filter + AI Ranking（不排除候選，只排序）===
+  // rankingSignals 存在時，候選集合完全由上面已經組好的 hard filter
+  // conditions 決定（status/industry/subIndustry/region/businessType/
+  // capitalLevel/mfgMode），不額外加任何 OR 內容比對條件去縮小 WHERE——避免
+  // 重蹈「能力詞被當成硬性篩選，符合地區+產業但商品文字沒提到關鍵字的工廠被
+  // 整個排除」的舊問題（見對話中「不要用 AI 過度篩掉候選」）。
+  if (rankingSignals && rankingSignals.length > 0) {
+    const whereClause = and(...conditions);
+    const [countResult] = await db.select({ count: sql<number>`COUNT(*)` }).from(factories).where(whereClause);
+    const total = Number(countResult?.count ?? 0);
+
+    const candidates = await db.select().from(factories).where(whereClause)
+      .orderBy(desc(factories.avgRating), desc(factories.reviewCount))
+      .limit(AI_CANDIDATE_LIMIT);
+
+    const productMap = new Map<number, string[]>();
+    if (candidates.length > 0) {
+      const candidateIds = candidates.map(f => f.id);
+      const productRows = await db
+        .select({ factoryId: products.factoryId, name: products.name, desc: products.description })
+        .from(products)
+        .where(inArray(products.factoryId, candidateIds));
+      for (const p of productRows) {
+        const list = productMap.get(p.factoryId) ?? [];
+        list.push(`${p.name} ${p.desc ?? ''}`);
+        productMap.set(p.factoryId, list);
+      }
+    }
+
+    // relatedSubIndustries：只有聊天端（已經有完整 intent）才帶得出這個「能力詞
+    // 語意上屬於哪個子產業」的次要排序訊號；/search 頁純靠 q 參數重建
+    // rankingSignals 時沒有 intent，退化成只看「明確文字命中」兩層，仍然正確、
+    // 不需要為此另外呼叫一次 LLM（見「不要新增 LLM call」）。
+    const relatedSubIndustries = intent?.subIndustries ?? [];
+    const lowerSignals = rankingSignals.map(s => s.toLowerCase()).filter(Boolean);
+    const scored = candidates.map(f => {
+      const haystack = `${f.description ?? ''} ${(productMap.get(f.id) ?? []).join(' ')}`.toLowerCase();
+      // 每個 candidate 對「每一個」ranking signal 各自獨立判斷是否有明確文字
+      // 命中（Phase 6A.1「Direct Capability Evidence」）——CNC 跟五軸各自分開
+      // 判斷，不是「命中任何一個就算全部命中」，見 factorySearchRequestService.ts
+      // 的 Trigger B/C 說明。
+      const matchedSignals = new Set(lowerSignals.filter(sig => haystack.includes(sig)));
+      return {
+        factory: f,
+        tier: computeRankingTier(f, productMap.get(f.id) ?? [], rankingSignals, relatedSubIndustries),
+        matchesAllSignals: lowerSignals.length > 0 && matchedSignals.size === lowerSignals.length,
+        matchedSignals,
+      };
+    });
+
+    scored.sort((a, b) => {
+      if (b.tier !== a.tier)                                   return b.tier - a.tier;
+      const rDiff = Number(b.factory.avgRating ?? 0) - Number(a.factory.avgRating ?? 0);
+      if (rDiff !== 0)                                         return rDiff;
+      const rcDiff = (b.factory.reviewCount ?? 0) - (a.factory.reviewCount ?? 0);
+      if (rcDiff !== 0)                                        return rcDiff;
+      return new Date(b.factory.updatedAt).getTime() - new Date(a.factory.updatedAt).getTime();
+    });
+
+    // Phase 6A.1：這兩個欄位一定要算在「全部」已抓到的候選（scored，最多
+    // AI_CANDIDATE_LIMIT 筆）上，不能只算分頁後的 pageSlice——不然使用者翻到
+    // 第 2 頁時，directCapabilityMatchCount 會離奇地看起來變少。
+    const directCapabilityMatchCount = scored.filter(s => s.matchesAllSignals).length;
+    const missingCapabilities = rankingSignals.filter(
+      sig => !scored.some(s => s.matchedSignals.has(sig.toLowerCase()))
+    );
+
+    const offset = (page - 1) * pageSize;
+    const pageSlice = scored.slice(offset, offset + pageSize);
+    return {
+      items: pageSlice.map(s => s.factory),
+      total,
+      tiers: pageSlice.map(s => s.tier),
+      directCapabilityMatchCount,
+      missingCapabilities,
+    };
+  }
 
   const hasIntent = !!intent && intent.confidence >= 0.5;
   const useAIMode = hasIntent && (!sortBy || sortBy === 'rating');

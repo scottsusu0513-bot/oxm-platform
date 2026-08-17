@@ -20,6 +20,7 @@ import Navbar from "@/components/Navbar";
 import LoginDialog from "@/components/LoginDialog";
 import { FloatingBackButton } from "@/components/FloatingBackButton";
 import { CaseStatusOverview, type CaseStatusDef, type CaseStatusColor } from "@/components/CaseStatusOverview";
+import { AiOriginBadge, AiAssessmentDialogTrigger } from "@/components/AiAssessmentBadge";
 import {
   CERTIFICATION_CASE_STATUSES, CERTIFICATION_STATUS_LABELS, CERTIFICATION_STATUS_TRANSITIONS,
   CERTIFICATION_EXCEPTION_STATUSES, type CertificationCaseStatus,
@@ -193,9 +194,11 @@ function CaseCard({ item, isAdmin, serviceNameByCode, onMutated }: { item: any; 
               <Building2 className="w-4 h-4 text-muted-foreground shrink-0" />
               <span className="font-semibold truncate">{item.companyNameSnapshot}</span>
               <Badge className={statusColor(item.status)}>{CERTIFICATION_STATUS_LABELS[item.status as CertificationCaseStatus] ?? item.status}</Badge>
+              {item.aiAssessment && <AiOriginBadge />}
             </div>
             <p className="text-xs text-muted-foreground truncate">{item.companyAddressSnapshot}</p>
           </div>
+          {item.aiAssessment && <AiAssessmentDialogTrigger serviceKey="certification" assessment={item.aiAssessment} />}
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-sm">
@@ -257,6 +260,7 @@ function UnassignedCaseCard({ item, serviceNameByCode, onClaimed }: { item: any;
           <Building2 className="w-4 h-4 text-muted-foreground shrink-0" />
           <span className="font-semibold truncate">{item.companyNameSnapshot}</span>
           <Badge className={statusColor("unassigned")}>{CERTIFICATION_STATUS_LABELS.unassigned}</Badge>
+          {item.aiAssessment && <AiOriginBadge />}
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-sm">
           <div className="flex items-center gap-1.5"><UserIcon className="w-3.5 h-3.5 text-muted-foreground" />聯絡人：{item.contactName}</div>
@@ -264,6 +268,7 @@ function UnassignedCaseCard({ item, serviceNameByCode, onClaimed }: { item: any;
           <div className="flex items-center gap-1.5"><Clock className="w-3.5 h-3.5 text-muted-foreground" />送出時間：{fmtTaipeiDateTime(item.createdAt)}</div>
         </div>
         <p className="text-sm"><span className="text-muted-foreground">想了解的認證服務：</span>{services.join("、")}</p>
+        {item.aiAssessment && <AiAssessmentDialogTrigger serviceKey="certification" assessment={item.aiAssessment} />}
         <Button size="sm" disabled={claimMutation.isPending} onClick={() => claimMutation.mutate({ caseId: item.id })}>
           {claimMutation.isPending ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Inbox className="w-3.5 h-3.5 mr-1.5" />}
           取件

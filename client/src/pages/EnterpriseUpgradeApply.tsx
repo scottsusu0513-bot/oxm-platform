@@ -22,6 +22,8 @@ import LoginDialog from "@/components/LoginDialog";
 import { ArrowLeft, CheckCircle2, Loader2, Building2, ExternalLink, LogIn, Clock, XCircle, AlertCircle } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
+import { useAiHandoff } from "@/hooks/useAiHandoff";
+import { AiHandoffModal } from "@/components/ai/AiHandoffModal";
 
 // ── 表單型別 ──────────────────────────────────────────────────────────────────
 
@@ -178,6 +180,10 @@ export default function EnterpriseUpgradeApply() {
   const { user, loading } = useAuth();
   const [, navigate] = useLocation();
   const [loginOpen, setLoginOpen] = useState(false);
+  // 只有從 AI【幫你送出詢問】進來才會有值（URL ?aih= token）；一般入口
+  // （/upgrade-center/apply 直接點進來）這個 hook 的所有欄位都是安全的空值，
+  // 完全不影響一般入口行為（見「七、一般入口完全不能被改壞」）。
+  const aiHandoff = useAiHandoff("gov_subsidy");
 
   // Factory queries — only when logged in
   const { data: ownedFactory, isLoading: ownedLoading } = trpc.factory.getMine.useQuery(undefined, {
@@ -280,6 +286,34 @@ export default function EnterpriseUpgradeApply() {
     if (approvedFactory.capitalLevel) setValue("capitalLevel", approvedFactory.capitalLevel);
   }, [approvedFactory, user, setValue]);
 
+  // AI handoff 預填：只填 AI 這次對話中使用者明確確認過的欄位（見
+  // server/ai/handoffPrefill.ts 的白名單驗證），且刻意跟上面既有的工廠
+  // autofill 完全不重疊欄位（公司名稱/聯絡人/電話/Email/地址/資本額仍然
+  // 只由既有 autofill 邏輯處理，不重新從 AI handoff 複製一套，見對話中
+  // 「十三」）。所有欄位使用者都可以再修改，AI 預填不是最終值。
+  useEffect(() => {
+    if (!aiHandoff.hasHandoff) return;
+    const d = aiHandoff.prefillData;
+    if (typeof d.decisionMakerParticipation === "string") {
+      setValue("decisionMakerParticipation", d.decisionMakerParticipation as FormValues["decisionMakerParticipation"]);
+    }
+    if (typeof d.annualRevenue === "string") setValue("annualRevenue", d.annualRevenue);
+    if (typeof d.employeeCount === "string") setValue("employeeCount", d.employeeCount);
+    if (typeof d.factoryType === "string") setValue("factoryType", d.factoryType);
+    if (typeof d.isEnterpriseFirm === "boolean") setValue("isEnterpriseFirm", d.isEnterpriseFirm ? "yes" : "no");
+    if (typeof d.hasGovProject === "boolean") {
+      setValue("hasGovProject", d.hasGovProject ? "yes" : "no");
+      if (d.hasGovProject && typeof d.govProjectName === "string") setValue("govProjectName", d.govProjectName);
+    }
+    if (typeof d.hasAppliedForSubsidy === "boolean") setValue("hasAppliedForSubsidy", d.hasAppliedForSubsidy ? "yes" : "no");
+    if (typeof d.hasPatent === "boolean") {
+      setValue("hasPatent", d.hasPatent ? "yes" : "no");
+      if (d.hasPatent && typeof d.patentCount === "number") setValue("patentCount", String(d.patentCount));
+    }
+    if (typeof d.exportMode === "string") setValue("exportMode", d.exportMode);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aiHandoff.hasHandoff, aiHandoff.prefillData, setValue]);
+
   const hasGovProject = watch("hasGovProject");
   const hasAppliedForSubsidy = watch("hasAppliedForSubsidy");
   const hasPatent = watch("hasPatent");
@@ -325,6 +359,7 @@ export default function EnterpriseUpgradeApply() {
       notes: data.notes || undefined,
       consentAgreed: true,
       factoryId: approvedFactory.id,
+      aiHandoffToken: aiHandoff.token ?? undefined,
     });
   };
 
@@ -489,6 +524,7 @@ export default function EnterpriseUpgradeApply() {
   // ── 主表單 ──
   return (
     <div className="min-h-screen bg-background">
+      <AiHandoffModal open={aiHandoff.showModal} onConfirm={aiHandoff.acknowledge} isConfirming={aiHandoff.isAcknowledging} />
       <Helmet>
         <title>免費評估資格｜企業升級中心｜OXM</title>
         <meta

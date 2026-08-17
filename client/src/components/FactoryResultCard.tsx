@@ -64,9 +64,17 @@ export type FactoryCardProps = {
   isMobile: boolean;
   /** 後台「預覽搜尋卡片」模式：不導頁、不觸發收藏／詢價等任何副作用 */
   previewMode?: boolean;
+  /**
+   * Phase 6 UI Foundation（見對話中「哪些工廠會被套上橘框」與「為什麼一般
+   * /search 永遠不會出現橘框」）：只有從 OXM AI 的「查看完整搜尋結果」進來、
+   * 且 server 端真的驗證出這家工廠這次是 AI 排序 tier===2 時才會是 true——
+   * 一般搜尋／訪客／手動打關鍵字一律是 undefined／false，不會出現橘框，這個
+   * 元件本身不做任何猜測或判斷，完全信任呼叫端傳進來的值。
+   */
+  aiHighlighted?: boolean;
 };
 
-export function FactoryCard({ factory, getFavState, handleFavToggle, cartHas, cartAdd, cartRemove, setCartOpen, isMobile, previewMode }: FactoryCardProps) {
+export function FactoryCard({ factory, getFavState, handleFavToggle, cartHas, cartAdd, cartRemove, setCartOpen, isMobile, previewMode, aiHighlighted }: FactoryCardProps) {
   const avatarUrl = factory.avatarUrl as string | null | undefined;
   // 工廠頭貼／Logo 全站統一用同一份 avatarCrop、統一 1:1 顯示範圍（見
   // FactoryDashboard.tsx 的編輯器／FactoryDetailView 的公開頁頭貼），不再用
@@ -111,7 +119,7 @@ export function FactoryCard({ factory, getFavState, handleFavToggle, cartHas, ca
   // 卡片本身不能再用 overflow-hidden（會把跨越上邊界的緞帶勳章切掉），改成
   // 圖片各自的容器自己 overflow-hidden + 對應圓角，視覺上仍是方正的圖片角。
   const cardBody = (
-    <Card className={`hover:shadow-md transition-shadow h-full flex flex-col overflow-visible ${previewMode ? "" : "cursor-pointer"}`}>
+    <Card className={`hover:shadow-md transition-shadow h-full flex flex-col overflow-visible ${previewMode ? "" : "cursor-pointer"} ${aiHighlighted ? "border-2 border-orange-400 ring-1 ring-orange-200" : ""}`}>
       <div className="flex flex-1 min-h-0 flex-row overflow-hidden rounded-xl">
         {/* 頭貼／Logo：固定正方形容器，與編輯器 aspectRatio=1 的預覽窗完全
             一致——工廠主在 FactoryDashboard 調整好的顯示範圍，這裡會如實
@@ -131,7 +139,7 @@ export function FactoryCard({ factory, getFavState, handleFavToggle, cartHas, ca
           </div>
         </div>
         <div className="flex-1 min-w-0 min-h-0 p-4 flex flex-col">
-          <FactoryCardContent factory={factory} isMobile={isMobile} />
+          <FactoryCardContent factory={factory} isMobile={isMobile} aiHighlighted={aiHighlighted} />
         </div>
       </div>
       {cartButton}
@@ -163,7 +171,7 @@ export function FactoryCard({ factory, getFavState, handleFavToggle, cartHas, ca
   );
 }
 
-function FactoryCardContent({ factory, isMobile }: { factory: any; isMobile: boolean }) {
+function FactoryCardContent({ factory, isMobile, aiHighlighted }: { factory: any; isMobile: boolean; aiHighlighted?: boolean }) {
   const phoneClickable = isMobile || isNativeApp();
   const displayContact =
     (factory.contactPersonName as string | null)?.trim() ||
@@ -188,6 +196,11 @@ function FactoryCardContent({ factory, isMobile }: { factory: any; isMobile: boo
         <div className="flex-1 min-w-0 mr-2">
           <div className="flex items-center gap-1.5 flex-wrap">
             <h3 className="font-semibold text-lg leading-tight">{factory.name}</h3>
+            {aiHighlighted && (
+              <span className="inline-flex items-center gap-1 text-xs text-orange-700 bg-orange-50 border border-orange-200 px-2 py-0.5 rounded-full shrink-0">
+                較符合本次需求
+              </span>
+            )}
             {factory.operationStatus === "busy" && (
               <span className="inline-flex items-center gap-1 text-xs text-yellow-700 bg-yellow-50 border border-yellow-200 px-2 py-0.5 rounded-full shrink-0">
                 <span className="w-1.5 h-1.5 rounded-full bg-yellow-500" />產線繁忙

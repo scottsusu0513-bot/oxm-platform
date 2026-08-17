@@ -8,6 +8,80 @@ import { sha256Hex, generateRawToken } from './_core/oauthHelpers';
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { upgradeProgramsRouter } from "./upgradeProgramsRouter";
+import { runAiChat, runPersistentAiChat } from "./ai/chatService";
+import { isAiChatConfigured } from "./ai/provider";
+import { getActiveConversationForUser, getConversationForUser } from "./ai/conversationService";
+import { parseConversationState } from "./ai/contextBuilder";
+import { resolveAiFactory } from "./ai/factoryContext";
+import { buildFieldSpecs, buildHandoffPrefillFromConfirmedFacts, buildHandoffSummary } from "./ai/handoffPrefill";
+import {
+  createHandoffContext, getHandoffContextForUser, acknowledgeHandoffContext,
+  isHandoffContextUsable, claimHandoffForSubmission, finalizeHandoffSubmission, releaseHandoffClaim,
+} from "./ai/handoffContextService";
+import {
+  isHandoffEligibleServiceKey, getHandoffServiceMapping, type HandoffEligibleServiceKey,
+} from "../shared/ai/handoffServices";
+import { initiateCaseAssessment } from "./ai/caseAssessment";
+import { getAssessmentsForCases } from "./ai/caseAssessmentService";
+
+/**
+ * Phase 5：顧問案件列表附加 AI 初判 — 刻意在既有 myCases 查詢「裡面」批次
+ * 附加，不建立第二套查詢／權限系統（見對話中「二十二、權限完全沿用原案件
+ * 能不能看」）：items 本身已經是各服務自己的權限查詢結果，這裡只是把同一批
+ * caseId 對應的 assessment 狀態/內容一起帶出來，一般直接表單案件找不到對應
+ * row，aiAssessment 自然是 null（見「三十六」）。只回傳前台顧問頁需要的
+ * status／assessmentJson，不外露 retryCount／lastError／handoffContextId
+ * 等內部欄位。
+ */
+/**
+ * 可靠性修正（見對話中「一～五、Handoff Submit Idempotency」）：AI-origin
+ * submitApplication 的共用進入點——只有 request 帶 aiHandoffToken 時才呼叫，
+ * 完全沒帶 token 的 direct entry 完全不受影響（見「五」）。
+ *
+ * 回傳兩種形狀：
+ * - shortCircuit 有值：呼叫端應該立刻把它當作 mutation 的最終回傳值，不執行
+ *   任何業務驗證或案件建立——涵蓋「已經送出過，回既有結果」（見「三」）與
+ *   下面 claimHandoffForSubmission 判定為 rejected 時直接拋錯兩種情況（見
+ *   「二」：不得因為讀不到／不合法的 token 就靜默降級成普通 submit）。
+ * - shortCircuit 是 null、handoffContext 有值：呼叫端已經拿到這個 handoff 的
+ *   claim，接下來要把「業務驗證＋案件建立」包在 try/catch 裡，成功就呼叫
+ *   finalizeHandoffSubmission，任何失敗都要呼叫 releaseHandoffClaim 還鎖。
+ * - shortCircuit 是 null、handoffContext 也是 null：代表這次請求根本沒有帶
+ *   token，維持原本 direct entry 行為。
+ */
+async function beginHandoffIdempotentSubmit(
+  token: string | undefined,
+  userId: number,
+  serviceKey: HandoffEligibleServiceKey
+): Promise<{ shortCircuit: { success: true; id: number } | null; handoffContext: AiHandoffContext | null }> {
+  if (!token) return { shortCircuit: null, handoffContext: null };
+  const claim = await claimHandoffForSubmission({ token, userId, serviceKey });
+  if (claim.outcome === "already_submitted") {
+    return { shortCircuit: { success: true, id: claim.caseId }, handoffContext: null };
+  }
+  if (claim.outcome === "rejected") {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "此 AI 導件連結已失效、不屬於您，或正在處理中，請重新從 AI 對話發起，或直接使用一般表單送出。",
+    });
+  }
+  return { shortCircuit: null, handoffContext: claim.handoffContext };
+}
+
+async function withAiAssessments<T extends { id: number }>(
+  serviceKey: HandoffEligibleServiceKey,
+  items: T[]
+): Promise<(T & { aiAssessment: { status: "pending" | "completed" | "failed"; assessmentJson: Record<string, unknown> | null } | null })[]> {
+  if (items.length === 0) return items as (T & { aiAssessment: null })[];
+  const map = await getAssessmentsForCases(serviceKey, items.map(i => i.id));
+  return items.map(item => {
+    const a = map.get(item.id);
+    return {
+      ...item,
+      aiAssessment: a ? { status: a.status, assessmentJson: (a.assessmentJson as Record<string, unknown> | null) } : null,
+    };
+  });
+}
 import { publicProcedure, protectedProcedure, adminProcedure, badgeEvidenceUploadProcedure, router } from "./_core/trpc";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
@@ -17,19 +91,21 @@ import { storagePut, storagePresignedUrl, storageDelete } from "./storage";
 import { validateImageUpload } from "./_core/security";
 import { INDUSTRY_OPTIONS, TAIWAN_REGIONS, CAPITAL_OPTIONS, INDUSTRY_SLUGS } from "../shared/constants";
 import {
-  SHORT_VIDEO_SERVICE_KEYS, SHORT_VIDEO_GOAL_KEYS, SHORT_VIDEO_PLATFORM_KEYS,
+  SHORT_VIDEO_SERVICE_KEYS, SHORT_VIDEO_GOAL_KEYS, SHORT_VIDEO_PLATFORM_KEYS, SHORT_VIDEO_GOALS,
   SHORT_VIDEO_CASE_STATUSES, SHORT_VIDEO_STATUS_TRANSITIONS, SHORT_VIDEO_STATUS_LABELS, SHORT_VIDEO_EXCEPTION_STATUSES,
+  shortVideoServiceLabel, shortVideoPlatformLabel,
 } from "../shared/shortVideoMarketing";
 import {
   CERTIFICATION_CASE_STATUSES, CERTIFICATION_STATUS_TRANSITIONS, CERTIFICATION_STATUS_LABELS, CERTIFICATION_EXCEPTION_STATUSES,
 } from "../shared/certificationCase";
 import {
   ERP_NEED_TYPE_KEYS, ERP_CASE_STATUSES, ERP_STATUS_TRANSITIONS, ERP_STATUS_LABELS, ERP_EXCEPTION_STATUSES,
+  erpNeedTypeLabel,
 } from "../shared/erpOptimization";
 import { clampImageCrop } from "../shared/imageCrop";
 import { stripCertificationEvidence, stripCertificationEvidenceFromRevision, stripHiddenBadgesForPublic, isValidCertificationEvidenceKey, isValidBadgeId, CERTIFICATION_EVIDENCE_KEY_PREFIX, applyCertificationEvidenceDescriptions, summarizeCertificationEvidenceForOwner, sortBadgeIds } from "../shared/badges";
 import { nanoid } from "nanoid";
-import { factories, conversations, reviews, reports, factoryCoManagers, users, upgradeConsultants, type Factory } from "../drizzle/schema";
+import { factories, conversations, reviews, reports, factoryCoManagers, users, upgradeConsultants, type Factory, type AiHandoffContext } from "../drizzle/schema";
 import { desc, eq, and, sql, isNull } from "drizzle-orm";
 import { getDb } from "./db";
 import { sendPushToUser, sendPushToRecipients, toPlainPushSummary, toPlainNotificationText } from "./push";
@@ -607,6 +683,8 @@ const shortVideoApplicationSchema = z.object({
   noPlatformYet: z.boolean(),
   additionalNotes: z.string().max(2000).optional(),
   consentAgreed: z.literal(true),
+  // 只有從 AI handoff 進來的表單才會帶這個值；一般入口不帶，行為完全不受影響。
+  aiHandoffToken: z.string().max(64).optional(),
 })
   // 「不確定」與五項明確服務互斥：isUnsure=true 時 servicesWanted 必須是
   // 空陣列；isUnsure=false 時至少要選一項，不能兩者都空白送出。
@@ -635,6 +713,8 @@ const certificationApplicationSchema = z.object({
   isUnsure: z.boolean(),
   additionalNotes: z.string().max(2000).optional(),
   consentAgreed: z.literal(true),
+  // 只有從 AI handoff 進來的表單才會帶這個值；一般入口不帶，行為完全不受影響。
+  aiHandoffToken: z.string().max(64).optional(),
 }).refine(v => v.isUnsure ? v.servicesWanted.length === 0 : v.servicesWanted.length >= 1, {
   message: "請選擇至少一項認證服務，或勾選「不確定，希望由顧問協助判斷」",
   path: ["servicesWanted"],
@@ -643,6 +723,181 @@ const certificationApplicationSchema = z.object({
 export const appRouter = router({
   system: systemRouter,
   upgradePrograms: upgradeProgramsRouter,
+
+  // OXM AI（企業需求診斷與資源分流）——conversation 是「當次互動的暫存工作
+  // 區」，不是保存的歷史：同一頁面內收合/重開沿用同一個 conversationId（由
+  // client 記憶體內帶著，不落地、refresh 就會消失），一旦這個使用階段結束
+  // （client 沒有帶 conversationId 過來），伺服器就會把上一筆殘留的 active
+  // 對話收尾（產生摘要寫進 aiEnterpriseMemories、成功才刪除原文）再開新的一
+  // 筆。跨對話的長期記憶只透過 Enterprise Memory 承接，不會再把上一段逐字
+  // 內容當成歷史使用。publicProcedure 是刻意的：未登入使用者也應該能先聊
+  // （走無狀態的 guestHistory 路徑，完全不落地 DB）。
+  ai: router({
+    status: publicProcedure.query(() => ({ configured: isAiChatConfigured() })),
+
+    chat: publicProcedure
+      .input(z.object({
+        message: z.string().min(1).max(4000),
+        // 已登入使用者：client 記憶體內目前這頁的 conversationId（同頁收合/
+        // 重開會帶著同一個值；refresh 後是 undefined，代表新的使用階段）。
+        // 伺服器不會照單全收——一律用 getConversationForUser 驗證真的是這個
+        // user 名下、還 active 的那筆，驗證失敗就視同沒帶。
+        conversationId: z.number().int().positive().optional(),
+        // 只有訪客（未登入）會用到：純前端臨時 session 的既有歷史。已登入
+        // 使用者即使夾帶這個欄位，伺服器也完全不會讀取——歷史一律以 DB 為準。
+        guestHistory: z.array(z.object({
+          role: z.enum(["user", "assistant"]),
+          content: z.string().min(1).max(4000),
+        })).max(40).optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        try {
+          if (ctx.user) {
+            const result = await runPersistentAiChat({
+              userId: ctx.user.id,
+              message: input.message,
+              conversationId: input.conversationId,
+            });
+            return {
+              reply: result.reply,
+              conversationId: result.conversationId,
+              handoffOffer: result.handoffOffer,
+              factorySearchResult: result.factorySearchResult,
+              manualSourcing: result.manualSourcing,
+            };
+          }
+          const history = [...(input.guestHistory ?? []), { role: "user" as const, content: input.message }];
+          const result = await runAiChat({ history, userId: null });
+          // 訪客沒有登入，不可能建立 handoff context（需要 ctx.user.id），永遠不顯示 CTA。
+          // 找工廠不是顧問服務、不需要 handoff，訪客跟登入使用者一樣可以用（見
+          // 「二十三、權限」：沿用既有 AI login gate，不為找工廠另立規則）。
+          // Phase 6A.1 人工協尋需要 userId 才能建立 Request（見「十八、
+          // Ownership」），訪客沒有登入身分，永遠不會有 manualSourcing。
+          return {
+            reply: result.reply,
+            conversationId: null,
+            handoffOffer: null,
+            factorySearchResult: result.factorySearchResult,
+            manualSourcing: null,
+          };
+        } catch (error) {
+          console.error("[ai.chat] failed:", error);
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "AI 暫時無法回應，請稍後再試一次。",
+          });
+        }
+      }),
+
+    // 只回傳「目前是否有一筆 active 對話」，不回傳任何訊息內容——前台不應該
+    // 用這支 API 水合舊逐字對話（見產品規格「前台空白、後台保留／只讀摘
+    // 要」）。保留這支 API 是為了未來需要「確認後端狀態」的情境，目前前端
+    // 沒有呼叫它。
+    getActiveConversation: protectedProcedure.query(async ({ ctx }) => {
+      const conversation = await getActiveConversationForUser(ctx.user.id);
+      return conversation ? { conversationId: conversation.id } : null;
+    }),
+
+    // Phase 4：AI Handoff——只在使用者真的點【幫你送出詢問】那一刻才建立
+    // handoff context（不是 AI 一判斷出服務就自動建立，見對話中「二十四、
+    // 建立 Handoff Context 的時機」），避免大量使用者沒點 CTA 卻堆滿 DB。
+    // 這裡完全重新從 server-authoritative 的 conversation state 驗證一次
+    // handoffReady／primaryService，不信任 client 認為「現在應該可以 handoff」
+    // 這件事本身（見「二十五、Handoff Context 來源資料」）。
+    createHandoff: protectedProcedure
+      .input(z.object({ conversationId: z.number().int().positive().optional() }))
+      .mutation(async ({ ctx, input }) => {
+        let conversation = input.conversationId
+          ? await getConversationForUser(input.conversationId, ctx.user.id)
+          : undefined;
+        if (!conversation || conversation.status !== "active") {
+          conversation = await getActiveConversationForUser(ctx.user.id);
+        }
+        if (!conversation) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "目前沒有可以轉交的對話內容，請先跟 AI 聊聊你的需求。" });
+        }
+
+        const state = parseConversationState(conversation.currentStateJson);
+        if (!state || !state.handoffReady) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "目前還不到可以轉交顧問的階段。" });
+        }
+        const primaryServiceKey = state.candidateServiceKeys[0];
+        if (!isHandoffEligibleServiceKey(primaryServiceKey)) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "目前判斷的服務方向暫不支援直接送出詢問。" });
+        }
+        const mapping = getHandoffServiceMapping(primaryServiceKey);
+        if (!mapping) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "目前判斷的服務方向暫不支援直接送出詢問。" });
+        }
+
+        // 唯一資料來源是這一輪已經累積在 ConversationState.confirmedFacts 的
+        // 明確確認事實——不重新讀 aiMessages 逐字稿、不再呼叫任何 LLM 去猜
+        // （見對話中「一、正式表單預填不得重新從 raw transcript 推論」）。
+        // 這也代表 handoff context 建立時完全不依賴 conversation 的逐字內容
+        // 是否還存在，天生就跟 conversation／aiMessages 的生命週期解耦。
+        const factory = await resolveAiFactory(ctx.user.id);
+
+        let certificationCatalog: { code: string; name: string }[] = [];
+        if (primaryServiceKey === "certification") {
+          const catalog = await db.listPublicCertificationServices();
+          certificationCatalog = catalog.map(c => ({ code: c.code, name: c.name }));
+        }
+        const specs = buildFieldSpecs(primaryServiceKey, certificationCatalog);
+        const { prefillData, confirmedFields } = buildHandoffPrefillFromConfirmedFacts({
+          specs,
+          confirmedFacts: state.confirmedFacts,
+        });
+        const handoffSummary = buildHandoffSummary({
+          observedProblem: state.observedProblem,
+          primaryBusinessDirection: state.primaryBusinessDirection,
+          secondaryConcern: state.secondaryConcern,
+        });
+
+        const handoff = await createHandoffContext({
+          userId: ctx.user.id,
+          factoryId: factory?.id ?? conversation.factoryId ?? null,
+          serviceKey: primaryServiceKey,
+          prefillData,
+          confirmedFields,
+          handoffSummary,
+          sourceConversationId: conversation.id,
+        });
+
+        return { token: handoff.token, serviceKey: mapping.serviceKey, applyPath: mapping.applyPath };
+      }),
+
+    // 表單頁抵達時讀取：只回傳「這個 userId 擁有」的 handoff context 的
+    // prefill 資料，找不到／不是本人／過期／已消費一律回傳 null，不拋錯
+    // （表單頁對「沒有有效 handoff」的正常反應就是照一般直接進入的樣子顯示，
+    // 不需要是一個錯誤畫面）。不回傳 handoffSummary——Phase 4 UI 不需要顯示
+    // 它，見對話中「二十八」。
+    getHandoffContext: protectedProcedure
+      .input(z.object({ token: z.string().min(1).max(64) }))
+      .query(async ({ ctx, input }) => {
+        const context = await getHandoffContextForUser(input.token, ctx.user.id);
+        if (!context) return null;
+        if (!isHandoffContextUsable(context)) return null;
+        return {
+          serviceKey: context.serviceKey,
+          prefillData: context.prefillDataJson,
+          confirmedFields: context.confirmedFieldsJson,
+          acknowledgedAt: context.acknowledgedAt,
+        };
+      }),
+
+    // Blocking Modal「好，繼續填寫」按下時呼叫——只標記這個 user 自己名下的
+    // handoff context，同樣走擁有權檢查（見「十、Handoff Context 權限」）。
+    acknowledgeHandoff: protectedProcedure
+      .input(z.object({ token: z.string().min(1).max(64) }))
+      .mutation(async ({ ctx, input }) => {
+        const context = await getHandoffContextForUser(input.token, ctx.user.id);
+        if (!context || !isHandoffContextUsable(context)) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "找不到有效的 handoff context" });
+        }
+        await acknowledgeHandoffContext(context.id);
+        return { success: true } as const;
+      }),
+  }),
 
   analytics: router({
     record: publicProcedure.input(z.object({ visitorId: z.string().regex(/^[a-zA-Z0-9\-_]+$/).min(1).max(64) })).mutation(async ({ input }) => {
@@ -1133,11 +1388,26 @@ export const appRouter = router({
   capitalLevel: z.array(z.string().max(30)).max(10).optional(),
   mfgMode: z.string().max(10).optional(),
   keyword: z.string().max(100).optional(),
+  /**
+   * Phase 6A 搜尋邏輯修正：AI 找工廠聊天「查看全部搜尋結果」帶過來的能力／
+   * 技術詞（例如「CNC 五軸」），純粹是 ranking signal，不是 hard filter——
+   * 跟 keyword 語意不同，不會拿去排除候選（見 server/db.ts searchFactories
+   * 的 rankingSignals 說明、server/ai/factorySearchAction.ts）。
+   */
+  q: z.string().max(100).optional(),
+  /**
+   * Phase 6 UI Foundation（見對話中「AI Search Context 設計」）：只有從 OXM
+   * AI 的「查看完整搜尋結果」進來才會帶這個值——server-authoritative 的擁有權
+   * 驗證入口，決不信任這個 id 以外任何 client 傳入的排序／候選資料。無效／
+   * 不屬於這個使用者／conversation 沒有搜尋狀態時一律靜默降級成一般搜尋，
+   * 不拋錯（見「不要信任client傳入的：factory IDs / score / userId」）。
+   */
+  aiSearchConversationId: z.number().int().positive().optional(),
   businessType: z.string().max(20).optional(),
   sortBy: z.enum(["rating", "reviews", "response", "newest"]).optional(),
   page: z.number().int().min(1).default(1),
   pageSize: z.number().int().min(1).max(50).default(20),
-})).query(async ({ input }) => {
+})).query(async ({ ctx, input }) => {
   const industry      = input.industry     && input.industry.length > 0     ? input.industry     : undefined;
   const subIndustry   = input.subIndustry  && input.subIndustry.length > 0  ? input.subIndustry  : undefined;
   const region        = input.region       && input.region.length > 0       ? input.region       : undefined;
@@ -1147,11 +1417,38 @@ export const appRouter = router({
   // 使用者是否有手動選主產業（影響 AI matchTier 計算範圍）
   const userHasSelectedIndustry = !!(industry && industry.length > 0);
 
+  // q 是已經被聊天端拆解好的能力詞（例如「CNC 五軸」），直接切詞當
+  // rankingSignals，不再對 q 呼叫一次 getSearchIntent——避免每次點「查看全部
+  // 搜尋結果」都多打一次 OpenAI（見對話中「不要新增 LLM call」）。
+  let rankingSignals = input.q
+    ? input.q.split(/[\s,、，]+/).map(s => s.trim()).filter(Boolean).slice(0, 5)
+    : undefined;
+
+  // AI Search Mode（見對話中「AI Search Context 設計」）：aiSearchConversationId
+  // 有效且真的屬於這位登入使用者時，rankingSignals 一律改用這個 conversation
+  // 儲存的 coreCapabilities 重新算——不管使用者後續怎麼手動調整 industry／
+  // region，都用同一組能力詞對「新的」hard-filter 候選集合重新排序（見「使用者
+  // 修改篩選條件後 AI Search Mode 如何處理」選定的低風險方案）。任何查不到／
+  // 不屬於這個使用者／沒有搜尋狀態的情況，一律靜默降級成一般搜尋（aiHighlight
+  // 保持關閉），不拋錯。
+  let aiSearchModeEngaged = false;
+  if (input.aiSearchConversationId && ctx.user) {
+    const aiConversation = await getConversationForUser(input.aiSearchConversationId, ctx.user.id);
+    const aiState = aiConversation ? parseConversationState(aiConversation.currentStateJson) : null;
+    const aiSearchState = aiState?.currentFactorySearchState ?? null;
+    if (aiSearchState && aiSearchState.coreCapabilities.length > 0) {
+      rankingSignals = aiSearchState.coreCapabilities.slice(0, 5);
+      aiSearchModeEngaged = true;
+    }
+  }
+
   // 取得 AI 搜尋意圖（keyword 有值時嘗試；有 industry 時仍呼叫，用於 productKeywords 加權）
-  const intent = input.keyword ? await getSearchIntent(input.keyword) : null;
+  // 只在沒有 rankingSignals（也就是不是走 Phase 6A ranking-only 路徑）時才用
+  // keyword 觸發，維持既有手動關鍵字框行為不變。
+  const intent = (!rankingSignals && input.keyword) ? await getSearchIntent(input.keyword) : null;
 
   // fallback keyword：intent 無法使用時沿用舊有 enhanceSearchKeyword
-  const keyword = input.keyword
+  const keyword = (!rankingSignals && input.keyword)
     ? (intent ? input.keyword : await enhanceSearchKeyword(input.keyword))
     : undefined;
 
@@ -1161,7 +1458,18 @@ export const appRouter = router({
     keyword,
     intent,
     userHasSelectedIndustry,
+    rankingSignals,
   });
+
+  // 見「哪些工廠會被套上橘框、依據是什麼」：只有真的通過上面 ownership 驗證、
+  // 進入 AI Search Mode 時才計算，一般搜尋／訪客／q 手動排序一律是 undefined，
+  // 前端據此判斷「這是不是 AI 專屬入口進來的」，不得依賴 q 本身有沒有值。
+  // 一定要在下面 ads 重新排序「之前」用 result.items 原始順序對 result.tiers
+  // 取值（tiers 是跟原始順序 index 對齊的 parallel array，重新排序後就對不上了）。
+  const aiHighlightFactoryIds = aiSearchModeEngaged && result.tiers
+    ? result.items.filter((_, i) => result.tiers![i] === 2).map(f => f.id)
+    : undefined;
+
   let ads: Awaited<ReturnType<typeof db.getActiveAds>> = [];
 
   if (input.page === 1) {
@@ -1181,6 +1489,8 @@ export const appRouter = router({
     ...result,
     items: result.items.map(stripForSearch),
     ads: ads.map(ad => ad.factory ? { ...ad, factory: stripForSearch(ad.factory) } : ad),
+    aiSearchModeEngaged,
+    aiHighlightFactoryIds,
   };
 }),
 
@@ -6928,7 +7238,13 @@ export const appRouter = router({
       notes: z.string().max(2000).optional(),
       consentAgreed: z.literal(true),
       factoryId: z.number().int().positive(),
+      // 只有從 AI handoff 進來的表單才會帶這個值；一般入口不帶，行為完全不受影響。
+      aiHandoffToken: z.string().max(64).optional(),
     })).mutation(async ({ input, ctx }) => {
+      const idem = await beginHandoffIdempotentSubmit(input.aiHandoffToken, ctx.user.id, "gov_subsidy");
+      if (idem.shortCircuit) return idem.shortCircuit;
+      const handoffContext = idem.handoffContext;
+      try {
       // Validate factoryId belongs to this user and is approved
       const [owned, coManaged] = await Promise.all([
         db.getFactoryByOwnerId(ctx.user.id),
@@ -7067,7 +7383,39 @@ export const appRouter = router({
           }
         );
       }
+      // Phase 5：AI 導件案件 → AI 初判。案件已經成功建立、handoff claim（如果有）
+      // 已經在 beginHandoffIdempotentSubmit 階段搶到，這裡把它 finalize 成正式
+      // linkage——跟後面 assessment 是否成功完全脫鉤，即使 pending row 建立
+      // 失敗，這個 linkage 依然保留，讓 recovery job 之後可以補建 assessment。
+      if (handoffContext) {
+        await finalizeHandoffSubmission(handoffContext.id, id);
+        await initiateCaseAssessment({
+          serviceKey: "gov_subsidy",
+          handoffContext,
+          caseId: id,
+          factoryId: input.factoryId,
+          userId: ctx.user.id,
+          submittedForm: {
+            decisionMakerParticipation: input.decisionMakerParticipation,
+            annualRevenue: input.annualRevenue,
+            employeeCount: input.employeeCount,
+            factoryType: input.factoryType,
+            isEnterpriseFirm: input.isEnterpriseFirm,
+            hasGovernmentProject: input.hasGovernmentProject,
+            governmentProjectName: input.governmentProjectName ?? null,
+            hasAppliedForGovernmentSubsidy: input.hasAppliedForGovernmentSubsidy,
+            hasPatent: input.hasPatent,
+            patentCount: input.patentCount ?? null,
+            exportStatus: input.exportStatus,
+            notes: input.notes ?? null,
+          },
+        });
+      }
       return { success: true, id };
+      } catch (err) {
+        if (handoffContext) await releaseHandoffClaim(handoffContext.id).catch(() => {});
+        throw err;
+      }
     }),
 
     adminList: adminProcedure.input(z.object({
@@ -7138,7 +7486,7 @@ export const appRouter = router({
           db.listUpgradeApplications({ status: input.status, limit: input.limit, offset: input.offset }),
           db.countUpgradeApplications(input.status),
         ]);
-        return { items, total, consultants };
+        return { items: await withAiAssessments("gov_subsidy", items), total, consultants };
       }
       const activeConsultants = consultants.filter(c => c.isActive);
       if (activeConsultants.length === 0) throw new TRPCError({ code: "FORBIDDEN", message: "您不是顧問" });
@@ -7149,7 +7497,7 @@ export const appRouter = router({
         db.listUpgradeApplicationsByRegions(regionKeys, { status: input.status, limit: input.limit, offset: input.offset }),
         db.countUpgradeApplicationsByRegions(regionKeys, input.status),
       ]);
-      return { items, total, consultants };
+      return { items: await withAiAssessments("gov_subsidy", items), total, consultants };
     }),
 
     // 顧問查收案件（admin bypass：視同顧問）
@@ -7489,7 +7837,13 @@ export const appRouter = router({
       contactTime: z.string().min(1).max(100),
       consentAgreed: z.literal(true),
       factoryId: z.number().int().positive(),
+      // 只有從 AI handoff 進來的表單才會帶這個值；一般入口不帶，行為完全不受影響。
+      aiHandoffToken: z.string().max(64).optional(),
     })).mutation(async ({ input, ctx }) => {
+      const idem = await beginHandoffIdempotentSubmit(input.aiHandoffToken, ctx.user.id, "finance");
+      if (idem.shortCircuit) return idem.shortCircuit;
+      const handoffContext = idem.handoffContext;
+      try {
       // 只能替自己有權管理（owner 或 co-manager）且已通過審核的工廠送出申請，
       // 與 upgradeCenter.submitApplication 相同的驗證方式，伺服器端強制檢查，
       // 不信任前端傳入的 factoryId 之外的任何工廠資料。
@@ -7577,7 +7931,23 @@ export const appRouter = router({
         });
       }
 
+      if (handoffContext) {
+        await finalizeHandoffSubmission(handoffContext.id, id);
+        // 財務表單本身沒有業務欄位（只有聯絡資料），submittedForm 刻意是空物件。
+        await initiateCaseAssessment({
+          serviceKey: "finance",
+          handoffContext,
+          caseId: id,
+          factoryId: input.factoryId,
+          userId: ctx.user.id,
+          submittedForm: {},
+        });
+      }
       return { success: true, id };
+      } catch (err) {
+        if (handoffContext) await releaseHandoffClaim(handoffContext.id).catch(() => {});
+        throw err;
+      }
     }),
 
     // 申請進度查詢：回傳目前使用者名下工廠的財務優化案件，且刻意不回傳
@@ -7658,7 +8028,7 @@ export const appRouter = router({
         db.listFinanceApplications({ status: input.status, limit: input.limit, offset: input.offset }),
         db.countFinanceApplications(input.status),
       ]);
-      return { items, total };
+      return { items: await withAiAssessments("finance", items), total };
     }),
 
     // 合法流程：new→evaluating；evaluating→deferred/not_interested/won；
@@ -7831,6 +8201,10 @@ export const appRouter = router({
   shortVideoCenter: router({
     submitApplication: protectedProcedure.input(shortVideoApplicationSchema)
       .mutation(async ({ input, ctx }) => {
+        const idem = await beginHandoffIdempotentSubmit(input.aiHandoffToken, ctx.user.id, "short_video");
+        if (idem.shortCircuit) return idem.shortCircuit;
+        const handoffContext = idem.handoffContext;
+        try {
         // 只能替自己有權管理（owner 或 co-manager）且已通過審核的工廠送出
         // 申請，與 financeCenter.submitApplication 相同的驗證方式，伺服器端
         // 強制檢查，不信任前端傳入的 factoryId 之外的任何工廠資料。
@@ -7915,7 +8289,29 @@ export const appRouter = router({
           });
         }
 
+        if (handoffContext) {
+          await finalizeHandoffSubmission(handoffContext.id, id);
+          await initiateCaseAssessment({
+            serviceKey: "short_video",
+            handoffContext,
+            caseId: id,
+            factoryId: input.factoryId,
+            userId: ctx.user.id,
+            submittedForm: {
+              servicesWantedLabels: input.servicesWanted.map(shortVideoServiceLabel),
+              isUnsure: input.isUnsure,
+              primaryGoalLabel: SHORT_VIDEO_GOALS.find(g => g.key === input.primaryGoal)?.label ?? input.primaryGoal,
+              platformLabels: input.platforms.map(shortVideoPlatformLabel),
+              noPlatformYet: input.noPlatformYet,
+              additionalNotes: input.additionalNotes || null,
+            },
+          });
+        }
         return { success: true, id };
+        } catch (err) {
+          if (handoffContext) await releaseHandoffClaim(handoffContext.id).catch(() => {});
+          throw err;
+        }
       }),
 
     // 申請進度查詢：回傳目前使用者名下工廠的短影音案件，刻意不回傳 notes
@@ -7988,14 +8384,14 @@ export const appRouter = router({
       status: z.enum(SHORT_VIDEO_CASE_STATUSES).optional(),
     })).query(async ({ ctx, input }) => {
       if (ctx.user.isAdmin) {
-        return db.listShortVideoCasesAdmin({ status: input.status });
+        return withAiAssessments("short_video", await db.listShortVideoCasesAdmin({ status: input.status }));
       }
       const consultants = await db.getShortVideoConsultantsByUserId(ctx.user.id);
       const activeIds = consultants.filter(c => c.isActive).map(c => c.id);
       if (activeIds.length === 0) {
         throw new TRPCError({ code: "FORBIDDEN", message: "您不是短影音顧問" });
       }
-      return db.listShortVideoCasesForConsultant(activeIds, input.status);
+      return withAiAssessments("short_video", await db.listShortVideoCasesForConsultant(activeIds, input.status));
     }),
 
     // 待取件看板：任何啟用中的短影音顧問都能看到。
@@ -8006,7 +8402,7 @@ export const appRouter = router({
           throw new TRPCError({ code: "FORBIDDEN", message: "您不是短影音顧問" });
         }
       }
-      return db.listShortVideoCasesAdmin({ status: "unassigned" });
+      return withAiAssessments("short_video", await db.listShortVideoCasesAdmin({ status: "unassigned" }));
     }),
 
     // 顧問自助取件，原子性見 db.claimShortVideoCase 內註解。
@@ -8214,6 +8610,10 @@ export const appRouter = router({
 
     submitApplication: protectedProcedure.input(certificationApplicationSchema)
       .mutation(async ({ input, ctx }) => {
+        const idem = await beginHandoffIdempotentSubmit(input.aiHandoffToken, ctx.user.id, "certification");
+        if (idem.shortCircuit) return idem.shortCircuit;
+        const handoffContext = idem.handoffContext;
+        try {
         const [owned, coManaged] = await Promise.all([
           db.getFactoryByOwnerId(ctx.user.id),
           db.getCoManagedFactories(ctx.user.id),
@@ -8298,7 +8698,30 @@ export const appRouter = router({
           });
         }
 
+        if (handoffContext) {
+          await finalizeHandoffSubmission(handoffContext.id, id);
+          // servicesWanted 是目錄代碼，前面已經驗證過都存在於 catalog——重用同一份
+          // catalog 查詢轉成人類可讀名稱給 assessment 用，不再送代碼給模型。
+          const catalog = input.servicesWanted.length > 0 ? await db.listPublicCertificationServices() : [];
+          const nameByCode = new Map(catalog.map(c => [c.code, c.name]));
+          await initiateCaseAssessment({
+            serviceKey: "certification",
+            handoffContext,
+            caseId: id,
+            factoryId: input.factoryId,
+            userId: ctx.user.id,
+            submittedForm: {
+              servicesWantedLabels: input.servicesWanted.map(code => nameByCode.get(code) ?? code),
+              isUnsure: input.isUnsure,
+              additionalNotes: input.additionalNotes || null,
+            },
+          });
+        }
         return { success: true, id };
+        } catch (err) {
+          if (handoffContext) await releaseHandoffClaim(handoffContext.id).catch(() => {});
+          throw err;
+        }
       }),
 
     myApplicationProgress: protectedProcedure.query(async ({ ctx }) => {
@@ -8362,14 +8785,14 @@ export const appRouter = router({
       status: z.enum(CERTIFICATION_CASE_STATUSES).optional(),
     })).query(async ({ ctx, input }) => {
       if (ctx.user.isAdmin) {
-        return db.listCertificationCasesAdmin({ status: input.status });
+        return withAiAssessments("certification", await db.listCertificationCasesAdmin({ status: input.status }));
       }
       const consultants = await db.getCertificationConsultantsByUserId(ctx.user.id);
       const activeIds = consultants.filter(c => c.isActive).map(c => c.id);
       if (activeIds.length === 0) {
         throw new TRPCError({ code: "FORBIDDEN", message: "您不是 ISO 認證顧問" });
       }
-      return db.listCertificationCasesForConsultant(activeIds, input.status);
+      return withAiAssessments("certification", await db.listCertificationCasesForConsultant(activeIds, input.status));
     }),
 
     // 待取件看板：任何啟用中的 ISO 顧問都能看到，不受目前案件承辦人篩選限制
@@ -8382,7 +8805,7 @@ export const appRouter = router({
           throw new TRPCError({ code: "FORBIDDEN", message: "您不是 ISO 認證顧問" });
         }
       }
-      return db.listCertificationCasesAdmin({ status: "unassigned" });
+      return withAiAssessments("certification", await db.listCertificationCasesAdmin({ status: "unassigned" }));
     }),
 
     // 顧問自助取件：原子操作，只有第一位成功鎖定 unassigned 案件的顧問會
@@ -8583,7 +9006,13 @@ export const appRouter = router({
       needType: z.enum(ERP_NEED_TYPE_KEYS),
       additionalNotes: z.string().max(2000).optional(),
       consentAgreed: z.literal(true),
+      // 只有從 AI handoff 進來的表單才會帶這個值；一般入口不帶，行為完全不受影響。
+      aiHandoffToken: z.string().max(64).optional(),
     })).mutation(async ({ input, ctx }) => {
+      const idem = await beginHandoffIdempotentSubmit(input.aiHandoffToken, ctx.user.id, "erp");
+      if (idem.shortCircuit) return idem.shortCircuit;
+      const handoffContext = idem.handoffContext;
+      try {
       const [owned, coManaged] = await Promise.all([
         db.getFactoryByOwnerId(ctx.user.id),
         db.getCoManagedFactories(ctx.user.id),
@@ -8656,7 +9085,25 @@ export const appRouter = router({
         });
       }
 
+      if (handoffContext) {
+        await finalizeHandoffSubmission(handoffContext.id, id);
+        await initiateCaseAssessment({
+          serviceKey: "erp",
+          handoffContext,
+          caseId: id,
+          factoryId: input.factoryId,
+          userId: ctx.user.id,
+          submittedForm: {
+            needType: erpNeedTypeLabel(input.needType),
+            additionalNotes: input.additionalNotes || null,
+          },
+        });
+      }
       return { success: true, id };
+      } catch (err) {
+        if (handoffContext) await releaseHandoffClaim(handoffContext.id).catch(() => {});
+        throw err;
+      }
     }),
 
     myApplicationProgress: protectedProcedure.query(async ({ ctx }) => {
@@ -8719,14 +9166,14 @@ export const appRouter = router({
       status: z.enum(ERP_CASE_STATUSES).optional(),
     })).query(async ({ ctx, input }) => {
       if (ctx.user.isAdmin) {
-        return db.listErpCasesAdmin({ status: input.status });
+        return withAiAssessments("erp", await db.listErpCasesAdmin({ status: input.status }));
       }
       const consultants = await db.getErpConsultantsByUserId(ctx.user.id);
       const activeIds = consultants.filter(c => c.isActive).map(c => c.id);
       if (activeIds.length === 0) {
         throw new TRPCError({ code: "FORBIDDEN", message: "您不是 ERP 顧問" });
       }
-      return db.listErpCasesForConsultant(activeIds, input.status);
+      return withAiAssessments("erp", await db.listErpCasesForConsultant(activeIds, input.status));
     }),
 
     // 待取件看板：任何啟用中的 ERP 顧問都能看到。
@@ -8737,7 +9184,7 @@ export const appRouter = router({
           throw new TRPCError({ code: "FORBIDDEN", message: "您不是 ERP 顧問" });
         }
       }
-      return db.listErpCasesAdmin({ status: "unassigned" });
+      return withAiAssessments("erp", await db.listErpCasesAdmin({ status: "unassigned" }));
     }),
 
     // 顧問自助取件，原子性見 db.claimErpCase 內註解。

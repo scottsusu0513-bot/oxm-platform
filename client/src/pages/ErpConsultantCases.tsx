@@ -20,6 +20,7 @@ import Navbar from "@/components/Navbar";
 import LoginDialog from "@/components/LoginDialog";
 import { FloatingBackButton } from "@/components/FloatingBackButton";
 import { CaseStatusOverview, type CaseStatusDef, type CaseStatusColor } from "@/components/CaseStatusOverview";
+import { AiOriginBadge, AiAssessmentDialogTrigger } from "@/components/AiAssessmentBadge";
 import {
   ERP_CASE_STATUSES, ERP_STATUS_LABELS, ERP_STATUS_TRANSITIONS, ERP_EXCEPTION_STATUSES, erpNeedTypeLabel,
   type ErpCaseStatus,
@@ -191,9 +192,11 @@ function CaseCard({ item, isAdmin, onMutated }: { item: any; isAdmin: boolean; o
               <Building2 className="w-4 h-4 text-muted-foreground shrink-0" />
               <span className="font-semibold truncate">{item.companyNameSnapshot}</span>
               <Badge className={statusColor(item.status)}>{ERP_STATUS_LABELS[item.status as ErpCaseStatus] ?? item.status}</Badge>
+              {item.aiAssessment && <AiOriginBadge />}
             </div>
             <p className="text-xs text-muted-foreground truncate">{item.companyAddressSnapshot}</p>
           </div>
+          {item.aiAssessment && <AiAssessmentDialogTrigger serviceKey="erp" assessment={item.aiAssessment} />}
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-sm">
@@ -252,6 +255,7 @@ function UnassignedCaseCard({ item, onClaimed }: { item: any; onClaimed: () => v
           <Building2 className="w-4 h-4 text-muted-foreground shrink-0" />
           <span className="font-semibold truncate">{item.companyNameSnapshot}</span>
           <Badge className={statusColor("unassigned")}>{ERP_STATUS_LABELS.unassigned}</Badge>
+          {item.aiAssessment && <AiOriginBadge />}
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-sm">
           <div className="flex items-center gap-1.5"><UserIcon className="w-3.5 h-3.5 text-muted-foreground" />聯絡人：{item.contactName}</div>
@@ -259,6 +263,7 @@ function UnassignedCaseCard({ item, onClaimed }: { item: any; onClaimed: () => v
           <div className="flex items-center gap-1.5"><Clock className="w-3.5 h-3.5 text-muted-foreground" />送出時間：{fmtTaipeiDateTime(item.createdAt)}</div>
         </div>
         <p className="text-sm"><span className="text-muted-foreground">需求類型：</span>{erpNeedTypeLabel(item.needType)}</p>
+        {item.aiAssessment && <AiAssessmentDialogTrigger serviceKey="erp" assessment={item.aiAssessment} />}
         <Button size="sm" disabled={claimMutation.isPending} onClick={() => claimMutation.mutate({ caseId: item.id })}>
           {claimMutation.isPending ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Inbox className="w-3.5 h-3.5 mr-1.5" />}
           取件

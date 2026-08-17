@@ -175,6 +175,23 @@ export default function Search() {
   const [region, setRegion] = useState<string[]>(() => params.getAll("region").filter(Boolean));
   const [keyword, setKeyword] = useState(() => params.get("keyword") ?? "");
   const [committedKeyword, setCommittedKeyword] = useState(() => params.get("keyword") ?? "");
+  // Phase 6A：AI 找工廠「查看全部搜尋結果」帶來的能力／技術詞（例如
+  // 「CNC 五軸」），只影響排序，不是使用者可編輯／移除的 hard filter，所以
+  // 只在 mount 時讀一次、不提供 setter 或篩選標籤（見 factorySearchAction.ts
+  // buildSearchViewAllUrl 的說明）。
+  const q = useMemo(() => params.get("q") ?? "", []); // eslint-disable-line react-hooks/exhaustive-deps
+  // Phase 6 UI Foundation（見對話中「AI Search Context」）：只有從 OXM AI 的
+  // 「查看完整搜尋結果」進來才會帶這個值，server 端會驗證真的屬於這個登入
+  // 使用者才會生效（見 routers.ts factory.search）。跟 q 一樣只在 mount 時
+  // 讀一次、之後使用者怎麼調整 industry／region 篩選都繼續帶著同一個值，讓
+  // server 對「新的」hard-filter 候選集合用同一組 AI 排序訊號重新排序（見
+  // 「使用者修改篩選條件後 AI Search Mode 如何處理」選定的方案），不會因為
+  // 使用者編輯篩選就整個降級成一般搜尋。
+  const aiSearchConversationId = useMemo(() => {
+    const raw = params.get("aiSearch");
+    const n = raw ? Number(raw) : NaN;
+    return Number.isInteger(n) && n > 0 ? n : undefined;
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const [businessType, setBusinessType] = useState(() => params.get("businessType") ?? "all");
   const isComposing = useRef(false);
   const [showHistory, setShowHistory] = useState(false);
@@ -295,11 +312,13 @@ export default function Search() {
     subIndustry: subIndustry.length > 0 ? subIndustry : undefined,
     region: region.length > 0 ? region : undefined,
     keyword: committedKeyword || undefined,
+    q: q || undefined,
+    aiSearchConversationId,
     businessType: businessType && businessType !== "all" ? businessType : undefined,
     sortBy: sortBy as "rating" | "reviews" | "response" | "newest" | undefined,
     page,
     pageSize,
-  }), [mfgMode, industry, subIndustry, region, committedKeyword, businessType, sortBy, page, pageSize]);
+  }), [mfgMode, industry, subIndustry, region, committedKeyword, q, aiSearchConversationId, businessType, sortBy, page, pageSize]);
 
   const appliedFilters = useMemo(() => {
     const filters: Array<{ key: string; label: string; value: string }> = [];
@@ -337,6 +356,15 @@ export default function Search() {
     placeholderData: (prev) => prev,
   });
   const ads = data?.ads ?? [];
+  // AI Search Mode（見對話中「哪些工廠會被套上橘框、依據是什麼」與「為什麼
+  // 一般 /search 永遠不會出現橘框」）：aiHighlightFactoryIds 只有在 server 端
+  // 真的驗證過 aiSearchConversationId 屬於這個登入使用者時才會有值（見
+  // routers.ts factory.search），一般搜尋／訪客／手動打 q 都固定是
+  // undefined，這裡用一個空 Set 保底，橘框永遠不會憑空出現。
+  const aiHighlightIds = useMemo(
+    () => new Set(data?.aiHighlightFactoryIds ?? []),
+    [data?.aiHighlightFactoryIds]
+  );
 
   // filterFingerprint detects when search conditions change (excluding page) to reset mobile accumulated list
   const filterFingerprint = useMemo(() =>
@@ -847,6 +875,7 @@ export default function Search() {
                     cartRemove={cartRemove}
                     setCartOpen={setCartOpen}
                     isMobile={isMobile}
+                    aiHighlighted={aiHighlightIds.has(factory.id)}
                   />
                 ))}
               </div>

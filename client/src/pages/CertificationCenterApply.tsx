@@ -19,6 +19,8 @@ import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
 import { resolveAnyFactoryStatus } from "./financeOptimizationApplyStatus";
 import { CERTIFICATION_OPEN_STATUSES, CERTIFICATION_STATUS_LABELS } from "@shared/certificationCase";
+import { useAiHandoff } from "@/hooks/useAiHandoff";
+import { AiHandoffModal } from "@/components/ai/AiHandoffModal";
 
 const OPEN_STATUSES = new Set<string>(CERTIFICATION_OPEN_STATUSES);
 
@@ -93,6 +95,7 @@ export default function CertificationCenterApply() {
 
   const [servicesWanted, setServicesWanted] = useState<string[]>([]);
   const [isUnsure, setIsUnsure] = useState(false);
+  const aiHandoff = useAiHandoff("certification");
 
   const { data: ownedFactory, isLoading: ownedLoading } = trpc.factory.getMine.useQuery(undefined, { enabled: !!user });
   const { data: coManaged, isLoading: coManagedLoading } = trpc.factory.getCoManagedFactories.useQuery(undefined, { enabled: !!user });
@@ -156,6 +159,20 @@ export default function CertificationCenterApply() {
     }
   }, [eligibleFactories, selectedFactoryId]);
 
+  // AI handoff 預填：servicesWanted 的每個代碼都已經在 server 端對照過目前
+  // 實際上架（published + serviceEnabled）的服務目錄驗證過，不會出現已下架
+  // 或不存在的代碼（見 server/ai/handoffPrefill.ts certificationFieldSpecs）。
+  useEffect(() => {
+    if (!aiHandoff.hasHandoff) return;
+    const d = aiHandoff.prefillData;
+    if (Array.isArray(d.servicesWanted) && d.servicesWanted.length > 0) {
+      setServicesWanted(d.servicesWanted.filter((v): v is string => typeof v === "string"));
+    } else if (d.isUnsure === true) {
+      setIsUnsure(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aiHandoff.hasHandoff, aiHandoff.prefillData]);
+
   const selectedFactory = eligibleFactories.find(f => f.id === selectedFactoryId) ?? null;
   const selectedOpenCase = selectedFactoryId != null ? openCaseByFactory.get(selectedFactoryId) : undefined;
 
@@ -193,6 +210,7 @@ export default function CertificationCenterApply() {
       isUnsure,
       additionalNotes: data.additionalNotes || undefined,
       consentAgreed: true,
+      aiHandoffToken: aiHandoff.token ?? undefined,
     });
   };
 
@@ -353,6 +371,7 @@ export default function CertificationCenterApply() {
 
   return (
     <div className="min-h-screen bg-background">
+      <AiHandoffModal open={aiHandoff.showModal} onConfirm={aiHandoff.acknowledge} isConfirming={aiHandoff.isAcknowledging} />
       <Helmet>
         <title>ISO 與低碳認證免費初步諮詢｜OXM</title>
         <meta name="description" content="填寫聯絡資料與想了解的認證服務，OXM 合作顧問將為您安排免費初步諮詢。" />

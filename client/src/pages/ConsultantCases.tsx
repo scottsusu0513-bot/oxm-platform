@@ -18,6 +18,7 @@ import {
 import Navbar from "@/components/Navbar";
 import { FloatingBackButton } from "@/components/FloatingBackButton";
 import { CaseStatusOverview, type CaseStatusDef, type CaseStatusColor } from "@/components/CaseStatusOverview";
+import { AiOriginBadge, AiAssessmentDialogTrigger } from "@/components/AiAssessmentBadge";
 
 // ── 狀態設定 ─────────────────────────────────────────────────────────────────
 
@@ -223,6 +224,8 @@ type Case = {
   // 更新紀錄」，不可用其他欄位猜測。
   lastUpdatedByUserId?: number | null;
   lastUpdatedByNameSnapshot?: string;
+  // Phase 5：AI 導件案件的 AI 初判狀態；一般直接表單案件是 null（見對話中「三十六」）。
+  aiAssessment?: { status: "pending" | "completed" | "failed"; assessmentJson: Record<string, unknown> | null } | null;
 };
 
 // ── 金額格式化 ───────────────────────────────────────────────────────────────
@@ -562,6 +565,7 @@ function CaseCard({ item, defaultExpanded }: { item: Case; defaultExpanded?: boo
             <div className="flex items-center gap-1.5 flex-wrap">
               <span className="font-semibold text-base break-all">{item.companyName}</span>
               <Badge className={`${info.color} border-0 text-xs shrink-0`}>{info.label}</Badge>
+              {item.aiAssessment && <AiOriginBadge />}
               {/* 資本額級距標籤 */}
               <span className={`inline-flex items-center px-2 py-0.5 rounded-full border text-[10px] font-medium shrink-0 ${tierBadge.cls}`}>
                 {tierBadge.label}
@@ -607,6 +611,11 @@ function CaseCard({ item, defaultExpanded }: { item: Case; defaultExpanded?: boo
             {showUpdated && (
               <div className="text-xs text-muted-foreground/60 whitespace-nowrap flex items-center gap-1 justify-end">
                 <Clock className="w-3 h-3" />{updatedDate}
+              </div>
+            )}
+            {item.aiAssessment && (
+              <div className="flex justify-end mt-1">
+                <AiAssessmentDialogTrigger serviceKey="gov_subsidy" assessment={item.aiAssessment} />
               </div>
             )}
             <button

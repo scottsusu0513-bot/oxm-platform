@@ -13,6 +13,8 @@ import { consumePendingNavigatePath, initPushNotifications } from "@/lib/pushNot
 import { AppLoading } from "@/components/AppLoading";
 import { AppBottomNav } from "@/components/AppBottomNav";
 import NetworkStatusOverlay from "@/components/NetworkStatusOverlay";
+import { AiShellProvider } from "@/contexts/AiShellContext";
+import { GlobalAiShell } from "@/components/ai/GlobalAiShell";
 
 // ── 公開頁面 ──────────────────────────────────────────────────────────────
 const Home                  = lazy(() => import("./pages/Home"));
@@ -327,6 +329,32 @@ function PageFallback() {
   return <AppLoading />;
 }
 
+/**
+ * Global AI Shell 排除路由（見對話中「哪些路由目前顯示／不顯示，以及原因」）：
+ * - /admin、/admin/*、/admin-message/*（startsWith("/admin") 一併涵蓋）：
+ *   內部管理後台工具，操作情境與畫面密度都跟「一般使用者找工廠／問問題」
+ *   完全不同，管理員也不是這個 AI 的服務對象。
+ * - /verify-email：短暫的驗證流程頁，不需要、也不適合疊加聊天面板。
+ * - /consultant-center 與所有以 "-consultant/cases" 結尾的路徑（endsWith
+ *   判斷涵蓋所有既有顧問案件看板）：顧問身份專用的內部工作頁面，不是一般
+ *   公開瀏覽情境。
+ * 其餘所有一般公開頁面（首頁／搜尋／工廠頁／FAQ／新聞／會員中心／訊息……）
+ * 都正常顯示。
+ */
+function isAiShellExcludedPath(pathname: string): boolean {
+  if (pathname.startsWith("/admin")) return true;
+  if (pathname === "/verify-email") return true;
+  if (pathname === "/consultant-center") return true;
+  if (pathname.endsWith("-consultant/cases")) return true;
+  return false;
+}
+
+function AiShellGate() {
+  const [pathname] = useLocation();
+  if (isAiShellExcludedPath(pathname)) return null;
+  return <GlobalAiShell />;
+}
+
 function Router() {
   return (
     <Suspense fallback={<PageFallback />}>
@@ -477,16 +505,19 @@ function App() {
       <ErrorBoundary>
         <ThemeProvider defaultTheme="light">
           <TooltipProvider>
-            <Toaster />
-            <PageViewTracker />
-            <AppBadgeSyncer />
-            <AppDeepLinkHandler />
-            <PushAutoInitializer />
-            <PushNavigationHandler />
-            <RouteTracker />
-            <NetworkStatusOverlay />
-            <Router />
-            <AppBottomNav />
+            <AiShellProvider>
+              <Toaster />
+              <PageViewTracker />
+              <AppBadgeSyncer />
+              <AppDeepLinkHandler />
+              <PushAutoInitializer />
+              <PushNavigationHandler />
+              <RouteTracker />
+              <NetworkStatusOverlay />
+              <Router />
+              <AppBottomNav />
+              <AiShellGate />
+            </AiShellProvider>
           </TooltipProvider>
         </ThemeProvider>
       </ErrorBoundary>
