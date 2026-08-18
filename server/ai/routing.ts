@@ -1,10 +1,13 @@
 import { AI_SERVICE_REGISTRY } from "../../shared/ai/serviceRegistry";
+import { OXM_NAVIGATION_REGISTRY } from "../../shared/ai/navigationRegistry";
+import { OXM_PLATFORM_HELP_REGISTRY } from "../../shared/ai/platformHelpRegistry";
 import { getAiChatProvider, type AiChatMessage } from "./provider";
 import { serializeFactoryContext, serializeHistory, serializeService } from "./serialize";
 import type { AiFactoryContext } from "./factoryContext";
 import type { AiChatTurn } from "./types";
 import { ENTERPRISE_MEMORY_RELEVANCE_GATE, type EnterpriseDiagnosis, type EnterpriseMemoryForDiagnosis } from "./diagnosis";
 import type { FactorySearchStateSnapshot } from "./factorySearchState";
+import type { NewsSearchStateSnapshot } from "./newsSearchState";
 
 /**
  * Layer 2：OXM Resource Routing（OXM 資源分流層）＋最終回答組裝。
@@ -17,6 +20,38 @@ import type { FactorySearchStateSnapshot } from "./factorySearchState";
  */
 export type ServiceRelationType = "sequential" | "concurrent" | "integrated";
 
+/**
+ * 見對話中「Phase 6B + 6C 人工驗收發現一個跨 Resource Routing bug」：這是
+ * 這一輪唯一、通用的「Resource Goal」分類，取代原本讓 factorySourcingContextRelevant／
+ * newsSearchContextRelevant／govSubsidyLookupRelevant 三個欄位各自獨立判斷、
+ * 彼此沒有優先序、導致舊 News Context 可以蓋過這一輪已經明確換成政府補助的
+ * 真實 bug。這是「本輪先判斷 Resource Goal，再決定要不要繼承上一輪的
+ * Resource State」這個通用原則的落地位置——resourceTarget 必須只看「最新
+ * 使用者訊息」本身在要求哪一種資源，previous Resource Context（News／Factory
+ * 既有搜尋摘要）只能用來補齊「這一輪沒有重新講、但明顯延續同一個 target」的
+ * 省略資訊，不能反過來讓舊 target 蓋過這一輪已經清楚換掉的新 target。
+ *
+ * - "none"：這一輪不是在要求 factory_search／news／subsidy_programs 這三種
+ *   直接執行型資源本身——包含純聊天、一般資訊性問題、企業現況描述
+ *   （business_exploration，即使最後方向可能走向政府補助或找工廠）、或明確
+ *   要找顧問／執行動作（action_request／Handoff）。這些都走原本既有的
+ *   diagnosis／routing／Handoff 流程，不受這個欄位影響。
+ * - "factory_search"：這一輪的核心訴求是找製造合作對象本身。
+ * - "news"：這一輪的核心訴求是消息／公告／展覽／競賽／活動／最新資訊本身
+ *   （即使主題剛好是政府補助，例如「最近政府有沒有公布什麼補助消息？」也是
+ *   news，不是 subsidy_programs——差別在使用者要的是「消息」還是「方案本
+ *   身」）。
+ * - "subsidy_programs"：這一輪的核心訴求是政府補助方案本身（有哪些方案、
+ *   某個方案是什麼、方案之間怎麼比較），不是消息、也不是企業自己適不適合。
+ * - "platform_help"（Phase 6D，見對話中「OXM AI 平台操作 / 使用方式能力」）：
+ *   這一輪的核心訴求是「OXM 這個功能怎麼操作／在哪裡」本身（how_to_use），
+ *   不是「幫我直接執行」（do_it_for_me）。例如「我要怎麼找工廠？」「找消息
+ *   怎麼用？」「怎麼刊登工廠？」都是 platform_help；「幫我找台中的CNC加工
+ *   廠」「最近有什麼展覽？」則分別是 factory_search／news，不是
+ *   platform_help——差別在使用者要的是操作說明，還是要 AI 直接動手做。
+ */
+export type OxmResourceTarget = "none" | "factory_search" | "news" | "subsidy_programs" | "platform_help";
+
 export interface OxmRouting {
   primaryService: string | null;
   secondaryService: string | null;
@@ -25,19 +60,74 @@ export interface OxmRouting {
   shouldOfferHandoff: boolean;
   finalReply: string;
   /**
+   * 見上面 OxmResourceTarget 的說明：這是模型每一輪都要先判斷的唯一 Resource
+   * Goal 分類，下面三個 ContextRelevant／LookupRelevant 欄位都是它的下游、
+   * 受它的程式碼防線約束（見 enforceResourceTargetGate），不是各自獨立的
+   * 判斷來源。
+   */
+  resourceTarget: OxmResourceTarget;
+  /**
    * Phase 6 Action Architecture（見對話中「Current Factory Search State 沒有
    * 真正被保存」的架構修正）：這一輪的使用者訊息是不是在針對「這段對話既有
    * 的 Factory Search Context」做出反應、評論、補充或延續（例如否定上一輪
    * 結果、要求更多、問還有沒有別的），不論這一輪的 primaryService 是否又是
-   * factory_search。這是語意判斷，不是關鍵字比對——用來讓 chatService.ts
-   * 決定要不要呼叫 Action Planner，即使這一輪沒有重新執行搜尋。同一次 Layer
-   * 2 呼叫多輸出這一個欄位，不是新增一次 LLM call（見「十七」）。
+   * factory_search。這是語意判斷，不是關鍵字比對。程式碼層級防線
+   * （enforceResourceTargetGate）保證只有 resourceTarget === "factory_search"
+   * 時這個欄位才可能是 true，避免舊 Factory Context 蓋過這一輪明確換掉的新
+   * target（同一種 bug class，見「六：同樣原則未來也適用」）。
    */
   factorySourcingContextRelevant: boolean;
+  /**
+   * Phase 6B（見對話中「找消息」）：同上，News Search 版本——這一輪的使用者
+   * 訊息是不是在針對「這段對話既有的 News Search Context」做出反應、評論、
+   * 補充或延續，不論這一輪的 primaryService 是否又是 news。程式碼層級防線
+   * （enforceResourceTargetGate）保證只有 resourceTarget === "news" 時這個
+   * 欄位才可能是 true——這正是修正「有哪些政府補助被誤送到 news」這個 bug
+   * 的關鍵：即使模型這裡誤判成 true，只要 resourceTarget 已經正確判斷成
+   * subsidy_programs，這裡就會被強制清空，不會蓋過使用者這一輪已經明確換
+   * 掉的新 target。
+   */
+  newsSearchContextRelevant: boolean;
+  /**
+   * Phase 6C（見對話中「政府補助資訊查詢 ≠ Handoff」）：這一輪使用者是不是
+   * 想知道 OXM 目前實際的政府補助方案本身，跟「使用者在描述企業現況、AI
+   * 判斷方向走向 gov_subsidy Handoff」是兩件不同的事——後者仍然走原本的
+   * primaryService／shouldOfferHandoff 流程，不受這個欄位影響。這個欄位不
+   * 再由模型直接輸出（見對話中「跨 Resource Routing bug」根因：原本獨立輸出
+   * 容易跟 newsSearchContextRelevant 互相沒有優先序），改成純粹從
+   * resourceTarget 衍生（resourceTarget === "subsidy_programs"），見
+   * parseRouting。這個欄位獨立於 enforceDiagnosisGate（不會因為
+   * conversationIntent 是 informational 就被清空），因為方案事實查詢本身是
+   * 唯讀操作，不受「診斷是否收斂」限制。
+   */
+  govSubsidyLookupRelevant: boolean;
+  /**
+   * Phase 6C（見對話中「站內 Navigation Action」）：使用者這一輪是不是明確
+   * 想「前往」「帶我去」「我要看」某個 OXM_NAVIGATION_REGISTRY 裡登記的頁面
+   * ——值只能是 Registry 裡的 key 或 null，真正網址由 server 端 Registry 決定
+   * （見「十三：模型不能輸出任意 path」）。同樣獨立於 enforceDiagnosisGate，
+   * 也不是這輪 resourceTarget bug 的範圍（導覽沒有持久化的 context 可以被舊
+   * 狀態蓋過），不受這個修正影響。
+   */
+  navigationTarget: string | null;
+  /**
+   * Phase 6D（見對話中「OXM AI 平台操作 / 使用方式能力」）：resourceTarget 是
+   * "platform_help" 時，這一輪具體對應到 OXM_PLATFORM_HELP_REGISTRY 裡的哪個
+   * 主題 key——真正的操作內容（steps／relatedRoute／requirements／notes）由
+   * server 端 Registry 決定，finalReply 只能依這個主題的真實內容改寫成聊天
+   * 語氣，不能自己編造步驟或按鈕。跟 govSubsidyLookupRelevant 是同一種設計：
+   * platformHelpRelevant 不再是獨立輸出的欄位，直接用
+   * resourceTarget === "platform_help" 判斷（見「七：或更乾淨的等價
+   * structured output」），這裡只保留「是哪一個主題」需要模型額外指出。
+   */
+  platformHelpTarget: string | null;
 }
 
 const VALID_SERVICE_KEYS = new Set(AI_SERVICE_REGISTRY.map(s => s.key));
 const VALID_RELATIONS = new Set<ServiceRelationType>(["sequential", "concurrent", "integrated"]);
+const VALID_NAVIGATION_KEYS = new Set(OXM_NAVIGATION_REGISTRY.map(e => e.key));
+const VALID_RESOURCE_TARGETS = new Set<OxmResourceTarget>(["none", "factory_search", "news", "subsidy_programs", "platform_help"]);
+const VALID_PLATFORM_HELP_KEYS = new Set(OXM_PLATFORM_HELP_REGISTRY.map(t => t.key));
 
 /**
  * finalReply 是唯一真正顯示給使用者的文字，所以「使用者直接問過去的事
@@ -89,6 +179,50 @@ function serializeFactorySearchContext(state: FactorySearchStateSnapshot | null)
   ].join("\n");
 }
 
+/**
+ * 見 OxmRouting.newsSearchContextRelevant 的說明：同上，News Search 版本。
+ * 找消息目前沒有 Action Planner／人工協尋這個後續步驟（見對話中「十三：
+ * 不要人工協尋」），這個欄位純粹用來讓 chatService.ts 判斷要不要在沒有重新
+ * 搜尋的情況下，仍然呼叫 Final Response Composer 針對既有消息搜尋狀態回話
+ * （例如使用者評論「這些我都看過了」但沒有講出新的搜尋條件）。
+ */
+function serializeNewsSearchContext(state: NewsSearchStateSnapshot | null): string {
+  if (!state) {
+    return "目前這段對話沒有任何既有的 News Search Context（從來沒有搜尋過消息，或搜尋狀態已經不存在）——newsSearchContextRelevant 固定回傳 false。";
+  }
+  return [
+    `這段對話稍早已經執行過消息搜尋，目前最新的搜尋狀態是：「${state.searchSummary}」（找到 ${state.resultCount} 則）。`,
+    "只有使用者這一輪的最新訊息，明顯是在針對這個既有消息搜尋結果做出反應、評論、補充、或延續同一個找消息目標時（例如：「這些我都看過了」「還有沒有別的」「有沒有更新的」），才把 newsSearchContextRelevant 設為 true。如果使用者這一輪明顯在講別的事情，一律設為 false——不要因為這段對話「曾經」搜過消息，就把後面每一輪都當成相關。",
+    "newsSearchContextRelevant 跟「這一輪 conversationIntent 要不要判斷成 resource_request（要不要真的重新執行一次搜尋）」是兩個獨立的判斷：使用者這一輪如果講出一個新的、可獨立成立的搜尋條件（例如換了產業或消息類型，像「食品的呢」），conversationIntent 本身就會是 resource_request，這一輪就必須真的重新查詢。只有使用者純粹在評論／否定既有結果、沒有講出任何新的可查詢條件時，才不需要重新查詢。",
+  ].join("\n");
+}
+
+/**
+ * Phase 6C（見「十二、十三」）：Navigation Registry 序列化——AI 只能從這份
+ * 清單裡選一個 key 當 navigationTarget，不能自己編 URL。
+ */
+function serializeNavigationRegistry(): string {
+  return OXM_NAVIGATION_REGISTRY.map(e => `- key: ${e.key}｜${e.title}：${e.description}（route: ${e.route}，僅供你判斷用，finalReply 不需要提到實際網址字串）`).join("\n");
+}
+
+/**
+ * Phase 6D（見對話中「三：不要再維護一大份手寫 Help Prompt」）：把
+ * OXM_PLATFORM_HELP_REGISTRY 的真實內容序列化進 prompt，AI 只能依照這裡列出
+ * 的 steps／relatedRoute／requirements／notes 回答「怎麼操作」類問題，不能
+ * 自己編造步驟、按鈕或頁面（見「九：回答內容要來自真實平台」）。
+ */
+function serializePlatformHelpRegistry(): string {
+  return OXM_PLATFORM_HELP_REGISTRY.map(t => [
+    `【${t.title}】(key: ${t.key})`,
+    `使用者可能的問法：${t.userIntentExamples.join("；")}`,
+    `一句話總結：${t.answerSummary}`,
+    `真實步驟（finalReply 只能從這裡精簡改寫，不能新增這裡沒有的步驟）：${t.steps.map((s, i) => `${i + 1}. ${s}`).join(" ")}`,
+    t.requirements.length ? `使用條件：${t.requirements.join("；")}` : "",
+    t.notes.length ? `必須誠實澄清的地方：${t.notes.join("；")}` : "",
+    t.relatedRoute ? `對應的可導覽頁面 key（見上面 Navigation Registry）：${t.relatedRoute}` : "沒有對應的可導覽頁面",
+  ].filter(Boolean).join("\n")).join("\n\n");
+}
+
 function serializeDiagnosis(d: EnterpriseDiagnosis): string {
   return [
     `conversationIntent（這一輪的第一層分類，見下面「conversationIntent 決定這一輪的處理方式」規則）：${d.conversationIntent}`,
@@ -119,13 +253,39 @@ const ROUTING_SYSTEM_PROMPT = `
 
 確認清楚以上兩點後：這一輪的 finalReply 第一句先誠實回答這個記憶問題，不能忽略、不能顧左右而言他；回答完之後，才視情況接一句原本該問的診斷問題，如果使用者明顯只是在問記憶本身，不用硬塞診斷問題。這條規則優先於下面所有資源分流規則。
 
+【resourceTarget——本輪的 Resource Goal，必須先判斷這個，再決定要不要繼承上一輪的 Resource Context】
+這是比 conversationIntent 更上游、專門處理「這一輪到底是四種直接執行型資源（找工廠／找消息／政府補助方案／平台操作說明）裡的哪一種、還是都不是」的判斷，見對話中「跨 Resource Routing bug」的修正：核心原則是「latest user message 已經明確表達的新 Resource Goal，優先於 previous Resource Context」——previous News／Factory Search Context 只能幫助解析「這一輪明顯延續同一個 target、但省略了條件」的語句，絕對不能讓舊 target 蓋過這一輪已經清楚換掉的新 target。
+
+判斷順序：先只看「最新一則使用者訊息」本身在要求哪一種資源（忽略上一輪聊了什麼），這是 semantic resource-goal distinction，不是關鍵字比對：
+- "factory_search"：核心訴求是「幫我直接找到」製造合作對象本身（do_it_for_me，例如「幫我找台中的CNC加工廠」）。
+- "news"：核心訴求是消息／公告／展覽／競賽／活動／最近發生什麼／最新資訊本身。即使主題剛好是政府補助，只要使用者要的是「消息」而不是「方案本身」，仍然是 news——例如「最近政府有沒有公布什麼補助消息？」「這些補助有沒有什麼新消息？」都是 news，不是 subsidy_programs。
+- "subsidy_programs"：核心訴求是政府補助方案本身——有哪些方案、某個具體方案是什麼、方案之間怎麼比較，例如「OXM現在有哪些政府補助？」「CITD是什麼？」「CITD跟SBIR差在哪？」。
+- "platform_help"（見對話中「OXM AI 平台操作 / 使用方式能力」）：核心訴求是「OXM 這個功能怎麼操作、在哪裡」本身（how_to_use，不是 do_it_for_me），例如「我要怎麼找工廠？」「怎麼刊登工廠？」「詢價怎麼用？」「找消息怎麼用？」「政府補助專區怎麼使用？」「我要怎麼送政府補助詢問？」「怎麼修改工廠資料？」「工廠審核是什麼？」「怎麼看ERP專區？」「登入後可以做什麼？」。判斷成 platform_help 時必須同時指出 platformHelpTarget（見下面「OXM 平台操作說明」段落，只能選裡面實際列出的 key 或 null）。
+- "none"：以上四種都不是——包含純聊天、一般資訊性問題（不涉及操作步驟的知識性問題，例如「CITD是什麼」屬於 subsidy_programs 不是 none，但「ERP是什麼」這種純概念解釋、不是在問怎麼操作，屬於 none／informational）、企業現況描述（例如「我們最近有新製程，也要買設備，有什麼補助適合？」——這是在問「自己公司適合哪個」，屬於 business_exploration，要走既有診斷流程判斷方向，不是直接列清單或操作說明）、或明確要找顧問／執行動作（例如「直接幫我找補助顧問」，屬於 action_request／Handoff，同樣不是列清單或操作說明）。
+
+【resourceTarget 容易混淆的邊界，務必校準】
+1. how_to_use（platform_help）vs do_it_for_me（factory_search／news／subsidy_programs）：「怎麼找台中的金屬加工廠？」「找工廠怎麼搜尋？」是在問操作方式本身 → platform_help；「幫我找台中的金屬加工廠」是要求現在就執行 → factory_search。同樣地「找消息怎麼用？」是 platform_help，「最近有什麼展覽？」是 news；「政府補助專區怎麼使用？」是 platform_help，「OXM現在有哪些政府補助？」是 subsidy_programs。
+2. platform_help vs navigationTarget：「我要怎麼找工廠？」是在問操作方式，屬於 platform_help（可以順便附上 navigationTarget 帶去該頁面，兩者可以同時成立）；「帶我去找工廠」「我要看ERP」是單純的移動意圖，不需要操作說明，這種情況 resourceTarget 應該是 "none"、只靠 navigationTarget 處理，不要因為使用者提到某個頁面就也把 resourceTarget 判斷成 platform_help。
+3. platform_help vs Handoff：「我要怎麼送政府補助詢問？」是在問流程本身 → platform_help，回答完流程不代表已經送出任何詢問或建立顧問媒合；「直接幫我找補助顧問」「幫我找CITD顧問」是明確要找真人 → action_request／Handoff，不是 platform_help。
+
+只有這一輪本身沒有講出新的、可獨立成立的資源條件，但明顯是在延續上一輪同一個 target 時（例如上一輪在問展覽，這一輪只說「食品的呢？」），才可以把 resourceTarget 判斷成跟上一輪相同的 target，用既有 Context 補齊省略的條件；只要這一輪已經換了一個明確可辨識的新 target（例如上一輪在幫使用者找工廠，這一輪改問「那我自己平常要怎麼搜尋？」——這已經是在問操作方式，resourceTarget 必須立刻變成 platform_help，不能因為 currentFactorySearchState 還存在就繼續當 factory_search），resourceTarget 就必須立刻反映新 target，不能因為「上一輪剛聊過某個 target」就繼續當同一種處理——這不是選字面關鍵字，是每次都要重新判斷這一句話真正要的是哪一種資源。
+
+【platformHelpTarget 與回覆內容】
+resourceTarget 是 "platform_help" 時，finalReply 必須完全依照「OXM 平台操作說明」段落裡對應主題的真實 steps 精簡改寫成 3～5 個步驟的聊天語氣，不能自己發明這裡沒有的按鈕、頁面或流程；如果該主題有 notes（例如「工廠審核個案原因 AI 不知道」），要誠實反映，不能假裝知道使用者的個案細節。如果使用者的問題不在任何已知主題範圍內，platformHelpTarget 給 null，finalReply 誠實說明目前沒有這方面的操作說明，不要用一般知識自己編一套流程。
+
 【conversationIntent 決定這一輪的處理方式——這是唯一該看的第一層分類，不要另外列岔題案例清單】
 企業診斷層已經幫這一輪標記了 conversationIntent（見「企業診斷層的結果」段落），這是整個對話架構的第一層分流：
 - casual_conversation／informational：使用者在聊天，或在問一個資訊本身（一般知識，或 OXM 平台／服務有什麼）——finalReply 第一句直接、完整回答這個問題／自然聊天即可，不需要、也不應該進入下面的資源比對邏輯，primaryService／secondaryService／shouldOfferHandoff 這一輪固定是 null／null／false（下面也有程式碼層級的防線保證這件事，不完全依賴這裡）。回答 OXM 平台服務時，依下面「OXM 服務清單」的實際資料自然口語化列出幾個代表性項目＋一句總括即可，不用逐條照唸。回答完之後，如果這段對話原本已經有進行中的企業診斷，可以視情況自然接一句銜接，但不用強迫接——如果使用者接下來的訊息又明確表示要「回到剛才」，必須延續原本企業診斷的既有理解（見「企業診斷層的結果」段落），不能假裝是全新對話重問一次。
 - business_exploration：使用者在描述企業問題——套用下面完整的資源分流規則（1～6）。
-- resource_request／action_request：使用者已經明確講出可執行的資源需求或行動請求——不需要等 bottleneckStatus 收斂，直接依診斷結果對應到能承接的服務（含找工廠等直接執行型能力），見下面規則 2 的判斷方式。
+- resource_request／action_request：使用者已經明確講出可執行的資源需求或行動請求——不需要等 bottleneckStatus 收斂，直接依診斷結果對應到能承接的服務（含找工廠、找消息等直接執行型能力），見下面規則 2 的判斷方式。找消息（news）跟找工廠（factory_search）是同一種角色：只要 recommendedBusinessDirection 明確對應到消息／展覽／競賽／產業資訊搜尋需求本身，primaryService 直接判斷為 news，不需要先追問「要不要找」，也不需要問完地區、數量等細節才能給出判斷——直接回一句自然回覆＋讓 chatService.ts 執行搜尋。
 
 不要把這條規則理解成「針對每一種案例各寫一條特規」——conversationIntent 本身就是唯一的分流依據，finalReply 每一輪都要讓使用者感覺得到對話真的在往前推進，不是原地重複上一輪已經問過、已經被使用者回答過的問題（這是 Layer 1 的責任，見 diagnosis.ts 規則 5b，這裡不重複維護一份）。
+
+【政府補助方案事實查詢的回覆語氣】
+resourceTarget 判斷成 "subsidy_programs" 時：真正的方案細節查詢由後端直接查真實資料庫回答，你不需要（也不應該）自己在 finalReply 裡背誦方案內容，這一輪的 finalReply 可以留空泛一點的過渡語氣，實際內容會由另一個步驟依照真實資料重組。
+
+【navigationTarget——站內導覽，獨立於 conversationIntent 分流，不受 enforceDiagnosisGate 影響】
+只有使用者這一輪明確表達「想現在去看／前往」某個 OXM 頁面本身時（例如「帶我去找工廠」「我要看ERP」「帶我去找消息」），才從上面「OXM 站內可導覽頁面」清單裡選一個對應的 key 填入 navigationTarget；純粹問「XX是什麼」這種資訊性問題（例如「ERP是什麼？」）不算，navigationTarget 維持 null，不要強迫每次提到某個服務都附帶導覽。使用者提到的頁面如果不在清單裡，navigationTarget 也是 null。同一輪最多只選一個最符合的 key，不要因為使用者一次問了「OXM有哪些服務」就想列出好幾個導覽目標。
 
 【非 OXM 純閒聊收斂——只在 consecutiveOutOfDomainCasualTurns >= 4 時才適用】
 下面會告訴你這一輪是「連續第幾輪」跟企業／OXM 完全無關的純閒聊（例如聊天氣、咖啡、電影這種話題；跟企業／製造業相關的閒聊如「今天工廠很煩」不算，見 diagnosis.ts 的判斷，不會累加這個數字）。核心目的不是禁止聊天，是避免對話被長時間拿來當一般聊天機器人用、持續消耗資源，同時要保留自然、不生硬的體驗：
@@ -177,7 +337,11 @@ shouldOfferHandoff 這個欄位就是 handoffReadiness 的結果：只回答一�
   "serviceFitReason": "string，內部判斷理由，不會直接顯示給使用者",
   "shouldOfferHandoff": true/false,
   "finalReply": "string，直接顯示給使用者的聊天回覆，遵守上面的語氣與長度規則",
-  "factorySourcingContextRelevant": true/false
+  "resourceTarget": "none 或 factory_search 或 news 或 subsidy_programs 或 platform_help（見「resourceTarget」規則，必須先判斷這個）",
+  "factorySourcingContextRelevant": true/false,
+  "newsSearchContextRelevant": true/false,
+  "navigationTarget": "Registry 裡的 key 或 null",
+  "platformHelpTarget": "Help Registry 裡的 key 或 null（只有 resourceTarget 是 platform_help 時才可能非 null）"
 }
 `.trim();
 
@@ -187,6 +351,7 @@ function buildRoutingPrompt(params: {
   factoryContext: AiFactoryContext | null;
   enterpriseMemory: EnterpriseMemoryForDiagnosis | null;
   currentFactorySearchState: FactorySearchStateSnapshot | null;
+  currentNewsSearchState: NewsSearchStateSnapshot | null;
   consecutiveOutOfDomainCasualTurns: number;
 }): string {
   const servicesBlock = AI_SERVICE_REGISTRY.map(serializeService).join("\n\n");
@@ -202,6 +367,12 @@ function buildRoutingPrompt(params: {
       servicesBlock,
     "\n\n===== 既有 Factory Search Context（判斷 factorySourcingContextRelevant 用，見下方 JSON 格式）=====\n" +
       serializeFactorySearchContext(params.currentFactorySearchState),
+    "\n\n===== 既有 News Search Context（判斷 newsSearchContextRelevant 用，見下方 JSON 格式）=====\n" +
+      serializeNewsSearchContext(params.currentNewsSearchState),
+    "\n\n===== OXM 站內可導覽頁面（判斷 navigationTarget 用，只能選這裡面的 key 或 null，不能自己編別的）=====\n" +
+      serializeNavigationRegistry(),
+    "\n\n===== OXM 平台操作說明（判斷 resourceTarget===\"platform_help\" 與 platformHelpTarget 用，只依下面實際列出的主題與步驟回答，不要編造不存在的按鈕或流程）=====\n" +
+      serializePlatformHelpRegistry(),
     "\n\n===== 非 OXM 純閒聊收斂（見上面規則）=====\n" +
       `這一輪 consecutiveOutOfDomainCasualTurns（已經包含這一輪本身，server-authoritative 算好的）＝${params.consecutiveOutOfDomainCasualTurns}。`,
   ].join("\n");
@@ -225,6 +396,14 @@ function parseRouting(raw: string): OxmRouting {
   if (!finalReply) {
     throw new Error("Layer 2 routing 回傳空的 finalReply");
   }
+  const navigationTarget =
+    typeof parsed.navigationTarget === "string" && VALID_NAVIGATION_KEYS.has(parsed.navigationTarget)
+      ? parsed.navigationTarget
+      : null;
+  const resourceTarget: OxmResourceTarget =
+    typeof parsed.resourceTarget === "string" && VALID_RESOURCE_TARGETS.has(parsed.resourceTarget as OxmResourceTarget)
+      ? (parsed.resourceTarget as OxmResourceTarget)
+      : "none";
   return {
     primaryService,
     secondaryService,
@@ -232,7 +411,25 @@ function parseRouting(raw: string): OxmRouting {
     serviceFitReason: String(parsed.serviceFitReason ?? ""),
     shouldOfferHandoff: Boolean(parsed.shouldOfferHandoff),
     finalReply,
+    resourceTarget,
     factorySourcingContextRelevant: Boolean(parsed.factorySourcingContextRelevant),
+    newsSearchContextRelevant: Boolean(parsed.newsSearchContextRelevant),
+    // 見對話中「跨 Resource Routing bug」的根因修正：不再讓模型獨立輸出這個
+    // 欄位（原本的獨立輸出容易跟 newsSearchContextRelevant 沒有優先序、互相
+    // 打架），改成純粹從 resourceTarget 衍生——resourceTarget 本身已經是
+    // 「先判斷 Resource Goal」的唯一權威來源。
+    govSubsidyLookupRelevant: resourceTarget === "subsidy_programs",
+    navigationTarget,
+    // Phase 6D：只有 resourceTarget 真的是 "platform_help" 時，platformHelpTarget
+    // 才可能非 null——即使模型不遵守規則、在別的 resourceTarget 底下也塞了一個
+    // key，這裡直接忽略，避免 platform_help 的判斷來源分裂成兩個互相沒有優先
+    // 序的欄位（跟 govSubsidyLookupRelevant 同一種根因修正）。
+    platformHelpTarget:
+      resourceTarget === "platform_help" &&
+      typeof parsed.platformHelpTarget === "string" &&
+      VALID_PLATFORM_HELP_KEYS.has(parsed.platformHelpTarget)
+        ? parsed.platformHelpTarget
+        : null,
   };
 }
 
@@ -285,12 +482,32 @@ function enforceDiagnosisGate(diagnosis: EnterpriseDiagnosis, routing: OxmRoutin
   return routing;
 }
 
+/**
+ * 程式碼層級的硬性防線，修正「Phase 6B + 6C 人工驗收發現一個跨 Resource
+ * Routing bug」：resourceTarget 是這一輪唯一的 Resource Goal 權威來源，
+ * factorySourcingContextRelevant／newsSearchContextRelevant 只是「要不要繼承
+ * 對應的 Resource State」的訊號，不能在 resourceTarget 已經判斷成別的
+ * target（或完全不是資源請求）時還維持 true——不然舊的 News／Factory
+ * Context 就會蓋過這一輪已經明確換掉的新 target（例如上一輪在聊消息，這一
+ * 輪已經問「你們現在有哪些政府補助？」，newsSearchContextRelevant 卻還是
+ * true）。不完全依賴模型自己遵守 prompt 指示，跟 enforceDiagnosisGate 是同一
+ * 種設計哲學：結構化欄位的正確性用程式碼保證。
+ */
+function enforceResourceTargetGate(routing: OxmRouting): OxmRouting {
+  return {
+    ...routing,
+    factorySourcingContextRelevant: routing.resourceTarget === "factory_search" ? routing.factorySourcingContextRelevant : false,
+    newsSearchContextRelevant: routing.resourceTarget === "news" ? routing.newsSearchContextRelevant : false,
+  };
+}
+
 export async function runOxmRouting(params: {
   diagnosis: EnterpriseDiagnosis;
   history: AiChatTurn[];
   factoryContext: AiFactoryContext | null;
   enterpriseMemory?: EnterpriseMemoryForDiagnosis | null;
   currentFactorySearchState?: FactorySearchStateSnapshot | null;
+  currentNewsSearchState?: NewsSearchStateSnapshot | null;
   /** 見「非 OXM 純閒聊收斂機制」：chatService.ts 用 resolveConsecutiveOutOfDomainCasualTurns() 算好再傳進來，這裡不重算。訪客／無狀態路徑不傳，預設為 0（沒有 session state 可以累計，不觸發收斂）。 */
   consecutiveOutOfDomainCasualTurns?: number;
 }): Promise<OxmRouting> {
@@ -298,6 +515,7 @@ export async function runOxmRouting(params: {
     ...params,
     enterpriseMemory: params.enterpriseMemory ?? null,
     currentFactorySearchState: params.currentFactorySearchState ?? null,
+    currentNewsSearchState: params.currentNewsSearchState ?? null,
     consecutiveOutOfDomainCasualTurns: params.consecutiveOutOfDomainCasualTurns ?? 0,
   });
   const messages: AiChatMessage[] = [
@@ -305,11 +523,11 @@ export async function runOxmRouting(params: {
     {
       role: "user",
       content:
-        "請依照上面的診斷結果與規則，輸出這一輪的資源分流判斷與 finalReply。先檢查對話逐字稿裡使用者最新一則訊息是不是在問過去的互動本身（見「最優先檢查」規則），是的話 finalReply 必須先回答那個問題。也請判斷 factorySourcingContextRelevant（見「既有 Factory Search Context」段落的規則）。",
+        "請依照上面的診斷結果與規則，輸出這一輪的資源分流判斷與 finalReply。先判斷 resourceTarget（見「resourceTarget」規則段落，這是最上游的判斷，只看最新使用者訊息在要求哪一種資源，不要被上一輪的既有 Context 蓋過；resourceTarget 是 platform_help 時要同時給出 platformHelpTarget）。先檢查對話逐字稿裡使用者最新一則訊息是不是在問過去的互動本身（見「最優先檢查」規則），是的話 finalReply 必須先回答那個問題。也請判斷 factorySourcingContextRelevant（見「既有 Factory Search Context」段落的規則）、newsSearchContextRelevant（見「既有 News Search Context」段落的規則）與 navigationTarget（見同名規則段落）。",
     },
   ];
   const provider = getAiChatProvider("routing");
   const raw = await provider.completeJson(messages, 600);
   const routing = parseRouting(raw);
-  return enforceDiagnosisGate(params.diagnosis, routing);
+  return enforceDiagnosisGate(params.diagnosis, enforceResourceTargetGate(routing));
 }

@@ -3,7 +3,7 @@
  * ——prompt 內容與防禦性 parse 驗證。不打真實 OpenAI API：mock provider.ts。
  */
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import type { ComposerFactorySearchInput, ComposerActionInput } from "./responseComposer";
+import type { ComposerFactorySearchInput, ComposerActionInput, ComposerSubsidyQueryInput } from "./responseComposer";
 
 const mockCompleteJson = vi.fn();
 vi.mock("./provider", () => ({
@@ -123,7 +123,7 @@ describe("composeFinalResponse — 語氣與長度規則、防禦性 parse", () 
     await composeFinalResponse({ history: [], factorySearch: MATCH_FOUND_INPUT, action: null });
     const prompt = mockCompleteJson.mock.calls[0][0][0].content as string;
     expect(prompt).toContain("最多 90 個中文字");
-    expect(prompt).toContain("絕對不要自己編造工廠名稱或細節");
+    expect(prompt).toContain("絕對不要自己編造工廠名稱、消息標題、補助方案名稱或細節");
   });
 
   it("模型回傳合法 finalReply 時原樣回傳", async () => {
@@ -140,5 +140,70 @@ describe("composeFinalResponse — 語氣與長度規則、防禦性 parse", () 
   it("finalReply 缺漏時拋錯", async () => {
     mockCompleteJson.mockResolvedValue(JSON.stringify({}));
     await expect(composeFinalResponse({ history: [], factorySearch: MATCH_FOUND_INPUT, action: null })).rejects.toThrow();
+  });
+});
+
+describe("composeFinalResponse — Phase 6C：政府補助方案查詢（見對話中「政府補助資訊查詢 ≠ Handoff」）", () => {
+  const CITD_ONLY_INPUT: ComposerSubsidyQueryInput = {
+    candidates: [{
+      slug: "citd", title: "協助傳統產業技術開發", shortTitle: "CITD",
+      description: "補助技術升級、製程改善及智慧化轉型所需研發費用。",
+      targetAudience: null, highlights: ["傳統產業適用"], maxFundingLabel: "1,000 萬元",
+      statusLabel: null, registryProfile: null, url: "/upgrade-center",
+    }],
+    totalActiveCount: 5,
+    matchedProgramSlugs: ["citd"],
+    compareMode: false,
+    zeroResult: false,
+    registryOnlyMatch: null,
+    viewAllUrl: "/upgrade-center",
+  };
+
+  it("單一方案查詢：prompt 帶出真實方案資料，不是 compareMode", async () => {
+    mockCompleteJson.mockResolvedValue(JSON.stringify({ finalReply: "x" }));
+    await composeFinalResponse({ history: [], subsidySearch: CITD_ONLY_INPUT, action: null });
+    const prompt = mockCompleteJson.mock.calls[0][0][0].content as string;
+    expect(prompt).toContain("協助傳統產業技術開發");
+    expect(prompt).toContain("CITD");
+    expect(prompt).not.toContain("比較多個方案");
+  });
+
+  it("compareMode=true：prompt 明確要求分別講清楚每個方案的差異", async () => {
+    mockCompleteJson.mockResolvedValue(JSON.stringify({ finalReply: "x" }));
+    const compareInput: ComposerSubsidyQueryInput = {
+      ...CITD_ONLY_INPUT,
+      compareMode: true,
+      matchedProgramSlugs: ["citd", "sbir"],
+      candidates: [
+        ...CITD_ONLY_INPUT.candidates,
+        { slug: "sbir", title: "小型企業創新研發計畫", shortTitle: "SBIR", description: "偏創新研發補助。", targetAudience: null, highlights: [], maxFundingLabel: "3,000 萬元", statusLabel: null, registryProfile: null, url: "/upgrade-center" },
+      ],
+    };
+    await composeFinalResponse({ history: [], subsidySearch: compareInput, action: null });
+    const prompt = mockCompleteJson.mock.calls[0][0][0].content as string;
+    expect(prompt).toContain("比較多個方案");
+    expect(prompt).toContain("小型企業創新研發計畫");
+  });
+
+  it("zeroResult=true 且沒有 registryOnlyMatch：prompt 明確禁止編造方案內容", async () => {
+    mockCompleteJson.mockResolvedValue(JSON.stringify({ finalReply: "x" }));
+    const zeroInput: ComposerSubsidyQueryInput = {
+      ...CITD_ONLY_INPUT, candidates: [], matchedProgramSlugs: [], zeroResult: true, registryOnlyMatch: null,
+    };
+    await composeFinalResponse({ history: [], subsidySearch: zeroInput, action: null });
+    const prompt = mockCompleteJson.mock.calls[0][0][0].content as string;
+    expect(prompt).toContain("絕對不能編造方案名稱、金額或資格條件");
+  });
+
+  it("zeroResult=true 但有 registryOnlyMatch（例如 19+1）：prompt 帶出 Registry 背景知識，且誠實標示不是 OXM 公開方案卡片", async () => {
+    mockCompleteJson.mockResolvedValue(JSON.stringify({ finalReply: "x" }));
+    const registryInput: ComposerSubsidyQueryInput = {
+      ...CITD_ONLY_INPUT, candidates: [], matchedProgramSlugs: [], zeroResult: true,
+      registryOnlyMatch: { name: "製造業 19+1 AI 診斷輔導", profile: "官方正式名稱為「產業競爭力輔導團」..." },
+    };
+    await composeFinalResponse({ history: [], subsidySearch: registryInput, action: null });
+    const prompt = mockCompleteJson.mock.calls[0][0][0].content as string;
+    expect(prompt).toContain("製造業 19+1 AI 診斷輔導");
+    expect(prompt).toContain("不是 upgradePrograms 資料表裡的公開方案卡片");
   });
 });

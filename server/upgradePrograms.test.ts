@@ -11,14 +11,15 @@ function readSource(...segments: string[]): string {
 }
 
 describe("政府補助方案既有內容與公開篩選契約", () => {
-  it("保留原本五項方案、名稱、說明、標籤、補助金額與排序", () => {
-    expect(UPGRADE_PROGRAM_SEEDS).toHaveLength(5);
+  it("保留原本六項方案（含 19+1）、名稱、說明、標籤、補助金額與排序", () => {
+    expect(UPGRADE_PROGRAM_SEEDS).toHaveLength(6);
     expect(UPGRADE_PROGRAM_SEEDS.map((program) => program.shortTitle)).toEqual([
       "SBIR",
       "CITD",
       "SIIR",
       "研發轉型補助",
       "海外通路計畫",
+      "19+1",
     ]);
     expect(UPGRADE_PROGRAM_SEEDS.map((program) => program.title)).toEqual([
       "小型企業創新研發計畫",
@@ -26,6 +27,7 @@ describe("政府補助方案既有內容與公開篩選契約", () => {
       "服務業創新研發計畫",
       "企業研發轉型與升級計畫",
       "海外市場拓展與通路布局",
+      "製造業 19+1 AI 診斷輔導",
     ]);
     expect(UPGRADE_PROGRAM_SEEDS.map((program) => program.maxFundingLabel)).toEqual([
       "3,000 萬元",
@@ -33,6 +35,9 @@ describe("政府補助方案既有內容與公開篩選契約", () => {
       "1,000 萬元",
       "4,000 萬元",
       "2,000 萬元",
+      // 19+1 診斷費用由政府直接支付給輔導團隊，不是企業可拿到的補助金額上限，
+      // 刻意不填數字避免誤解成現金補助（見對話中「政府補助資料一致性問題」）。
+      null,
     ]);
     for (const program of UPGRADE_PROGRAM_SEEDS) {
       expect(program.description.trim().length).toBeGreaterThan(0);
@@ -40,6 +45,15 @@ describe("政府補助方案既有內容與公開篩選契約", () => {
       expect(program.enabled).toBe(true);
       expect(program.ctaLabel).toBe("免費評估資格");
     }
+  });
+
+  it("19+1 方案內容誠實反映其性質是 AI 診斷／輔導支持，不是現金補助（見對話中「三」）", () => {
+    const nineteenPlusOne = UPGRADE_PROGRAM_SEEDS.find((p) => p.slug === "manufacturing-19plus1");
+    expect(nineteenPlusOne).toBeDefined();
+    expect(nineteenPlusOne!.maxFundingLabel).toBeNull();
+    expect(nineteenPlusOne!.description).not.toContain("現金");
+    expect(nineteenPlusOne!.description).not.toMatch(/付\s*1\s*萬/);
+    expect(nineteenPlusOne!.description).toContain("診斷");
   });
 
   it("slug 與 displayOrder 唯一，排序穩定", () => {
@@ -60,22 +74,22 @@ describe("政府補助方案既有內容與公開篩選契約", () => {
     expect(selectVisibleUpgradePrograms(programs).map((program) => program.title)).toEqual(["第二", "第三"]);
   });
 
-  it("第六項資料加入後會自然進入公開清單，不需要名稱分支", () => {
-    const six = UPGRADE_PROGRAM_SEEDS.map((program, index) => ({
+  it("再新增一項資料後會自然進入公開清單，不需要名稱分支", () => {
+    const withExtra = UPGRADE_PROGRAM_SEEDS.map((program, index) => ({
       ...program,
       id: index + 1,
       archivedAt: null,
     })).concat({
       ...UPGRADE_PROGRAM_SEEDS[0],
-      id: 6,
-      slug: "temporary-sixth",
+      id: UPGRADE_PROGRAM_SEEDS.length + 1,
+      slug: "temporary-extra",
       shortTitle: "NEW",
-      title: "暫時第六項",
-      displayOrder: 60,
+      title: "暫時新增項",
+      displayOrder: 999,
       archivedAt: null,
     });
-    expect(selectVisibleUpgradePrograms(six)).toHaveLength(6);
-    expect(selectVisibleUpgradePrograms(six).at(-1)?.title).toBe("暫時第六項");
+    expect(selectVisibleUpgradePrograms(withExtra)).toHaveLength(UPGRADE_PROGRAM_SEEDS.length + 1);
+    expect(selectVisibleUpgradePrograms(withExtra).at(-1)?.title).toBe("暫時新增項");
   });
 });
 

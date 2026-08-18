@@ -24,6 +24,10 @@ import {
 import { planNextOxmAction, type FactorySearchStateForPlanner } from "./actionPlanner";
 import { composeFinalResponse } from "./responseComposer";
 import { buildFactorySearchStateSnapshot, type FactorySearchStateSnapshot } from "./factorySearchState";
+import { runNewsSearchAction, type NewsSearchActionResult } from "./newsSearchAction";
+import { buildNewsSearchStateSnapshot, type NewsSearchStateSnapshot } from "./newsSearchState";
+import { runSubsidyProgramsAction, type SubsidyProgramsActionResult } from "./subsidyProgramsAction";
+import { getNavigationEntry } from "../../shared/ai/navigationRegistry";
 import type { AiConversation, AiFactorySearchRequest } from "../../drizzle/schema";
 import type { AiChatTurn } from "./types";
 import type { ConversationState } from "./conversationState";
@@ -100,6 +104,39 @@ function resolveRequestedMatchCount(plannerValue: number | null, existing: Facto
 }
 
 /**
+ * Phase 6B：同上 resolveFactorySearchStateSnapshot 的邏輯，News Search 版本，
+ * 但比工廠搜尋簡單——沒有 pending request 這個概念（見「十三：不要人工協
+ * 尋」），只有「這輪重新搜尋」跟「沿用既有快照」兩種情況。
+ */
+function resolveNewsSearchStateSnapshot(params: {
+  newsSearchResult: NewsSearchActionResult | null;
+  currentNewsSearchState: NewsSearchStateSnapshot | null;
+}): NewsSearchStateSnapshot | null {
+  const { newsSearchResult, currentNewsSearchState } = params;
+  if (newsSearchResult) return buildNewsSearchStateSnapshot(newsSearchResult);
+  return currentNewsSearchState;
+}
+
+/**
+ * Phase 6C（見「十三：Navigation Registry 必須是 server-authoritative」）：
+ * routing.navigationTarget 只會是 Registry 裡的 key 或 null（parseRouting 已經
+ * 驗證過），這裡查出真正的 title／route 給 client 顯示按鈕用——模型全程沒有
+ * 機會輸出任何 URL 字串。
+ */
+export interface NavigationAction {
+  key: string;
+  title: string;
+  route: string;
+}
+
+function resolveNavigationAction(navigationTarget: string | null): NavigationAction | null {
+  if (!navigationTarget) return null;
+  const entry = getNavigationEntry(navigationTarget);
+  if (!entry) return null;
+  return { key: entry.key, title: entry.title, route: entry.route };
+}
+
+/**
  * OXM AI 對話核心——兩條路徑：
  *
  * 1. runAiChat()：無狀態單輪，被訪客聊天（沒有 userId）與本地測試腳本
@@ -123,6 +160,12 @@ export interface StatelessChatResult {
    * 登入）。只有 Layer 2 判斷 primaryService 是 "factory_search" 時才有值。
    */
   factorySearchResult: FactorySearchActionResult | null;
+  /** Phase 6B：見 factorySearchResult 的說明，找消息版本。只有 Layer 2 判斷 primaryService 是 "news" 時才有值。 */
+  newsSearchResult: NewsSearchActionResult | null;
+  /** Phase 6C：見 factorySearchResult 的說明，政府補助方案查詢版本。只有 Layer 2 判斷 govSubsidyLookupRelevant 為真時才有值。 */
+  subsidyProgramsResult: SubsidyProgramsActionResult | null;
+  /** Phase 6C：站內導覽（見對話中「站內 Navigation Action」），只有 Layer 2 判斷 navigationTarget 有對應到 Registry 裡的 key 時才有值。 */
+  navigationAction: NavigationAction | null;
 }
 
 export async function runAiChat(params: {
@@ -146,14 +189,19 @@ export async function runAiChat(params: {
     });
     const factorySearchResult =
       routing.primaryService === "factory_search" ? await runFactorySearchAction(params.history) : null;
-    return { reply: routing.finalReply, factorySearchResult };
+    const newsSearchResult =
+      routing.primaryService === "news" ? await runNewsSearchAction(params.history) : null;
+    const subsidyProgramsResult =
+      routing.govSubsidyLookupRelevant ? await runSubsidyProgramsAction(params.history) : null;
+    const navigationAction = resolveNavigationAction(routing.navigationTarget);
+    return { reply: routing.finalReply, factorySearchResult, newsSearchResult, subsidyProgramsResult, navigationAction };
   } catch (error) {
     console.error("[chatService] Layer 2 routing failed, falling back to Layer 1 content:", error);
     const reply =
       diagnosis.nextBestQuestion ??
       diagnosis.recommendedBusinessDirection ??
       "能再多說一點你現在遇到的狀況嗎？";
-    return { reply, factorySearchResult: null };
+    return { reply, factorySearchResult: null, newsSearchResult: null, subsidyProgramsResult: null, navigationAction: null };
   }
 }
 
@@ -176,6 +224,12 @@ export interface PersistentChatResult {
   handoffOffer: HandoffOffer | null;
   /** Phase 6A：見 StatelessChatResult.factorySearchResult 的說明，登入使用者版本。 */
   factorySearchResult: FactorySearchActionResult | null;
+  /** Phase 6B：見 StatelessChatResult.newsSearchResult 的說明，登入使用者版本。 */
+  newsSearchResult: NewsSearchActionResult | null;
+  /** Phase 6C：見 StatelessChatResult.subsidyProgramsResult 的說明，登入使用者版本。 */
+  subsidyProgramsResult: SubsidyProgramsActionResult | null;
+  /** Phase 6C：見 StatelessChatResult.navigationAction 的說明，登入使用者版本。 */
+  navigationAction: NavigationAction | null;
   /**
    * Phase 6A.1：這一輪是否觸發／更新／維持了一筆人工協尋 request——只有登入
    * 使用者才有（訪客沒有 userId，人工協尋沒有對象可以回覆，見對話中「十八、
@@ -273,6 +327,9 @@ export async function runPersistentAiChat(params: {
         conversationId: conversation.id,
         handoffOffer: null,
         factorySearchResult: null,
+        newsSearchResult: null,
+        subsidyProgramsResult: null,
+        navigationAction: null,
         manualSourcing: null,
       };
     }
@@ -296,6 +353,10 @@ export async function runPersistentAiChat(params: {
   // 用），兩者都會餵給下面的 Action Planner。
   const pendingFactorySearchRequest = await getPendingFactorySearchRequestForConversation(conversation.id);
   const currentFactorySearchState = turnContext.previousState?.currentFactorySearchState ?? null;
+  // Phase 6B：找消息沒有 pending request 這個概念（見「十三」），只需要既有
+  // News Search State 本身，一樣不餵給 Layer 1，會餵給 Layer 2（判斷
+  // newsSearchContextRelevant 用）。
+  const currentNewsSearchState = turnContext.previousState?.currentNewsSearchState ?? null;
 
   const diagnosis = await runEnterpriseDiagnosis({
     history: turnContext.history,
@@ -311,11 +372,16 @@ export async function runPersistentAiChat(params: {
   let finalReply: string;
   let nextState = turnContext.previousState ?? createEmptyConversationState(!!factoryContext);
   let factorySearchResult: FactorySearchActionResult | null = null;
+  let newsSearchResult: NewsSearchActionResult | null = null;
+  let subsidyProgramsResult: SubsidyProgramsActionResult | null = null;
+  let navigationAction: NavigationAction | null = null;
   let manualSourcing: ManualSourcingResult | null = null;
   // 這一輪最終要寫回 ConversationState 的 Factory Search State，預設沿用舊值
   // 不變（見「十四」）；只有真的重新搜尋，或 Planner 這輪換算出新的
   // requestedCount 時才會被更新。
   let resolvedFactorySearchState = currentFactorySearchState;
+  // Phase 6B：同上，News Search State 版本。
+  let resolvedNewsSearchState = currentNewsSearchState;
 
   try {
     const routing = await runOxmRouting({
@@ -324,6 +390,7 @@ export async function runPersistentAiChat(params: {
       factoryContext,
       enterpriseMemory,
       currentFactorySearchState,
+      currentNewsSearchState,
       consecutiveOutOfDomainCasualTurns,
     });
     finalReply = routing.finalReply;
@@ -335,6 +402,24 @@ export async function runPersistentAiChat(params: {
     if (routing.primaryService === "factory_search") {
       factorySearchResult = await runFactorySearchAction(turnContext.history, conversation.id);
     }
+    // Phase 6B：同上，找消息版本——一樣直接沿用 Layer 2 的 primaryService
+    // 判斷，不用額外的 LLM 呼叫再問一次「要不要搜尋」。
+    if (routing.primaryService === "news") {
+      newsSearchResult = await runNewsSearchAction(turnContext.history);
+    }
+    // Phase 6C：政府補助方案查詢——獨立於 primaryService（見 routing.ts
+    // govSubsidyLookupRelevant 的說明：informational 詢問特定方案本身時，
+    // primaryService 會被 enforceDiagnosisGate 清空，但這個欄位不受影響，
+    // 才能讓「CITD是什麼？」這種問法也走真實 DB 查詢，不是走原本 Layer 2
+    // 自己背知識回答）。沒有持久化的 currentSubsidyQueryState（見「十九」），
+    // 每次觸發都是這一輪即時查詢。
+    if (routing.govSubsidyLookupRelevant) {
+      subsidyProgramsResult = await runSubsidyProgramsAction(turnContext.history);
+    }
+    // Phase 6C：站內導覽——同樣獨立於 primaryService／conversationIntent，
+    // 純粹讀 Registry，不影響 Handoff 或其他 Action 分支（見「十五：Navigation
+    // 不等於 Handoff」）。
+    navigationAction = resolveNavigationAction(routing.navigationTarget);
 
     // Action Planner／Final Response Composer 呼叫條件（見「四、Planner
     // invocation 條件必須修正」，及「OXM AI 已完成功能整體驗收修正」三十：
@@ -448,6 +533,38 @@ export async function runPersistentAiChat(params: {
           action: decision.action === "none" ? null : { action: decision.action, reasonCategory: decision.reasonCategory, outcome: actionOutcome },
         });
       }
+    } else {
+      // Phase 6B：找消息版本——同樣的邏輯，但沒有 Action Planner（見「十三：
+      // 不要人工協尋」），這輪真的重新搜尋過、或既有 News Search Context 且
+      // Layer 2 判斷這一輪確實在延續或評論它，就呼叫 Composer 針對消息搜尋
+      // 狀態組出誠實的回覆。跟工廠搜尋分支互斥（else），同一輪只會有其中一種
+      // Tool Result，不會同時發生。
+      const shouldComposeNewsReply =
+        !!newsSearchResult ||
+        (!!currentNewsSearchState && routing.newsSearchContextRelevant);
+
+      if (shouldComposeNewsReply) {
+        const workingNewsSnapshot = resolveNewsSearchStateSnapshot({ newsSearchResult, currentNewsSearchState });
+        if (workingNewsSnapshot) {
+          resolvedNewsSearchState = workingNewsSnapshot;
+          // 見「十一」的同一種設計：Composer 是本輪唯一允許新增的一次 LLM
+          // call，跟 shouldComposeNewsReply 共用同一個 gate，不是每輪都多打。
+          finalReply = await composeFinalResponse({
+            history: turnContext.history,
+            newsSearch: { ...workingNewsSnapshot, isFreshSearch: !!newsSearchResult },
+            action: null,
+          });
+        }
+      } else if (subsidyProgramsResult) {
+        // Phase 6C：政府補助方案查詢版本——沒有跨輪持久狀態（見「十九：不要
+        // 為了形式硬加」），只要這一輪真的觸發過查詢就一定呼叫 Composer 針對
+        // 真實 DB 結果組出誠實回覆；跟工廠搜尋／找消息分支互斥。
+        finalReply = await composeFinalResponse({
+          history: turnContext.history,
+          subsidySearch: subsidyProgramsResult,
+          action: null,
+        });
+      }
     }
 
     nextState = deriveConversationState({
@@ -456,6 +573,7 @@ export async function runPersistentAiChat(params: {
       previousState: turnContext.previousState,
       companyContextKnown: !!factoryContext,
       factorySearchState: resolvedFactorySearchState,
+      newsSearchState: resolvedNewsSearchState,
       consecutiveOutOfDomainCasualTurns,
     });
   } catch (error) {
@@ -507,6 +625,9 @@ export async function runPersistentAiChat(params: {
     conversationId: conversation.id,
     handoffOffer: resolveHandoffOffer(nextState),
     factorySearchResult,
+    newsSearchResult,
+    subsidyProgramsResult,
+    navigationAction,
     manualSourcing,
   };
 }

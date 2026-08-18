@@ -1,6 +1,7 @@
 import type { EnterpriseDiagnosis, BottleneckStatus } from "./diagnosis";
 import type { OxmRouting, ServiceRelationType } from "./routing";
 import type { FactorySearchStateSnapshot } from "./factorySearchState";
+import type { NewsSearchStateSnapshot } from "./newsSearchState";
 
 /**
  * Current Conversation State——只屬於「這一段」對話的短期理解摘要，不是跨
@@ -37,6 +38,13 @@ export interface ConversationState {
    * （不會因為這一輪聊別的就被清空，見 chatService.ts 的更新邏輯）。
    */
   currentFactorySearchState: FactorySearchStateSnapshot | null;
+  /**
+   * Phase 6B：這段對話目前的 News Search State（見
+   * server/ai/newsSearchState.ts 的完整說明）——跟 currentFactorySearchState
+   * 同一種設計：描述「剛剛搜尋了什麼消息」，同一段對話持續存在，新搜尋覆蓋
+   * 成最新狀態，沒有新搜尋時原樣保留。
+   */
+  currentNewsSearchState: NewsSearchStateSnapshot | null;
   /**
    * 見對話中「非 OXM 純閒聊收斂機制」：連續幾輪是「conversationIntent=
    * casual_conversation 且跟企業／OXM 完全無關」的閒聊——純屬這一段對話的
@@ -78,6 +86,7 @@ export function createEmptyConversationState(companyContextKnown: boolean): Conv
     unresolvedQuestion: null,
     lastUpdatedAt: new Date().toISOString(),
     currentFactorySearchState: null,
+    currentNewsSearchState: null,
     consecutiveOutOfDomainCasualTurns: 0,
     outOfDomainCasualMode: "normal",
   };
@@ -121,10 +130,12 @@ export function deriveConversationState(params: {
    * 更新過的舊快照，一律由呼叫端解析好、原樣寫入，這裡不做任何判斷。
    */
   factorySearchState: FactorySearchStateSnapshot | null;
+  /** 同上，Phase 6B News Search 版本，一律由呼叫端解析好、原樣寫入。 */
+  newsSearchState: NewsSearchStateSnapshot | null;
   /** chatService.ts 已經用 resolveConsecutiveOutOfDomainCasualTurns() 算好的這一輪數值，原樣寫入。 */
   consecutiveOutOfDomainCasualTurns: number;
 }): ConversationState {
-  const { diagnosis, routing, previousState, companyContextKnown, factorySearchState, consecutiveOutOfDomainCasualTurns } = params;
+  const { diagnosis, routing, previousState, companyContextKnown, factorySearchState, newsSearchState, consecutiveOutOfDomainCasualTurns } = params;
 
   return {
     companyContextKnown,
@@ -146,6 +157,7 @@ export function deriveConversationState(params: {
     unresolvedQuestion: diagnosis.nextBestQuestion,
     lastUpdatedAt: new Date().toISOString(),
     currentFactorySearchState: factorySearchState,
+    currentNewsSearchState: newsSearchState,
     consecutiveOutOfDomainCasualTurns,
     outOfDomainCasualMode: previousState?.outOfDomainCasualMode ?? "normal",
   };

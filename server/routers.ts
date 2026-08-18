@@ -763,14 +763,17 @@ export const appRouter = router({
               conversationId: result.conversationId,
               handoffOffer: result.handoffOffer,
               factorySearchResult: result.factorySearchResult,
+              newsSearchResult: result.newsSearchResult,
+              subsidyProgramsResult: result.subsidyProgramsResult,
+              navigationAction: result.navigationAction,
               manualSourcing: result.manualSourcing,
             };
           }
           const history = [...(input.guestHistory ?? []), { role: "user" as const, content: input.message }];
           const result = await runAiChat({ history, userId: null });
           // 訪客沒有登入，不可能建立 handoff context（需要 ctx.user.id），永遠不顯示 CTA。
-          // 找工廠不是顧問服務、不需要 handoff，訪客跟登入使用者一樣可以用（見
-          // 「二十三、權限」：沿用既有 AI login gate，不為找工廠另立規則）。
+          // 找工廠／找消息都不是顧問服務、不需要 handoff，訪客跟登入使用者一樣
+          // 可以用（見「二十三、權限」：沿用既有 AI login gate，不另立規則）。
           // Phase 6A.1 人工協尋需要 userId 才能建立 Request（見「十八、
           // Ownership」），訪客沒有登入身分，永遠不會有 manualSourcing。
           return {
@@ -778,6 +781,9 @@ export const appRouter = router({
             conversationId: null,
             handoffOffer: null,
             factorySearchResult: result.factorySearchResult,
+            newsSearchResult: result.newsSearchResult,
+            subsidyProgramsResult: result.subsidyProgramsResult,
+            navigationAction: result.navigationAction,
             manualSourcing: null,
           };
         } catch (error) {

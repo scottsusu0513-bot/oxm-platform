@@ -7,15 +7,26 @@
  * function（server/ai/factorySearchAction.ts／factorySearchRequestService.ts），
  * AI 永遠不會拿到、也不能直接呼叫這些底層函式或 DB。
  *
- * V1 範圍（見「三、先建立 OXM Action Registry」）：只登記 3 個真正接上執行
- * 邏輯的 Action。未來要擴充（search_news／offer_erp_handoff／
- * navigate_to_factory 等）時，只需要照同樣的 OxmActionDefinition 形狀新增
- * 一筆，不需要改 Action Planner 的 prompt 組裝邏輯或 schema——這裡刻意不先
- * 塞入 enabled:false 的未來 stub 項目，避免存在完全沒有測試覆蓋、沒有執行路
- * 徑的死程式碼；架構本身已經支援擴充。
+ * V1 範圍（見「三、先建立 OXM Action Registry」）：只登記真正接上執行邏輯的
+ * Action。未來要擴充（offer_erp_handoff／navigate_to_factory 等）時，只需要
+ * 照同樣的 OxmActionDefinition 形狀新增一筆，不需要改 Action Planner 的
+ * prompt 組裝邏輯或 schema——這裡刻意不先塞入 enabled:false 的未來 stub 項目，
+ * 避免存在完全沒有測試覆蓋、沒有執行路徑的死程式碼；架構本身已經支援擴充。
+ *
+ * search_news（Phase 6B：AI 找消息，見對話中「找消息不是 Consultant
+ * Handoff」）跟 search_factories 完全同一種角色：由 Layer 2 的 primaryService
+ * 判斷直接觸發執行（見 chatService.ts），不是 Action Planner 的可選決定，
+ * 這裡只登記描述性 metadata 供文件與未來擴充參考——目前沒有「人工找消息」
+ * 這個後續 write action（見對話中「十三：不要人工協尋」）。
  */
 
-export type OxmActionKey = "search_factories" | "request_factory_sourcing" | "cancel_factory_sourcing";
+export type OxmActionKey =
+  | "search_factories"
+  | "request_factory_sourcing"
+  | "cancel_factory_sourcing"
+  | "search_news"
+  | "search_subsidy_programs"
+  | "navigate_oxm";
 
 export type OxmActionSideEffectLevel = "none" | "read" | "write";
 
@@ -66,6 +77,36 @@ export const OXM_ACTION_REGISTRY: OxmActionDefinition[] = [
     requiredContext: ["是否有進行中的人工協尋"],
     optionalContext: [],
     sideEffectLevel: "write",
+    enabled: true,
+  },
+  {
+    key: "search_news",
+    description: "使用 OXM 既有 /news 資料搜尋消息——消息類型（重要／競賽／展覽／跨產業）與產業別決定候選集合，關鍵字只影響排序（在完全沒有類型與產業時，關鍵字本身才會當作篩選條件）。",
+    whenUseful: "使用者想找 OXM 平台上的消息、活動、展覽、競賽或產業資訊，且這一輪的訊息足以組出至少一個消息類型、產業別或關鍵字。",
+    whenNotUseful: "使用者的需求還太模糊、完全沒有指定任何類型／產業／主題；或使用者問的是一般知識性問題、顧問服務需求、找工廠需求、或純聊天——這些都不會走到這裡。",
+    requiredContext: ["使用者這輪或先前訊息中的消息搜尋條件"],
+    optionalContext: [],
+    sideEffectLevel: "read",
+    enabled: true,
+  },
+  {
+    key: "search_subsidy_programs",
+    description: "讀取 OXM 目前正式啟用的政府補助方案（upgradePrograms 資料表），不修改、不新增、不刪除方案，也不自動送出任何申請或建立顧問 Handoff。",
+    whenUseful: "使用者想知道 OXM 目前有哪些政府補助方案、想了解某個具體方案（例如 CITD 是什麼）、或想比較兩個方案的差異。",
+    whenNotUseful: "使用者在描述自己企業的現況／需求，需要顧問判斷方向（走既有企業診斷與 Handoff 流程）；或問題與政府補助完全無關。",
+    requiredContext: ["使用者這輪或先前訊息中提到的方案名稱或關鍵字"],
+    optionalContext: [],
+    sideEffectLevel: "read",
+    enabled: true,
+  },
+  {
+    key: "navigate_oxm",
+    description: "把使用者導向 OXM 站內某個既有公開頁面，網址一律由 shared/ai/navigationRegistry.ts 決定，模型只能選擇 Registry 裡登記的 key，不能輸出任意 URL。",
+    whenUseful: "使用者明確表達想「前往」「帶我去」「我要看」某個 OXM 頁面或功能本身。",
+    whenNotUseful: "使用者只是在問某個服務是什麼（informational），沒有表達想現在就過去看的意思；或提到的頁面不在 Registry 名單裡。",
+    requiredContext: ["使用者想去的頁面"],
+    optionalContext: [],
+    sideEffectLevel: "read",
     enabled: true,
   },
 ];

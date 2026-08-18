@@ -3,6 +3,8 @@ import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/hooks/useAuth";
 import type { FactorySearchCandidateForUi } from "@/components/ai/FactorySearchAttachment";
+import type { NewsSearchCandidateForUi } from "@/components/ai/NewsSearchAttachment";
+import type { SubsidyProgramCandidateForUi } from "@/components/ai/SubsidyProgramsAttachment";
 
 /**
  * Phase 6 UI Foundation（見對話中「全站AI Shell」）：OXM AI 是 app 層級、
@@ -28,6 +30,24 @@ export type AiShellAttachment =
       candidates: FactorySearchCandidateForUi[];
       total: number;
       viewAllUrl: string;
+    }
+  | {
+      type: "news_search_results";
+      candidates: NewsSearchCandidateForUi[];
+      total: number;
+      viewAllUrl: string;
+    }
+  | {
+      type: "subsidy_programs_results";
+      candidates: SubsidyProgramCandidateForUi[];
+      totalActiveCount: number;
+      viewAllUrl: string;
+    }
+  | {
+      type: "navigation_action";
+      key: string;
+      title: string;
+      route: string;
     }
   | {
       type: "handoff_offer";
@@ -110,6 +130,30 @@ export function AiShellProvider({ children }: { children: ReactNode }) {
               candidates: result.factorySearchResult.candidates.slice(0, 3),
               total: result.factorySearchResult.total,
               viewAllUrl: result.factorySearchResult.viewAllUrl,
+            });
+          }
+          if (result.newsSearchResult) {
+            attachments.push({
+              type: "news_search_results",
+              candidates: result.newsSearchResult.candidates.slice(0, 3),
+              total: result.newsSearchResult.total,
+              viewAllUrl: result.newsSearchResult.viewAllUrl,
+            });
+          }
+          if (result.subsidyProgramsResult) {
+            attachments.push({
+              type: "subsidy_programs_results",
+              candidates: result.subsidyProgramsResult.candidates,
+              totalActiveCount: result.subsidyProgramsResult.totalActiveCount,
+              viewAllUrl: result.subsidyProgramsResult.viewAllUrl,
+            });
+          }
+          if (result.navigationAction) {
+            attachments.push({
+              type: "navigation_action",
+              key: result.navigationAction.key,
+              title: result.navigationAction.title,
+              route: result.navigationAction.route,
             });
           }
           if (result.handoffOffer) {

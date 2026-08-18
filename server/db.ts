@@ -2720,6 +2720,133 @@ export async function listPublicNews(params: ListPublicNewsParams): Promise<{ it
   };
 }
 
+/**
+ * Phase 6B：OXM AI 找消息——獨立於 listPublicNews 之外的新函式（見對話中
+ * 「不要破壞正常 /news」：一般 /news 頁面繼續呼叫既有 listPublicNews，完全不
+ * 受這支函式影響，兩者互不耦合）。
+ *
+ * Hard Filter／Ranking 責任分離，沿用 Factory Search 的既有原則（見
+ * server/ai/factorySearchAction.ts 檔頭）：
+ * - Hard Filter（SQL WHERE，決定「誰能出現」）：消息類型（重要／競賽／展覽／
+ *   跨產業，任一被偵測到就以 OR 條件納入候選）、產業（newsIndustries 命中任一
+ *   偵測到的產業名稱）、以及在「完全沒有類型也沒有產業」時，keyword 本身
+ *   （對 title/summary/content 做 LIKE，避免在沒有任何結構化條件時把全站消息
+ *   當候選集合，那樣排序無意義、也容易誤導使用者）。
+ * - Ranking（JS 端排序，決定「誰排前面」，不影響候選集合本身）：keyword
+ *   命中 title 記 tier 2，命中 summary／content 記 tier 1，都沒命中（純粹只
+ *   靠類型／產業篩出來的）記 tier 0——都不會被排除，只影響排序，跟
+ *   computeRankingTier 同一種設計哲學。
+ */
+export interface NewsSearchForAiParams {
+  categoryFilters: { isImportant: boolean; isCompetition: boolean; isExhibition: boolean; isCrossIndustry: boolean };
+  industryNames: string[];
+  /** 排序／（在沒有類型與產業時）篩選用的關鍵字，deterministic 抽取自使用者原話，不是 AI 自由生成。 */
+  keywords: string[];
+  limit?: number;
+}
+
+export interface NewsSearchForAiItem {
+  id: number;
+  slug: string;
+  title: string;
+  summary: string;
+  isImportant: boolean;
+  isCompetition: boolean;
+  isExhibition: boolean;
+  isCrossIndustry: boolean;
+  publishedAt: Date | null;
+  industryNames: string[];
+  tier: 0 | 1 | 2;
+}
+
+const NEWS_SEARCH_CANDIDATE_LIMIT = 30;
+
+export async function searchNewsForAi(params: NewsSearchForAiParams): Promise<{ items: NewsSearchForAiItem[]; total: number }> {
+  const db = await getDb();
+  if (!db) return { items: [], total: 0 };
+
+  const { categoryFilters, industryNames, keywords } = params;
+  const limit = Math.min(params.limit ?? 3, 10);
+
+  const conditions = [eq(news.status, "published")];
+
+  const typeConditions = [
+    categoryFilters.isImportant ? eq(news.isImportant, true) : null,
+    categoryFilters.isCompetition ? eq(news.isCompetition, true) : null,
+    categoryFilters.isExhibition ? eq(news.isExhibition, true) : null,
+    categoryFilters.isCrossIndustry ? eq(news.isCrossIndustry, true) : null,
+  ].filter((c): c is NonNullable<typeof c> => c !== null);
+  if (typeConditions.length > 0) conditions.push(or(...typeConditions)!);
+
+  let industryNewsIds: number[] | null = null;
+  if (industryNames.length > 0) {
+    const idRows = await db.selectDistinct({ newsId: newsIndustries.newsId })
+      .from(newsIndustries).where(inArray(newsIndustries.industryName, industryNames));
+    industryNewsIds = idRows.map(r => r.newsId);
+    if (industryNewsIds.length === 0) return { items: [], total: 0 };
+    conditions.push(inArray(news.id, industryNewsIds));
+  }
+
+  const hasStructuralFilter = typeConditions.length > 0 || industryNames.length > 0;
+
+  // 完全沒有類型也沒有產業時，keyword 本身要當 hard filter（見檔頭說明），
+  // 避免候選集合是「全站已發布消息」這種沒有邊界的查詢。
+  if (!hasStructuralFilter && keywords.length > 0) {
+    const keywordConditions = keywords.flatMap(k => [
+      like(news.title, `%${k}%`),
+      like(news.summary, `%${k}%`),
+      like(news.content, `%${k}%`),
+    ]);
+    conditions.push(or(...keywordConditions)!);
+  }
+
+  const where = and(...conditions);
+  const [countResult] = await db.select({ count: sql<number>`COUNT(*)` }).from(news).where(where);
+  const total = Number(countResult?.count ?? 0);
+  if (total === 0) return { items: [], total: 0 };
+
+  const candidates = await db.select().from(news).where(where)
+    .orderBy(desc(news.publishedAt), desc(news.id))
+    .limit(NEWS_SEARCH_CANDIDATE_LIMIT);
+
+  const industryMap = await getNewsIndustryNamesBatch(candidates.map(c => c.id));
+
+  const lowerKeywords = keywords.map(k => k.toLowerCase()).filter(Boolean);
+  function computeTier(item: News): 0 | 1 | 2 {
+    if (lowerKeywords.length === 0) return 0;
+    const title = item.title.toLowerCase();
+    if (lowerKeywords.some(k => title.includes(k))) return 2;
+    const body = `${item.summary} ${item.content}`.toLowerCase();
+    if (lowerKeywords.some(k => body.includes(k))) return 1;
+    return 0;
+  }
+
+  const scored = candidates
+    .map(item => ({ item, tier: computeTier(item) }))
+    .sort((a, b) => {
+      if (b.tier !== a.tier) return b.tier - a.tier;
+      const aTime = a.item.publishedAt ? a.item.publishedAt.getTime() : 0;
+      const bTime = b.item.publishedAt ? b.item.publishedAt.getTime() : 0;
+      return bTime - aTime;
+    });
+
+  const items: NewsSearchForAiItem[] = scored.slice(0, limit).map(({ item, tier }) => ({
+    id: item.id,
+    slug: item.slug,
+    title: item.title,
+    summary: item.summary,
+    isImportant: item.isImportant,
+    isCompetition: item.isCompetition,
+    isExhibition: item.isExhibition,
+    isCrossIndustry: item.isCrossIndustry,
+    publishedAt: item.publishedAt,
+    industryNames: industryMap.get(item.id) ?? [],
+    tier,
+  }));
+
+  return { items, total };
+}
+
 /** sitemap.xml 專用：只回傳 status === "published" 的消息 slug／updatedAt，不分頁（消息數量遠小於工廠）。 */
 export async function getPublishedNewsForSitemap(): Promise<{ slug: string; updatedAt: Date }[]> {
   const db = await getDb();

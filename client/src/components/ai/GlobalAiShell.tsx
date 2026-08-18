@@ -6,6 +6,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { useAiShell } from "@/contexts/AiShellContext";
 import { HANDOFF_CTA_LABEL } from "@shared/ai/handoffServices";
 import { FactorySearchAttachmentView } from "./FactorySearchAttachment";
+import { NewsSearchAttachmentView } from "./NewsSearchAttachment";
+import { SubsidyProgramsAttachmentView } from "./SubsidyProgramsAttachment";
+import { NavigationAttachmentView } from "./NavigationAttachment";
 
 /**
  * Global AI Shell（見對話中「Phase 6 UI Foundation：全站AI Shell」）：
@@ -147,6 +150,12 @@ export function GlobalAiShell() {
                       {message.attachments?.map((attachment, i) =>
                         attachment.type === "factory_search_results" ? (
                           <FactorySearchAttachmentView key={i} attachment={attachment} />
+                        ) : attachment.type === "news_search_results" ? (
+                          <NewsSearchAttachmentView key={i} attachment={attachment} />
+                        ) : attachment.type === "subsidy_programs_results" ? (
+                          <SubsidyProgramsAttachmentView key={i} attachment={attachment} />
+                        ) : attachment.type === "navigation_action" ? (
+                          <NavigationAttachmentView key={i} attachment={attachment} />
                         ) : (
                           <div key={i} className="mt-2 rounded-lg border border-slate-200 bg-white p-2.5">
                             <Button

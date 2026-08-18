@@ -121,6 +121,34 @@ export const UPGRADE_PROGRAM_SEEDS: readonly UpgradeProgramSeed[] = [
     displayOrder: 50,
     enabled: true,
   },
+  {
+    slug: "manufacturing-19plus1",
+    title: "製造業 19+1 AI 診斷輔導",
+    shortTitle: "19+1",
+    // 見對話中「政府補助資料一致性問題」：這是製造業 AI／數位轉型的前段診斷
+    // 入口（官方正式名稱「產業競爭力輔導團」），由專業輔導團隊進駐盤點企業
+    // 現況、流程、資料基礎、AI 成熟度與痛點，產出「AI 導入與轉型建議報告」，
+    // 不是像 SBIR／CITD 那種企業提出計畫、直接撥款的研發補助——刻意不寫成
+    // 「付 1 萬拿 19 萬現金」這種說法，因為診斷費用是政府直接支付給輔導
+    // 團隊，不是撥款給企業的現金。內容沿用 shared/ai/serviceRegistry.ts 既有
+    // 的 19+1 正式知識（gov_subsidy.govSubsidyPrograms 裡的
+    // manufacturing_19plus1 側寫），不重新上網編寫。
+    description: "由專業輔導團隊進駐企業，盤點現況、流程、資料基礎與 AI 成熟度，產出「AI 導入與轉型建議報告」，是製造業 AI／數位轉型的前段診斷入口，不是直接撥款的研發補助。",
+    targetAudience: "以依法登記之製造業為核心（也延伸至部分服務業），特別適合對 AI 應用場景還不明確、需要專業診斷盤點方向的企業。",
+    highlights: ["AI導入診斷", "官方支付輔導費用", "適合場景待釐清的企業"],
+    badge: "政府輔導計畫",
+    statusLabel: null,
+    visualKey: "digital",
+    // 診斷費用由政府直接支付給輔導團隊、企業僅自籌一小部分行政費，性質上不是
+    // 「企業可拿到的補助金額上限」，刻意不填數字避免被誤解成現金補助（見「三：
+    // 不要錯誤描述成付1萬拿19萬現金」）；後續 AI 工具導入／人才培訓／研發轉型
+    // 屬於分開的接續階段資源，同樣不適合濃縮成單一金額標籤。
+    maxFundingLabel: null,
+    imageUrl: null,
+    ctaLabel: "免費評估資格",
+    displayOrder: 60,
+    enabled: true,
+  },
 ] as const;
 
 export function selectVisibleUpgradePrograms<
