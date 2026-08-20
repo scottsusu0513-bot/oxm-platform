@@ -36,6 +36,19 @@ pnpm run retry:failed-ai-case-assessments
 
 `reconcileEnterpriseMemoryFactoryScope.ts`（Phase 11.2 的一次性資料遷移腳本，見 `drizzle/0087`／`0088`）刻意不加入這份排程清單——那是一次性工具，不是週期性 job，只保留 `pnpm run reconcile:enterprise-memory-factory-scope:dev`。
 
+## Enterprise Memory migration order（Phase 13.2C）
+
+`aiEnterpriseMemories` 從 user-scoped 改成 factory-scoped 這一段，正確的 production 執行順序是：
+
+1. `0087_ai_enterprise_memory_quarantine.sql` — 建立 `aiEnterpriseMemoriesLegacyQuarantine` 隔離表。
+2. `0088_ai_enterprise_memory_factory_scope.sql` — schema cutover：`userId` 改名為 `lastActorUserId`，`factoryId` 改成 `NOT NULL` + `UNIQUE`。
+3. `reconcileEnterpriseMemoryFactoryScope.ts` — 分類／合併／隔離既有 legacy 資料。
+4. `0089_ai_conversation_permanently_failed.sql` — `aiConversations.status` 加入 `permanently_failed`。
+
+**不要照著 `0088_ai_enterprise_memory_factory_scope.sql` 檔案內那段舊註解操作**——那段註解寫著 reconciliation 應該在 0088 之前執行，但那是已確認過期、跟腳本實際可執行行為相反的敘述（見 Phase 13.2B/13.2B.1 稽核）：腳本的 `SELECT` 直接讀取 `lastActorUserId` 這個欄位名稱，這個欄位只有 0088 執行後才存在，在 0088 之前執行這支腳本會直接因為「未知欄位」失敗。`0088` SQL 檔案本身已經 production-applied、不能再修改，正確順序以本節與 `reconcileEnterpriseMemoryFactoryScope.ts` 檔案開頭的註解為準。
+
+Production 已於 Phase 13.2B/13.2B.1 依此順序（0087 → 0088 → reconciliation → 0089）完整套用並驗證：reconciliation 在空表上執行得到 `totalRowsExamined: 0` 的 no-op 結果，10 張 OXM AI table 全部存在且 row count 皆為 0，`SHOW CREATE TABLE` 逐一核對與 `drizzle/schema.ts` 一致。
+
 ## Production 上線時需要建立的 Render Cron Job（本輪未建立，僅記錄）
 
 每個 job 各自一個獨立的 Render Cron Job resource，`buildCommand` 沿用主站的 `pnpm build`（或指向同一個已建置的 image/repo），`command` 用上面對應的 `pnpm run <job>` 指令，環境變數（`DATABASE_URL`／`OPENAI_API_KEY` 等）比照主站 web service。

@@ -3,11 +3,34 @@ import { getRawPool, getActiveFactoryAffiliationDetail } from "../db";
 
 /**
  * Phase 11.2（見對話中「十二～十四、三十四、三十五」）：一次性、可安全重跑的
- * 資料整理腳本，把現有 userId-scoped 的 aiEnterpriseMemories 轉成
- * factory-scoped 之前的必要前置步驟——在 schema 真正被
- * 0088_ai_enterprise_memory_factory_scope.sql 改成 UNIQUE(factoryId) NOT NULL
- * 之前，必須先確保表裡沒有 NULL factoryId、也沒有兩筆 row 指向同一個
- * factoryId，否則那支 migration 的 ALTER 會直接失敗。
+ * 資料整理腳本，把現有 aiEnterpriseMemories 的 legacy 資料安全分類成
+ * 「可歸屬到目前 approved affiliation 的工廠」或「無法安全歸屬、需要隔離」。
+ *
+ * Correct production order（見 Phase 13.2C 對話——0088 已 production-applied，
+ * 這裡記錄的是實際已驗證正確、且已在 production 依此順序成功執行過的順序，
+ * 不是理論推測）：
+ *
+ *   0087_ai_enterprise_memory_quarantine.sql（建立隔離表）
+ *   → 0088_ai_enterprise_memory_factory_scope.sql（userId 改名為
+ *     lastActorUserId、factoryId 改成 NOT NULL + UNIQUE）
+ *   → 這支 reconcileEnterpriseMemoryFactoryScope.ts
+ *   → 0089_ai_conversation_permanently_failed.sql
+ *
+ * 必須在 0088 之後執行，不是之前：下面的 SELECT 明確讀取 `lastActorUserId`
+ * 這個欄位名稱，而這個欄位只有在 0088 把 `userId` rename 成
+ * `lastActorUserId` 之後才存在——在 0088 之前執行這支腳本，這條 SQL 會直接
+ * 因為「未知欄位」失敗，不會是「用舊欄位名稱照樣跑」。
+ *
+ * 0088_ai_enterprise_memory_factory_scope.sql 檔案本身的既有註解寫著「這支
+ * migration 執行前必須先跑過這支腳本」——那是已經確認過期、跟實際可執行行為
+ * 相反的舊敘述（見 Phase 13.2B/13.2B.1 稽核）。0088 SQL 檔案本身已經
+ * production-applied，不能再修改，正確順序以這裡與 server/jobs/README.md
+ * 為準，不要照著 0088 檔案裡那段舊註解操作。
+ *
+ * 必須在正式開放 AI（OXM_AI_RELEASE_MODE=live）、有真實使用者流量寫入
+ * aiEnterpriseMemories 之前執行過一次——在此之前，這張表通常是空的，這支
+ * 腳本在空表上執行可以安全地得到 no-op（totalRowsExamined=0，其餘欄位全部
+ * 0），這正是 production 目前已驗證過的實際狀態。
  *
  * 分類規則（刻意保守，見對話中「我偏好：保守處理，只有明確可證明相符才
  * migrate」）：
@@ -124,11 +147,13 @@ export async function reconcileEnterpriseMemoryFactoryScope(): Promise<Reconcili
   };
 
   try {
-    // 見對話中「三十五：Migration Idempotency」：故意用 lastActorUserId AS
-    // userId 讀取——migration 0088 已經把欄位從 userId 改名成
-    // lastActorUserId，這支腳本設計上必須在「schema 還沒改名前」與「schema
-    // 已經改名後」都能安全執行同一套邏輯（不能假設自己一定只會在改名前跑
-    // 一次），用別名讓下面所有邏輯完全不用關心目前實際欄位叫什麼名字。
+    // 見對話中「三十五：Migration Idempotency」／Phase 13.2C：這支腳本設計上
+    // 必須在 0088 之後執行（見檔案開頭「Correct production order」），此時
+    // 欄位已經被 0088 改名成 lastActorUserId，不再叫 userId——下面用
+    // `lastActorUserId AS userId` 讀取，單純是讓這支腳本內部（分類邏輯、
+    // quarantine row 寫入）繼續沿用原本 `userId` 這個變數/型別命名，不用整支
+    // 檔案跟著改名，跟「相容改名前的 schema」無關；這支查詢在改名前的 schema
+    // 執行會直接因為欄位不存在而失敗，本來就不是設計成兩種 schema 都能跑。
     const [rows]: any = await conn.execute(
       "SELECT id, lastActorUserId AS userId, factoryId, summaryText, hasMeaningfulBusinessInfo, lastInteractionAt, lastInteractionHadMeaningfulInfo, sourceConversationId, createdAt, updatedAt FROM aiEnterpriseMemories ORDER BY id"
     );
