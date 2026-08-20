@@ -21,8 +21,10 @@ import { resolveAnyFactoryStatus } from "./financeOptimizationApplyStatus";
 import { CERTIFICATION_OPEN_STATUSES, CERTIFICATION_STATUS_LABELS } from "@shared/certificationCase";
 import { useAiHandoff } from "@/hooks/useAiHandoff";
 import { AiHandoffModal } from "@/components/ai/AiHandoffModal";
+import { AiHandoffPrefillBanner, AiPrefillFieldHint, hasAiPrefilledAnyOf } from "@/components/ai/AiHandoffPrefillProvenance";
 
 const OPEN_STATUSES = new Set<string>(CERTIFICATION_OPEN_STATUSES);
+const AI_PREFILLABLE_FIELD_KEYS = ["servicesWanted", "isUnsure"];
 
 type FormValues = {
   contactName: string;
@@ -407,6 +409,8 @@ export default function CertificationCenterApply() {
           </div>
         )}
 
+        <AiHandoffPrefillBanner show={hasAiPrefilledAnyOf(aiHandoff.confirmedFields, AI_PREFILLABLE_FIELD_KEYS)} />
+
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-8">
           <fieldset className="space-y-5 rounded-xl border border-border p-6">
             <legend className="px-1 text-sm font-semibold text-muted-foreground">公司資料（由 OXM 工廠資料帶入，不可修改）</legend>
@@ -462,6 +466,8 @@ export default function CertificationCenterApply() {
               不確定，希望由顧問協助判斷
             </label>
             {!servicesValid && <p className="text-xs text-destructive">請選擇至少一項認證服務，或勾選「不確定」</p>}
+            <AiPrefillFieldHint confirmedFields={aiHandoff.confirmedFields} fieldKey="servicesWanted" />
+            <AiPrefillFieldHint confirmedFields={aiHandoff.confirmedFields} fieldKey="isUnsure" />
           </fieldset>
 
           <fieldset className="space-y-2 rounded-xl border border-border p-6">

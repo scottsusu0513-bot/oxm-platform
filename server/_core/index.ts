@@ -163,6 +163,7 @@ async function startServer() {
     // 固定公開頁
     urls.push(entry(`${BASE}/`, "1.0", "daily", today));
     urls.push(entry(`${BASE}/about`, "0.6", "monthly"));
+    urls.push(entry(`${BASE}/faq`, "0.6", "monthly"));
     urls.push(entry(`${BASE}/search`, "0.9", "daily", today));
     urls.push(entry(`${BASE}/announcements`, "0.6", "weekly", today));
     urls.push(entry(`${BASE}/news`, "0.6", "daily", today));

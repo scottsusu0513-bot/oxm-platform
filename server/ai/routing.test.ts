@@ -214,7 +214,7 @@ describe("runOxmRouting — factorySourcingContextRelevant（Current Factory Sea
     }));
     await runOxmRouting({ diagnosis: UNCLEAR_DIAGNOSIS, history: [], factoryContext: null });
     expect(capturedSystemPrompt()).toContain("沒有任何既有的 Factory Search Context");
-    expect(capturedSystemPrompt()).toContain("factorySourcingContextRelevant 固定回傳 false");
+    expect(capturedSystemPrompt()).toContain("factorySourcingContextRelevant 與 factoryResultAnalysisRequest 都固定回傳 false");
   });
 
   it("有 currentFactorySearchState 時，prompt 帶入搜尋摘要，並要求語意判斷（不是關鍵字），且明確舉出「這些都沒有五軸啊」等例句", async () => {
@@ -234,7 +234,9 @@ describe("runOxmRouting — factorySourcingContextRelevant（Current Factory Sea
     const prompt = capturedSystemPrompt();
     expect(prompt).toContain("台中市、金屬加工；核心能力：五軸加工");
     expect(prompt).toContain("這些都沒有五軸啊");
-    expect(prompt).toContain("不要因為這段對話「曾經」搜過工廠，就把後面每一輪都當成相關");
+    // Phase 6H.1：「不要因為曾經有過就當成相關」這條 meta 原則已收斂成共用段落
+    // （RESOURCE_CONTEXT_RELEVANCE_META_RULE），不再各自重複，見那段落本身的文字。
+    expect(prompt).toContain("不要因為這段對話「曾經」有過這個 Context，就把後面每一輪都當成相關");
   });
 
   it("parseRouting：模型回傳的 factorySourcingContextRelevant 正確透傳（resourceTarget 也要是 factory_search，見 enforceResourceTargetGate）", async () => {
@@ -274,6 +276,34 @@ describe("runOxmRouting — factorySourcingContextRelevant（Current Factory Sea
     expect(prompt).toContain("是兩個獨立的判斷");
     expect(prompt).toContain("conversationIntent 本身就會是 resource_request");
     expect(prompt).toContain("既有 Factory Search Context");
+  });
+
+  it("Phase 6H.1：Resource Context 通用判斷原則只出現一次（去重後不再各自重複），但 Factory／News 各自的 worked examples 都還在", async () => {
+    mockCompleteJson.mockResolvedValue(JSON.stringify({
+      primaryService: null, secondaryService: null, relationship: null,
+      serviceFitReason: "", shouldOfferHandoff: false, finalReply: "ok",
+    }));
+    await runOxmRouting({
+      diagnosis: UNCLEAR_DIAGNOSIS, history: [], factoryContext: null,
+      currentFactorySearchState: {
+        hardFilters: { mainIndustries: ["金屬加工"], regions: ["台中市"] },
+        coreCapabilities: ["五軸加工"], candidateCount: 20, directCapabilityMatchCount: 0,
+        missingCoreCapabilities: ["五軸加工"], requestedMatchCount: null, topResults: [],
+        searchSummary: "台中市、金屬加工；核心能力：五軸加工", lastSearchAt: "2026-08-16T00:00:00.000Z",
+      },
+      currentNewsSearchState: {
+        categoryFilters: { isImportant: false, isCompetition: false, isExhibition: true, isCrossIndustry: false },
+        industryNames: ["金屬加工"], keywords: [], resultCount: 3, topResults: [],
+        searchSummary: "展覽；金屬加工", lastSearchAt: "2026-08-16T00:00:00.000Z",
+      },
+    });
+    const prompt = capturedSystemPrompt();
+    // 通用原則的「實質內容句」（不是短指標）只應該出現一次，不再各自重複整句
+    const substantiveSentence = "不能只因為「已經有既有 Context」就只用文字承諾「需要的話我可以幫你搜尋」卻不執行";
+    const occurrences = prompt.split(substantiveSentence).length - 1;
+    expect(occurrences).toBe(1);
+    expect(prompt).toContain("這些都沒有五軸啊"); // factory 專屬 worked example 仍在
+    expect(prompt).toContain("這些我都看過了"); // news 專屬 worked example 仍在
   });
 });
 
@@ -499,7 +529,7 @@ describe("runOxmRouting — Phase 6C：govSubsidyLookupRelevant／navigationTarg
     const prompt = capturedSystemPrompt();
     expect(prompt).toContain("resourceTarget");
     expect(prompt).toContain("latest user message 已經明確表達的新 Resource Goal，優先於 previous Resource Context");
-    expect(prompt).toContain("這是在問「自己公司適合哪個」，屬於 business_exploration");
+    expect(prompt).toContain("這是在問「自己公司適合哪個／該怎麼辦」，屬於 business_exploration");
   });
 
   it("prompt 用具體例句區分 news 與 subsidy_programs：主題是補助但要的是「消息」仍然是 news，不是 subsidy_programs", async () => {
@@ -586,16 +616,34 @@ describe("runOxmRouting — enforceResourceTargetGate 程式碼防線（見對�
     expect(result.newsSearchContextRelevant).toBe(true);
   });
 
-  it("resourceTarget=none（例如 business_exploration 或 action_request／Handoff）時，newsSearchContextRelevant／factorySourcingContextRelevant 都被強制清空，即使模型誤判為 true（CASE R5／R6）", async () => {
+  it("Phase 6H.2：resourceTarget=none 時，newsSearchContextRelevant／factorySourcingContextRelevant／factoryResultAnalysisRequest 現在允許通過（見「Factory Result Boundary Stability」真實 API 根因修正——「分析既有結果」語意上跟 resourceTarget=none 不衝突，只有換成其他四種明確目標時才需要清空）", async () => {
     mockCompleteJson.mockResolvedValue(JSON.stringify({
       primaryService: null, secondaryService: null, relationship: null,
       serviceFitReason: "", shouldOfferHandoff: false, finalReply: "ok",
       resourceTarget: "none", newsSearchContextRelevant: true, factorySourcingContextRelevant: true,
+      factoryResultAnalysisRequest: true,
     }));
     const result = await runOxmRouting({ diagnosis: UNCLEAR_DIAGNOSIS, history: [], factoryContext: null });
-    expect(result.newsSearchContextRelevant).toBe(false);
-    expect(result.factorySourcingContextRelevant).toBe(false);
-    expect(result.govSubsidyLookupRelevant).toBe(false);
+    expect(result.newsSearchContextRelevant).toBe(true);
+    expect(result.factorySourcingContextRelevant).toBe(true);
+    expect(result.factoryResultAnalysisRequest).toBe(true);
+    expect(result.govSubsidyLookupRelevant).toBe(false); // 這個欄位仍然嚴格依 resourceTarget==="subsidy_programs" 才為 true，不受本次放寬影響
+  });
+
+  it("Phase 6H.2 regression：resourceTarget 換成其他四種明確目標（platform_help／service_info／subsidy_programs）時，factorySourcingContextRelevant／factoryResultAnalysisRequest／newsSearchContextRelevant 依然被強制清空——沒有重新打開「跨 Resource Routing bug」原本要修的洞", async () => {
+    for (const otherTarget of ["platform_help", "service_info", "subsidy_programs"] as const) {
+      mockCompleteJson.mockReset();
+      mockCompleteJson.mockResolvedValue(JSON.stringify({
+        primaryService: null, secondaryService: null, relationship: null,
+        serviceFitReason: "", shouldOfferHandoff: false, finalReply: "ok",
+        resourceTarget: otherTarget,
+        newsSearchContextRelevant: true, factorySourcingContextRelevant: true, factoryResultAnalysisRequest: true,
+      }));
+      const result = await runOxmRouting({ diagnosis: UNCLEAR_DIAGNOSIS, history: [], factoryContext: null });
+      expect(result.newsSearchContextRelevant).toBe(false);
+      expect(result.factorySourcingContextRelevant).toBe(false);
+      expect(result.factoryResultAnalysisRequest).toBe(false);
+    }
   });
 
   it("resourceTarget=factory_search 時，同樣的鏡射邏輯：factorySourcingContextRelevant 正常通過，newsSearchContextRelevant 被強制清空", async () => {
@@ -711,5 +759,513 @@ describe("runOxmRouting — Phase 6D：platformHelpTarget／resourceTarget=platf
     await runOxmRouting({ diagnosis: UNCLEAR_DIAGNOSIS, history: [], factoryContext: null });
     const prompt = capturedSystemPrompt();
     expect(prompt).toContain("不能自己發明這裡沒有的按鈕、頁面或流程");
+  });
+});
+
+describe("runOxmRouting — Phase 6E：resourceTarget=service_info／serviceTargets（見對話中「OXM 顧問服務知識中心化 + 精準服務查詢」）", () => {
+  beforeEach(() => {
+    mockCompleteJson.mockReset();
+  });
+
+  function capturedSystemPrompt(): string {
+    const messages = mockCompleteJson.mock.calls[0][0] as { role: string; content: string }[];
+    return messages.find(m => m.role === "system")!.content;
+  }
+
+  it("resourceTarget=service_info 且 serviceTargets 是服務清單裡真實存在的 key 時正確透傳，不受 enforceDiagnosisGate 影響（CASE E1 情境：informational 讓 primaryService 被清空，但 serviceTargets 不受影響）", async () => {
+    mockCompleteJson.mockResolvedValue(JSON.stringify({
+      primaryService: null, secondaryService: null, relationship: null,
+      serviceFitReason: "", shouldOfferHandoff: false, finalReply: "ok",
+      resourceTarget: "service_info", serviceTargets: ["erp"],
+    }));
+    const result = await runOxmRouting({
+      diagnosis: { ...CLEAR_DIAGNOSIS, conversationIntent: "informational" },
+      history: [], factoryContext: null,
+    });
+    expect(result.resourceTarget).toBe("service_info");
+    expect(result.serviceTargets).toEqual(["erp"]);
+    expect(result.primaryService).toBeNull();
+    expect(result.shouldOfferHandoff).toBe(false);
+  });
+
+  it("serviceTargets 支援兩個服務比較（CASE E5），並自動去除重複值", async () => {
+    mockCompleteJson.mockResolvedValue(JSON.stringify({
+      primaryService: null, secondaryService: null, relationship: null,
+      serviceFitReason: "", shouldOfferHandoff: false, finalReply: "ok",
+      resourceTarget: "service_info", serviceTargets: ["erp", "finance", "erp"],
+    }));
+    const result = await runOxmRouting({ diagnosis: UNCLEAR_DIAGNOSIS, history: [], factoryContext: null });
+    expect(result.serviceTargets).toEqual(["erp", "finance"]);
+  });
+
+  it("serviceTargets：找工廠／找消息不算「顧問型服務」，即使模型誤輸出也被過濾掉（不會跟既有 factory_search／news resourceTarget 機制重疊，見「十七」）", async () => {
+    mockCompleteJson.mockResolvedValue(JSON.stringify({
+      primaryService: null, secondaryService: null, relationship: null,
+      serviceFitReason: "", shouldOfferHandoff: false, finalReply: "ok",
+      resourceTarget: "service_info", serviceTargets: ["erp", "factory_search", "news"],
+    }));
+    const result = await runOxmRouting({ diagnosis: UNCLEAR_DIAGNOSIS, history: [], factoryContext: null });
+    expect(result.serviceTargets).toEqual(["erp"]);
+  });
+
+  it("即使模型多此一舉直接輸出 serviceTargets，只要 resourceTarget 不是 service_info 就必須忽略（跟 platformHelpTarget／govSubsidyLookupRelevant 同一種根因修正）", async () => {
+    mockCompleteJson.mockResolvedValue(JSON.stringify({
+      primaryService: null, secondaryService: null, relationship: null,
+      serviceFitReason: "", shouldOfferHandoff: false, finalReply: "ok",
+      resourceTarget: "news", serviceTargets: ["erp"],
+    }));
+    const result = await runOxmRouting({ diagnosis: UNCLEAR_DIAGNOSIS, history: [], factoryContext: null });
+    expect(result.serviceTargets).toEqual([]);
+  });
+
+  it("resourceTarget／serviceTargets 欄位缺漏時安全預設為 none／空陣列", async () => {
+    mockCompleteJson.mockResolvedValue(JSON.stringify({
+      primaryService: null, secondaryService: null, relationship: null,
+      serviceFitReason: "", shouldOfferHandoff: false, finalReply: "ok",
+    }));
+    const result = await runOxmRouting({ diagnosis: UNCLEAR_DIAGNOSIS, history: [], factoryContext: null });
+    expect(result.resourceTarget).toBe("none");
+    expect(result.serviceTargets).toEqual([]);
+  });
+
+  it("真實 bug class 重現與修正（CASE E-cross regression：Factory Search → Service Info）：resourceTarget=service_info 時，即使模型誤判 factorySourcingContextRelevant=true（沿用舊 Factory Context），也被 enforceResourceTargetGate 強制清空", async () => {
+    mockCompleteJson.mockResolvedValue(JSON.stringify({
+      primaryService: null, secondaryService: null, relationship: null,
+      serviceFitReason: "", shouldOfferHandoff: false, finalReply: "ok",
+      resourceTarget: "service_info", serviceTargets: ["erp"],
+      factorySourcingContextRelevant: true, newsSearchContextRelevant: true,
+    }));
+    const result = await runOxmRouting({ diagnosis: UNCLEAR_DIAGNOSIS, history: [], factoryContext: null });
+    expect(result.factorySourcingContextRelevant).toBe(false);
+    expect(result.newsSearchContextRelevant).toBe(false);
+    expect(result.resourceTarget).toBe("service_info");
+  });
+
+  it("prompt 明確區分 service_info 跟 platform_help／navigation／Handoff／business_exploration／subsidy_programs 的邊界（CASE 校準規則 4~8）", async () => {
+    mockCompleteJson.mockResolvedValue(JSON.stringify({
+      primaryService: null, secondaryService: null, relationship: null,
+      serviceFitReason: "", shouldOfferHandoff: false, finalReply: "ok",
+    }));
+    await runOxmRouting({ diagnosis: UNCLEAR_DIAGNOSIS, history: [], factoryContext: null });
+    const prompt = capturedSystemPrompt();
+    expect(prompt).toContain("service_info（服務本身在做什麼）vs platform_help（怎麼操作／在哪裡）");
+    expect(prompt).toContain("service_info vs navigationTarget");
+    expect(prompt).toContain("service_info vs Handoff");
+    expect(prompt).toContain("service_info vs business_exploration");
+    expect(prompt).toContain("service_info vs subsidy_programs");
+    expect(prompt).toContain("不要跟第 4 點混淆");
+  });
+
+  it("prompt 明確要求比較時不能只講空話「兩個都可以幫企業提升競爭力」", async () => {
+    mockCompleteJson.mockResolvedValue(JSON.stringify({
+      primaryService: null, secondaryService: null, relationship: null,
+      serviceFitReason: "", shouldOfferHandoff: false, finalReply: "ok",
+    }));
+    await runOxmRouting({ diagnosis: UNCLEAR_DIAGNOSIS, history: [], factoryContext: null });
+    const prompt = capturedSystemPrompt();
+    expect(prompt).toContain("不能只講「兩個都可以幫企業提升競爭力」這種空話");
+  });
+
+  it("prompt 明確要求 service_info 不會自動觸發 Handoff", async () => {
+    mockCompleteJson.mockResolvedValue(JSON.stringify({
+      primaryService: null, secondaryService: null, relationship: null,
+      serviceFitReason: "", shouldOfferHandoff: false, finalReply: "ok",
+    }));
+    await runOxmRouting({ diagnosis: UNCLEAR_DIAGNOSIS, history: [], factoryContext: null });
+    const prompt = capturedSystemPrompt();
+    expect(prompt).toContain("完全不代表這一輪要往 Handoff 方向走");
+  });
+
+  it("prompt 把 Service Registry 的 serviceScope／notIncluded 序列化進去（透過既有 servicesBlock，不是第二套 Registry）", async () => {
+    mockCompleteJson.mockResolvedValue(JSON.stringify({
+      primaryService: null, secondaryService: null, relationship: null,
+      serviceFitReason: "", shouldOfferHandoff: false, finalReply: "ok",
+    }));
+    await runOxmRouting({ diagnosis: UNCLEAR_DIAGNOSIS, history: [], factoryContext: null });
+    const prompt = capturedSystemPrompt();
+    expect(prompt).toContain("實際服務範圍");
+    expect(prompt).toContain("不包含／常見誤解");
+    expect(prompt).toContain("ERP 系統導入評估");
+  });
+});
+
+describe("runOxmRouting — Phase 6F：factoryResultAnalysisRequest（見對話中「Factory Search Result Boundary / 工廠搜尋結果分析限制」）", () => {
+  beforeEach(() => {
+    mockCompleteJson.mockReset();
+  });
+
+  function capturedSystemPrompt(): string {
+    const messages = mockCompleteJson.mock.calls[0][0] as { role: string; content: string }[];
+    return messages.find(m => m.role === "system")!.content;
+  }
+
+  const SAMPLE_FACTORY_STATE = {
+    hardFilters: { mainIndustries: ["金屬加工"], regions: ["彰化縣"] },
+    coreCapabilities: [], candidateCount: 5, directCapabilityMatchCount: 3,
+    missingCoreCapabilities: [], requestedMatchCount: null, topResults: [],
+    searchSummary: "彰化縣、金屬加工", lastSearchAt: "2026-08-16T00:00:00.000Z",
+  };
+
+  it("resourceTarget=factory_search 且 factoryResultAnalysisRequest=true 時正確透傳（CASE B1-B6 情境）", async () => {
+    mockCompleteJson.mockResolvedValue(JSON.stringify({
+      primaryService: null, secondaryService: null, relationship: null,
+      serviceFitReason: "", shouldOfferHandoff: false, finalReply: "ok",
+      resourceTarget: "factory_search", factoryResultAnalysisRequest: true,
+    }));
+    const result = await runOxmRouting({
+      diagnosis: UNCLEAR_DIAGNOSIS, history: [], factoryContext: null,
+      currentFactorySearchState: SAMPLE_FACTORY_STATE as any,
+    });
+    expect(result.factoryResultAnalysisRequest).toBe(true);
+  });
+
+  it("真實 bug 重現與修正（人工驗收發現）：同一次 Layer 2 呼叫可能同時輸出 primaryService===\"factory_search\" 與 factoryResultAnalysisRequest===true 這兩個互相矛盾的訊號——如果不處理，chatService.ts 會因為 factorySearchResult 非 null 而略過 boundary 短路，變成又執行一次全新搜尋。enforceResourceTargetGate 必須在 factoryResultAnalysisRequest 為 true 時強制把 primaryService／secondaryService 清空為 null，這樣 chatService.ts 才不會誤觸發 runFactorySearchAction。", async () => {
+    mockCompleteJson.mockResolvedValue(JSON.stringify({
+      primaryService: "factory_search", secondaryService: null, relationship: null,
+      serviceFitReason: "使用者的需求是確認候選合作工廠是否符合金屬加工能力",
+      shouldOfferHandoff: false, finalReply: "ok",
+      resourceTarget: "factory_search", factorySourcingContextRelevant: true, factoryResultAnalysisRequest: true,
+    }));
+    const result = await runOxmRouting({
+      diagnosis: UNCLEAR_DIAGNOSIS, history: [], factoryContext: null,
+      currentFactorySearchState: SAMPLE_FACTORY_STATE as any,
+    });
+    expect(result.factoryResultAnalysisRequest).toBe(true);
+    expect(result.primaryService).toBeNull(); // 硬性防線強制清空，不能讓 chatService.ts 又觸發一次全新搜尋
+    expect(result.secondaryService).toBeNull();
+  });
+
+  it("Phase 6H.2：真實 API 重現的 root cause（見對話中「Factory Result Boundary Stability」）——resourceTarget=none 但 factoryResultAnalysisRequest=true 這個真實觀察到的組合，現在正確保留 Boundary（不再被錯誤清空），且 primaryService 仍然被強制清空避免又觸發一次全新搜尋", async () => {
+    mockCompleteJson.mockResolvedValue(JSON.stringify({
+      primaryService: null, secondaryService: null, relationship: null,
+      serviceFitReason: "", shouldOfferHandoff: false, finalReply: "我能協助你的是依照需求把可能符合的工廠搜尋出來，實際加工能力建議直接進工廠頁確認。",
+      resourceTarget: "none", factorySourcingContextRelevant: true, factoryResultAnalysisRequest: true,
+    }));
+    const result = await runOxmRouting({
+      diagnosis: UNCLEAR_DIAGNOSIS, history: [], factoryContext: null,
+      currentFactorySearchState: SAMPLE_FACTORY_STATE as any,
+    });
+    expect(result.factoryResultAnalysisRequest).toBe(true);
+    expect(result.factorySourcingContextRelevant).toBe(true);
+    expect(result.primaryService).toBeNull();
+    expect(result.secondaryService).toBeNull();
+  });
+
+  it("真實 bug class 防線：resourceTarget 不是 factory_search 時，即使模型誤判 factoryResultAnalysisRequest=true，也被 enforceResourceTargetGate 強制清空（CASE B11-B14 情境：上一輪 Factory Search，這一輪換成別的 target）", async () => {
+    mockCompleteJson.mockResolvedValue(JSON.stringify({
+      primaryService: null, secondaryService: null, relationship: null,
+      serviceFitReason: "", shouldOfferHandoff: false, finalReply: "ok",
+      resourceTarget: "service_info", serviceTargets: ["erp"], factoryResultAnalysisRequest: true,
+    }));
+    const result = await runOxmRouting({
+      diagnosis: UNCLEAR_DIAGNOSIS, history: [], factoryContext: null,
+      currentFactorySearchState: SAMPLE_FACTORY_STATE as any,
+    });
+    expect(result.factoryResultAnalysisRequest).toBe(false);
+    expect(result.resourceTarget).toBe("service_info");
+  });
+
+  it("factoryResultAnalysisRequest 欄位缺漏時安全預設為 false", async () => {
+    mockCompleteJson.mockResolvedValue(JSON.stringify({
+      primaryService: null, secondaryService: null, relationship: null,
+      serviceFitReason: "", shouldOfferHandoff: false, finalReply: "ok",
+    }));
+    const result = await runOxmRouting({ diagnosis: UNCLEAR_DIAGNOSIS, history: [], factoryContext: null });
+    expect(result.factoryResultAnalysisRequest).toBe(false);
+  });
+
+  it("沒有 currentFactorySearchState 時，prompt 明確要求誠實說明沒有可對應結果，不能假裝知道「第一家」是誰（CASE B10）", async () => {
+    mockCompleteJson.mockResolvedValue(JSON.stringify({
+      primaryService: null, secondaryService: null, relationship: null,
+      serviceFitReason: "", shouldOfferHandoff: false, finalReply: "ok",
+    }));
+    await runOxmRouting({ diagnosis: UNCLEAR_DIAGNOSIS, history: [], factoryContext: null });
+    const prompt = capturedSystemPrompt();
+    expect(prompt).toContain("finalReply 必須誠實說明目前這段對話沒有可對應的工廠搜尋結果");
+  });
+
+  it("有 currentFactorySearchState 時，prompt 明確列出 factoryResultAnalysisRequest 的語意範例（第一家/比較/推薦/打樣/少量），且不是窮舉關鍵字", async () => {
+    mockCompleteJson.mockResolvedValue(JSON.stringify({
+      primaryService: null, secondaryService: null, relationship: null,
+      serviceFitReason: "", shouldOfferHandoff: false, finalReply: "ok",
+    }));
+    await runOxmRouting({
+      diagnosis: UNCLEAR_DIAGNOSIS, history: [], factoryContext: null,
+      currentFactorySearchState: SAMPLE_FACTORY_STATE as any,
+    });
+    const prompt = capturedSystemPrompt();
+    expect(prompt).toContain("第一家主要做什麼？");
+    expect(prompt).toContain("第一家跟第三家差在哪？");
+    expect(prompt).toContain("哪一家比較適合我？");
+    expect(prompt).toContain("哪一家可以打樣？");
+    expect(prompt).toContain("幫我分析這幾家");
+    expect(prompt).toContain("你推薦哪一家？");
+    expect(prompt).toContain("語意類型，不是窮舉關鍵字");
+  });
+
+  it("重要：prompt 明確要求不要為了判斷這個欄位把 topResults 完整內容送進來（見「七」）", async () => {
+    mockCompleteJson.mockResolvedValue(JSON.stringify({
+      primaryService: null, secondaryService: null, relationship: null,
+      serviceFitReason: "", shouldOfferHandoff: false, finalReply: "ok",
+    }));
+    await runOxmRouting({
+      diagnosis: UNCLEAR_DIAGNOSIS, history: [], factoryContext: null,
+      currentFactorySearchState: {
+        ...SAMPLE_FACTORY_STATE,
+        topResults: [{ factoryId: 1, companyName: "測試工廠不應該出現在prompt", region: "彰化縣", relevanceTier: "high" }],
+      } as any,
+    });
+    const prompt = capturedSystemPrompt();
+    expect(prompt).toContain("不要為了判斷這個欄位又把 topResults 完整內容送進來");
+    expect(prompt).not.toContain("測試工廠不應該出現在prompt");
+  });
+
+  it("prompt 明確區分 factoryResultAnalysisRequest 與「重新搜尋／換條件」（CASE B7-B9：改地區、換能力、重新搜尋都不是分析既有結果）", async () => {
+    mockCompleteJson.mockResolvedValue(JSON.stringify({
+      primaryService: null, secondaryService: null, relationship: null,
+      serviceFitReason: "", shouldOfferHandoff: false, finalReply: "ok",
+    }));
+    await runOxmRouting({
+      diagnosis: UNCLEAR_DIAGNOSIS, history: [], factoryContext: null,
+      currentFactorySearchState: SAMPLE_FACTORY_STATE as any,
+    });
+    const prompt = capturedSystemPrompt();
+    expect(prompt).toContain("這幾家都不是，再幫我找別的");
+    expect(prompt).toContain("改找彰化的");
+    expect(prompt).toContain("重新幫我找可以打樣的工廠");
+    expect(prompt).toContain("這幾家哪一家可以打樣？」是分析既有結果（true），出現在「重新幫我找可以打樣的工廠」是新的搜尋需求（false）");
+  });
+
+  it("prompt 明確要求 boundary reply 的五個產品立場，且禁止說出違反立場的話", async () => {
+    mockCompleteJson.mockResolvedValue(JSON.stringify({
+      primaryService: null, secondaryService: null, relationship: null,
+      serviceFitReason: "", shouldOfferHandoff: false, finalReply: "ok",
+    }));
+    await runOxmRouting({ diagnosis: UNCLEAR_DIAGNOSIS, history: [], factoryContext: null });
+    const prompt = capturedSystemPrompt();
+    expect(prompt).toContain("我能協助你的是依照需求把可能符合的工廠搜尋出來");
+    expect(prompt).toContain("我幫你分析看看");
+    expect(prompt).toContain("第一家比較適合");
+    expect(prompt).toContain("我可以替你整理這幾家的差異");
+    expect(prompt).toContain("根據資料我推薦第二家");
+    expect(prompt).toContain("不要說「我不能回答」「系統限制」「功能不支援」這種生硬拒絕");
+  });
+
+  it("prompt 明確允許自然改寫措辭的範例（不要求逐字照抄固定文案）", async () => {
+    mockCompleteJson.mockResolvedValue(JSON.stringify({
+      primaryService: null, secondaryService: null, relationship: null,
+      serviceFitReason: "", shouldOfferHandoff: false, finalReply: "ok",
+    }));
+    await runOxmRouting({ diagnosis: UNCLEAR_DIAGNOSIS, history: [], factoryContext: null });
+    const prompt = capturedSystemPrompt();
+    expect(prompt).toContain("允許的自然調整範例");
+    expect(prompt).toContain("不用逐字照抄");
+  });
+});
+
+describe("runOxmRouting — Phase 6G.1：govSubsidyRecommendation（見對話中「政府補助 Program Decision Layer / 方案級主次推薦與追問強化」）", () => {
+  beforeEach(() => {
+    mockCompleteJson.mockReset();
+  });
+
+  function capturedSystemPrompt(): string {
+    const messages = mockCompleteJson.mock.calls[0][0] as { role: string; content: string }[];
+    return messages.find(m => m.role === "system")!.content;
+  }
+
+  it("primaryService=gov_subsidy 且模型給出合法的 primary／secondary key：正常解析", async () => {
+    mockCompleteJson.mockResolvedValue(JSON.stringify({
+      primaryService: "gov_subsidy", secondaryService: null, relationship: null,
+      serviceFitReason: "有明確新製程與設備需求", shouldOfferHandoff: false,
+      finalReply: "CITD 會比較優先，因為已經有明確的新製程目標。",
+      govSubsidyRecommendation: {
+        primaryProgramKey: "citd", secondaryProgramKey: "sbir",
+        reasoning: "已有初步驗證，設備是為了支援新製程", missingInformation: [],
+      },
+    }));
+    const result = await runOxmRouting({ diagnosis: CLEAR_DIAGNOSIS, history: [], factoryContext: null });
+    expect(result.govSubsidyRecommendation).toEqual({
+      primaryProgramKey: "citd", secondaryProgramKey: "sbir",
+      reasoning: "已有初步驗證，設備是為了支援新製程", missingInformation: [],
+    });
+  });
+
+  it("primaryProgramKey 不是 Service Registry 裡真實存在的 key：一律視為 null，不讓模型輸出任意方案名稱", async () => {
+    mockCompleteJson.mockResolvedValue(JSON.stringify({
+      primaryService: "gov_subsidy", secondaryService: null, relationship: null,
+      serviceFitReason: "", shouldOfferHandoff: false, finalReply: "ok",
+      govSubsidyRecommendation: {
+        primaryProgramKey: "made_up_program", secondaryProgramKey: "citd",
+        reasoning: "理由", missingInformation: [],
+      },
+    }));
+    const result = await runOxmRouting({ diagnosis: CLEAR_DIAGNOSIS, history: [], factoryContext: null });
+    expect(result.govSubsidyRecommendation?.primaryProgramKey).toBeNull();
+    expect(result.govSubsidyRecommendation?.secondaryProgramKey).toBe("citd");
+  });
+
+  it("secondaryProgramKey 跟 primaryProgramKey 相同：secondaryProgramKey 被強制清為 null（主／次不能是同一個方向）", async () => {
+    mockCompleteJson.mockResolvedValue(JSON.stringify({
+      primaryService: "gov_subsidy", secondaryService: null, relationship: null,
+      serviceFitReason: "", shouldOfferHandoff: false, finalReply: "ok",
+      govSubsidyRecommendation: {
+        primaryProgramKey: "citd", secondaryProgramKey: "citd",
+        reasoning: "理由", missingInformation: [],
+      },
+    }));
+    const result = await runOxmRouting({ diagnosis: CLEAR_DIAGNOSIS, history: [], factoryContext: null });
+    expect(result.govSubsidyRecommendation?.primaryProgramKey).toBe("citd");
+    expect(result.govSubsidyRecommendation?.secondaryProgramKey).toBeNull();
+  });
+
+  it("資訊不足：primaryProgramKey／secondaryProgramKey 皆為 null 是合法狀態，missingInformation 保留", async () => {
+    mockCompleteJson.mockResolvedValue(JSON.stringify({
+      primaryService: "gov_subsidy", secondaryService: null, relationship: null,
+      serviceFitReason: "", shouldOfferHandoff: false, finalReply: "還想先了解一下你們的設備規劃。",
+      govSubsidyRecommendation: {
+        primaryProgramKey: null, secondaryProgramKey: null,
+        reasoning: "使用者只表示想申請補助，沒有講出任何研發／設備／AI／海外拓展的具體情境",
+        missingInformation: ["設備或研發的具體標的", "目前的成熟度"],
+      },
+    }));
+    const result = await runOxmRouting({ diagnosis: CLEAR_DIAGNOSIS, history: [], factoryContext: null });
+    expect(result.govSubsidyRecommendation?.primaryProgramKey).toBeNull();
+    expect(result.govSubsidyRecommendation?.secondaryProgramKey).toBeNull();
+    expect(result.govSubsidyRecommendation?.missingInformation).toEqual(["設備或研發的具體標的", "目前的成熟度"]);
+  });
+
+  it("primaryService 不是 gov_subsidy（例如 erp）：govSubsidyRecommendation 固定是 null，即使模型硬塞了一個", async () => {
+    mockCompleteJson.mockResolvedValue(JSON.stringify({
+      primaryService: "erp", secondaryService: null, relationship: null,
+      serviceFitReason: "", shouldOfferHandoff: false, finalReply: "ok",
+      govSubsidyRecommendation: {
+        primaryProgramKey: "citd", secondaryProgramKey: null,
+        reasoning: "（模型不應該在這裡給方案判斷）", missingInformation: [],
+      },
+    }));
+    const result = await runOxmRouting({ diagnosis: CLEAR_DIAGNOSIS, history: [], factoryContext: null });
+    expect(result.primaryService).toBe("erp");
+    expect(result.govSubsidyRecommendation).toBeNull();
+  });
+
+  it("diagnosis 還沒收斂（unclear）：即使模型輸出 primaryService=gov_subsidy 且給了方案判斷，enforceDiagnosisGate 清空 primaryService 後，govSubsidyRecommendation 也必須一起被清空", async () => {
+    mockCompleteJson.mockResolvedValue(JSON.stringify({
+      primaryService: "gov_subsidy", secondaryService: null, relationship: null,
+      serviceFitReason: "（模型不應該在這裡給理由）", shouldOfferHandoff: false, finalReply: "詢價的人變少，還是有詢價但沒成交？",
+      govSubsidyRecommendation: {
+        primaryProgramKey: "citd", secondaryProgramKey: null,
+        reasoning: "（診斷還沒收斂，不應該有這個判斷）", missingInformation: [],
+      },
+    }));
+    const result = await runOxmRouting({ diagnosis: UNCLEAR_DIAGNOSIS, history: [], factoryContext: null });
+    expect(result.primaryService).toBeNull();
+    expect(result.govSubsidyRecommendation).toBeNull();
+  });
+
+  it("prompt 包含 5b 規則與服務清單裡每個方向的 key／適合情境／注意事項（供模型判斷 govSubsidyRecommendation 用）", async () => {
+    mockCompleteJson.mockResolvedValue(JSON.stringify({
+      primaryService: null, secondaryService: null, relationship: null,
+      serviceFitReason: "", shouldOfferHandoff: false, finalReply: "ok",
+    }));
+    await runOxmRouting({ diagnosis: CLEAR_DIAGNOSIS, history: [], factoryContext: null });
+    const prompt = capturedSystemPrompt();
+    expect(prompt).toContain("govSubsidyRecommendation");
+    expect(prompt).toContain("不是資格審查、不是核准機率");
+    expect(prompt).toContain("SBIR（key: sbir）");
+    expect(prompt).toContain("CITD（key: citd）");
+    expect(prompt).toContain("製造業 19+1 AI 診斷輔導（key: manufacturing_19plus1）");
+    expect(prompt).toContain("適合情境");
+    expect(prompt).toContain("注意／不要誤判");
+    expect(prompt).toContain("與其他方向的差異");
+  });
+});
+
+describe("runOxmRouting — Phase 6I：自由企業問題回答 / No-Resource Boundary（見對話中「Free-form Enterprise Advisory」）", () => {
+  beforeEach(() => {
+    mockCompleteJson.mockReset();
+  });
+
+  function capturedSystemPrompt(): string {
+    const messages = mockCompleteJson.mock.calls[0][0] as { role: string; content: string }[];
+    return messages.find(m => m.role === "system")!.content;
+  }
+
+  it("prompt 包含 primaryService=null 的三種情況 A/B/C 說明，且明確指出「對話本身就是合法終點」", async () => {
+    mockCompleteJson.mockResolvedValue(JSON.stringify({
+      primaryService: null, secondaryService: null, relationship: null,
+      serviceFitReason: "", shouldOfferHandoff: false, finalReply: "ok",
+    }));
+    await runOxmRouting({ diagnosis: CLEAR_DIAGNOSIS, history: [], factoryContext: null });
+    const prompt = capturedSystemPrompt();
+    expect(prompt).toContain("primaryService=null 的三種情況");
+    expect(prompt).toContain("對話本身就是合法終點");
+    expect(prompt).toContain("先回答／診斷企業問題，再判斷 OXM 是否有真正相符的資源");
+    expect(prompt).toContain("不要為了媒合而媒合");
+  });
+
+  it("prompt 包含 No-Resource Honesty 規則，明確禁止把 ISO 當 HACCP、把短影音範圍擴張到廣告投放", async () => {
+    mockCompleteJson.mockResolvedValue(JSON.stringify({
+      primaryService: null, secondaryService: null, relationship: null,
+      serviceFitReason: "", shouldOfferHandoff: false, finalReply: "ok",
+    }));
+    await runOxmRouting({ diagnosis: CLEAR_DIAGNOSIS, history: [], factoryContext: null });
+    const prompt = capturedSystemPrompt();
+    expect(prompt).toContain("No-Resource Honesty");
+    expect(prompt).toContain("HACCP——不能拿 ISO／低碳認證頂替");
+    expect(prompt).toContain("短影音服務只到內容製作與代操，不含廣告投放購買");
+  });
+
+  it("prompt 包含 secondaryService 不能亂塞的規則（不是 cross-sell）", async () => {
+    mockCompleteJson.mockResolvedValue(JSON.stringify({
+      primaryService: null, secondaryService: null, relationship: null,
+      serviceFitReason: "", shouldOfferHandoff: false, finalReply: "ok",
+    }));
+    await runOxmRouting({ diagnosis: CLEAR_DIAGNOSIS, history: [], factoryContext: null });
+    const prompt = capturedSystemPrompt();
+    expect(prompt).toContain("secondaryService 適用上面的總原則");
+    expect(prompt).toContain("不要為了「多幫一點」湊數");
+  });
+
+  it("prompt 包含使用者明確拒絕顧問時 shouldOfferHandoff 必須是 false 的規則", async () => {
+    mockCompleteJson.mockResolvedValue(JSON.stringify({
+      primaryService: null, secondaryService: null, relationship: null,
+      serviceFitReason: "", shouldOfferHandoff: false, finalReply: "ok",
+    }));
+    await runOxmRouting({ diagnosis: CLEAR_DIAGNOSIS, history: [], factoryContext: null });
+    const prompt = capturedSystemPrompt();
+    expect(prompt).toContain("使用者明確拒絕顧問");
+    expect(prompt).toContain("優先於承接時機規則的三個條件");
+  });
+
+  it("prompt 包含自由企業／產業策略問題的長度例外（150～200字）與一般路由對話仍維持 40～90字", async () => {
+    mockCompleteJson.mockResolvedValue(JSON.stringify({
+      primaryService: null, secondaryService: null, relationship: null,
+      serviceFitReason: "", shouldOfferHandoff: false, finalReply: "ok",
+    }));
+    await runOxmRouting({ diagnosis: CLEAR_DIAGNOSIS, history: [], factoryContext: null });
+    const prompt = capturedSystemPrompt();
+    expect(prompt).toContain("可放寬到約 150～200 個中文字");
+    expect(prompt).toContain("40～90 字上限");
+  });
+
+  it("prompt 包含 Advice 不等於保證的規則", async () => {
+    mockCompleteJson.mockResolvedValue(JSON.stringify({
+      primaryService: null, secondaryService: null, relationship: null,
+      serviceFitReason: "", shouldOfferHandoff: false, finalReply: "ok",
+    }));
+    await runOxmRouting({ diagnosis: CLEAR_DIAGNOSIS, history: [], factoryContext: null });
+    const prompt = capturedSystemPrompt();
+    expect(prompt).toContain("Advice 不等於保證");
+    expect(prompt).toContain("一定能增加訂單");
+  });
+
+  it("不是 keyword hardcode：新增規則本身是語意描述，不是「if includes(...)」這種條件判斷式", async () => {
+    mockCompleteJson.mockResolvedValue(JSON.stringify({
+      primaryService: null, secondaryService: null, relationship: null,
+      serviceFitReason: "", shouldOfferHandoff: false, finalReply: "ok",
+    }));
+    await runOxmRouting({ diagnosis: CLEAR_DIAGNOSIS, history: [], factoryContext: null });
+    const prompt = capturedSystemPrompt();
+    expect(prompt).not.toMatch(/if\s*\(.*includes/i);
   });
 });

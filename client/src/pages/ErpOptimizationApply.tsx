@@ -22,6 +22,9 @@ import { resolveAnyFactoryStatus } from "./financeOptimizationApplyStatus";
 import { ERP_NEED_TYPES, ERP_OPEN_STATUSES, ERP_STATUS_LABELS, type ErpNeedTypeKey } from "@shared/erpOptimization";
 import { useAiHandoff } from "@/hooks/useAiHandoff";
 import { AiHandoffModal } from "@/components/ai/AiHandoffModal";
+import { AiHandoffPrefillBanner, AiPrefillFieldHint, hasAiPrefilledAnyOf } from "@/components/ai/AiHandoffPrefillProvenance";
+
+const AI_PREFILLABLE_FIELD_KEYS = ["needType"];
 
 const OPEN_STATUSES = new Set<string>(ERP_OPEN_STATUSES);
 
@@ -342,6 +345,8 @@ export default function ErpOptimizationApply() {
           </div>
         )}
 
+        <AiHandoffPrefillBanner show={hasAiPrefilledAnyOf(aiHandoff.confirmedFields, AI_PREFILLABLE_FIELD_KEYS)} />
+
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-8">
           <fieldset className="space-y-5 rounded-xl border border-border p-6">
             <legend className="px-1 text-sm font-semibold text-muted-foreground">公司資料（由 OXM 工廠資料帶入，不可修改）</legend>
@@ -390,6 +395,7 @@ export default function ErpOptimizationApply() {
               </div>
             </RadioGroup>
             {!needType && <p className="text-xs text-destructive">請選擇本次需求類型</p>}
+            <AiPrefillFieldHint confirmedFields={aiHandoff.confirmedFields} fieldKey="needType" />
           </fieldset>
 
           <fieldset className="space-y-2 rounded-xl border border-border p-6">

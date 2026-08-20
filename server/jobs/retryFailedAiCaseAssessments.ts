@@ -54,7 +54,7 @@ async function recoverMissingAssessments(): Promise<AiCaseAssessment[]> {
       if (created) recovered.push(row);
     } catch (err) {
       console.error(
-        `[retryFailedAiCaseAssessments] missing-assessment recovery 建立 pending row 失敗 (${handoff.serviceKey}#${handoff.submittedCaseId}):`,
+        `[OXM-AI][background][layer:caseAssessmentRetryJob] missing-assessment recovery 建立 pending row 失敗 (${handoff.serviceKey}#${handoff.submittedCaseId}):`,
         err instanceof Error ? err.message : err
       );
     }
@@ -75,8 +75,9 @@ async function recoverMissingAssessments(): Promise<AiCaseAssessment[]> {
  * regenerateCaseAssessment，一律操作同一筆既有 row），仍然失敗就標記 failed、
  * retryCount 再 +1，留給下一次排程繼續重試。
  *
- * 只由外部排程直接執行本檔案（CLI 進入點，見下方），本輪不設定正式排程，
- * 只提供本地可手動執行的能力，沿用 retryFailedAiSummaries.ts 同一種風格。
+ * 只由外部排程（例如 Render Cron Job）直接執行本檔案（CLI 進入點，見下方），
+ * 沿用 retryFailedAiSummaries.ts 同一種風格；建議排程頻率見
+ * server/jobs/README.md（每 30 分鐘）。
  */
 export async function retryFailedAiCaseAssessments(): Promise<RetryFailedAiCaseAssessmentsResult> {
   const [failed, stalePending, recoveredFromMissing] = await Promise.all([
@@ -115,11 +116,11 @@ const invokedDirectly = typeof process.argv[1] === "string" &&
 if (invokedDirectly) {
   retryFailedAiCaseAssessments()
     .then((result) => {
-      console.log(`[cron] retry-failed-ai-case-assessments: attempted=${result.attempted} succeeded=${result.succeeded} stillFailing=${result.stillFailing}`);
+      console.log(`[OXM-AI][background][layer:caseAssessmentRetryJob] attempted=${result.attempted} succeeded=${result.succeeded} stillFailing=${result.stillFailing}`);
       process.exit(result.stillFailing > 0 ? 1 : 0);
     })
     .catch((err: unknown) => {
-      console.error("[cron] retry-failed-ai-case-assessments failed:", err instanceof Error ? err.message : "unknown error");
+      console.error("[OXM-AI][background][layer:caseAssessmentRetryJob] failed:", err instanceof Error ? err.message : "unknown error");
       process.exit(1);
     });
 }

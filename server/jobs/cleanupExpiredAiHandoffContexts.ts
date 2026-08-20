@@ -7,7 +7,7 @@ import { cleanupExpiredHandoffContexts } from "../ai/handoffContextService";
  * 只清沒有被使用過的）。
  *
  * 只由外部排程（例如 Render Cron Job）直接執行本檔案（CLI 進入點，見檔案最
- * 下方），本輪不設定正式排程，只提供本地可手動執行的能力。
+ * 下方）；建議排程頻率見 server/jobs/README.md（每小時）。
  */
 export async function runAiHandoffContextCleanup(): Promise<{ deleted: number }> {
   return cleanupExpiredHandoffContexts();
@@ -19,11 +19,11 @@ const invokedDirectly = typeof process.argv[1] === "string" &&
 if (invokedDirectly) {
   runAiHandoffContextCleanup()
     .then((result) => {
-      console.log(`[cron] cleanup-expired-ai-handoff-contexts: deleted=${result.deleted}`);
+      console.log(`[OXM-AI][background][layer:handoffCleanupJob] deleted=${result.deleted}`);
       process.exit(0);
     })
     .catch((err: unknown) => {
-      console.error("[cron] cleanup-expired-ai-handoff-contexts failed:", err instanceof Error ? err.message : "unknown error");
+      console.error("[OXM-AI][background][layer:handoffCleanupJob] failed:", err instanceof Error ? err.message : "unknown error");
       process.exit(1);
     });
 }

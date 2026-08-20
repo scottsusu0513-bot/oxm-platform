@@ -23,6 +23,7 @@ import {
   cleanupExpiredHandoffContexts,
   HANDOFF_CONTEXT_TTL_MS,
 } from "./handoffContextService";
+import { createConversation, appendMessage, deleteConversationAndMessages } from "./conversationService";
 
 const runId = `ai-handoff-svc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 let userAId: number;
@@ -196,5 +197,23 @@ describe("cleanupExpiredHandoffContexts", () => {
     expect(remainingIds).not.toContain(expiredUnconsumed.id); // 過期且沒消費過 → 被清掉
     expect(remainingIds).toContain(expiredConsumed.id); // 過期但已消費過 → 保留供 Phase 5 參考
     expect(remainingIds).toContain(stillFresh.id); // 還沒過期 → 保留
+  });
+
+  it("P9（Phase 11.2「三十一」）：conversation raw delete 後，指向它的 handoff context 完全不受影響（故意不建 FK，見 schema 註解）", async () => {
+    const conversation = await createConversation(userAId, null);
+    await appendMessage(conversation.id, "user", "測試 handoff 不受 conversation 生命週期影響");
+
+    const created = await createHandoffContext({
+      userId: userAId, factoryId: null, serviceKey: "erp",
+      prefillData: { needType: "erp_adoption" }, confirmedFields: { needType: { sourceFact: "needType" } },
+      handoffSummary: "P9 測試摘要", sourceConversationId: conversation.id,
+    });
+
+    await deleteConversationAndMessages(conversation.id);
+
+    const found = await getHandoffContextForUser(created.token, userAId);
+    expect(found).toBeTruthy();
+    expect(found?.handoffSummary).toBe("P9 測試摘要");
+    expect(found?.sourceConversationId).toBe(conversation.id); // 純資訊性欄位，即使指向的 conversation 已經不存在也原樣保留
   });
 });

@@ -7859,7 +7859,9 @@ export async function getCommunityBidIndustries(bidId: number): Promise<string[]
 }
 
 // Helper: raw pool for conditional UPDATE with affectedRows check
-async function getRawPool(): Promise<mysql.Pool> {
+// Phase 8.1（server/ai/aiQuota.ts）也重用同一顆 pool 做 FOR UPDATE transaction，
+// 跟 createFactoryAtomic／acceptInvitation 同一種鎖序模式，不重新開一顆 pool。
+export async function getRawPool(): Promise<mysql.Pool> {
   if (!_pool) await getDb();
   if (!_pool) throw new Error("DB not available");
   return _pool;

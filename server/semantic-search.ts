@@ -5,6 +5,8 @@ import { getDb } from './db';
 import { searchCache, aiSearchIntents } from '../drizzle/schema';
 import { eq, sql } from 'drizzle-orm';
 import { ENV } from './_core/env';
+import { getCurrentAiCallContext } from './ai/aiCallContext';
+import { logAiModelCall } from './ai/aiUsageLogging';
 
 // ===== 舊版 Anthropic 快取（保留，enhanceSearchKeyword 仍可用）=====
 const anthropicClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY ?? '' });
@@ -120,17 +122,61 @@ function parseAndValidateIntent(raw: string, normalizedQuery: string): AISearchI
   };
 }
 
+/**
+ * Phase 8.1（見對話中「provider instrumentation」）：這個 client 跟
+ * provider.ts 的 OpenAiChatProvider 是完全獨立的第二條 LLM 路徑（AI Shell
+ * 的 factory search 語意排序步驟＋公開 /search 頁的關鍵字強化都會走到這
+ * 裡）。只有在 AI Shell 的 chatService.ts 已經用 runWithAiCallContext 包住
+ * 呼叫鏈時才記錄 usage（getCurrentAiCallContext() 有值）——公開 /search 頁
+ * 直接呼叫 getSearchIntent()，沒有包 ambient context，不應該產生任何
+ * aiModelCalls row（不是「用 null 歸屬」，是完全不記）。
+ */
 async function resolveSearchIntentWithOpenAI(key: string): Promise<AISearchIntent> {
   const client = new OpenAI({ apiKey: ENV.openaiApiKey });
-  const response = await client.chat.completions.create({
-    model:           ENV.aiSearchModel,
-    max_tokens:      250,
-    temperature:     0,
-    response_format: { type: 'json_object' },
-    messages: [{ role: 'user', content: buildIntentPrompt(key) }],
-  });
-  const text = response.choices[0]?.message?.content ?? '{}';
-  return parseAndValidateIntent(text, key);
+  const startedAt = Date.now();
+  const shouldLog = getCurrentAiCallContext() !== undefined;
+  try {
+    const response = await client.chat.completions.create({
+      model:           ENV.aiSearchModel,
+      max_tokens:      250,
+      temperature:     0,
+      response_format: { type: 'json_object' },
+      messages: [{ role: 'user', content: buildIntentPrompt(key) }],
+    });
+    const text = response.choices[0]?.message?.content ?? '{}';
+    const result = parseAndValidateIntent(text, key);
+    if (shouldLog) {
+      void logAiModelCall({
+        layer: 'factorySemantic',
+        model: ENV.aiSearchModel,
+        provider: 'openai',
+        latencyMs: Date.now() - startedAt,
+        success: true,
+        usage: response.usage
+          ? {
+              inputTokens: response.usage.prompt_tokens ?? null,
+              outputTokens: response.usage.completion_tokens ?? null,
+              totalTokens: response.usage.total_tokens ?? null,
+              cachedInputTokens: response.usage.prompt_tokens_details?.cached_tokens ?? null,
+              reasoningTokens: response.usage.completion_tokens_details?.reasoning_tokens ?? null,
+            }
+          : undefined,
+      });
+    }
+    return result;
+  } catch (err) {
+    if (shouldLog) {
+      void logAiModelCall({
+        layer: 'factorySemantic',
+        model: ENV.aiSearchModel,
+        provider: 'openai',
+        latencyMs: Date.now() - startedAt,
+        success: false,
+        errorCategory: 'unknown_error',
+      });
+    }
+    throw err;
+  }
 }
 
 function isIntentEnabled(): boolean {

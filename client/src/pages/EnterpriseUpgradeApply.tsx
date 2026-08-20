@@ -24,6 +24,22 @@ import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
 import { useAiHandoff } from "@/hooks/useAiHandoff";
 import { AiHandoffModal } from "@/components/ai/AiHandoffModal";
+import { AiHandoffPrefillBanner, AiPrefillFieldHint, hasAiPrefilledAnyOf } from "@/components/ai/AiHandoffPrefillProvenance";
+
+/** Phase 7.2：這個表單實際會用 aiHandoff.prefillData setValue 的欄位（見下面的預填 useEffect），provenance banner／per-field hint 只吃這份清單跟 confirmedFields 的交集。 */
+const AI_PREFILLABLE_FIELD_KEYS = [
+  "decisionMakerParticipation",
+  "annualRevenue",
+  "employeeCount",
+  "factoryType",
+  "isEnterpriseFirm",
+  "hasGovProject",
+  "govProjectName",
+  "hasAppliedForSubsidy",
+  "hasPatent",
+  "patentCount",
+  "exportMode",
+];
 
 // ── 表單型別 ──────────────────────────────────────────────────────────────────
 
@@ -587,6 +603,8 @@ export default function EnterpriseUpgradeApply() {
           </a>
         </div>
 
+        <AiHandoffPrefillBanner show={hasAiPrefilledAnyOf(aiHandoff.confirmedFields, AI_PREFILLABLE_FIELD_KEYS)} />
+
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-8">
           {/* ── 基本資料 ── */}
           <fieldset className="space-y-5 rounded-xl border border-border p-6">
@@ -714,6 +732,7 @@ export default function EnterpriseUpgradeApply() {
             {errors.decisionMakerParticipation && (
               <p className="text-xs text-destructive">{errors.decisionMakerParticipation.message}</p>
             )}
+            <AiPrefillFieldHint confirmedFields={aiHandoff.confirmedFields} fieldKey="decisionMakerParticipation" />
           </fieldset>
 
           {/* ── 企業規模 ── */}
@@ -771,6 +790,7 @@ export default function EnterpriseUpgradeApply() {
               {errors.annualRevenue && (
                 <p className="text-xs text-destructive">{errors.annualRevenue.message}</p>
               )}
+              <AiPrefillFieldHint confirmedFields={aiHandoff.confirmedFields} fieldKey="annualRevenue" />
             </div>
 
             {/* 員工人數 */}
@@ -797,6 +817,7 @@ export default function EnterpriseUpgradeApply() {
               {errors.employeeCount && (
                 <p className="text-xs text-destructive">{errors.employeeCount.message}</p>
               )}
+              <AiPrefillFieldHint confirmedFields={aiHandoff.confirmedFields} fieldKey="employeeCount" />
             </div>
 
             {/* 工廠類型 */}
@@ -823,6 +844,7 @@ export default function EnterpriseUpgradeApply() {
               {errors.factoryType && (
                 <p className="text-xs text-destructive">{errors.factoryType.message}</p>
               )}
+              <AiPrefillFieldHint confirmedFields={aiHandoff.confirmedFields} fieldKey="factoryType" />
             </div>
 
             {/* 是否為企業社 */}
@@ -842,6 +864,7 @@ export default function EnterpriseUpgradeApply() {
                   <Label htmlFor="enterpriseFirm-no" className="font-normal cursor-pointer">否</Label>
                 </div>
               </RadioGroup>
+              <AiPrefillFieldHint confirmedFields={aiHandoff.confirmedFields} fieldKey="isEnterpriseFirm" />
             </div>
           </fieldset>
 
@@ -865,6 +888,7 @@ export default function EnterpriseUpgradeApply() {
                   <Label htmlFor="appliedForSubsidy-no" className="font-normal cursor-pointer">沒有</Label>
                 </div>
               </RadioGroup>
+              <AiPrefillFieldHint confirmedFields={aiHandoff.confirmedFields} fieldKey="hasAppliedForSubsidy" />
             </div>
 
             <div className="space-y-3">
@@ -883,10 +907,12 @@ export default function EnterpriseUpgradeApply() {
                   <Label htmlFor="govProject-no" className="font-normal cursor-pointer">沒有</Label>
                 </div>
               </RadioGroup>
+              <AiPrefillFieldHint confirmedFields={aiHandoff.confirmedFields} fieldKey="hasGovProject" />
               {hasGovProject === "yes" && (
                 <div className="pl-1 space-y-2">
                   <Label htmlFor="govProjectName">計畫名稱</Label>
                   <Input id="govProjectName" placeholder="例：SBIR 小型企業創新研發計畫" {...register("govProjectName")} />
+                  <AiPrefillFieldHint confirmedFields={aiHandoff.confirmedFields} fieldKey="govProjectName" />
                 </div>
               )}
             </div>
@@ -907,10 +933,12 @@ export default function EnterpriseUpgradeApply() {
                   <Label htmlFor="patent-no" className="font-normal cursor-pointer">沒有</Label>
                 </div>
               </RadioGroup>
+              <AiPrefillFieldHint confirmedFields={aiHandoff.confirmedFields} fieldKey="hasPatent" />
               {hasPatent === "yes" && (
                 <div className="pl-1 space-y-2">
                   <Label htmlFor="patentCount">專利數量</Label>
                   <Input id="patentCount" type="number" min={1} placeholder="例：3" {...register("patentCount")} />
+                  <AiPrefillFieldHint confirmedFields={aiHandoff.confirmedFields} fieldKey="patentCount" />
                 </div>
               )}
             </div>
@@ -941,6 +969,7 @@ export default function EnterpriseUpgradeApply() {
             {errors.exportMode && (
               <p className="text-xs text-destructive">{errors.exportMode.message}</p>
             )}
+            <AiPrefillFieldHint confirmedFields={aiHandoff.confirmedFields} fieldKey="exportMode" />
           </fieldset>
 
           {/* ── 補充說明 ── */}

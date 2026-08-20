@@ -200,7 +200,7 @@ export default function Navbar() {
   const [menuClosing, setMenuClosing] = useState(false);
   const [loginDialogOpen, setLoginDialogOpen] = useState(false);
 
-  // OXM 品牌區下拉選單（左上角）：目前有「首頁」／「關於 OXM」兩個項目，桌機／
+  // OXM 品牌區下拉選單（左上角）：目前有「首頁」／「關於 OXM」／「FAQ」三個項目，桌機／
   // 手機共用同一份 DOM（沒有 breakpoint 拆兩套），不需要另外處理手機版。
   // Content 透過 createPortal 掛到 document.body、用 position:fixed + 手動算好的
   // 座標定位（brandMenuPos），而不是原本「absolute 相對 brandMenuRef 父層」的寫法：
@@ -523,6 +523,11 @@ export default function Navbar() {
             <Link href="/about" onClick={() => setBrandMenuOpen(false)}>
               <div className="px-3.5 py-2 text-sm font-medium text-foreground hover:bg-orange-50 hover:text-orange-700 transition-colors cursor-pointer">
                 關於 OXM
+              </div>
+            </Link>
+            <Link href="/faq" onClick={() => setBrandMenuOpen(false)}>
+              <div className="px-3.5 py-2 text-sm font-medium text-foreground hover:bg-orange-50 hover:text-orange-700 transition-colors cursor-pointer">
+                常見問答 FAQ
               </div>
             </Link>
           </div>,

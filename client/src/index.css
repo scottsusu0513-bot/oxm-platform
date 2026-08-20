@@ -61,6 +61,32 @@
   }
 }
 
+/* Phase 7.1 P1-1（見對話中「OXM Thinking Animation」）：取代原本的 generic
+   Loader2 spinner，O/X/M 三個字母依序小幅跳動，純 CSS keyframe，不用 GIF／
+   影片／Canvas／額外的 animation library。 */
+@keyframes oxm-letter-bounce {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+  }
+  30% {
+    transform: translateY(-4px);
+  }
+}
+
+.oxm-thinking-letter {
+  display: inline-block;
+  animation: oxm-letter-bounce 1s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .oxm-thinking-letter {
+    animation: none !important;
+    transform: none !important;
+  }
+}
+
 /* ── iOS / Capacitor safe area utilities ──────────────────────────────────────
    viewport-fit=cover (index.html) exposes env(safe-area-inset-*).
    Pages without a sticky Navbar must pad their top container so no interactive

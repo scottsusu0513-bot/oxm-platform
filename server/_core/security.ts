@@ -1,8 +1,24 @@
 import { Express, Request, Response, NextFunction } from "express";
 import helmet from "helmet";
+import { ENV } from "./env";
 
 /**
  * 安全 headers middleware
+ *
+ * Phase 7.3（見對話中「LAN Development Security」root cause）：helmet 的
+ * Content-Security-Policy 預設會加上 upgrade-insecure-requests——這個指令會
+ * 讓瀏覽器把頁面上所有子資源請求自動改寫成 https。正式站全站本來就是
+ * https，這條指令保留完全沒有影響；但本機開發用 plain http 提供服務，這條
+ * 指令會讓瀏覽器把 /@vite/client、/src/main.tsx 等改寫成不存在的
+ * https://<host>:3000/...，導致整個 React app 完全無法載入。只有
+ * localhost／127.0.0.1 因為瀏覽器把 loopback 視為天生可信任（potentially
+ * trustworthy origin）才沒觸發這個改寫，LAN IP 真機測試會直接整頁壞掉、只
+ * 剩 prerender fallback 文字（見對話中的 root cause 診斷）。HSTS
+ * （Strict-Transport-Security）是同一類問題：告訴瀏覽器「這個 host 以後
+ * 永遠只能用 https 連」，本機開發用 plain http 提供服務不該送出這個
+ * header。兩者都只在 ENV.isProduction 為 true 時維持原本設定，非正式環境
+ * 明確關閉，不影響正式站安全策略；沿用專案既有的 ENV.isProduction
+ * （server/_core/env.ts）判斷方式，不新增第二套環境判斷。
  */
 export function setupSecurityHeaders(app: Express) {
   // Helmet 基礎安全 headers
@@ -21,16 +37,20 @@ export function setupSecurityHeaders(app: Express) {
         fontSrc: ["'self'", "data:", "https:", "fonts.gstatic.com"],
         mediaSrc: ["'self'"],
         frameSrc: ["'none'"],
+        // 只在正式環境維持 helmet 預設的 upgrade-insecure-requests；非正式
+        // 環境明確設 null 關閉（helmet 文件記載的標準關閉寫法），讓本機
+        // plain http 開發（含 LAN IP 真機測試）的子資源請求不被改寫成 https。
+        upgradeInsecureRequests: ENV.isProduction ? [] : null,
       },
     },
     referrerPolicy: { policy: "strict-origin-when-cross-origin" },
     noSniff: true,
     xssFilter: true,
-    hsts: {
-      maxAge: 31536000,
-      includeSubDomains: true,
-      preload: true,
-    },
+    // 正式環境維持原本 HSTS 設定；非正式環境關閉，本機 plain http 開發不
+    // 應該送出「以後永遠只能用 https」這個長效指示。
+    hsts: ENV.isProduction
+      ? { maxAge: 31536000, includeSubDomains: true, preload: true }
+      : false,
   }));
 
   // 自訂安全 headers
@@ -38,7 +58,12 @@ export function setupSecurityHeaders(app: Express) {
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("X-Frame-Options", "DENY");
     res.setHeader("X-XSS-Protection", "1; mode=block");
-    res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload");
+    // 這裡原本跟上面 helmet 的 hsts 選項重複設定同一個 header——保留正式站
+    // 既有行為不變，但同樣需要依環境關閉，否則即使 helmet 的 hsts 選項被
+    // 關掉，這裡仍會在非正式環境送出 Strict-Transport-Security。
+    if (ENV.isProduction) {
+      res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload");
+    }
     next();
   });
 }

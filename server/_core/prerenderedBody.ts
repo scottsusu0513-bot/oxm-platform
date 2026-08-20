@@ -39,6 +39,7 @@ function resolvePrerenderedFile(filename: string): string {
 const PRERENDERED_PAGES: Record<string, { file: string; marker: string }> = {
   "/": { file: resolvePrerenderedFile("home.html"), marker: "home" },
   "/about": { file: resolvePrerenderedFile("about.html"), marker: "about" },
+  "/faq": { file: resolvePrerenderedFile("faq.html"), marker: "faq" },
 };
 
 const cache = new Map<string, string | null>();

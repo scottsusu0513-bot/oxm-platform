@@ -15,6 +15,8 @@ import { AppBottomNav } from "@/components/AppBottomNav";
 import NetworkStatusOverlay from "@/components/NetworkStatusOverlay";
 import { AiShellProvider } from "@/contexts/AiShellContext";
 import { GlobalAiShell } from "@/components/ai/GlobalAiShell";
+import { FloatingActionStack } from "@/components/FloatingActionStack";
+import { isAiShellExcludedPath } from "@/lib/aiShellRoutes";
 
 // ── 公開頁面 ──────────────────────────────────────────────────────────────
 const Home                  = lazy(() => import("./pages/Home"));
@@ -31,6 +33,7 @@ const Announcements         = lazy(() => import("./pages/Announcements"));
 const BlogList              = lazy(() => import("./pages/BlogList"));
 const BlogPost              = lazy(() => import("./pages/BlogPost"));
 const AboutOXM              = lazy(() => import("./pages/AboutOXM"));
+const FAQ                   = lazy(() => import("./pages/FAQ"));
 const ResourceCenter        = lazy(() => import("./pages/ResourceCenter"));
 const Talent                = lazy(() => import("./pages/Talent"));
 const Brand                 = lazy(() => import("./pages/Brand"));
@@ -94,6 +97,7 @@ const AdminMessages         = lazy(() => import("./pages/AdminMessages"));
 const AdminMessageDetail    = lazy(() => import("./pages/AdminMessageDetail"));
 const AdminCertificationServices = lazy(() => import("./pages/AdminCertificationServices"));
 const AdminConsultantManagement = lazy(() => import("./pages/AdminConsultantManagement"));
+const AdminAiManagement = lazy(() => import("./pages/AdminAiManagement"));
 
 // ── App badge count syncer ────────────────────────────────────────────────────
 // 只在 Capacitor native app 執行，沿用 Navbar 相同紅點邏輯計算 badge 數字
@@ -329,26 +333,6 @@ function PageFallback() {
   return <AppLoading />;
 }
 
-/**
- * Global AI Shell 排除路由（見對話中「哪些路由目前顯示／不顯示，以及原因」）：
- * - /admin、/admin/*、/admin-message/*（startsWith("/admin") 一併涵蓋）：
- *   內部管理後台工具，操作情境與畫面密度都跟「一般使用者找工廠／問問題」
- *   完全不同，管理員也不是這個 AI 的服務對象。
- * - /verify-email：短暫的驗證流程頁，不需要、也不適合疊加聊天面板。
- * - /consultant-center 與所有以 "-consultant/cases" 結尾的路徑（endsWith
- *   判斷涵蓋所有既有顧問案件看板）：顧問身份專用的內部工作頁面，不是一般
- *   公開瀏覽情境。
- * 其餘所有一般公開頁面（首頁／搜尋／工廠頁／FAQ／新聞／會員中心／訊息……）
- * 都正常顯示。
- */
-function isAiShellExcludedPath(pathname: string): boolean {
-  if (pathname.startsWith("/admin")) return true;
-  if (pathname === "/verify-email") return true;
-  if (pathname === "/consultant-center") return true;
-  if (pathname.endsWith("-consultant/cases")) return true;
-  return false;
-}
-
 function AiShellGate() {
   const [pathname] = useLocation();
   if (isAiShellExcludedPath(pathname)) return null;
@@ -403,6 +387,7 @@ function Router() {
         <Route path="/certification-consultant/cases" component={CertificationConsultantCases} />
         <Route path="/admin/certification-services" component={AdminCertificationServices} />
         <Route path="/admin/consultant-management" component={AdminConsultantManagement} />
+        <Route path="/admin/ai-management" component={AdminAiManagement} />
         {/* ERP 與產線優化專區：同上，僅由 /resources 提供受控入口；
             noindex／nofollow、sitemap 與 prerender 限制維持不變。
             /apply 為真正可送出的申請表單，同樣隱藏、同樣 noindex；
@@ -421,6 +406,7 @@ function Router() {
         <Route path="/announcements" component={Announcements} />
         <Route path="/manual" component={UserManual} />
         <Route path="/about" component={AboutOXM} />
+        <Route path="/faq" component={FAQ} />
         <Route path="/resources" component={ResourceCenter} />
         <Route path="/talent" component={Talent} />
         <Route path="/brand" component={Brand} />
@@ -517,6 +503,7 @@ function App() {
               <Router />
               <AppBottomNav />
               <AiShellGate />
+              <FloatingActionStack />
             </AiShellProvider>
           </TooltipProvider>
         </ThemeProvider>

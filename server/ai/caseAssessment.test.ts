@@ -131,7 +131,10 @@ describe("服務專屬格式：不共用 universal template（見「七」）", 
     const prompt = capturedPrompts[capturedPrompts.length - 1];
     expect(prompt).toContain("primaryRecommendation");
     expect(prompt).toContain("CITD");
-    expect(prompt).toContain("製造業 19+1 AI 診斷輔導：適合企業想導 AI");
+    // Phase 6G.1：判斷細節不再手寫獨立文字，改為重用 shared/ai/serviceRegistry.ts
+    // 的 fitSignals／cautionSignals／comparisonNotes（見 serializeGovSubsidyPrograms）。
+    expect(prompt).toContain("製造業 19+1 AI 診斷輔導（key: manufacturing_19plus1）");
+    expect(prompt).toContain("已經有清楚的研發標的、已完成 PoC、準備把技術整合成正式產品時，不應該再把 19+1 當首選");
     expect(prompt).toContain("目前較適合往 XXX 評估");
     expect(prompt).not.toContain('{"summary"');
   });

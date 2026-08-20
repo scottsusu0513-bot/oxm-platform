@@ -21,7 +21,9 @@ import {
   markConversationSummaryFailed,
   getFailedConversations,
   getInactiveConversations,
+  updateConversationStateAndAppendMessage,
 } from "./conversationService";
+import { createEmptyConversationState } from "./conversationState";
 import { aiConversations } from "../../drizzle/schema";
 import { eq } from "drizzle-orm";
 
@@ -172,6 +174,46 @@ describe("getInactiveConversations — inactivity finalizer 用的查詢", () =>
 
     const inactive = await getInactiveConversations(30 * 60 * 1000);
     expect(inactive.map(c => c.id)).not.toContain(conversation.id);
+
+    await deleteConversationAndMessages(conversation.id);
+  });
+});
+
+describe("updateConversationStateAndAppendMessage — Phase 10.2 P1「十七」：state + assistant message 交易化，R14", () => {
+  it("正常路徑：state 與 assistant message 一起成功寫入（同一次呼叫，不是分兩次）", async () => {
+    const conversation = await createConversation(userAId, null);
+    const state = { ...createEmptyConversationState(false), consecutiveOutOfDomainCasualTurns: 2 };
+
+    await updateConversationStateAndAppendMessage(conversation.id, state, "assistant", "交易化收尾測試回覆");
+
+    const refreshed = await getConversationForUser(conversation.id, userAId);
+    expect((refreshed?.currentStateJson as typeof state | null)?.consecutiveOutOfDomainCasualTurns).toBe(2);
+    const messages = await getAllMessages(conversation.id);
+    expect(messages).toHaveLength(1);
+    expect(messages[0].role).toBe("assistant");
+    expect(messages[0].content).toBe("交易化收尾測試回覆");
+
+    await deleteConversationAndMessages(conversation.id);
+  });
+
+  it("R14：其中一個寫入失敗時整筆交易一起回滾——state 不會被留下半套的更新（不是舊版分開呼叫時，前半段可能已經真的寫入的情況）", async () => {
+    const conversation = await createConversation(userAId, null);
+    const beforeState = await getConversationForUser(conversation.id, userAId);
+    expect(beforeState?.currentStateJson).toBeNull();
+
+    const state = { ...createEmptyConversationState(false), consecutiveOutOfDomainCasualTurns: 9 };
+    // role 故意用一個不在 mysqlEnum("role", ["user","assistant"]) 裡的值，繞過
+    // TypeScript 型別檢查、在 DB 層真正觸發一個約束違反（strict mode 下會
+    // throw，而不是靜默寫入空字串）——用來製造「第二個寫入真的失敗」的情境，
+    // 驗證第一個寫入（更新 currentStateJson）有沒有真的被交易一起回滾。
+    await expect(
+      updateConversationStateAndAppendMessage(conversation.id, state, "system" as unknown as "assistant", "不應該被寫入的內容")
+    ).rejects.toThrow();
+
+    const afterState = await getConversationForUser(conversation.id, userAId);
+    expect(afterState?.currentStateJson).toBeNull(); // 沒有半套更新殘留
+    const messages = await getAllMessages(conversation.id);
+    expect(messages).toHaveLength(0); // 也沒有殘留任何訊息
 
     await deleteConversationAndMessages(conversation.id);
   });

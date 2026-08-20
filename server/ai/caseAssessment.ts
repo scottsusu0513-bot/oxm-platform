@@ -1,8 +1,10 @@
 import * as db from "../db";
 import { getAiChatProvider, type AiChatMessage } from "./provider";
+import { runWithAiCallContext, logAiError } from "./aiCallContext";
 import { getAiFactoryContextByFactoryId, type AiFactoryContext } from "./factoryContext";
 import { getHandoffContextById } from "./handoffContextService";
 import { AI_SERVICE_REGISTRY } from "../../shared/ai/serviceRegistry";
+import { serializeGovSubsidyPrograms } from "./serialize";
 import { shortVideoServiceLabel, shortVideoPlatformLabel, SHORT_VIDEO_GOALS } from "../../shared/shortVideoMarketing";
 import { erpNeedTypeLabel } from "../../shared/erpOptimization";
 import type { HandoffEligibleServiceKey } from "../../shared/ai/handoffServices";
@@ -187,7 +189,9 @@ function buildCommonContextBlock(params: {
 /** 呼叫一次 LLM，要求回傳單一 JSON object，找不到/解析失敗就直接丟錯給呼叫端處理（標記 failed）。 */
 async function callAssessmentModel(systemPrompt: string, maxTokens: number): Promise<Record<string, unknown>> {
   const messages: AiChatMessage[] = [{ role: "system", content: systemPrompt }];
-  const provider = getAiChatProvider();
+  // Phase 8.1：只是標註 usage log 的 layer 分類，不影響模型選擇（沒有專屬
+  // env model，仍落到跟以前不傳 layer 相同的 default）。
+  const provider = getAiChatProvider("caseAssessment");
   const raw = await provider.completeJson(messages, maxTokens);
   const parsed: unknown = JSON.parse(raw);
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
@@ -224,7 +228,11 @@ function buildGovSubsidyPrompt(params: {
   factoryContext: AiFactoryContext | null;
 }): string {
   const programs = AI_SERVICE_REGISTRY.find(s => s.key === "gov_subsidy")?.govSubsidyPrograms ?? [];
-  const programProfiles = programs.map(p => `- ${p.name}：${p.profile}`).join("\n");
+  // Phase 6G.1（見對話中「二十：Case Assessment 去重」）：不再手寫一份獨立的
+  // 「判斷細節」，直接重用 shared/ai/serviceRegistry.ts 的 fitSignals／
+  // cautionSignals／comparisonNotes——跟 Layer 2 routing.ts 的 govSubsidyRecommendation
+  // 判斷共用同一份知識來源，避免兩處各自維護容易漂移。
+  const programProfiles = serializeGovSubsidyPrograms(programs);
   const form = params.submittedForm;
   // key 命名對應 handoffPrefill.ts govSubsidyFieldSpecs 的 prefill key，用來
   // 讓 buildAuthoritativeReferenceBackground 知道哪些 handoff 舊值已經被正式
@@ -263,20 +271,12 @@ function buildGovSubsidyPrompt(params: {
     "",
     buildCommonContextBlock({ ...params, submittedAnswers }),
     "",
-    "===== 六大政府補助方向側寫（判斷主推薦／次推薦時的依據，不是逐字照搬）=====",
+    "===== 六大政府補助方向側寫（判斷主推薦／次推薦時的依據，不是逐字照搬；已包含每個方向的適合情境、注意事項與跟其他方向的差異，不要自己另外假設官方資格條件）=====",
     programProfiles,
-    "",
-    "【判斷細節，務必遵守】",
-    "- 製造業 19+1 AI 診斷輔導：適合企業想導 AI／自動化，但還不知道應該用在哪裡、需要先做診斷的情況；不是「使用者提到 AI 兩個字」就自動推薦，如果企業真正問題是庫存/工單/排程等基礎管理，應該先考慮是否為 ERP 範疇。",
-    "- CITD：偏製造業產品／技術／製程／技術升級，不是單純「買設備擴產」。",
-    "- SBIR：需要明確的創新研發目標（新產品／新技術／新服務）。",
-    "- 研發轉型：必須尊重當年度正式政策條件，不能因為只是大型設備投資就自動推薦。",
-    "- SIIR：偏服務／商業模式創新，且需要有市場驗證，不是製造技術本身。",
-    "- 海外市場拓展：需要產品已有一定成熟度、準備真正建立海外通路布局，不是只有參展或探路階段。",
-    "- 是否為企業社純粹是登記型態資訊，不得做任何負面資格判斷。",
     "",
     "【文案規則，務必遵守】",
     "- AI 初判不是政府審查結果，主推薦／次推薦一律用「目前較適合往 XXX 評估」「若研發創新程度較高可考慮 XXX」這類語氣，絕對不能寫「符合 XXX」「一定可以申請」「核准機率高」這類斷言。",
+    "- 是否為企業社純粹是登記型態資訊，不得做任何負面資格判斷。",
     "- 表單或背景完全沒有提到的欄位，一律誠實寫「未提供」或「目前未取得相關資訊」，絕對不能自己杜撰或用「應具備一定能力」這種安慰性語句頂替（例如關稅影響沒聊到就寫「未提供」，不能因為「沒有專利」就推論「不適合申請」）。",
     "- 每一欄只寫一句到極短一段，不要寫成報告；不要新增這 8 欄以外的任何欄位（不要 AI 信心、不要進度、不要待確認清單）。",
     "",
@@ -503,9 +503,10 @@ async function createPendingAssessmentWithRetry(params: {
       if (attempt < PENDING_CREATE_ATTEMPTS) await delay(PENDING_CREATE_RETRY_DELAY_MS * attempt);
     }
   }
-  console.error(
-    `[caseAssessment] createPendingAssessment 重試 ${PENDING_CREATE_ATTEMPTS} 次仍失敗 (${params.serviceKey}#${params.caseId}, handoffContextId=${params.handoffContextId}):`,
-    lastErr instanceof Error ? lastErr.message : lastErr
+  logAiError(
+    "caseAssessment",
+    `createPendingAssessment 重試 ${PENDING_CREATE_ATTEMPTS} 次仍失敗 (${params.serviceKey}#${params.caseId}, handoffContextId=${params.handoffContextId})`,
+    lastErr
   );
   return null;
 }
@@ -536,16 +537,19 @@ export async function initiateCaseAssessment(params: InitiateCaseAssessmentParam
   });
   if (assessmentId == null) return false;
 
-  void (async () => {
+  // Phase 8.1（見對話中「三十五：Case Assessment 不消耗使用者 quota，但仍記
+  // model usage」）：這裡不屬於任何使用者可見 AI Shell turn，turnId 為 null，
+  // 但 factoryId／actorUserId 已知，讓 aiModelCalls 仍可依工廠做用量分析。
+  void runWithAiCallContext({ turnId: null, factoryId: params.factoryId, actorUserId: params.userId }, async () => {
     try {
       const factoryContext = await getAiFactoryContextByFactoryId(params.factoryId);
       const { assessmentJson, assessmentText } = await runGeneration(params, factoryContext);
       await markAssessmentCompleted(assessmentId, { assessmentJson, assessmentText });
     } catch (err) {
-      console.error(`[caseAssessment] generation failed for assessment #${assessmentId} (${params.serviceKey}#${params.caseId}):`, err instanceof Error ? err.message : err);
+      logAiError("caseAssessment", `generation failed for assessment #${assessmentId} (${params.serviceKey}#${params.caseId})`, err);
       await markAssessmentFailed(assessmentId, err instanceof Error ? err.message : "unknown error").catch(() => {});
     }
-  })();
+  });
   return true;
 }
 

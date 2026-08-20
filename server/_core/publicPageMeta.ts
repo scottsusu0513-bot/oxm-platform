@@ -1,4 +1,4 @@
-// 針對固定公開頁（目前為 "/" 與 "/about"）在回傳 index.html 前，把 title／
+// 針對固定公開頁（目前為 "/"、"/about" 與 "/faq"）在回傳 index.html 前，把 title／
 // description／canonical／OG／JSON-LD 直接寫進初始 HTML，讓「檢視網頁原始碼」
 // 與搜尋引擎爬蟲不需要等待 React 執行、由 react-helmet-async 寫入才看得到正確
 // 的 SEO 資料。
@@ -36,6 +36,8 @@ import {
   getWebsiteSchema,
   getAboutPageSchema,
   getAboutBreadcrumbSchema,
+  getFaqPageSchema,
+  getFaqBreadcrumbSchema,
   toSafeJsonLdString,
   type JsonLdObject,
 } from "@shared/seo/schema";
@@ -64,6 +66,9 @@ function getJsonLdForPath(pathname: string): JsonLdObject[] {
   }
   if (normalized === "/about") {
     return [getAboutPageSchema(), getAboutBreadcrumbSchema()];
+  }
+  if (normalized === "/faq") {
+    return [getFaqPageSchema(), getFaqBreadcrumbSchema()];
   }
   return [];
 }

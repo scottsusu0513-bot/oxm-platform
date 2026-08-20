@@ -25,7 +25,7 @@ export interface FinalizeInactiveAiConversationsResult {
  * 永久卡在 active。
  *
  * 只由外部排程（例如 Render Cron Job）直接執行本檔案（CLI 進入點，見檔案最
- * 下方），本輪不設定正式排程，只提供本地可手動執行的能力。
+ * 下方）；建議排程頻率見 server/jobs/README.md（每 10 分鐘）。
  */
 export async function finalizeInactiveAiConversations(
   thresholdMs: number = INACTIVITY_THRESHOLD_MS
@@ -53,11 +53,11 @@ if (invokedDirectly) {
   finalizeInactiveAiConversations()
     .then((result) => {
       // 只印統計數字，不含任何對話內容或使用者資料。
-      console.log(`[cron] finalize-inactive-ai-conversations: attempted=${result.attempted} succeeded=${result.succeeded} stillFailing=${result.stillFailing}`);
+      console.log(`[OXM-AI][background][layer:inactivityFinalizerJob] attempted=${result.attempted} succeeded=${result.succeeded} stillFailing=${result.stillFailing}`);
       process.exit(result.stillFailing > 0 ? 1 : 0);
     })
     .catch((err: unknown) => {
-      console.error("[cron] finalize-inactive-ai-conversations failed:", err instanceof Error ? err.message : "unknown error");
+      console.error("[OXM-AI][background][layer:inactivityFinalizerJob] failed:", err instanceof Error ? err.message : "unknown error");
       process.exit(1);
     });
 }

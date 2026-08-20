@@ -1,5 +1,5 @@
 import { and, eq, inArray, lt, or, sql } from "drizzle-orm";
-import { getDb, getAdminUserIds } from "../db";
+import { getDb, getAdminUserIds, getRawPool } from "../db";
 import { aiFactorySearchRequests, users, factories, type AiFactorySearchRequest } from "../../drizzle/schema";
 import { createPlatformNotifications } from "../notifications";
 
@@ -110,10 +110,6 @@ export async function applyFactorySourcingDecision(params: {
   requestedMatchCount: number | null;
   plannerReason: string;
 }): Promise<{ requestId: number }> {
-  const db = await getDb();
-  if (!db) throw new Error("DB not available");
-
-  const existing = await getPendingFactorySearchRequestForConversation(params.conversationId);
   const requestSummary = buildRequestSummary({
     mainIndustries: params.mainIndustries,
     regions: params.regions,
@@ -124,38 +120,90 @@ export async function applyFactorySourcingDecision(params: {
     requestedMatchCount: params.requestedMatchCount,
     plannerReason: params.plannerReason,
   });
-  const hardFiltersJson = { mainIndustries: params.mainIndustries, regions: params.regions };
+  const hardFiltersStr = JSON.stringify({ mainIndustries: params.mainIndustries, regions: params.regions });
+  const coreCapabilitiesStr = JSON.stringify(params.coreCapabilities);
 
-  if (existing) {
-    await db.update(aiFactorySearchRequests)
-      .set({
-        hardFiltersJson,
-        rankingSignalsJson: params.coreCapabilities,
-        coreCapabilitiesJson: params.coreCapabilities,
-        requestSummary,
-        candidateCount: params.candidateCount,
-        directCapabilityMatchCount: params.directCapabilityMatchCount,
-        requestedMatchCount: params.requestedMatchCount,
-      })
-      .where(and(eq(aiFactorySearchRequests.id, existing.id), eq(aiFactorySearchRequests.status, "pending")));
-    return { requestId: existing.id };
+  // Phase 10.2 P0 修正：原本是「SELECT 既有 pending → UPDATE／INSERT」的
+  // check-then-act，沒有交易也沒有鎖，同一 conversation 被併發呼叫兩次（例如
+  // client 端網路失敗、pending 提前解除、使用者 Retry，而 server 端原本執行
+  // 的那一次仍在跑，見 Phase 10.1 稽核）會各自讀到「沒有既有 pending」而各自
+  // INSERT 一筆，造成重複的人工協尋 request／重複通知。
+  //
+  // 修法：整段包在一個交易裡，第一步先鎖住一定已經存在的 aiConversations
+  // parent row（FOR UPDATE），把同一 conversationId 的所有併發呼叫序列化在
+  // 這把鎖之後，再做既有的「找 pending 就 UPDATE，沒有就 INSERT」邏輯——鎖序
+  // 沿用 server/db.ts createFactoryAtomic／acceptInvitation 同一種「鎖一定
+  // 存在的 parent row，不要鎖可能不存在的 row」慣例（後者只會拿到弱
+  // gap-lock，見 Phase 8.2 tryChargeQuotaLocked 死鎖的教訓）。
+  //
+  // 沿用既有語意：只把「同一 conversation 有既有 pending」視為要更新的既有
+  // request（不擴大成 notifying／notification_failed 也算——那是完全不同的
+  // 時間點/流程，這一輪的併發 race 只發生在 finalize 之前，此時既有 request
+  // 一定還是 pending），避免非必要地改動既有行為。
+  const pool = await getRawPool();
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    await conn.execute("SELECT id FROM aiConversations WHERE id = ? FOR UPDATE", [params.conversationId]);
+
+    const [existingRows]: any = await conn.execute(
+      "SELECT id FROM aiFactorySearchRequests WHERE conversationId = ? AND status = 'pending' LIMIT 1",
+      [params.conversationId]
+    );
+    const existing = existingRows && existingRows.length > 0 ? existingRows[0] : null;
+
+    let requestId: number;
+    if (existing) {
+      await conn.execute(
+        `UPDATE aiFactorySearchRequests SET
+          hardFiltersJson = ?, rankingSignalsJson = ?, coreCapabilitiesJson = ?,
+          requestSummary = ?, candidateCount = ?, directCapabilityMatchCount = ?,
+          requestedMatchCount = ?
+        WHERE id = ? AND status = 'pending'`,
+        [
+          hardFiltersStr,
+          coreCapabilitiesStr,
+          coreCapabilitiesStr,
+          requestSummary,
+          params.candidateCount,
+          params.directCapabilityMatchCount,
+          params.requestedMatchCount,
+          existing.id,
+        ]
+      );
+      requestId = existing.id;
+    } else {
+      const [inserted]: any = await conn.execute(
+        `INSERT INTO aiFactorySearchRequests (
+          userId, factoryId, conversationId, status, hardFiltersJson, rankingSignalsJson,
+          coreCapabilitiesJson, requestSummary, candidateCount, directCapabilityMatchCount,
+          requestedMatchCount, createdAt, updatedAt
+        ) VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
+        [
+          params.userId,
+          params.factoryId,
+          params.conversationId,
+          hardFiltersStr,
+          coreCapabilitiesStr,
+          coreCapabilitiesStr,
+          requestSummary,
+          params.candidateCount,
+          params.directCapabilityMatchCount,
+          params.requestedMatchCount,
+        ]
+      );
+      requestId = inserted.insertId;
+    }
+
+    await conn.commit();
+    return { requestId };
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
   }
-
-  const [inserted] = await db.insert(aiFactorySearchRequests).values({
-    userId: params.userId,
-    factoryId: params.factoryId,
-    conversationId: params.conversationId,
-    status: "pending",
-    hardFiltersJson,
-    rankingSignalsJson: params.coreCapabilities,
-    coreCapabilitiesJson: params.coreCapabilities,
-    requestSummary,
-    candidateCount: params.candidateCount,
-    directCapabilityMatchCount: params.directCapabilityMatchCount,
-    requestedMatchCount: params.requestedMatchCount,
-  });
-  const insertId = (inserted as unknown as { insertId: number }).insertId;
-  return { requestId: insertId };
 }
 
 /**

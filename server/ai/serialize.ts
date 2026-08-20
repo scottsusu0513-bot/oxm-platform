@@ -1,4 +1,4 @@
-import type { ServiceDefinition } from "../../shared/ai/serviceRegistry";
+import type { ServiceDefinition, GovSubsidyProgram } from "../../shared/ai/serviceRegistry";
 import type { AiFactoryContext } from "./factoryContext";
 import type { AiChatTurn } from "./types";
 
@@ -12,6 +12,25 @@ import type { AiChatTurn } from "./types";
  * 都會用到（企業背景是一般商業知識，不是 OXM 服務資訊），所以放在這個共用檔
  * 也提供給 diagnosis.ts import。
  */
+/**
+ * Phase 6G.1（見對話中「政府補助 Program Decision Layer」）：六大政府補助
+ * 方向的完整序列化——同一份輸出同時供 routing.ts（透過 serializeService 併入
+ * 服務清單）與 caseAssessment.ts 共用，避免兩處各自手寫一份「判斷細節」容易
+ * 漂移不一致（見對話中「二十：Case Assessment 去重」）。
+ */
+export function serializeGovSubsidyPrograms(programs: GovSubsidyProgram[]): string {
+  return programs
+    .map(p => {
+      const lines = [`- ${p.name}（key: ${p.key}）：${p.profile}`];
+      if (p.fitSignals && p.fitSignals.length > 0) lines.push(`  適合情境：${p.fitSignals.join("；")}`);
+      if (p.cautionSignals && p.cautionSignals.length > 0) lines.push(`  注意／不要誤判：${p.cautionSignals.join("；")}`);
+      if (p.comparisonNotes) lines.push(`  與其他方向的差異：${p.comparisonNotes}`);
+      if (p.usefulQuestions && p.usefulQuestions.length > 0) lines.push(`  可追問：${p.usefulQuestions.join("；")}`);
+      return lines.join("\n");
+    })
+    .join("\n");
+}
+
 export function serializeService(s: ServiceDefinition): string {
   const lines = [
     `【${s.displayName}】(key: ${s.key})`,
@@ -30,11 +49,15 @@ export function serializeService(s: ServiceDefinition): string {
     );
   }
   lines.push(`顧問最終需要理解什麼：${s.advisorNeedsToUnderstand}`);
+  if (s.serviceScope && s.serviceScope.length > 0) {
+    lines.push(`實際服務範圍（見「Phase 6E：不要編造服務範圍」，回答 service_info 查詢只能依這裡列出的項目）：\n` + s.serviceScope.map(item => `- ${item}`).join("\n"));
+  }
+  if (s.notIncluded) {
+    lines.push(`不包含／常見誤解（必須誠實澄清，不能承諾這裡沒有的東西）：${s.notIncluded}`);
+  }
   if (s.govSubsidyPrograms && s.govSubsidyPrograms.length > 0) {
-    lines.push("此服務下的細分方向：");
-    for (const p of s.govSubsidyPrograms) {
-      lines.push(`- ${p.name}：${p.profile}`);
-    }
+    lines.push("此服務下的細分方向（適合情境／注意事項／與其他方向的差異，是判斷 govSubsidyRecommendation 主推薦／次推薦的唯一依據）：");
+    lines.push(serializeGovSubsidyPrograms(s.govSubsidyPrograms));
   }
   return lines.join("\n");
 }

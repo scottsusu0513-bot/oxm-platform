@@ -41,27 +41,33 @@ export function toAiFactoryContext(f: Factory): AiFactoryContext {
 }
 
 /**
- * 解析「這個登入使用者屬於哪家公司」，同時處理 owner 與 active 共同管理者
- * 兩種身分（Phase 0 已確認：只查 owner 會讓共管者遇到「找不到工廠」）。
- * 找不到任何關聯工廠時回傳 undefined。
+ * Phase 11.2 P0 根因修正（見對話中「七、統一 Factory Resolver」）：這裡曾經
+ * 各自呼叫 db.getFactoryByOwnerId／db.getCoManagedFactories，兩者都不篩
+ * status——代表 draft／pending／rejected／delisted 的工廠都會被當成「目前
+ * 工廠」，餵進 LLM prompt、寫進 conversation.factoryId、進而寫進 Enterprise
+ * Memory 的 factory 歸屬。這跟 server/ai/entitlement.ts 用的
+ * db.getActiveFactoryAffiliationDetail()（只認 status='approved'）是兩條
+ * 完全不同標準的解析路徑，Phase 11.1 Audit 認定為 P0 根因之一。
+ *
+ * 現在統一改成呼叫同一個 db.getActiveFactoryAffiliationDetail()——entitlement
+ * （quota 資格）／conversation factory／factory context／Enterprise Memory
+ * factory／quota owner 這五件事，全部共用這一個 source of truth：只有
+ * status='approved' 的工廠才算「這個使用者目前的企業」。
  */
-async function resolveFactoryRow(userId: number): Promise<Factory | undefined> {
-  const owned = await db.getFactoryByOwnerId(userId);
-  if (owned) return owned;
-
-  const coManaged = await db.getCoManagedFactories(userId);
-  if (coManaged.length === 0) return undefined;
-
-  const preferred = coManaged.find(f => f.status !== "delisted") ?? coManaged[0];
-  return db.getFactoryById(preferred.factoryId);
+async function resolveApprovedFactoryRow(userId: number): Promise<Factory | undefined> {
+  const affiliation = await db.getActiveFactoryAffiliationDetail(userId);
+  if (!affiliation) return undefined;
+  return db.getFactoryById(affiliation.factoryId);
 }
 
 /**
- * 找不到任何關聯工廠時回傳 null，呼叫端應該把 AI 對話當成「還不知道使用者
- * 公司背景」繼續進行，而不是拋錯中斷對話。
+ * 找不到任何「已核准」關聯工廠時回傳 null，呼叫端應該把 AI 對話當成「還不
+ * 知道使用者公司背景」繼續進行，而不是拋錯中斷對話。draft／pending／
+ * rejected／delisted 的工廠一律視同「沒有工廠」（見上方 resolveApprovedFactoryRow
+ * 的說明）。
  */
 export async function getAiFactoryContext(userId: number): Promise<AiFactoryContext | null> {
-  const row = await resolveFactoryRow(userId);
+  const row = await resolveApprovedFactoryRow(userId);
   return row ? toAiFactoryContext(row) : null;
 }
 
@@ -77,15 +83,28 @@ export async function getAiFactoryContextByFactoryId(factoryId: number): Promise
 }
 
 export interface AiFactoryResolution {
-  /** 只用於 DB 關聯（例如 aiConversations.factoryId snapshot），不是送給 LLM 的白名單欄位。 */
+  /** 只用於 DB 關聯（例如 aiConversations.factoryId snapshot／Enterprise Memory 歸屬），不是送給 LLM 的白名單欄位。 */
   id: number;
   context: AiFactoryContext;
+  role: "owner" | "co_manager";
 }
 
-/** 跟 getAiFactoryContext 共用同一次工廠解析，但額外回傳 id——用在需要把
- * conversation 關聯到工廠 row 的地方（見 server/ai/conversationService.ts），
- * 避免呼叫端為了拿 id 重複做一次一樣的 owner/co-manager 查詢。 */
-export async function resolveAiFactory(userId: number): Promise<AiFactoryResolution | null> {
-  const row = await resolveFactoryRow(userId);
-  return row ? { id: row.id, context: toAiFactoryContext(row) } : null;
+/**
+ * 見對話中「七、統一 Factory Resolver」：AI 這一側（conversation 建立、
+ * factory context、Enterprise Memory 歸屬）唯一允許使用的工廠解析函式，跟
+ * getAiFactoryContext 共用同一次「只認 approved」解析，額外回傳 id／role——
+ * 用在需要把 conversation／Enterprise Memory 關聯到工廠 row 的地方（見
+ * server/ai/chatService.ts／server/ai/memory.ts），避免呼叫端為了拿 id 重複
+ * 做一次一樣的查詢。找不到已核准工廠時回傳 null——呼叫端必須把這個情況當成
+ * 「沒有企業 context」處理（例如 Admin 沒有 approved 工廠時），不得 fallback
+ * 成任何非 approved 的工廠、也不得 fallback 成上一次 conversation 殘留的
+ * factoryId（見「三、Memory Read API」：沒有 factoryId 就是不讀 memory，沒有
+ * 例外）。
+ */
+export async function resolveApprovedAiFactoryContext(userId: number): Promise<AiFactoryResolution | null> {
+  const affiliation = await db.getActiveFactoryAffiliationDetail(userId);
+  if (!affiliation) return null;
+  const row = await db.getFactoryById(affiliation.factoryId);
+  if (!row) return null;
+  return { id: row.id, context: toAiFactoryContext(row), role: affiliation.role };
 }

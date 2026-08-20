@@ -8,11 +8,16 @@ import { sha256Hex, generateRawToken } from './_core/oauthHelpers';
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { upgradeProgramsRouter } from "./upgradeProgramsRouter";
-import { runAiChat, runPersistentAiChat } from "./ai/chatService";
+import { runPersistentAiChat } from "./ai/chatService";
 import { isAiChatConfigured } from "./ai/provider";
 import { getActiveConversationForUser, getConversationForUser } from "./ai/conversationService";
 import { parseConversationState } from "./ai/contextBuilder";
-import { resolveAiFactory } from "./ai/factoryContext";
+import { resolveApprovedAiFactoryContext } from "./ai/factoryContext";
+import { resolveAiEntitlement } from "./ai/entitlement";
+import { reserveAiTurn, completeAiTurn, failAiTurn, checkFactoryAiQuota } from "./ai/aiQuota";
+import { runWithAiCallContext, logAiError } from "./ai/aiCallContext";
+import { ENV } from "./_core/env";
+import { getAiUsageDashboard, getRecentAiUsageTurns } from "./ai/aiUsageAudit";
 import { buildFieldSpecs, buildHandoffPrefillFromConfirmedFacts, buildHandoffSummary } from "./ai/handoffPrefill";
 import {
   createHandoffContext, getHandoffContextForUser, acknowledgeHandoffContext,
@@ -735,6 +740,51 @@ export const appRouter = router({
   ai: router({
     status: publicProcedure.query(() => ({ configured: isAiChatConfigured() })),
 
+    // FAQ AI 問答入口（client/src/components/faq/FaqAiEntry.tsx）需要在
+    // Global AI Shell 面板打開之前就知道目前是不是 coming_soon，才能直接把
+    // 輸入框畫成 disabled，而不是先假裝可以送出、開了面板才發現被擋下來。
+    // entitlementStatus 刻意只在面板打開時才查（見該 query 的 enabled:
+    // isOpen 註解，避免每一頁都連帶查 entitlement/quota），這裡另外提供一支
+    // 極輕量、無需登入、不查 DB 的獨立 query，只回傳 ENV.aiReleaseMode 本身
+    // ——與 entitlementStatus／ai.chat 判斷 coming_soon 用的是同一個
+    // server-authoritative 來源，不是另一套判斷邏輯。
+    releaseMode: publicProcedure.query(() => ({ mode: ENV.aiReleaseMode })),
+
+    // Phase 8.1（見對話中「一」）：guest／已登入但非已審核工廠成員一律不可
+    // 使用 AI，client 用這支 query 決定要顯示哪一種 deterministic UX（不是
+    // LLM 生成文案，固定文字放在前端），已審核工廠成員額外附上目前的每日
+    // 額度使用量供顯示「13/20」。
+    entitlementStatus: publicProcedure.query(async ({ ctx }) => {
+      // Phase 13.0（見對話「二、六、八、十九」）：release mode 是比 kill
+      // switch 更外層的產品發布狀態判斷——coming_soon 時完全不需要、也不
+      // 應該讓使用者先看到「請登入」「維護中」這類 entitlement/kill-switch
+      // 相關文案，一律先看到「敬請期待」。這裡刻意不呼叫 resolveAiEntitlement
+      // （見「十三」：coming_soon 階段不需要先揭露 guest/no_factory 狀態）。
+      if (ENV.aiReleaseMode !== "live") {
+        return { kind: "coming_soon" as const };
+      }
+      // Phase 12.2（見對話「三」）：讓前端能提前知道 aiEnabled，避免使用者
+      // 先看到正常輸入框才在送出時才被 ai.chat 擋下來。ai.chat 本身的
+      // server-side gate才是唯一權威，這裡只是提前 UX，不能單獨依賴。
+      if (!ENV.aiEnabled) {
+        return { kind: "disabled" as const, aiEnabled: false };
+      }
+      const entitlement = await resolveAiEntitlement(ctx.user?.id ?? null, !!ctx.user?.isAdmin);
+      if (entitlement.kind === "guest" || entitlement.kind === "no_factory") {
+        return { kind: entitlement.kind, aiEnabled: true } as const;
+      }
+      const quota = entitlement.kind === "factory_member" && entitlement.factoryId != null
+        ? await checkFactoryAiQuota(entitlement.factoryId)
+        : null;
+      return {
+        kind: entitlement.kind,
+        factoryId: entitlement.factoryId,
+        factoryName: entitlement.factoryName,
+        quota,
+        aiEnabled: true as const,
+      };
+    }),
+
     chat: publicProcedure
       .input(z.object({
         message: z.string().min(1).max(4000),
@@ -743,6 +793,11 @@ export const appRouter = router({
         // 伺服器不會照單全收——一律用 getConversationForUser 驗證真的是這個
         // user 名下、還 active 的那筆，驗證失敗就視同沒帶。
         conversationId: z.number().int().positive().optional(),
+        // Phase 8.1（見對話中「五、十：P0 retry 去重」）：同一個 user-visible
+        // turn 的第一次送出與所有 retry 都帶同一個值，server 用
+        // (factoryId, clientTurnId) 判斷是否為同一筆 turn 的重試，不依賴前端
+        // 按鈕行為本身。前端由 aiChatSendController.ts 產生／保存。
+        clientTurnId: z.string().min(1).max(64),
         // 只有訪客（未登入）會用到：純前端臨時 session 的既有歷史。已登入
         // 使用者即使夾帶這個欄位，伺服器也完全不會讀取——歷史一律以 DB 為準。
         guestHistory: z.array(z.object({
@@ -751,43 +806,103 @@ export const appRouter = router({
         })).max(40).optional(),
       }))
       .mutation(async ({ ctx, input }) => {
+        // Phase 13.0（見對話「六、七、二十」）：release mode 是比 kill
+        // switch 更外層的短路，順序：release mode → kill switch →
+        // entitlement → concurrency/quota。coming_soon 時，不管 Admin
+        // 與否、不管 kill switch 開關，一律直接拒絕，完全不觸碰
+        // entitlement／quota／aiUsageTurns／任何 provider／任何 side
+        // effect（這是產品發布狀態，不是 entitlement 判斷，見「二十」：
+        // 不做 Admin bypass）。
+        if (ENV.aiReleaseMode !== "live") {
+          return { status: "denied" as const, reason: "coming_soon" as const };
+        }
+
+        // Phase 12.2（見對話「一、二、四」）：全域 kill switch 次外層短路，
+        // 比 entitlement 判斷更早——disabled 時連 Admin 都不能用（這是整個
+        // OXM AI 系統的緊急停止，不是使用者限制），且不能有任何 side effect
+        // （不能 reserve quota／建立 aiUsageTurn／打任何 provider）。
+        if (!ENV.aiEnabled) {
+          return { status: "denied" as const, reason: "ai_disabled" as const };
+        }
+
+        // Phase 8.1（見對話中「一」）：guest／已登入非已審核工廠成員完全不可
+        // 使用 AI，這裡是唯一權威（不是前端隱藏按鈕而已）；在觸碰任何 quota
+        // 或呼叫 runPersistentAiChat／runAiChat 之前就短路回傳，不會有任何
+        // aiUsageTurns／aiModelCalls row（見「三：只在真正接受新 turn 時才
+        // 扣 quota」）。
+        const entitlement = await resolveAiEntitlement(ctx.user?.id ?? null, !!ctx.user?.isAdmin);
+        if (entitlement.kind === "guest" || entitlement.kind === "no_factory") {
+          return { status: "denied" as const, reason: entitlement.kind };
+        }
+
+        const factoryId = entitlement.factoryId;
+        const bypassQuota = entitlement.kind === "admin";
+        const userId = ctx.user!.id;
+
+        const reservation = await reserveAiTurn({
+          factoryId,
+          actorUserId: userId,
+          conversationId: input.conversationId ?? null,
+          clientTurnId: input.clientTurnId,
+          bypassQuota,
+        });
+
+        if (!reservation.ok) {
+          if (reservation.reason === "ai_busy") {
+            return { status: "denied" as const, reason: "ai_busy" as const };
+          }
+          return { status: "denied" as const, reason: "quota_exhausted" as const, quota: reservation.status };
+        }
+
         try {
-          if (ctx.user) {
-            const result = await runPersistentAiChat({
-              userId: ctx.user.id,
+          const result = await runWithAiCallContext(
+            { turnId: reservation.turnId, factoryId, actorUserId: userId },
+            () => runPersistentAiChat({
+              userId,
               message: input.message,
               conversationId: input.conversationId,
-            });
-            return {
-              reply: result.reply,
+            })
+          );
+          const intent =
+            result.factorySearchResult ? "factory_search" :
+            result.newsSearchResult ? "news" :
+            result.subsidyProgramsResult ? "gov_subsidy" :
+            null;
+          // Phase 8.2（見對話中「二十二」／section 3 情境 E）：completeAiTurn
+          // 只是收尾 bookkeeping（狀態欄位／intent／conversationId），這裡
+          // 故意用自己的 try/catch 包住、不讓它的失敗落進下面外層 catch——
+          // 否則 runPersistentAiChat 已經成功產生的真實回覆會被整個丟掉，
+          // 使用者收到 500，且 failAiTurn 會把一筆「真的成功」的 turn 誤記成
+          // failed（帳記錯，比維持 status='started' 更糟）。bookkeeping 失敗時
+          // turn 停在 started／quotaCharged 維持 reserveAiTurn 當下的值，跟
+          // server crash 在同一時間點的情況一樣，是已知、可接受的邊界情況。
+          try {
+            await completeAiTurn(reservation.turnId, {
+              intent,
+              resourceTarget: result.handoffOffer?.serviceKey ?? null,
               conversationId: result.conversationId,
-              handoffOffer: result.handoffOffer,
-              factorySearchResult: result.factorySearchResult,
-              newsSearchResult: result.newsSearchResult,
-              subsidyProgramsResult: result.subsidyProgramsResult,
-              navigationAction: result.navigationAction,
-              manualSourcing: result.manualSourcing,
-            };
+            });
+          } catch (bookkeepingError) {
+            logAiError("turnBookkeeping", "completeAiTurn bookkeeping failed (turn itself succeeded, only status bookkeeping affected)", bookkeepingError, reservation.turnId);
           }
-          const history = [...(input.guestHistory ?? []), { role: "user" as const, content: input.message }];
-          const result = await runAiChat({ history, userId: null });
-          // 訪客沒有登入，不可能建立 handoff context（需要 ctx.user.id），永遠不顯示 CTA。
-          // 找工廠／找消息都不是顧問服務、不需要 handoff，訪客跟登入使用者一樣
-          // 可以用（見「二十三、權限」：沿用既有 AI login gate，不另立規則）。
-          // Phase 6A.1 人工協尋需要 userId 才能建立 Request（見「十八、
-          // Ownership」），訪客沒有登入身分，永遠不會有 manualSourcing。
           return {
+            status: "ok" as const,
             reply: result.reply,
-            conversationId: null,
-            handoffOffer: null,
+            conversationId: result.conversationId,
+            handoffOffer: result.handoffOffer,
             factorySearchResult: result.factorySearchResult,
             newsSearchResult: result.newsSearchResult,
             subsidyProgramsResult: result.subsidyProgramsResult,
             navigationAction: result.navigationAction,
-            manualSourcing: null,
+            manualSourcing: result.manualSourcing,
+            govSubsidyRecommendation: result.govSubsidyRecommendation,
+            factoryResultBoundary: result.factoryResultBoundary,
           };
         } catch (error) {
-          console.error("[ai.chat] failed:", error);
+          await failAiTurn(reservation.turnId).catch((failErr) => {
+            logAiError("turnBookkeeping", "failAiTurn bookkeeping failed", failErr, reservation.turnId);
+          });
+          logAiError("aiChat", "ai.chat turn failed", error, reservation.turnId);
           throw new TRPCError({
             code: "INTERNAL_SERVER_ERROR",
             message: "AI 暫時無法回應，請稍後再試一次。",
@@ -841,7 +956,7 @@ export const appRouter = router({
         // （見對話中「一、正式表單預填不得重新從 raw transcript 推論」）。
         // 這也代表 handoff context 建立時完全不依賴 conversation 的逐字內容
         // 是否還存在，天生就跟 conversation／aiMessages 的生命週期解耦。
-        const factory = await resolveAiFactory(ctx.user.id);
+        const factory = await resolveApprovedAiFactoryContext(ctx.user.id);
 
         let certificationCatalog: { code: string; name: string }[] = [];
         if (primaryServiceKey === "certification") {
@@ -4844,6 +4959,30 @@ export const appRouter = router({
           throw new TRPCError({ code: "BAD_REQUEST", message: err instanceof Error ? err.message : "刪除失敗" });
         }
       }),
+    }),
+
+    // ===== Phase 9.2：AI 管理（見對話中「五」）——只有 dashboard／recentTurns
+    // 兩支，dashboard 一次回傳 KPI／工廠表／Model／Layer／失敗與額度記帳需要
+    // 的所有資料（同一天、資料量小，沒必要拆成 6 次 request）；recentTurns
+    // 獨立分頁，避免翻頁時整個 dashboard 重抓。兩者都是 adminProcedure——
+    // server-authoritative，不是前端隱藏而已。全部只回傳 metadata（見
+    // aiUsageAudit.ts 的說明），不查任何逐字內容。
+    aiUsage: router({
+      dashboard: adminProcedure
+        .input(z.object({ quotaDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() }).optional())
+        .query(async ({ input }) => {
+          return getAiUsageDashboard(input?.quotaDate);
+        }),
+
+      recentTurns: adminProcedure
+        .input(z.object({
+          quotaDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+          page: z.number().int().min(1).default(1),
+          pageSize: z.number().int().min(1).max(100).default(20),
+        }))
+        .query(async ({ input }) => {
+          return getRecentAiUsageTurns(input);
+        }),
     }),
   }),
 

@@ -1,4 +1,5 @@
 import { getAiChatProvider, type AiChatMessage } from "./provider";
+import { logAiError } from "./aiCallContext";
 
 /**
  * 見對話中「非 OXM 純閒聊收斂機制」二階段設計：一旦對話進入 warned／paused，
@@ -34,7 +35,7 @@ export async function checkOutOfDomainResumeRelevance(latestMessage: string): Pr
     const parsed = JSON.parse(raw);
     return typeof parsed.relevant === "boolean" ? parsed.relevant : true;
   } catch (error) {
-    console.error("[casualPauseGate] resume relevance check failed, defaulting to relevant=true (保守 fallback，避免使用者卡在 paused 出不來):", error);
+    logAiError("casualPauseGate", "resume relevance check failed, defaulting to relevant=true (保守 fallback，避免使用者卡在 paused 出不來)", error);
     return true;
   }
 }

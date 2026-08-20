@@ -1703,14 +1703,27 @@ export type InsertErpCase = typeof erpCases.$inferInsert;
 export const aiConversations = mysqlTable("aiConversations", {
   id: int("id").autoincrement().primaryKey(),
   userId: int("userId").notNull().references(() => users.id, { onDelete: "cascade" }),
-  // 僅企業 context snapshot／關聯用途，不是權限依據——讀取權限永遠只看
-  // aiConversations.userId（見 server/ai/conversationService.ts）。
+  // Phase 11.2（見對話中「八、Conversation factoryId」）：這個欄位從單純的
+  // 「資訊性 snapshot」提升成「enterprise context boundary」——建立當下必須
+  // 來自 server/ai/factoryContext.ts::resolveApprovedAiFactoryContext（只認
+  // status='approved'），且這段對話收尾時的 Enterprise Memory 一律歸屬到這個
+  // factoryId（見 server/ai/memory.ts）。conversation 建立後這個值不得中途
+  // 切換；client 帶著既有 conversationId 續聊時，如果目前重新解析出來的
+  // approved factoryId 跟這裡不一致，一律視為「工廠 context 已經變了」，不
+  // 沿用、改為收尾後建立新的一筆（見 server/ai/chatService.ts::
+  // resolveConversationForTurn）。仍然不是「讀取權限」的判斷依據——讀取權限
+  // 永遠只看 aiConversations.userId（見 server/ai/conversationService.ts）。
   factoryId: int("factoryId").references(() => factories.id, { onDelete: "set null" }),
   // active：這次使用階段還在進行中，可以繼續 append 訊息。
   // failed：收尾時摘要產生或寫入失敗，原文暫時保留待重試（見
-  // server/jobs/retryFailedAiSummaries.ts）；正常收尾成功的對話直接整筆刪除，
-  // 不會有第三種「已完成」的持久狀態。
-  status: mysqlEnum("status", ["active", "failed"]).notNull().default("active"),
+  // server/jobs/retryFailedAiSummaries.ts）。
+  // permanently_failed（Phase 11.2，見對話中「二十二、二十三」）：重試已達
+  // MAX_RETRY_COUNT 上限，retry job 之後不再自動撿它，但原文依然保留，不會
+  // 因為「重試次數用完」就默默丟掉企業資料——只是變成需要人工判斷的
+  // governance 案件，見 server/ai/conversationService.ts::
+  // getPermanentlyFailedConversationsCount()。
+  // 正常收尾成功的對話直接整筆刪除，不會有第四種「已完成」的持久狀態。
+  status: mysqlEnum("status", ["active", "failed", "permanently_failed"]).notNull().default("active"),
   // Current Conversation State：短期、結構化、只屬於這一段對話（不是長期
   // Enterprise Memory），格式見 server/ai/conversationState.ts 的 ConversationState。
   currentStateJson: json("currentStateJson").$type<Record<string, unknown>>(),
@@ -1745,8 +1758,16 @@ export type AiMessage = typeof aiMessages.$inferSelect;
 export type InsertAiMessage = typeof aiMessages.$inferInsert;
 
 // ===== OXM AI Enterprise Memory（跨對話唯一的長期記憶來源）=====
+// Phase 11.2（見對話中「一、正式架構決策」）：Enterprise Memory 是
+// factory-scoped，不是 user-scoped、也不是 user+factory scoped——OXM AI 記住
+// 的是「這間企業」，不是「這個人的企業背景」。同一間 approved 工廠的
+// owner／co-manager 共用同一份記憶；user 離開這間工廠、加入另一間工廠之後，
+// 只會讀到新工廠自己的記憶，不會繼續讀到舊工廠的記憶（Phase 11.1 Audit
+// 認定的 P0：cross-factory memory leakage，見
+// server/jobs/reconcileEnterpriseMemoryFactoryScope.ts 的歷史資料遷移策略）。
+//
 // 每個 conversation 正常收尾時都會產生一筆「這次對話」的摘要，但那份摘要
-// 絕對不能直接 blind overwrite 這個 user 的既有長期記憶——summaryText 是
+// 絕對不能直接 blind overwrite 這間工廠的既有長期記憶——summaryText 是
 // 「目前最新、最精簡的企業狀態」，由 server/ai/memory.ts 的
 // mergeEnterpriseMemory() 把既有 summaryText 與這次對話摘要合併/取代/更新
 // 產生，不是單純覆寫也不是逐次 append 成日誌。沒有新資訊時（這次對話沒講
@@ -1756,10 +1777,19 @@ export type InsertAiMessage = typeof aiMessages.$inferInsert;
 // 記憶」混為一談。
 export const aiEnterpriseMemories = mysqlTable("aiEnterpriseMemories", {
   id: int("id").autoincrement().primaryKey(),
-  userId: int("userId").notNull().references(() => users.id, { onDelete: "cascade" }),
-  // 跟 aiConversations 一樣，僅企業 context 關聯用途；一個 user 事實上最多
-  // 只會對應到一間工廠（owner 或 co-manager 身分互斥，見 Phase 0 盤點）。
-  factoryId: int("factoryId").references(() => factories.id, { onDelete: "set null" }),
+  // 這張表現在唯一的查詢 key／ownership 依據（見下方 UNIQUE INDEX）。只有
+  // status='approved' 的工廠才可能擁有一筆記憶（見
+  // server/ai/factoryContext.ts::resolveApprovedAiFactoryContext）；工廠被
+  // owner 自助真的物理刪除時，這筆記憶一起 CASCADE 刪除（該工廠已經不存在，
+  // 不該變成無主 memory，見「十五、Factory Delete」）；admin 下架／軟刪除
+  // 不是真正的 DELETE，不會觸發這個 FK。
+  factoryId: int("factoryId").notNull().references(() => factories.id, { onDelete: "cascade" }),
+  // 純稽核用途，不是查詢 key——只記錄「最後一次觸發這筆記憶更新的是哪個
+  // 登入帳號」（該工廠的 owner 或 co-manager 之一）。絕對不能被拿來當作讀取
+  // 權限或 memory scope 的判斷依據：所有 runtime 讀寫一律只認 factoryId（見
+  // server/ai/memory.ts）。user 帳號被刪除時這裡只是 set null，不影響這筆
+  // 企業記憶本身是否存在——記憶屬於工廠，不屬於任何特定使用者。
+  lastActorUserId: int("lastActorUserId").references(() => users.id, { onDelete: "set null" }),
   // 極短摘要，電報式短句，是「目前最新狀態」不是歷史日誌；沒有取得任何有
   // 價值資訊時，固定寫入「本次未提供可形成企業判斷的關鍵資訊。」，不能留
   // 空——區分「聊過但從來沒有取得過有效資訊」跟「從來沒聊過」（memory 這筆
@@ -1782,13 +1812,41 @@ export const aiEnterpriseMemories = mysqlTable("aiEnterpriseMemories", {
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 }, (t) => ({
-  // 一個 user 一筆——每次收尾都是 upsert（merge 後寫入合併結果），不是新增
+  // 一間工廠一筆——每次收尾都是 upsert（merge 後寫入合併結果），不是新增
   // 一筆新記錄，也不是無條件覆寫。
-  userIdUq: uniqueIndex("aem_user_id_uq").on(t.userId),
+  factoryIdUq: uniqueIndex("aem_factory_id_uq").on(t.factoryId),
 }));
 
 export type AiEnterpriseMemory = typeof aiEnterpriseMemories.$inferSelect;
 export type InsertAiEnterpriseMemory = typeof aiEnterpriseMemories.$inferInsert;
+
+// ===== Phase 11.2：Enterprise Memory 歷史資料隔離區 =====
+// 從 user-scoped 遷移到 factory-scoped 時，無法安全歸屬的舊資料（factoryId
+// 本來就是 null、或該 user 現在已經沒有 approved affiliation、或跟目前
+// affiliation 不符——見 server/jobs/reconcileEnterpriseMemoryFactoryScope.ts
+// 的分類邏輯）不會被猜測性地掛到任何工廠，而是搬進這張表保存原始內容供稽核
+// ／未來人工判斷，不參與任何 runtime 讀寫。這不是最終治理方案的定案型態，
+// production 上線前需要正式決定這些資料的最終處置。
+export const aiEnterpriseMemoriesLegacyQuarantine = mysqlTable("aiEnterpriseMemoriesLegacyQuarantine", {
+  id: int("id").autoincrement().primaryKey(),
+  originalId: int("originalId").notNull(),
+  userId: int("userId").notNull(),
+  factoryId: int("factoryId"),
+  summaryText: varchar("summaryText", { length: 500 }).notNull(),
+  hasMeaningfulBusinessInfo: boolean("hasMeaningfulBusinessInfo").notNull().default(false),
+  lastInteractionAt: timestamp("lastInteractionAt").notNull(),
+  lastInteractionHadMeaningfulInfo: boolean("lastInteractionHadMeaningfulInfo").notNull().default(false),
+  sourceConversationId: int("sourceConversationId"),
+  createdAt: timestamp("createdAt").notNull(),
+  updatedAt: timestamp("updatedAt").notNull(),
+  quarantineReason: varchar("quarantineReason", { length: 60 }).notNull(),
+  quarantinedAt: timestamp("quarantinedAt").defaultNow().notNull(),
+}, (t) => ({
+  userIdIdx: index("aemlq_user_id_idx").on(t.userId),
+  originalIdIdx: index("aemlq_original_id_idx").on(t.originalId),
+}));
+
+export type AiEnterpriseMemoryLegacyQuarantine = typeof aiEnterpriseMemoriesLegacyQuarantine.$inferSelect;
 
 // ===== OXM AI Handoff Context（Phase 4：AI 對話 → 既有真人服務表單）=====
 // 使用者在 AI 對話裡點【幫你送出詢問】時，server 才建立這筆短效 snapshot
@@ -1973,3 +2031,109 @@ export const aiFactorySearchRequests = mysqlTable("aiFactorySearchRequests", {
 
 export type AiFactorySearchRequest = typeof aiFactorySearchRequests.$inferSelect;
 export type InsertAiFactorySearchRequest = typeof aiFactorySearchRequests.$inferInsert;
+
+// ===== Phase 8.1：OXM AI Entitlement / 每日額度 / Usage Logging =====
+//
+// Quota 主體是 factory（同一間工廠的 owner／co-manager 共用同一份每日
+// 額度），不是 user——見 server/ai/entitlement.ts／server/ai/aiQuota.ts 的
+// 說明。三張表分工：
+// - factoryAiDailyUsage：quota enforcement 唯一權威（atomic counter）。
+// - aiUsageTurns：使用者可見的「一次 turn」audit log，同時是 retry 去重的
+//   依據（factoryId + clientTurnId 唯一）。
+// - aiModelCalls：turn 內部實際發生的每一次 LLM provider 呼叫，供成本／
+//   用量分析，跟「這一輪扣不扣使用者額度」完全無關。
+// 三張表都刻意不存完整 prompt／回覆內容或任何 PII snapshot。
+
+/** Server-authoritative 每日額度上限，唯一來源見 shared/ai/aiQuotaConfig.ts；這裡不重複硬寫數字。 */
+export const factoryAiDailyUsage = mysqlTable("factoryAiDailyUsage", {
+  id: int("id").autoincrement().primaryKey(),
+  factoryId: int("factoryId").notNull().references(() => factories.id, { onDelete: "cascade" }),
+  // Asia/Taipei 的 YYYY-MM-DD，見 server/ai/taipeiTime.ts::getTaipeiQuotaDate()——
+  // 刻意不用 server UTC date 或 DB TIMESTAMP，避免額度重置時間跟台灣午夜對不上。
+  quotaDate: varchar("quotaDate", { length: 10 }).notNull(),
+  usedTurns: int("usedTurns").notNull().default(0),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (t) => ({
+  factoryDateUq: uniqueIndex("fadu_factory_date_uq").on(t.factoryId, t.quotaDate),
+}));
+
+export type FactoryAiDailyUsage = typeof factoryAiDailyUsage.$inferSelect;
+export type InsertFactoryAiDailyUsage = typeof factoryAiDailyUsage.$inferInsert;
+
+export const aiUsageTurns = mysqlTable("aiUsageTurns", {
+  id: int("id").autoincrement().primaryKey(),
+  // Quota owner——這一輪算誰的每日額度。Nullable：admin 完全跳過 entitlement
+  // 門檻，即使本身不是任何工廠的 owner／co-manager 也能使用 AI（見對話中
+  // 使用者對「Admin 無工廠語境」的最終決議＋server/ai/entitlement.ts），此時
+  // 沒有工廠可歸屬，quotaCharged 恆為 false。注意：MySQL 的 unique index 對
+  // NULL 值不視為互斥，所以 factoryId 為 null 時，(factoryId, clientTurnId)
+  // 唯一索引不會擋下同一 admin 的重複 clientTurnId——這種情況下 retry 去重
+  // 完全依賴前端 clientTurnId 本身的唯一性，不影響任何工廠的 quota 正確性
+  // （唯一有風險的只有 admin 自己的診斷用 audit row 可能重複，不是 P0 顧慮）。
+  factoryId: int("factoryId").references(() => factories.id, { onDelete: "cascade" }),
+  // 真正操作這一輪的登入帳號（owner 或 co-manager 之一，或 admin）。
+  actorUserId: int("actorUserId").notNull().references(() => users.id, { onDelete: "cascade" }),
+  conversationId: int("conversationId").references(() => aiConversations.id, { onDelete: "set null" }),
+  // Retry 去重鍵：同一個 user-visible turn 的第一次送出與後續 retry 共用同一個
+  // clientTurnId（見 client/src/contexts/aiChatSendController.ts）。
+  // (factoryId, clientTurnId) 唯一——server-authoritative，不依賴前端按鈕行為。
+  clientTurnId: varchar("clientTurnId", { length: 64 }).notNull(),
+  // Asia/Taipei 的 YYYY-MM-DD，跟 factoryAiDailyUsage.quotaDate 同一份定義。
+  quotaDate: varchar("quotaDate", { length: 10 }).notNull(),
+  // 這一輪最終判斷出的 primaryService／resourceTarget，只在 turn 完成後才會
+  // 填入（server 端已知的分類結果，不是完整逐字內容）。
+  intent: varchar("intent", { length: 40 }),
+  resourceTarget: varchar("resourceTarget", { length: 40 }),
+  status: mysqlEnum("status", ["started", "completed", "failed"]).notNull().default("started"),
+  // 這一輪是否真的扣了 factoryAiDailyUsage 的每日額度——admin bypass 或
+  // 尚未進入任何 model call 前就被擋下的情況都是 false（見對話中「九」）。
+  quotaCharged: boolean("quotaCharged").notNull().default(false),
+  // 同一個 clientTurnId 被 retry 的次數（含第一次），只影響這個欄位，不影響
+  // quotaCharged／usedTurns（見對話中「十：Retry 不重複扣quota，但usage仍記」）。
+  attemptCount: int("attemptCount").notNull().default(1),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  completedAt: timestamp("completedAt"),
+}, (t) => ({
+  // Retry 去重＋quota enforcement 的唯一權威索引：同一間工廠、同一個
+  // clientTurnId 只會有一筆 row。
+  factoryClientTurnUq: uniqueIndex("aiut_factory_client_turn_uq").on(t.factoryId, t.clientTurnId),
+  factoryQuotaDateIdx: index("aiut_factory_quota_date_idx").on(t.factoryId, t.quotaDate),
+  actorIdx: index("aiut_actor_idx").on(t.actorUserId),
+}));
+
+export type AiUsageTurn = typeof aiUsageTurns.$inferSelect;
+export type InsertAiUsageTurn = typeof aiUsageTurns.$inferInsert;
+
+export const aiModelCalls = mysqlTable("aiModelCalls", {
+  id: int("id").autoincrement().primaryKey(),
+  // Case Assessment／Memory finalize／merge 這類背景流程不屬於任何使用者可見
+  // turn，此時為 null（見對話中「三十五、三十六」：這些流程仍記 model usage，
+  // 但不扣每日額度、也不對應一筆 aiUsageTurns）。
+  turnId: int("turnId").references(() => aiUsageTurns.id, { onDelete: "set null" }),
+  // 冗餘欄位，方便不 join aiUsageTurns 就能依工廠做用量分析；背景流程有已知
+  // factoryId 時填入，完全未知時為 null。
+  factoryId: int("factoryId").references(() => factories.id, { onDelete: "set null" }),
+  actorUserId: int("actorUserId").references(() => users.id, { onDelete: "set null" }),
+  // diagnosis／routing／factory_semantic／planner／composer／case_assessment／
+  // memory_summary／memory_merge／casual_pause_gate／other，見
+  // server/ai/aiCallContext.ts 的 AiModelCallLayer。
+  layer: varchar("layer", { length: 40 }).notNull(),
+  model: varchar("model", { length: 100 }).notNull(),
+  provider: varchar("provider", { length: 40 }).notNull(),
+  inputTokens: int("inputTokens"),
+  outputTokens: int("outputTokens"),
+  totalTokens: int("totalTokens"),
+  cachedInputTokens: int("cachedInputTokens"),
+  reasoningTokens: int("reasoningTokens"),
+  latencyMs: int("latencyMs").notNull(),
+  success: boolean("success").notNull(),
+  errorCategory: varchar("errorCategory", { length: 60 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  turnIdx: index("aimc_turn_idx").on(t.turnId),
+  factoryIdx: index("aimc_factory_idx").on(t.factoryId),
+  createdAtIdx: index("aimc_created_at_idx").on(t.createdAt),
+}));
+
+export type AiModelCall = typeof aiModelCalls.$inferSelect;
+export type InsertAiModelCall = typeof aiModelCalls.$inferInsert;

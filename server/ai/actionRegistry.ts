@@ -26,7 +26,8 @@ export type OxmActionKey =
   | "cancel_factory_sourcing"
   | "search_news"
   | "search_subsidy_programs"
-  | "navigate_oxm";
+  | "navigate_oxm"
+  | "lookup_oxm_services";
 
 export type OxmActionSideEffectLevel = "none" | "read" | "write";
 
@@ -105,6 +106,16 @@ export const OXM_ACTION_REGISTRY: OxmActionDefinition[] = [
     whenUseful: "使用者明確表達想「前往」「帶我去」「我要看」某個 OXM 頁面或功能本身。",
     whenNotUseful: "使用者只是在問某個服務是什麼（informational），沒有表達想現在就過去看的意思；或提到的頁面不在 Registry 名單裡。",
     requiredContext: ["使用者想去的頁面"],
+    optionalContext: [],
+    sideEffectLevel: "read",
+    enabled: true,
+  },
+  {
+    key: "lookup_oxm_services",
+    description: "讀取 OXM 顧問型服務（政府補助／ERP／ISO低碳／短影音品牌／企業財務）在 shared/ai/serviceRegistry.ts 裡的真實服務範圍知識，回答「這個服務是什麼／包含什麼／跟另一個服務差在哪」，不修改任何資料、不建立顧問 Handoff。",
+    whenUseful: "使用者純粹想了解某個 OXM 顧問服務本身在做什麼、包含哪些項目，或想比較兩個服務的差異——不是在描述自己企業的問題，也不是要找方案清單（政府補助方案清單走 search_subsidy_programs）。",
+    whenNotUseful: "使用者在描述自己企業的現況／需求，需要顧問判斷方向（走既有企業診斷與 Handoff 流程）；或問的是操作方式（走 Platform Help）；或明確要找顧問（走 Handoff）。",
+    requiredContext: ["使用者這輪提到的服務名稱"],
     optionalContext: [],
     sideEffectLevel: "read",
     enabled: true,

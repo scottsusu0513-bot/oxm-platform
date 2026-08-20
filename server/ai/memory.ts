@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { getDb } from "../db";
 import { aiEnterpriseMemories, type AiConversation, type AiEnterpriseMemory } from "../../drizzle/schema";
 import { getAiChatProvider, type AiChatMessage } from "./provider";
+import { runWithAiCallContext, logAiError } from "./aiCallContext";
 import { serializeHistory } from "./serialize";
 import { getAllMessages, deleteConversationAndMessages, markConversationSummaryFailed } from "./conversationService";
 import { finalizeFactorySearchRequestForConversation, buildFinalizeSummaryClause } from "./factorySearchRequestService";
@@ -15,6 +16,87 @@ export const NO_MEANINGFUL_INFO_SUMMARY = "本次未提供可形成企業判斷�
 export interface ConversationSummaryResult {
   summaryText: string;
   hasMeaningfulBusinessInfo: boolean;
+}
+
+/**
+ * Phase 12.2（見對話「十四~二十」）：Memory Summary 偶爾出現
+ * `Unterminated string in JSON` ——追到真實根因：generateConversationSummary
+ * 原本只給 completeJson 300 tokens 的預算，但 SUMMARY_SYSTEM_PROMPT 本身
+ * 允許 summaryText 最多 200 個中文字（CJK 在 GPT tokenizer 底下經常一個字
+ * 就吃掉 1.5~2.5 token，200 字加上 JSON 結構本身很容易逼近甚至超過 300），
+ * 且非 gpt-5 系列模型完全沒有 provider.ts 既有的「新參數模型多留 4 倍
+ * 餘裕」safety net（那個 safety net 只套用在 usesNewCompletionParams 的
+ * 模型）。這不是「每一層都可能有這個 bug」的臆測——Diagnosis(550)／
+ * Routing(750)／ActionPlanner(300，但輸出結構遠比 summary 精簡)／
+ * ResponseComposer(350) 都是本輪連帶盤點過的既有呼叫端，各自的 budget 相對
+ * 自己的輸出長度要求都留有更寬裕的比例，只有 Memory 這兩處 summary
+ * 生成（generateConversationSummary／mergeEnterpriseMemory）用同一個偏緊的
+ * 300，且輸出長度上限（200~500 中文字）明顯比其他層級的 JSON 輸出更長。
+ *
+ * 修法只動這一層：(1) 提高這裡專用的 token 上限（300 → 1024，不是無限拉
+ * 高）；(2) 改用 OpenAI Structured Outputs（json_schema + strict:true）取代
+ * 原本的自由格式 json_object，讓 provider 端就先保證欄位形狀；(3)
+ * 萬一仍然拿到無法解析的 JSON（例如真的被 max_completion_tokens 截斷，
+ * finish_reason==='length'），在同一次 finalize attempt 內最多重試一次
+ * parser-level retry（見「十八」，重新呼叫一次 provider，不是用 regex/
+ * substring 從壞掉的字串硬湊），兩次都失敗就直接拋出，交給既有的
+ * markConversationSummaryFailed／retry job 機制處理——原文永遠不會因為這裡
+ * 失敗而被刪除（見「十九」：不自己造假 fallback 摘要）。
+ */
+const MEMORY_SUMMARY_MAX_TOKENS = 1024;
+
+const CONVERSATION_SUMMARY_JSON_SCHEMA = {
+  name: "conversation_summary",
+  schema: {
+    type: "object",
+    properties: {
+      summaryText: { type: "string" },
+      hasMeaningfulBusinessInfo: { type: "boolean" },
+    },
+    required: ["summaryText", "hasMeaningfulBusinessInfo"],
+    additionalProperties: false,
+  },
+};
+
+const MERGED_MEMORY_JSON_SCHEMA = {
+  name: "merged_enterprise_memory",
+  schema: {
+    type: "object",
+    properties: {
+      summaryText: { type: "string" },
+    },
+    required: ["summaryText"],
+    additionalProperties: false,
+  },
+};
+
+/**
+ * 呼叫 completeJson 並嘗試 JSON.parse，失敗時在同一次呼叫內重試最多一次
+ * （見「十八」）。每次 completeJson 呼叫本身都會各自透過既有的
+ * logAiModelCall 記錄 aiModelCalls（見 provider.ts），這裡不用另外處理成本
+ * 紀錄。兩次都失敗時，把最後一次的 parse error 原樣拋出——不吞掉、不猜測、
+ * 不從壞掉的字串硬湊資料。
+ */
+async function completeJsonWithParseRetry(
+  provider: { completeJson: (messages: AiChatMessage[], maxTokens?: number, jsonSchema?: { name: string; schema: Record<string, unknown> }) => Promise<string> },
+  messages: AiChatMessage[],
+  jsonSchema: { name: string; schema: Record<string, unknown> }
+): Promise<any> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const raw = await provider.completeJson(messages, MEMORY_SUMMARY_MAX_TOKENS, jsonSchema);
+    try {
+      return JSON.parse(raw);
+    } catch (err) {
+      lastError = err;
+      logAiError(
+        "memorySummary",
+        `completeJsonWithParseRetry: attempt ${attempt} produced unparseable JSON, ${attempt < 2 ? "retrying once" : "giving up"}`,
+        err
+      );
+    }
+  }
+  throw lastError;
 }
 
 const SUMMARY_SYSTEM_PROMPT = `
@@ -38,13 +120,13 @@ export async function generateConversationSummary(messages: AiChatTurn[]): Promi
   if (messages.length === 0) {
     return { summaryText: NO_MEANINGFUL_INFO_SUMMARY, hasMeaningfulBusinessInfo: false };
   }
-  const provider = getAiChatProvider();
+  // Phase 8.1：只是標註 usage log 的 layer 分類，不影響模型選擇。
+  const provider = getAiChatProvider("memorySummary");
   const chatMessages: AiChatMessage[] = [
     { role: "system", content: SUMMARY_SYSTEM_PROMPT },
     { role: "user", content: "以下是這一整段對話的逐字稿：\n\n" + serializeHistory(messages) },
   ];
-  const raw = await provider.completeJson(chatMessages, 300);
-  const parsed = JSON.parse(raw);
+  const parsed = await completeJsonWithParseRetry(provider, chatMessages, CONVERSATION_SUMMARY_JSON_SCHEMA);
   const summaryText = typeof parsed.summaryText === "string" && parsed.summaryText.trim()
     ? parsed.summaryText.trim().slice(0, 500)
     : NO_MEANINGFUL_INFO_SUMMARY;
@@ -110,7 +192,8 @@ export async function mergeEnterpriseMemory(
     return { summaryText: existing!.summaryText, hasMeaningfulBusinessInfo: true };
   }
 
-  const provider = getAiChatProvider();
+  // Phase 8.1：只是標註 usage log 的 layer 分類，不影響模型選擇。
+  const provider = getAiChatProvider("memoryMerge");
   const chatMessages: AiChatMessage[] = [
     { role: "system", content: MERGE_SYSTEM_PROMPT },
     {
@@ -121,18 +204,23 @@ export async function mergeEnterpriseMemory(
       ].join("\n"),
     },
   ];
-  const raw = await provider.completeJson(chatMessages, 300);
-  const parsed = JSON.parse(raw);
+  const parsed = await completeJsonWithParseRetry(provider, chatMessages, MERGED_MEMORY_JSON_SCHEMA);
   const mergedText = typeof parsed.summaryText === "string" && parsed.summaryText.trim()
     ? parsed.summaryText.trim().slice(0, 500)
     : newSummary.summaryText;
   return { summaryText: mergedText, hasMeaningfulBusinessInfo: true };
 }
 
-/** 一個 user 一筆，upsert（merge 後寫入合併結果，不是新增也不是無條件覆寫）——見 drizzle/schema.ts 的 aiEnterpriseMemories 註解。 */
+/**
+ * Phase 11.2（見對話中「四、Memory Write API」）：一間工廠一筆，upsert（merge
+ * 後寫入合併結果，不是新增也不是無條件覆寫）——unique target 是 factoryId，
+ * 不再是 userId（見 drizzle/schema.ts 的 aiEnterpriseMemories 註解）。
+ * lastActorUserId 純粹是稽核用途的 attribution，不影響這筆記憶「屬於哪個
+ * factoryId」這件事。
+ */
 export async function upsertEnterpriseMemory(params: {
-  userId: number;
-  factoryId: number | null;
+  factoryId: number;
+  lastActorUserId: number | null;
   summaryText: string;
   hasMeaningfulBusinessInfo: boolean;
   lastInteractionHadMeaningfulInfo: boolean;
@@ -144,8 +232,8 @@ export async function upsertEnterpriseMemory(params: {
   await db
     .insert(aiEnterpriseMemories)
     .values({
-      userId: params.userId,
       factoryId: params.factoryId,
+      lastActorUserId: params.lastActorUserId,
       summaryText: params.summaryText,
       hasMeaningfulBusinessInfo: params.hasMeaningfulBusinessInfo,
       lastInteractionAt: now,
@@ -154,7 +242,7 @@ export async function upsertEnterpriseMemory(params: {
     })
     .onDuplicateKeyUpdate({
       set: {
-        factoryId: params.factoryId,
+        lastActorUserId: params.lastActorUserId,
         summaryText: params.summaryText,
         hasMeaningfulBusinessInfo: params.hasMeaningfulBusinessInfo,
         lastInteractionAt: now,
@@ -164,11 +252,35 @@ export async function upsertEnterpriseMemory(params: {
     });
 }
 
-export async function getEnterpriseMemory(userId: number): Promise<AiEnterpriseMemory | null> {
+/**
+ * Phase 11.2（見對話中「三、Memory Read API」）：唯一允許的讀取路徑是
+ * factoryId——沒有 factoryId 就是不讀 memory，呼叫端不得 fallback 成
+ * userId、不得 fallback 成上一次的 factoryId、不得 fallback 成「隨便找一筆
+ * 最近的 memory」。factoryId 為 null 的情況（例如 admin 沒有 approved 工廠）
+ * 完全不應該呼叫這個函式，應該在呼叫端就直接跳過整個 memory 讀取步驟（見
+ * server/ai/chatService.ts）。
+ */
+export async function getEnterpriseMemory(factoryId: number): Promise<AiEnterpriseMemory | null> {
   const db = await getDb();
   if (!db) return null;
-  const rows = await db.select().from(aiEnterpriseMemories).where(eq(aiEnterpriseMemories.userId, userId)).limit(1);
+  const rows = await db.select().from(aiEnterpriseMemories).where(eq(aiEnterpriseMemories.factoryId, factoryId)).limit(1);
   return rows[0] ?? null;
+}
+
+/**
+ * Phase 11.2（見對話中「二十九、Memory Reset API」）：最小 server capability，
+ * 供 Admin support／未來使用者自助重設／測試清理／governance 緊急處理使用。
+ * 本輪刻意不建立對外 route（見對話說明：先只建立 service helper + tests），
+ * 呼叫端必須自行決定授權檢查——這裡不做任何權限判斷，純粹是「清空這間工廠
+ * 的企業記憶」這個資料操作本身。傳入不存在的 factoryId 是安全的 no-op（沒有
+ * 東西可刪）。
+ */
+export async function resetEnterpriseMemory(factoryId: number): Promise<{ deleted: boolean }> {
+  const db = await getDb();
+  if (!db) return { deleted: false };
+  const result = await db.delete(aiEnterpriseMemories).where(eq(aiEnterpriseMemories.factoryId, factoryId));
+  const affectedRows = (result[0] as { affectedRows?: number }).affectedRows ?? 0;
+  return { deleted: affectedRows > 0 };
 }
 
 export interface EndConversationResult {
@@ -200,12 +312,48 @@ export interface EndConversationResult {
  * 誠實敘述（見「二十九、三十」）。
  */
 export async function endConversationAndSummarize(conversation: AiConversation): Promise<EndConversationResult> {
+  // Phase 8.1（見對話中「三十六：Memory finalize 不消耗使用者 quota，但仍記
+  // model usage」）：turnId 為 null（不屬於任何使用者可見 turn），
+  // factoryId／actorUserId 用這個 conversation 本身已知的值。
+  return runWithAiCallContext(
+    { turnId: null, factoryId: conversation.factoryId, actorUserId: conversation.userId },
+    () => endConversationAndSummarizeImpl(conversation)
+  );
+}
+
+async function endConversationAndSummarizeImpl(conversation: AiConversation): Promise<EndConversationResult> {
+  // 見對話中「二十五、Admin No-Factory Finalization」：沒有 approved 工廠
+  // context 的對話（目前唯一情況是 admin 使用 AI 但自己沒有 approved 工廠）
+  // 天生沒有 Enterprise Memory 可以歸屬——不產生摘要、不呼叫任何 LLM（避免
+  // 白燒 API 成本）、不讀寫 aiEnterpriseMemories，直接安全刪除原文。人工協尋
+  // claim+notify（若有）仍然照常執行，那是獨立於 Enterprise Memory 的機制。
+  if (conversation.factoryId == null) {
+    try {
+      await finalizeFactorySearchRequestForConversation(conversation.id);
+    } catch (error) {
+      logAiError("memorySummary", `finalizeFactorySearchRequestForConversation failed for conversation ${conversation.id} (no-factory)`, error);
+    }
+    try {
+      await deleteConversationAndMessages(conversation.id);
+      return { success: true };
+    } catch (error) {
+      logAiError("memorySummary", `no-factory raw delete failed for conversation ${conversation.id}`, error);
+      try {
+        await markConversationSummaryFailed(conversation.id, error);
+      } catch (markError) {
+        logAiError("memorySummary", `failed to mark conversation ${conversation.id} as failed`, markError);
+      }
+      return { success: false };
+    }
+  }
+
+  const factoryId = conversation.factoryId;
   let factorySearchClause: string | null = null;
   try {
     const finalizedRequest = await finalizeFactorySearchRequestForConversation(conversation.id);
     factorySearchClause = buildFinalizeSummaryClause(finalizedRequest);
   } catch (error) {
-    console.error(`[memory] finalizeFactorySearchRequestForConversation failed for conversation ${conversation.id}:`, error instanceof Error ? error.message : error);
+    logAiError("memorySummary", `finalizeFactorySearchRequestForConversation failed for conversation ${conversation.id}`, error);
   }
 
   try {
@@ -219,11 +367,11 @@ export async function endConversationAndSummarize(conversation: AiConversation):
         : factorySearchClause;
       conversationSummary.hasMeaningfulBusinessInfo = true;
     }
-    const existingMemory = await getEnterpriseMemory(conversation.userId);
+    const existingMemory = await getEnterpriseMemory(factoryId);
     const merged = await mergeEnterpriseMemory(existingMemory, conversationSummary);
     await upsertEnterpriseMemory({
-      userId: conversation.userId,
-      factoryId: conversation.factoryId,
+      factoryId,
+      lastActorUserId: conversation.userId,
       summaryText: merged.summaryText,
       hasMeaningfulBusinessInfo: merged.hasMeaningfulBusinessInfo,
       lastInteractionHadMeaningfulInfo: conversationSummary.hasMeaningfulBusinessInfo,
@@ -232,11 +380,11 @@ export async function endConversationAndSummarize(conversation: AiConversation):
     await deleteConversationAndMessages(conversation.id);
     return { success: true };
   } catch (error) {
-    console.error(`[memory] endConversationAndSummarize failed for conversation ${conversation.id}:`, error instanceof Error ? error.message : error);
+    logAiError("memorySummary", `endConversationAndSummarize failed for conversation ${conversation.id}`, error);
     try {
       await markConversationSummaryFailed(conversation.id, error);
     } catch (markError) {
-      console.error(`[memory] failed to mark conversation ${conversation.id} as failed:`, markError instanceof Error ? markError.message : markError);
+      logAiError("memorySummary", `failed to mark conversation ${conversation.id} as failed`, markError);
     }
     return { success: false };
   }

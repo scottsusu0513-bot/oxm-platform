@@ -1,27 +1,28 @@
 /**
- * getAiFactoryContext() 白名單驗證：
- * 1. owner 身分可以正確解析出企業 context
- * 2. 沒有擁有工廠、但是 active 共同管理者時也能正確解析（Phase 0 發現的既有
- *    坑：只查 owner 會讓共管者遇到「找不到工廠」，這裡驗證我們沒有重蹈覆轍）
- * 3. 兩者都沒有時回傳 null，而不是丟錯
- * 4. 回傳物件絕對不包含 adminNote / contactStatus / certificationEvidence /
- *    rejectionReason / deletedAt / ownerId / 聯絡方式等內部或個資欄位
+ * Phase 11.2（見對話中「七、統一 Factory Resolver」）：getAiFactoryContext()／
+ * resolveApprovedAiFactoryContext() 現在唯一 source of truth 是
+ * db.getActiveFactoryAffiliationDetail()（只認 status='approved'），不再各自
+ * 呼叫 getFactoryByOwnerId／getCoManagedFactories（那條路徑不篩 status，是
+ * Phase 11.1 Audit 認定的 P0 根因之一）。
  *
- * 全部用 vi.mock 隔離 db.ts，不連真實資料庫、不做任何 DB 讀寫。
+ * R1-R6（見「三十二、Approved Resolver Tests」）：驗證 approved owner／
+ * approved co-manager／pending／rejected／delisted／無 approved 工廠 六種
+ * 情境下的解析結果，確保跟 entitlement.ts 用的是同一套判斷標準。
+ *
+ * 白名單驗證（回傳物件不含 adminNote/contactStatus/... 等內部或個資欄位）
+ * 沿用既有測試精神，全部用 vi.mock 隔離 db.ts，不連真實資料庫。
  */
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-const mockGetFactoryByOwnerId = vi.fn();
-const mockGetCoManagedFactories = vi.fn();
+const mockGetActiveFactoryAffiliationDetail = vi.fn();
 const mockGetFactoryById = vi.fn();
 
 vi.mock("../db", () => ({
-  getFactoryByOwnerId: (...args: unknown[]) => mockGetFactoryByOwnerId(...args),
-  getCoManagedFactories: (...args: unknown[]) => mockGetCoManagedFactories(...args),
+  getActiveFactoryAffiliationDetail: (...args: unknown[]) => mockGetActiveFactoryAffiliationDetail(...args),
   getFactoryById: (...args: unknown[]) => mockGetFactoryById(...args),
 }));
 
-import { getAiFactoryContext } from "./factoryContext";
+import { getAiFactoryContext, resolveApprovedAiFactoryContext } from "./factoryContext";
 
 const FULL_FACTORY_ROW = {
   id: 1,
@@ -55,15 +56,17 @@ const FULL_FACTORY_ROW = {
   deletedAt: null,
 };
 
-describe("getAiFactoryContext", () => {
+describe("getAiFactoryContext / resolveApprovedAiFactoryContext（Phase 11.2 統一 approved resolver）", () => {
   beforeEach(() => {
-    mockGetFactoryByOwnerId.mockReset();
-    mockGetCoManagedFactories.mockReset();
+    mockGetActiveFactoryAffiliationDetail.mockReset();
     mockGetFactoryById.mockReset();
   });
 
-  it("owner 身分：回傳正確的白名單欄位", async () => {
-    mockGetFactoryByOwnerId.mockResolvedValue(FULL_FACTORY_ROW);
+  it("R1：approved owner → 正確解析出企業 context", async () => {
+    mockGetActiveFactoryAffiliationDetail.mockResolvedValue({
+      factoryId: 1, factoryName: "測試金屬加工廠", factoryStatus: "approved", role: "owner",
+    });
+    mockGetFactoryById.mockResolvedValue(FULL_FACTORY_ROW);
 
     const ctx = await getAiFactoryContext(42);
 
@@ -78,33 +81,70 @@ describe("getAiFactoryContext", () => {
       mfgModes: ["ODM", "OEM"],
       description: "專精五金沖壓與 CNC 加工。",
     });
-    expect(mockGetCoManagedFactories).not.toHaveBeenCalled();
+
+    const resolution = await resolveApprovedAiFactoryContext(42);
+    expect(resolution).toEqual({ id: 1, context: ctx, role: "owner" });
   });
 
-  it("非 owner，但是 active 共同管理者：仍能正確解析出企業 context", async () => {
-    mockGetFactoryByOwnerId.mockResolvedValue(undefined);
-    mockGetCoManagedFactories.mockResolvedValue([
-      { factoryId: 1, name: "測試金屬加工廠", status: "approved" },
-    ]);
+  it("R2：approved co-manager → 正確解析出企業 context", async () => {
+    mockGetActiveFactoryAffiliationDetail.mockResolvedValue({
+      factoryId: 1, factoryName: "測試金屬加工廠", factoryStatus: "approved", role: "co_manager",
+    });
     mockGetFactoryById.mockResolvedValue(FULL_FACTORY_ROW);
 
     const ctx = await getAiFactoryContext(99);
-
     expect(ctx?.companyName).toBe("測試金屬加工廠");
-    expect(mockGetFactoryById).toHaveBeenCalledWith(1);
+
+    const resolution = await resolveApprovedAiFactoryContext(99);
+    expect(resolution?.role).toBe("co_manager");
+    expect(resolution?.id).toBe(1);
   });
 
-  it("既不是 owner 也沒有共管工廠：回傳 null，不丟錯", async () => {
-    mockGetFactoryByOwnerId.mockResolvedValue(undefined);
-    mockGetCoManagedFactories.mockResolvedValue([]);
+  it("R3：pending owner（尚未核准）→ null（getActiveFactoryAffiliationDetail 只認 approved，直接回傳 null，不會走到這裡）", async () => {
+    mockGetActiveFactoryAffiliationDetail.mockResolvedValue(null);
 
     const ctx = await getAiFactoryContext(7);
+    expect(ctx).toBeNull();
+    const resolution = await resolveApprovedAiFactoryContext(7);
+    expect(resolution).toBeNull();
+    expect(mockGetFactoryById).not.toHaveBeenCalled();
+  });
 
+  it("R4：rejected owner → null", async () => {
+    mockGetActiveFactoryAffiliationDetail.mockResolvedValue(null);
+
+    const resolution = await resolveApprovedAiFactoryContext(8);
+    expect(resolution).toBeNull();
+  });
+
+  it("R5：delisted owner → null", async () => {
+    mockGetActiveFactoryAffiliationDetail.mockResolvedValue(null);
+
+    const resolution = await resolveApprovedAiFactoryContext(9);
+    expect(resolution).toBeNull();
+  });
+
+  it("R6：admin 沒有任何 approved 工廠 → null，不 fallback 成任何其他狀態的工廠", async () => {
+    mockGetActiveFactoryAffiliationDetail.mockResolvedValue(null);
+
+    const ctx = await getAiFactoryContext(999);
+    expect(ctx).toBeNull();
+    const resolution = await resolveApprovedAiFactoryContext(999);
+    expect(resolution).toBeNull();
+  });
+
+  it("既不是 owner 也沒有 approved 共管工廠：回傳 null，不丟錯", async () => {
+    mockGetActiveFactoryAffiliationDetail.mockResolvedValue(null);
+
+    const ctx = await getAiFactoryContext(7);
     expect(ctx).toBeNull();
   });
 
   it("回傳物件絕對不包含內部/個資欄位", async () => {
-    mockGetFactoryByOwnerId.mockResolvedValue(FULL_FACTORY_ROW);
+    mockGetActiveFactoryAffiliationDetail.mockResolvedValue({
+      factoryId: 1, factoryName: "測試金屬加工廠", factoryStatus: "approved", role: "owner",
+    });
+    mockGetFactoryById.mockResolvedValue(FULL_FACTORY_ROW);
 
     const ctx = await getAiFactoryContext(42);
     const keys = Object.keys(ctx as object);
@@ -125,5 +165,15 @@ describe("getAiFactoryContext", () => {
     ]) {
       expect(keys).not.toContain(forbidden);
     }
+  });
+
+  it("找不到 affiliation 對應的 factory row（防禦性 edge case，理論上不應發生）→ null，不丟錯", async () => {
+    mockGetActiveFactoryAffiliationDetail.mockResolvedValue({
+      factoryId: 404, factoryName: "已消失的工廠", factoryStatus: "approved", role: "owner",
+    });
+    mockGetFactoryById.mockResolvedValue(undefined);
+
+    const resolution = await resolveApprovedAiFactoryContext(42);
+    expect(resolution).toBeNull();
   });
 });

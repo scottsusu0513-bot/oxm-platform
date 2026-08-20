@@ -1,4 +1,4 @@
-import { getAiFactoryContext, resolveAiFactory, type AiFactoryContext } from "./factoryContext";
+import { getAiFactoryContext, resolveApprovedAiFactoryContext, type AiFactoryContext } from "./factoryContext";
 import { runEnterpriseDiagnosis } from "./diagnosis";
 import { runOxmRouting } from "./routing";
 import { buildTurnContext } from "./contextBuilder";
@@ -8,7 +8,7 @@ import {
   getConversationForUser,
   createConversation,
   appendMessage,
-  updateConversationState,
+  updateConversationStateAndAppendMessage,
 } from "./conversationService";
 import { getEnterpriseMemory, endConversationAndSummarize } from "./memory";
 import { checkOutOfDomainResumeRelevance } from "./casualPauseGate";
@@ -27,7 +27,9 @@ import { buildFactorySearchStateSnapshot, type FactorySearchStateSnapshot } from
 import { runNewsSearchAction, type NewsSearchActionResult } from "./newsSearchAction";
 import { buildNewsSearchStateSnapshot, type NewsSearchStateSnapshot } from "./newsSearchState";
 import { runSubsidyProgramsAction, type SubsidyProgramsActionResult } from "./subsidyProgramsAction";
+import { buildGovSubsidyRecommendationForUi, type GovSubsidyRecommendationForUi } from "./govSubsidyRecommendationUi";
 import { getNavigationEntry } from "../../shared/ai/navigationRegistry";
+import { logAiError } from "./aiCallContext";
 import type { AiConversation, AiFactorySearchRequest } from "../../drizzle/schema";
 import type { AiChatTurn } from "./types";
 import type { ConversationState } from "./conversationState";
@@ -166,6 +168,8 @@ export interface StatelessChatResult {
   subsidyProgramsResult: SubsidyProgramsActionResult | null;
   /** Phase 6C：站內導覽（見對話中「站內 Navigation Action」），只有 Layer 2 判斷 navigationTarget 有對應到 Registry 裡的 key 時才有值。 */
   navigationAction: NavigationAction | null;
+  /** Phase 7.1：見 PersistentChatResult.govSubsidyRecommendation 的說明，訪客版本。 */
+  govSubsidyRecommendation: GovSubsidyRecommendationForUi | null;
 }
 
 export async function runAiChat(params: {
@@ -194,14 +198,29 @@ export async function runAiChat(params: {
     const subsidyProgramsResult =
       routing.govSubsidyLookupRelevant ? await runSubsidyProgramsAction(params.history) : null;
     const navigationAction = resolveNavigationAction(routing.navigationTarget);
-    return { reply: routing.finalReply, factorySearchResult, newsSearchResult, subsidyProgramsResult, navigationAction };
+    const govSubsidyRecommendation = buildGovSubsidyRecommendationForUi(routing.govSubsidyRecommendation);
+    return {
+      reply: routing.finalReply,
+      factorySearchResult,
+      newsSearchResult,
+      subsidyProgramsResult,
+      navigationAction,
+      govSubsidyRecommendation,
+    };
   } catch (error) {
-    console.error("[chatService] Layer 2 routing failed, falling back to Layer 1 content:", error);
+    logAiError("layer2Pipeline", "Layer 2 pipeline failed, falling back to Layer 1 content", error);
     const reply =
       diagnosis.nextBestQuestion ??
       diagnosis.recommendedBusinessDirection ??
       "能再多說一點你現在遇到的狀況嗎？";
-    return { reply, factorySearchResult: null, newsSearchResult: null, subsidyProgramsResult: null, navigationAction: null };
+    return {
+      reply,
+      factorySearchResult: null,
+      newsSearchResult: null,
+      subsidyProgramsResult: null,
+      navigationAction: null,
+      govSubsidyRecommendation: null,
+    };
   }
 }
 
@@ -237,6 +256,21 @@ export interface PersistentChatResult {
    * OXM 人工協尋」的誠實文案，不自己猜測或詢問使用者要不要協尋。
    */
   manualSourcing: ManualSourcingResult | null;
+  /**
+   * Phase 7.1（見對話中「P0-2：Government Subsidy Recommendation 專屬 UI」）：
+   * routing.govSubsidyRecommendation 的 UI-ready 版本（見
+   * govSubsidyRecommendationUi.ts），只在有明確 primaryProgramKey 時才非
+   * null。純 transport／type mapping，不改變 routing.ts 原本的判斷邏輯。
+   */
+  govSubsidyRecommendation: GovSubsidyRecommendationForUi | null;
+  /**
+   * Phase 7.1（見對話中「P1-6：Factory Boundary 下一步 UX」）：這一輪是否觸發
+   * 了 Factory Result Boundary（見下方 isFactoryResultBoundary 的既有判斷，
+   * 這裡只是把已經算出來的值回傳給 client，不是新的判斷）。client 只在這個
+   * 欄位為 true、且對話中確實存在較早的 factory_search_results attachment
+   * 時，才顯示「查看剛剛的工廠」CTA——不靠 finalReply 文字判斷。
+   */
+  factoryResultBoundary: boolean;
 }
 
 function resolveHandoffOffer(state: ConversationState): HandoffOffer | null {
@@ -268,7 +302,21 @@ async function resolveConversationForTurn(
 ): Promise<AiConversation> {
   if (clientConversationId) {
     const owned = await getConversationForUser(clientConversationId, userId);
-    if (owned && owned.status === "active") return owned;
+    if (owned && owned.status === "active") {
+      // Phase 11.2（見「九、Conversation Reuse」）：conversation.factoryId 現在
+      // 是 enterprise context boundary，不只是資訊性 snapshot——一旦這個 user
+      // 目前解析出來的 approved factoryId（可能因為換工廠、工廠審核狀態變化
+      // 而跟建立當下不同）跟這筆 conversation 的 factoryId 不一致，絕對不能
+      // 沿用，否則就是把 A 工廠的對話接到 B 工廠 context 下（Phase 11.1
+      // Audit 認定的 P0 cross-factory leakage 的另一種觸發方式）。安全策略是
+      // 照常收尾這筆舊 conversation（跟下面「殘留 orphaned 對話」走同一套安全
+      // 收尾邏輯），再建立一筆全新、factoryId 正確的 conversation。Admin
+      // 無工廠情境下兩邊都是 null，視為相符，正常沿用。
+      if (owned.factoryId === factoryId) {
+        return owned;
+      }
+      await endConversationAndSummarize(owned);
+    }
   }
 
   const orphaned = await getActiveConversationForUser(userId);
@@ -291,7 +339,7 @@ export async function runPersistentAiChat(params: {
   /** client 端記憶體內保存的 conversationId（同頁面內續聊用），refresh 後前端會是 undefined。 */
   conversationId?: number | null;
 }): Promise<PersistentChatResult> {
-  const factory = await resolveAiFactory(params.userId);
+  const factory = await resolveApprovedAiFactoryContext(params.userId);
   const factoryContext = factory?.context ?? null;
 
   const conversation = await resolveConversationForTurn(params.userId, factory?.id ?? null, params.conversationId);
@@ -320,8 +368,7 @@ export async function runPersistentAiChat(params: {
         lastUpdatedAt: new Date().toISOString(),
         outOfDomainCasualMode: "paused",
       };
-      await updateConversationState(conversation.id, pausedState);
-      await appendMessage(conversation.id, "assistant", OUT_OF_DOMAIN_CASUAL_PAUSED_REPLY);
+      await updateConversationStateAndAppendMessage(conversation.id, pausedState, "assistant", OUT_OF_DOMAIN_CASUAL_PAUSED_REPLY);
       return {
         reply: OUT_OF_DOMAIN_CASUAL_PAUSED_REPLY,
         conversationId: conversation.id,
@@ -331,12 +378,19 @@ export async function runPersistentAiChat(params: {
         subsidyProgramsResult: null,
         navigationAction: null,
         manualSourcing: null,
+        govSubsidyRecommendation: null,
+        factoryResultBoundary: false,
       };
     }
     resumedFromPause = true;
   }
 
-  const memoryRow = await getEnterpriseMemory(params.userId);
+  // Phase 11.2（見「三十七、No Memory Without Factory」）：沒有 approved
+  // 工廠 context 就完全不讀 Enterprise Memory——不呼叫 getEnterpriseMemory，
+  // 不 fallback 成 userId、不 fallback 成任何其他工廠。這是唯一允許的讀取
+  // 條件，Admin 沒有 approved 工廠時 factory 必為 null，這裡自動落在這個
+  // 分支，不需要另外判斷 entitlement.kind。
+  const memoryRow = factory ? await getEnterpriseMemory(factory.id) : null;
   const enterpriseMemory = memoryRow
     ? {
         summaryText: memoryRow.summaryText,
@@ -376,6 +430,16 @@ export async function runPersistentAiChat(params: {
   let subsidyProgramsResult: SubsidyProgramsActionResult | null = null;
   let navigationAction: NavigationAction | null = null;
   let manualSourcing: ManualSourcingResult | null = null;
+  // Phase 10.2 P1（見「十八、十九」）：cancel_factory_sourcing 成功時
+  // manualSourcing 會被設回跟「這輪本來就沒有任何 sourcing」一樣的預設形狀
+  // （{triggered:false,...}），所以不能只靠 manualSourcing.triggered 判斷
+  // 「這輪是不是真的成功執行過一個有副作用的 action」——額外用這個旗標記錄
+  // 「這輪真的成功執行了取消」，供下面 catch 區塊組出誠實訊息時使用。
+  let sourcingCancelledThisTurn = false;
+  // Phase 7.1：Layer 2 呼叫失敗（下面 catch 分支）時維持預設值，跟其他 Action
+  // 結果欄位的既有慣例一致。
+  let govSubsidyRecommendation: GovSubsidyRecommendationForUi | null = null;
+  let factoryResultBoundary = false;
   // 這一輪最終要寫回 ConversationState 的 Factory Search State，預設沿用舊值
   // 不變（見「十四」）；只有真的重新搜尋，或 Planner 這輪換算出新的
   // requestedCount 時才會被更新。
@@ -394,6 +458,9 @@ export async function runPersistentAiChat(params: {
       consecutiveOutOfDomainCasualTurns,
     });
     finalReply = routing.finalReply;
+    // Phase 7.1：純 transport，把這次 Layer 2 呼叫本來就有的
+    // routing.govSubsidyRecommendation 轉成 UI-ready 形狀，不改變判斷邏輯。
+    govSubsidyRecommendation = buildGovSubsidyRecommendationForUi(routing.govSubsidyRecommendation);
     // Phase 6A：只在「這一輪」Layer 2 真的判斷出 factory_search 時才觸發，不
     // 沿用舊值。search_factories 這個 Action 的觸發時機沿用既有 Layer 2
     // 判斷，不用 Action Planner 再問一次「要不要搜尋」（見「十六」：
@@ -437,9 +504,21 @@ export async function runPersistentAiChat(params: {
     // applyFactorySourcingDecision／buildFactorySearchStateSnapshot），所以
     // 這裡拿掉獨立分支不會漏掉「使用者對既有 pending 表達取消」的情況——那種
     // 情況 factorySourcingContextRelevant 一樣會判斷為 true。
+    // Phase 6F（見對話中「Factory Search Result Boundary」）：這一輪如果沒有
+    // 真的重新搜尋、且 Layer 2 判斷使用者是在要求對既有搜尋結果做逐家解釋／
+    // 比較／排名／推薦，一律不進 Action Planner——不呼叫任何額外模型、不把
+    // topResults 重新送進任何 prompt，finalReply 直接沿用上面這次 Layer 2
+    // 呼叫本身產生的邊界回覆（見 routing.ts 的 FACTORY_RESULT_BOUNDARY_REPLY_RULE），
+    // 維持 shouldPlanFactoryAction 為 false 即可，不需要額外程式碼組回覆。
+    const isFactoryResultBoundary =
+      !factorySearchResult && !!currentFactorySearchState && routing.factoryResultAnalysisRequest;
+    // Phase 7.1：把這個既有判斷回傳給 client（見 P1-6），純轉發，不是新判斷。
+    factoryResultBoundary = isFactoryResultBoundary;
+
     const shouldPlanFactoryAction =
-      !!factorySearchResult ||
-      (!!currentFactorySearchState && routing.factorySourcingContextRelevant);
+      !isFactoryResultBoundary &&
+      (!!factorySearchResult ||
+        (!!currentFactorySearchState && routing.factorySourcingContextRelevant));
 
     if (shouldPlanFactoryAction) {
       // 見「五、不要靠 raw transcript 當 authoritative search state」：
@@ -496,7 +575,7 @@ export async function runPersistentAiChat(params: {
             manualSourcing = { triggered: true, reason: decision.reasonCategory, requestId };
             actionOutcome = "succeeded";
           } catch (sourcingError) {
-            console.error(`[chatService] applyFactorySourcingDecision failed for conversation ${conversation.id}:`, sourcingError);
+            logAiError("actionPlanner", `applyFactorySourcingDecision failed for conversation ${conversation.id}`, sourcingError);
             manualSourcing = { triggered: false, reason: null, requestId: null };
             actionOutcome = "failed";
           }
@@ -504,9 +583,10 @@ export async function runPersistentAiChat(params: {
           try {
             await cancelFactorySearchRequestForConversation({ conversationId: conversation.id, userId: params.userId });
             manualSourcing = { triggered: false, reason: null, requestId: null };
+            sourcingCancelledThisTurn = true;
             actionOutcome = "succeeded";
           } catch (cancelError) {
-            console.error(`[chatService] cancelFactorySearchRequestForConversation failed for conversation ${conversation.id}:`, cancelError);
+            logAiError("actionPlanner", `cancelFactorySearchRequestForConversation failed for conversation ${conversation.id}`, cancelError);
             actionOutcome = "failed";
           }
         } else if (pendingFactorySearchRequest) {
@@ -577,11 +657,27 @@ export async function runPersistentAiChat(params: {
       consecutiveOutOfDomainCasualTurns,
     });
   } catch (error) {
-    console.error(`[chatService] Layer 2 routing failed for conversation ${conversation.id}, falling back to Layer 1 content:`, error);
-    finalReply =
-      diagnosis.nextBestQuestion ??
-      diagnosis.recommendedBusinessDirection ??
-      "能再多說一點你現在遇到的狀況嗎？";
+    logAiError("layer2Pipeline", `Layer 2 pipeline failed for conversation ${conversation.id}, falling back to Layer 1 content`, error);
+    // 見「十八、十九」：manualSourcing／sourcingCancelledThisTurn 是宣告在
+    // try 區塊外面的變數，這裡讀到的是「拋錯之前，action 真正執行到的最新
+    // 結果」——如果 applyFactorySourcingDecision／
+    // cancelFactorySearchRequestForConversation 已經成功、只是後面的
+    // composeFinalResponse（或同一個 try 區塊內更後面的其他步驟）才失敗，
+    // 不能用下面這句通用的 Layer 1 備援文案掩蓋掉「這個有副作用的 action
+    // 其實已經成功」的事實——那會讓使用者誤以為剛剛的操作沒生效，見「十九」
+    // 明確要求「不能暗示 action 失敗、不能觸發可能導致重複送出的 Retry」。
+    // 沒有真的執行過任何有副作用 action 時（多數情況），仍然走原本的通用
+    // 備援文案，不改變既有行為。
+    if (manualSourcing?.triggered) {
+      finalReply = "已經幫你送出人工找廠需求，OXM 會接續協助處理。這次回覆整理暫時發生問題，但不影響剛剛已送出的需求。";
+    } else if (sourcingCancelledThisTurn) {
+      finalReply = "已經幫你取消這筆人工找廠需求。這次回覆整理暫時發生問題，但不影響剛剛的取消結果。";
+    } else {
+      finalReply =
+        diagnosis.nextBestQuestion ??
+        diagnosis.recommendedBusinessDirection ??
+        "能再多說一點你現在遇到的狀況嗎？";
+    }
     // Layer 2 失敗時仍然用 Layer 1 的內容更新 state 裡跟診斷有關的欄位，只是
     // 服務分流相關欄位（candidateServiceKeys/handoffReady/serviceRelationship）
     // 維持前一輪的值，不能沒有 Layer 2 結果就亂猜。
@@ -617,8 +713,7 @@ export async function runPersistentAiChat(params: {
     nextState = { ...nextState, outOfDomainCasualMode: "normal" };
   }
 
-  await updateConversationState(conversation.id, nextState);
-  await appendMessage(conversation.id, "assistant", finalReply);
+  await updateConversationStateAndAppendMessage(conversation.id, nextState, "assistant", finalReply);
 
   return {
     reply: finalReply,
@@ -629,5 +724,7 @@ export async function runPersistentAiChat(params: {
     subsidyProgramsResult,
     navigationAction,
     manualSourcing,
+    govSubsidyRecommendation,
+    factoryResultBoundary,
   };
 }

@@ -1,11 +1,13 @@
 import "dotenv/config";
-import { getFailedConversations } from "../ai/conversationService";
+import { getFailedConversations, getPermanentlyFailedConversationsCount, MAX_SUMMARY_RETRY_COUNT } from "../ai/conversationService";
 import { endConversationAndSummarize } from "../ai/memory";
 
 export interface RetryFailedAiSummariesResult {
   attempted: number;
   succeeded: number;
   stillFailing: number;
+  /** Phase 11.2（見「二十二」）：這次執行後，累計達到 MAX_SUMMARY_RETRY_COUNT 上限、不會再被自動撿到的對話總數（只是回報現況，不是這次新增的數量）。 */
+  permanentlyFailedTotal: number;
 }
 
 /**
@@ -15,8 +17,15 @@ export interface RetryFailedAiSummariesResult {
  * 成功就整筆消失，仍然失敗會再次被標記 failed、retryCount 再 +1，留給下一次
  * 排程繼續重試——這裡刻意不做複雜的 backoff／queue，V1 先求「安全可重試」。
  *
+ * Phase 11.2（見對話中「二十二、Failed Summary Retention」）：重試不再無上限
+ * ——markConversationSummaryFailed 內部達到 MAX_SUMMARY_RETRY_COUNT（見
+ * conversationService.ts）後會把狀態轉成 permanently_failed，這裡的
+ * getFailedConversations() 只查 status='failed'，之後不會再自動撿到那些
+ * row；原文依然保留，只是變成需要人工判斷的 governance 案件（見 Admin AI
+ * 管理頁的 permanentlyFailedSummaryCount）。
+ *
  * 只由外部排程（例如 Render Cron Job）直接執行本檔案（CLI 進入點，見檔案最
- * 下方），本輪不設定正式排程，只提供本地可手動執行的能力。
+ * 下方）；建議排程頻率見 server/jobs/README（每 30 分鐘）。
  */
 export async function retryFailedAiSummaries(): Promise<RetryFailedAiSummariesResult> {
   const failed = await getFailedConversations();
@@ -32,7 +41,8 @@ export async function retryFailedAiSummaries(): Promise<RetryFailedAiSummariesRe
     }
   }
 
-  return { attempted: failed.length, succeeded, stillFailing };
+  const permanentlyFailedTotal = await getPermanentlyFailedConversationsCount();
+  return { attempted: failed.length, succeeded, stillFailing, permanentlyFailedTotal };
 }
 
 const invokedDirectly = typeof process.argv[1] === "string" &&
@@ -42,11 +52,11 @@ if (invokedDirectly) {
   retryFailedAiSummaries()
     .then((result) => {
       // 只印統計數字，不含任何對話內容或使用者資料。
-      console.log(`[cron] retry-failed-ai-summaries: attempted=${result.attempted} succeeded=${result.succeeded} stillFailing=${result.stillFailing}`);
+      console.log(`[OXM-AI][background][layer:summaryRetryJob] attempted=${result.attempted} succeeded=${result.succeeded} stillFailing=${result.stillFailing} permanentlyFailedTotal=${result.permanentlyFailedTotal} maxRetryCount=${MAX_SUMMARY_RETRY_COUNT}`);
       process.exit(result.stillFailing > 0 ? 1 : 0);
     })
     .catch((err: unknown) => {
-      console.error("[cron] retry-failed-ai-summaries failed:", err instanceof Error ? err.message : "unknown error");
+      console.error("[OXM-AI][background][layer:summaryRetryJob] failed:", err instanceof Error ? err.message : "unknown error");
       process.exit(1);
     });
 }

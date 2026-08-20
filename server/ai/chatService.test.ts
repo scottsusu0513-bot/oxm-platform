@@ -38,10 +38,10 @@ vi.mock("./routing", () => ({
 }));
 
 const mockGetAiFactoryContext = vi.fn();
-const mockResolveAiFactory = vi.fn();
+const mockResolveApprovedAiFactoryContext = vi.fn();
 vi.mock("./factoryContext", () => ({
   getAiFactoryContext: (...args: unknown[]) => mockGetAiFactoryContext(...args),
-  resolveAiFactory: (...args: unknown[]) => mockResolveAiFactory(...args),
+  resolveApprovedAiFactoryContext: (...args: unknown[]) => mockResolveApprovedAiFactoryContext(...args),
 }));
 
 const mockBuildTurnContext = vi.fn();
@@ -54,12 +54,21 @@ const mockGetConversationForUser = vi.fn();
 const mockCreateConversation = vi.fn();
 const mockAppendMessage = vi.fn();
 const mockUpdateConversationState = vi.fn();
+// Phase 10.2 P1（見「十七」）：chatService.ts 收尾時已經改呼叫合併後的
+// updateConversationStateAndAppendMessage（一個小交易），不再分開呼叫
+// updateConversationState／appendMessage 兩次——這裡讓 mock 版本內部照樣轉呼叫
+// 既有的 mockUpdateConversationState／mockAppendMessage，維持這個檔案原本
+// 「驗證 chatService 有沒有用正確的 conversationId／state／role/content 呼叫
+// 收尾邏輯」的測試意圖不變，不需要改寫底下每一個既有斷言。交易本身的原子性
+// 由 conversationService.test.ts 用真實 DB 驗證，不在這裡（mock 層）重複。
+const mockUpdateConversationStateAndAppendMessage = vi.fn();
 vi.mock("./conversationService", () => ({
   getActiveConversationForUser: (...args: unknown[]) => mockGetActiveConversationForUser(...args),
   getConversationForUser: (...args: unknown[]) => mockGetConversationForUser(...args),
   createConversation: (...args: unknown[]) => mockCreateConversation(...args),
   appendMessage: (...args: unknown[]) => mockAppendMessage(...args),
   updateConversationState: (...args: unknown[]) => mockUpdateConversationState(...args),
+  updateConversationStateAndAppendMessage: (...args: unknown[]) => mockUpdateConversationStateAndAppendMessage(...args),
 }));
 
 const mockGetEnterpriseMemory = vi.fn();
@@ -263,22 +272,25 @@ describe("runPersistentAiChat 編排", () => {
     finalReply: "詢價的人變少，還是有詢價但沒成交？",
     resourceTarget: "none" as const,
     factorySourcingContextRelevant: false,
+    factoryResultAnalysisRequest: false,
     newsSearchContextRelevant: false,
     govSubsidyLookupRelevant: false,
     navigationTarget: null,
     platformHelpTarget: null,
+    serviceTargets: [] as string[],
   };
 
   beforeEach(() => {
     mockRunEnterpriseDiagnosis.mockReset();
     mockRunOxmRouting.mockReset();
-    mockResolveAiFactory.mockReset();
+    mockResolveApprovedAiFactoryContext.mockReset();
     mockBuildTurnContext.mockReset();
     mockGetActiveConversationForUser.mockReset();
     mockGetConversationForUser.mockReset();
     mockCreateConversation.mockReset();
     mockAppendMessage.mockReset();
     mockUpdateConversationState.mockReset();
+    mockUpdateConversationStateAndAppendMessage.mockReset();
     mockGetEnterpriseMemory.mockReset();
     mockEndConversationAndSummarize.mockReset();
     mockRunFactorySearchAction.mockReset();
@@ -292,7 +304,7 @@ describe("runPersistentAiChat 編排", () => {
     mockComposeFinalResponse.mockReset();
     mockCheckOutOfDomainResumeRelevance.mockReset();
 
-    mockResolveAiFactory.mockResolvedValue(null);
+    mockResolveApprovedAiFactoryContext.mockResolvedValue(null);
     mockGetPendingFactorySearchRequestForConversation.mockResolvedValue(null);
     mockPlanNextOxmAction.mockResolvedValue({ action: "none", reason: "", reasonCategory: "other", actionPayload: { requestedCapabilities: [], requestedCount: null } });
     mockComposeFinalResponse.mockResolvedValue("目前搜尋到的狀況是這樣。");
@@ -304,6 +316,12 @@ describe("runPersistentAiChat 編排", () => {
     });
     mockAppendMessage.mockResolvedValue(undefined);
     mockUpdateConversationState.mockResolvedValue(undefined);
+    mockUpdateConversationStateAndAppendMessage.mockImplementation(
+      async (conversationId: number, state: unknown, role: string, content: string) => {
+        await mockUpdateConversationState(conversationId, state);
+        await mockAppendMessage(conversationId, role, content);
+      }
+    );
     mockGetEnterpriseMemory.mockResolvedValue(null);
     mockEndConversationAndSummarize.mockResolvedValue({ success: true });
   });
@@ -334,6 +352,8 @@ describe("runPersistentAiChat 編排", () => {
       subsidyProgramsResult: null,
       navigationAction: null,
       manualSourcing: null,
+      govSubsidyRecommendation: null,
+      factoryResultBoundary: false,
     });
   });
 
@@ -439,6 +459,40 @@ describe("runPersistentAiChat 編排", () => {
     expect(result.manualSourcing).toEqual({ triggered: false, reason: null, requestId: null });
   });
 
+  it("R11：request_factory_sourcing 真的寫入成功，但後續 composeFinalResponse 失敗 → 不能用通用備援文案掩蓋掉「其實已經成功」；manualSourcing 仍反映真實成功", async () => {
+    mockRunEnterpriseDiagnosis.mockResolvedValue(BASE_DIAGNOSIS);
+    mockRunOxmRouting.mockResolvedValue({ ...BASE_ROUTING, primaryService: "factory_search" });
+    const fakeSearchResult = {
+      candidates: [], total: 20, zeroResult: false,
+      appliedFilters: { mainIndustries: ["金屬加工"], regions: ["台中市"], rankingSignals: ["五軸加工"] },
+      hasExplicitCapabilityMatch: false, directCapabilityMatchCount: 0, missingCoreCapabilities: ["五軸加工"],
+      viewAllUrl: "/search",
+    };
+    mockRunFactorySearchAction.mockResolvedValue(fakeSearchResult);
+    mockPlanNextOxmAction.mockResolvedValue({
+      action: "request_factory_sourcing", reason: "沒有五軸直接證據", reasonCategory: "capability_gap",
+      actionPayload: { requestedCapabilities: ["五軸加工"], requestedCount: null },
+    });
+    // 側寫效果（DB 寫入）真的成功了。
+    mockApplyFactorySourcingDecision.mockResolvedValue({ requestId: 77 });
+    // 但緊接著 Composer 這次呼叫失敗（例如 provider 逾時／API 出錯）。
+    mockComposeFinalResponse.mockRejectedValue(new Error("composer boom"));
+
+    const result = await runPersistentAiChat({ userId: 42, message: "找台中五軸加工廠" });
+
+    // R12：不能拋錯（不會讓使用者看到失敗、也不會觸發可能導致重複送出的 Retry）。
+    expect(result.reply).toBeTruthy();
+    // manualSourcing 仍然如實反映「這輪真的成功執行過」，不因為 Composer 失敗而被清空。
+    expect(result.manualSourcing).toEqual({ triggered: true, reason: "capability_gap", requestId: 77 });
+    // 不能是通用的 Layer 1 備援文案（那句話完全沒提到剛剛已經送出的需求，會讓使用者誤會）。
+    expect(result.reply).not.toBe(BASE_DIAGNOSIS.nextBestQuestion);
+    expect(result.reply).not.toBe(BASE_DIAGNOSIS.recommendedBusinessDirection);
+    expect(result.reply).not.toBe("能再多說一點你現在遇到的狀況嗎？");
+    // 必須清楚表達「已經送出」，不能暗示失敗或要求使用者重新操作。
+    expect(result.reply).toContain("已經幫你送出人工找廠需求");
+    expect(result.reply).not.toMatch(/失敗|請重新|再試一次|請再說一次/);
+  });
+
   it("Action Planner 決定 cancel_factory_sourcing（有既有 pending，且 Layer 2 判斷這輪確實在講這件事）→ 呼叫 cancelFactorySearchRequestForConversation", async () => {
     mockGetPendingFactorySearchRequestForConversation.mockResolvedValue({
       id: 5, status: "pending", requestSummary: "尋找台中五軸加工廠", requestedMatchCount: null,
@@ -482,6 +536,48 @@ describe("runPersistentAiChat 編排", () => {
     expect(mockCancelFactorySearchRequestForConversation).toHaveBeenCalledWith({ conversationId: 101, userId: 42 });
     expect(mockApplyFactorySourcingDecision).not.toHaveBeenCalled();
     expect(result.manualSourcing).toEqual({ triggered: false, reason: null, requestId: null });
+  });
+
+  it("R11b：cancel_factory_sourcing 真的取消成功，但後續 composeFinalResponse 失敗 → 一樣不能用通用備援文案掩蓋掉「其實已經取消成功」", async () => {
+    mockGetPendingFactorySearchRequestForConversation.mockResolvedValue({
+      id: 5, status: "pending", requestSummary: "尋找台中五軸加工廠", requestedMatchCount: null,
+      hardFiltersJson: { mainIndustries: ["金屬加工"], regions: ["台中市"] }, coreCapabilitiesJson: ["五軸加工"],
+      candidateCount: 20, directCapabilityMatchCount: 0, updatedAt: new Date("2026-08-16T00:00:00.000Z"),
+    } as any);
+    mockBuildTurnContext.mockResolvedValue({
+      history: [
+        { role: "user", content: "找台中五軸加工廠" },
+        { role: "assistant", content: "..." },
+        { role: "user", content: "不用了，我只是問問" },
+      ],
+      previousState: {
+        ...createEmptyConversationState(false),
+        currentFactorySearchState: {
+          hardFilters: { mainIndustries: ["金屬加工"], regions: ["台中市"] },
+          coreCapabilities: ["五軸加工"], candidateCount: 20, directCapabilityMatchCount: 0,
+          missingCoreCapabilities: ["五軸加工"], status: "SIMILAR_ONLY", requestedMatchCount: null,
+          topResults: [], searchSummary: "台中市、金屬加工；核心能力：五軸加工",
+          lastSearchAt: "2026-08-16T00:00:00.000Z",
+        },
+      },
+    });
+    mockRunEnterpriseDiagnosis.mockResolvedValue(BASE_DIAGNOSIS);
+    mockRunOxmRouting.mockResolvedValue({ ...BASE_ROUTING, primaryService: null, factorySourcingContextRelevant: true });
+    mockPlanNextOxmAction.mockResolvedValue({
+      action: "cancel_factory_sourcing", reason: "使用者表示不用了", reasonCategory: "other",
+      actionPayload: { requestedCapabilities: [], requestedCount: null },
+    });
+    // 取消本身（DB 寫入）真的成功了。
+    mockCancelFactorySearchRequestForConversation.mockResolvedValue(true);
+    // 但緊接著 Composer 這次呼叫失敗。
+    mockComposeFinalResponse.mockRejectedValue(new Error("composer boom"));
+
+    const result = await runPersistentAiChat({ userId: 42, message: "不用了，我只是問問" });
+
+    expect(result.reply).toBeTruthy();
+    expect(result.reply).toContain("已經幫你取消這筆人工找廠需求");
+    expect(result.reply).not.toBe(BASE_DIAGNOSIS.nextBestQuestion);
+    expect(result.reply).not.toMatch(/失敗|請重新|再試一次|請再說一次/);
   });
 
   it("見「三十」：有既有 pending 協尋，但使用者這輪明顯在講完全不相關的新企業問題 → 不呼叫 Action Planner／Composer，不會把新問題誤當成工廠搜尋 follow-up", async () => {
@@ -678,7 +774,10 @@ describe("runPersistentAiChat 編排", () => {
     expect(result.conversationId).toBe(101); // 用的是新建立的那筆，不是孤兒那筆
   });
 
-  it("每一輪都會查 Enterprise Memory 並傳給 Layer 1／Layer 2", async () => {
+  it("有 approved 工廠 context 時：每一輪都會用 factoryId 查 Enterprise Memory 並傳給 Layer 1／Layer 2（Phase 11.2：factory-scoped）", async () => {
+    mockResolveApprovedAiFactoryContext.mockResolvedValue({
+      id: 7, context: { companyName: "測試工廠" } as any, role: "owner",
+    });
     mockGetEnterpriseMemory.mockResolvedValue({
       summaryText: "銘板製造；老客戶流失、價格競爭；主方向品牌內容；尚未轉交。",
       hasMeaningfulBusinessInfo: true,
@@ -689,7 +788,10 @@ describe("runPersistentAiChat 編排", () => {
 
     await runPersistentAiChat({ userId: 42, message: "你還記得我是做什麼的嗎？" });
 
-    expect(mockGetEnterpriseMemory).toHaveBeenCalledWith(42);
+    // Phase 11.2 P0 修正：查詢 key 是 factoryId（approved resolver 解析出來的
+    // 工廠 id），不再是 userId——這正是「Factory A → Factory B 換工廠時不能
+    // 讀到舊工廠記憶」的根因修正點，見 factoryContext.ts::resolveApprovedAiFactoryContext。
+    expect(mockGetEnterpriseMemory).toHaveBeenCalledWith(7);
     const expectedMemory = {
       summaryText: "銘板製造；老客戶流失、價格競爭；主方向品牌內容；尚未轉交。",
       hasMeaningfulBusinessInfo: true,
@@ -702,9 +804,21 @@ describe("runPersistentAiChat 編排", () => {
     expect(mockRunOxmRouting.mock.calls[0][0].enterpriseMemory).toEqual(expectedMemory);
   });
 
+  it("沒有 approved 工廠 context 時：完全不呼叫 getEnterpriseMemory，Layer 1／Layer 2 拿到的 enterpriseMemory 是 null（Phase 11.2「三十七、No Memory Without Factory」）", async () => {
+    mockResolveApprovedAiFactoryContext.mockResolvedValue(null);
+    mockRunEnterpriseDiagnosis.mockResolvedValue(BASE_DIAGNOSIS);
+    mockRunOxmRouting.mockResolvedValue(BASE_ROUTING);
+
+    await runPersistentAiChat({ userId: 42, message: "hi" });
+
+    expect(mockGetEnterpriseMemory).not.toHaveBeenCalled();
+    expect(mockRunEnterpriseDiagnosis.mock.calls[0][0].enterpriseMemory).toBeNull();
+    expect(mockRunOxmRouting.mock.calls[0][0].enterpriseMemory).toBeNull();
+  });
+
   it("有解析到工廠時，把 factoryId 傳給 createConversation，並把白名單 context 傳給 Layer 1/Layer 2", async () => {
     const aiFactoryContext = { companyName: "測試工廠" } as any;
-    mockResolveAiFactory.mockResolvedValue({ id: 7, context: aiFactoryContext });
+    mockResolveApprovedAiFactoryContext.mockResolvedValue({ id: 7, context: aiFactoryContext });
     mockRunEnterpriseDiagnosis.mockResolvedValue(BASE_DIAGNOSIS);
     mockRunOxmRouting.mockResolvedValue(BASE_ROUTING);
 
@@ -1190,6 +1304,206 @@ describe("runPersistentAiChat 編排", () => {
       expect(mockPlanNextOxmAction).not.toHaveBeenCalled();
       expect(mockComposeFinalResponse).not.toHaveBeenCalled();
       expect(result.reply).toBe("你也可以自己上找工廠頁面，用產業和地區篩選，再輸入關鍵字搜尋。");
+    });
+  });
+
+  describe("Phase 6E：Service Info 編排（見對話中「OXM 顧問服務知識中心化 + 精準服務查詢」）——chatService.ts 本身不需要任何新程式碼，resourceTarget=\"service_info\" 走既有的 finalReply passthrough 路徑，這裡是回歸驗證", () => {
+    it("resourceTarget=service_info 時：不觸發 search_factories／search_news／search_subsidy_programs，finalReply 直接使用 routing.finalReply（CASE E1）", async () => {
+      mockRunEnterpriseDiagnosis.mockResolvedValue(BASE_DIAGNOSIS);
+      mockRunOxmRouting.mockResolvedValue({
+        ...BASE_ROUTING, primaryService: null, resourceTarget: "service_info",
+        serviceTargets: ["erp"],
+        finalReply: "ERP 協助你盤點並優化生產管理，涵蓋系統導入評估、產線動線優化，或兩者整合改善。",
+      });
+
+      const result = await runPersistentAiChat({ userId: 42, message: "ERP服務是做什麼？" });
+
+      expect(mockRunFactorySearchAction).not.toHaveBeenCalled();
+      expect(mockRunNewsSearchAction).not.toHaveBeenCalled();
+      expect(mockRunSubsidyProgramsAction).not.toHaveBeenCalled();
+      expect(mockComposeFinalResponse).not.toHaveBeenCalled();
+      expect(result.reply).toBe("ERP 協助你盤點並優化生產管理，涵蓋系統導入評估、產線動線優化，或兩者整合改善。");
+      expect(result.factorySearchResult).toBeNull();
+      expect(result.subsidyProgramsResult).toBeNull();
+      expect(result.handoffOffer).toBeNull();
+    });
+
+    it("resourceTarget=service_info 且同時有 navigationTarget 時，navigationAction 正確附上（見「十五：可搭配既有 NavigationAttachment」）", async () => {
+      mockRunEnterpriseDiagnosis.mockResolvedValue(BASE_DIAGNOSIS);
+      mockRunOxmRouting.mockResolvedValue({
+        ...BASE_ROUTING, primaryService: null, resourceTarget: "service_info",
+        serviceTargets: ["erp"], navigationTarget: "erp",
+      });
+
+      const result = await runPersistentAiChat({ userId: 42, message: "ERP服務是做什麼？可以帶我去看看嗎？" });
+
+      expect(result.navigationAction).toEqual({ key: "erp", title: "ERP／產線優化專區", route: "/erp-optimization" });
+    });
+
+    it("CASE E-cross regression 端到端：既有 Factory Search Context 存在，但這輪 resourceTarget=service_info 時，即使 currentFactorySearchState 還在，也不會誤觸發 shouldPlanFactoryAction／Action Planner", async () => {
+      const existingFactoryState = {
+        hardFilters: { mainIndustries: ["金屬加工"], regions: ["台中市"] },
+        coreCapabilities: [], candidateCount: 20, directCapabilityMatchCount: 3,
+        missingCoreCapabilities: [], status: "MATCH_FOUND", requestedMatchCount: null, topResults: [],
+        searchSummary: "台中市、金屬加工", lastSearchAt: "2026-08-16T00:00:00.000Z",
+      };
+      mockBuildTurnContext.mockResolvedValue({
+        history: [{ role: "user", content: "ERP跟財務優化差在哪？" }],
+        previousState: { ...createEmptyConversationState(false), currentFactorySearchState: existingFactoryState },
+      });
+      mockRunEnterpriseDiagnosis.mockResolvedValue(BASE_DIAGNOSIS);
+      mockRunOxmRouting.mockResolvedValue({
+        ...BASE_ROUTING, primaryService: null, resourceTarget: "service_info",
+        serviceTargets: ["erp", "finance"], factorySourcingContextRelevant: false,
+        finalReply: "ERP 解決的是庫存、工單、排程沒系統化；財務優化解決的是現金流與融資結構，兩者處理的問題不同。",
+      });
+
+      const result = await runPersistentAiChat({ userId: 42, message: "ERP跟財務優化差在哪？" });
+
+      expect(mockRunFactorySearchAction).not.toHaveBeenCalled();
+      expect(mockPlanNextOxmAction).not.toHaveBeenCalled();
+      expect(mockComposeFinalResponse).not.toHaveBeenCalled();
+      expect(result.reply).toBe("ERP 解決的是庫存、工單、排程沒系統化；財務優化解決的是現金流與融資結構，兩者處理的問題不同。");
+    });
+  });
+
+  describe("Phase 6F：Factory Result Boundary 編排（見對話中「Factory Search Result Boundary / 工廠搜尋結果分析限制」）", () => {
+    const EXISTING_FACTORY_STATE = {
+      hardFilters: { mainIndustries: ["金屬加工"], regions: ["彰化縣"] },
+      coreCapabilities: [], candidateCount: 5, directCapabilityMatchCount: 3,
+      missingCoreCapabilities: [], status: "MATCH_FOUND", requestedMatchCount: null,
+      topResults: [
+        { factoryId: 1, companyName: "測試工廠A", region: "彰化縣", relevanceTier: "high" },
+        { factoryId: 2, companyName: "測試工廠B", region: "彰化縣", relevanceTier: "high" },
+      ],
+      searchSummary: "彰化縣、金屬加工", lastSearchAt: "2026-08-16T00:00:00.000Z",
+    };
+
+    it("CASE B1-B6：factoryResultAnalysisRequest=true 時不呼叫 Action Planner／Composer／search_factories，finalReply 直接用 routing.finalReply（不重新把 topResults 送進任何模型）", async () => {
+      mockBuildTurnContext.mockResolvedValue({
+        history: [{ role: "user", content: "第一家主要做什麼？" }],
+        previousState: { ...createEmptyConversationState(false), currentFactorySearchState: EXISTING_FACTORY_STATE },
+      });
+      mockRunEnterpriseDiagnosis.mockResolvedValue(BASE_DIAGNOSIS);
+      mockRunOxmRouting.mockResolvedValue({
+        ...BASE_ROUTING, primaryService: null, resourceTarget: "factory_search",
+        factorySourcingContextRelevant: false, factoryResultAnalysisRequest: true,
+        finalReply: "我能協助你的是依照需求把可能符合的工廠搜尋出來；後續產品、加工能力與合作條件，建議直接進工廠頁查看並與廠商確認。",
+      });
+
+      const result = await runPersistentAiChat({ userId: 42, message: "第一家主要做什麼？" });
+
+      expect(mockRunFactorySearchAction).not.toHaveBeenCalled();
+      expect(mockPlanNextOxmAction).not.toHaveBeenCalled();
+      expect(mockComposeFinalResponse).not.toHaveBeenCalled();
+      expect(result.reply).toBe("我能協助你的是依照需求把可能符合的工廠搜尋出來；後續產品、加工能力與合作條件，建議直接進工廠頁查看並與廠商確認。");
+      expect(result.factorySearchResult).toBeNull();
+      expect(result.manualSourcing).toBeNull();
+    });
+
+    it("boundary 回覆後，既有 Factory Search State 原樣保留（不會因為 boundary 回覆被清空，之後仍然可以正常延續或重新搜尋）", async () => {
+      mockBuildTurnContext.mockResolvedValue({
+        history: [{ role: "user", content: "哪一家比較適合我？" }],
+        previousState: { ...createEmptyConversationState(false), currentFactorySearchState: EXISTING_FACTORY_STATE },
+      });
+      mockRunEnterpriseDiagnosis.mockResolvedValue(BASE_DIAGNOSIS);
+      mockRunOxmRouting.mockResolvedValue({
+        ...BASE_ROUTING, primaryService: null, resourceTarget: "factory_search",
+        factoryResultAnalysisRequest: true,
+      });
+
+      await runPersistentAiChat({ userId: 42, message: "哪一家比較適合我？" });
+
+      const savedState = mockUpdateConversationState.mock.calls[0][1];
+      expect(savedState.currentFactorySearchState).toEqual(EXISTING_FACTORY_STATE);
+    });
+
+    it("CASE B7：這幾家都不是，再幫我找別的 → 不走 boundary，走既有 search/refine/sourcing（factoryResultAnalysisRequest=false，factorySourcingContextRelevant=true）", async () => {
+      mockBuildTurnContext.mockResolvedValue({
+        history: [{ role: "user", content: "這幾家都不是，再幫我找別的" }],
+        previousState: { ...createEmptyConversationState(false), currentFactorySearchState: EXISTING_FACTORY_STATE },
+      });
+      mockRunEnterpriseDiagnosis.mockResolvedValue(BASE_DIAGNOSIS);
+      mockRunOxmRouting.mockResolvedValue({
+        ...BASE_ROUTING, primaryService: null, resourceTarget: "factory_search",
+        factorySourcingContextRelevant: true, factoryResultAnalysisRequest: false,
+      });
+      mockPlanNextOxmAction.mockResolvedValue({
+        action: "none", reasonCategory: "other",
+        actionPayload: { requestedCount: null },
+        reason: "使用者否定既有結果但沒有新條件",
+      });
+      mockComposeFinalResponse.mockResolvedValue("了解，我幫你重新看看還有哪些選擇。");
+
+      const result = await runPersistentAiChat({ userId: 42, message: "這幾家都不是，再幫我找別的" });
+
+      expect(mockPlanNextOxmAction).toHaveBeenCalledTimes(1);
+      expect(result.reply).toBe("了解，我幫你重新看看還有哪些選擇。");
+    });
+
+    it("CASE B8/B9：改地區／重新搜尋時 primaryService=factory_search 觸發新搜尋，走既有流程，不是 boundary", async () => {
+      const freshResult = {
+        candidates: [], total: 3, zeroResult: false,
+        appliedFilters: { mainIndustries: ["金屬加工"], regions: ["彰化縣"], rankingSignals: [] },
+        hasExplicitCapabilityMatch: true, directCapabilityMatchCount: 1, missingCoreCapabilities: [],
+        viewAllUrl: "/search",
+      };
+      mockRunFactorySearchAction.mockResolvedValue(freshResult);
+      mockBuildTurnContext.mockResolvedValue({
+        history: [{ role: "user", content: "改找彰化的" }],
+        previousState: { ...createEmptyConversationState(false), currentFactorySearchState: EXISTING_FACTORY_STATE },
+      });
+      mockRunEnterpriseDiagnosis.mockResolvedValue(BASE_DIAGNOSIS);
+      mockRunOxmRouting.mockResolvedValue({
+        ...BASE_ROUTING, primaryService: "factory_search", resourceTarget: "factory_search",
+        factorySourcingContextRelevant: false, factoryResultAnalysisRequest: false,
+      });
+      mockPlanNextOxmAction.mockResolvedValue({
+        action: "none", reasonCategory: "other",
+        actionPayload: { requestedCount: null },
+        reason: "剛搜尋完，還不需要協尋",
+      });
+      mockComposeFinalResponse.mockResolvedValue("已經重新幫你找彰化的工廠了。");
+
+      const result = await runPersistentAiChat({ userId: 42, message: "改找彰化的" });
+
+      expect(mockRunFactorySearchAction).toHaveBeenCalledTimes(1);
+      expect(result.factorySearchResult).toBe(freshResult);
+      expect(result.reply).toBe("已經重新幫你找彰化的工廠了。");
+    });
+
+    it("CASE B10：沒有 currentFactorySearchState 時，即使模型誤判 factoryResultAnalysisRequest=true，也不會走 boundary 短路（因為程式碼要求 currentFactorySearchState 存在），finalReply 落回 routing 自己誠實產生的內容", async () => {
+      mockRunEnterpriseDiagnosis.mockResolvedValue(BASE_DIAGNOSIS);
+      mockRunOxmRouting.mockResolvedValue({
+        ...BASE_ROUTING, primaryService: null, resourceTarget: "factory_search",
+        factoryResultAnalysisRequest: true,
+        finalReply: "我目前這段對話裡沒有可對應的工廠搜尋結果。如果你告訴我想找什麼類型的工廠，我可以先幫你搜尋。",
+      });
+
+      const result = await runPersistentAiChat({ userId: 42, message: "第二家適合我嗎？" });
+
+      expect(mockRunFactorySearchAction).not.toHaveBeenCalled();
+      expect(mockComposeFinalResponse).not.toHaveBeenCalled();
+      expect(result.reply).toBe("我目前這段對話裡沒有可對應的工廠搜尋結果。如果你告訴我想找什麼類型的工廠，我可以先幫你搜尋。");
+    });
+
+    it("CASE B11-B14 端到端：既有 Factory Search Context 存在，但這輪 resourceTarget 換成別的 target（例如 service_info）時，不會誤觸發 boundary（factoryResultAnalysisRequest 已經被 enforceResourceTargetGate 清空，這裡驗證 chatService 端到端不受影響）", async () => {
+      mockBuildTurnContext.mockResolvedValue({
+        history: [{ role: "user", content: "ERP服務是什麼？" }],
+        previousState: { ...createEmptyConversationState(false), currentFactorySearchState: EXISTING_FACTORY_STATE },
+      });
+      mockRunEnterpriseDiagnosis.mockResolvedValue(BASE_DIAGNOSIS);
+      mockRunOxmRouting.mockResolvedValue({
+        ...BASE_ROUTING, primaryService: null, resourceTarget: "service_info",
+        serviceTargets: ["erp"], factorySourcingContextRelevant: false, factoryResultAnalysisRequest: false,
+        finalReply: "ERP 協助你盤點並優化生產管理。",
+      });
+
+      const result = await runPersistentAiChat({ userId: 42, message: "ERP服務是什麼？" });
+
+      expect(mockRunFactorySearchAction).not.toHaveBeenCalled();
+      expect(mockComposeFinalResponse).not.toHaveBeenCalled();
+      expect(result.reply).toBe("ERP 協助你盤點並優化生產管理。");
     });
   });
 });

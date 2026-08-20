@@ -53,4 +53,20 @@ export const ENV = {
   // aiChatModel 共用同一個保守預設（不會因為 local 端把 Layer 1/2 換成更貴
   // 的模型就跟著變貴），需要的話可以獨立覆寫成更便宜／更快的模型。
   aiCasualPauseGateModel: process.env.AI_CASUAL_PAUSE_GATE_MODEL ?? process.env.AI_CHAT_MODEL ?? 'gpt-4o-mini',
+  // Phase 12.2：OXM AI 全域 kill switch，唯一權威來源。語意刻意設計成
+  // 「unset → enabled」（只有明確設成字串 "false" 才會關閉）——這樣
+  // production 忘記設這個 env var 不會導致 AI 被誤關，只有維運人員主動設
+  // OXM_AI_ENABLED=false 才會停用。gate 實際擋在 server/routers.ts 的
+  // ai.chat mutation 最前面（entitlement 判斷之前），對一般使用者與 Admin
+  // 一視同仁（見對話「四」：這是整個系統的緊急停止，不是使用者限制）。
+  aiEnabled: process.env.OXM_AI_ENABLED !== "false",
+  // Phase 13.0：產品發布狀態（release gate），跟上面的 kill switch 是兩個
+  //完全獨立的概念，不可互相取代（見對話「一」）：kill switch 是「已經正式
+  // 開放後，臨時故障/維護」，release mode 是「還沒對外正式開放，敬請
+  // 期待」。語意刻意設計成「unset 或任何非 'live' 的值 → coming_soon」——
+  // 只有明確設成字串 "live" 才會真正開放，這樣 production 忘記設這個 env
+  // var、或未來不小心打錯字（例如 "Live"／"LIVE"／"prod"），都會安全落回
+  // coming_soon，絕對不會因為忘記設定或打錯字就把還沒準備好的 AI 系統
+  // 誤開放給所有使用者（見對話「十九」：預設安全策略跟 kill switch 相反）。
+  aiReleaseMode: (process.env.OXM_AI_RELEASE_MODE === "live" ? "live" : "coming_soon") as "coming_soon" | "live",
 };

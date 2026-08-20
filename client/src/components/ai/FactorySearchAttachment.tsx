@@ -1,5 +1,5 @@
 import { useLocation } from "wouter";
-import { Star, MapPin, ArrowRight } from "lucide-react";
+import { Star, MapPin, ArrowRight, Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { AiShellAttachment } from "@/contexts/AiShellContext";
 
@@ -40,6 +40,40 @@ const TIER_LABEL: Record<FactorySearchCandidateForUi["relevanceTier"], string> =
   general: "其他符合條件",
 };
 
+/**
+ * Phase 7.1 P0-1（見對話中「Factory status 必須由 server 結構化資料決定」）：
+ * MATCH_FOUND／SIMILAR_ONLY 的視覺差異只能吃 candidate.relevanceTier 這個
+ * server 算好的結構化欄位，不解析 matchReason 文字、不解析 finalReply。
+ * general（SIMILAR_ONLY）用琥珀色（警示色，非品牌橘色）跟 high／medium 明確
+ * 區分，避免視覺上暗示「已確認具備能力」。
+ */
+export function factoryTierBadgeClassName(tier: FactorySearchCandidateForUi["relevanceTier"]): string {
+  if (tier === "general") {
+    return "shrink-0 inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700";
+  }
+  if (tier === "high") {
+    return "shrink-0 inline-flex items-center gap-1 rounded-full bg-orange-50 px-2 py-0.5 text-[10px] font-medium text-orange-700";
+  }
+  return "shrink-0 inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-500";
+}
+
+/**
+ * Phase 7.1 P0-1：先前 truncate（強制單行省略號）跟 whitespace-pre-wrap（允許
+ * 換行）同時作用在同一個元素上，是互相衝突的 class，可能把 buildMatchReason()
+ * 在 general tier 附加的誠實免責句（「目前公開資料未明確提到相關能力」）截斷
+ * 看不到。改成 line-clamp-3（多行截斷，不是單行）——真實文字通常遠短於 3
+ * 行會完整顯示，只有極端情況才會被截斷，且不會把卡片撐成大段文字。
+ */
+export function factoryMatchReasonClassName(tier: FactorySearchCandidateForUi["relevanceTier"]): string {
+  const color = tier === "general" ? "text-amber-700" : "text-slate-600";
+  return `line-clamp-3 whitespace-pre-wrap break-words text-xs ${color}`;
+}
+
+/** Phase 7.1 P0-1：attachment header 是否要顯示一次性的 SIMILAR_ONLY 提醒。 */
+export function factoryAttachmentHasCaution(candidates: FactorySearchCandidateForUi[]): boolean {
+  return candidates.some(c => c.relevanceTier === "general");
+}
+
 function FactoryMiniCard({ candidate }: { candidate: FactorySearchCandidateForUi }) {
   const [, navigate] = useLocation();
   const { factory } = candidate;
@@ -51,7 +85,8 @@ function FactoryMiniCard({ candidate }: { candidate: FactorySearchCandidateForUi
     >
       <div className="flex items-center justify-between gap-2">
         <span className="min-w-0 flex-1 truncate text-sm font-bold text-slate-900">{factory.companyName}</span>
-        <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-500">
+        <span className={factoryTierBadgeClassName(candidate.relevanceTier)}>
+          {candidate.relevanceTier === "general" && <Info className="size-2.5 shrink-0" aria-hidden="true" />}
           {TIER_LABEL[candidate.relevanceTier]}
         </span>
       </div>
@@ -67,7 +102,7 @@ function FactoryMiniCard({ candidate }: { candidate: FactorySearchCandidateForUi
           </span>
         )}
       </div>
-      <p className="truncate whitespace-pre-wrap break-words text-xs text-slate-600">{candidate.matchReason}</p>
+      <p className={factoryMatchReasonClassName(candidate.relevanceTier)}>{candidate.matchReason}</p>
     </button>
   );
 }
@@ -79,9 +114,15 @@ export function FactorySearchAttachmentView({
 }) {
   const [, navigate] = useLocation();
   if (attachment.candidates.length === 0) return null;
+  const hasCaution = factoryAttachmentHasCaution(attachment.candidates);
 
   return (
     <div className="mt-2 flex flex-col gap-2 rounded-lg border border-slate-200 bg-white p-2.5">
+      {hasCaution && (
+        <p className="rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] leading-snug text-amber-800">
+          以下包含相似候選：目前公開資料尚未足以確認符合你指定的核心能力，建議進入工廠頁後直接與工廠確認。
+        </p>
+      )}
       {attachment.candidates.map(c => (
         <FactoryMiniCard key={c.factory.id} candidate={c} />
       ))}

@@ -167,6 +167,98 @@ describe("buildDiagnosisPrompt — Phase 6A：明確資源搜尋需求本身即�
   });
 });
 
+describe("buildDiagnosisPrompt — Phase 6E-fix：明確要求找顧問（Explicit Consultant Request）本身即可構成 clear，通用語意，不是特例", () => {
+  const prompt = buildDiagnosisPrompt(null, null);
+
+  it("H1-H5：包含五種不同服務的明確找顧問範例，證明是通用規則不是 ERP 特例", () => {
+    expect(prompt).toContain("幫我找ERP顧問");
+    expect(prompt).toContain("我想直接找ISO顧問談");
+    expect(prompt).toContain("可以安排短影音顧問嗎？");
+    expect(prompt).toContain("我要找財務顧問");
+    expect(prompt).toContain("直接幫我找補助顧問");
+    expect(prompt).toContain("明確要求找顧問／專業協助，且方向可辨識，本身即可構成 clear");
+  });
+
+  it("明確要求 userWantsAction／shouldStopQuestioning 都設為 true，不需要先確認企業背景", () => {
+    expect(prompt).toContain("userWantsAction 設為 true，shouldStopQuestioning 也設為 true（不需要先確認企業背景或現況）");
+  });
+
+  it("完全空泛的「我想找個顧問」明確保留在 unclear 分支，只問一個釐清問題（對應方向不可辨識時的排除情況）", () => {
+    expect(prompt).toContain("我想找個顧問");
+    expect(prompt).toContain("你想找哪個方面的顧問？");
+  });
+
+  it("明確限定不能跟一般 business_exploration（沒表達要找顧問）混為一談", () => {
+    expect(prompt).toContain("我們工單跟庫存都人工，常常對不上");
+    expect(prompt).toContain("仍然照規則 1～16 正常判斷，不適用這條規則");
+  });
+
+  it("recommendedBusinessDirection 範例遵守規則 7：不直接照抄服務名稱，改用商業語言描述", () => {
+    expect(prompt).toContain("避免直接照抄使用者講的服務名稱");
+    expect(prompt).toContain("生產管理系統化");
+  });
+
+  it("不是 keyword hardcode：規則本身是語意描述＋範例校準，不是「if includes(...)」這種條件判斷式", () => {
+    expect(prompt).not.toMatch(/if\s*\(.*includes/i);
+  });
+
+  it("不得出現任何 AI_SERVICE_REGISTRY 的 displayName 或 key（跟既有硬規則測試同一標準）", () => {
+    for (const service of AI_SERVICE_REGISTRY) {
+      expect(prompt).not.toContain(service.displayName);
+      expect(prompt).not.toContain(service.key);
+    }
+  });
+});
+
+describe("buildDiagnosisPrompt — Phase 6G.1：通用高價值追問維度（設備用途／研發成熟度／創新類型／AI場景成熟度／海外拓展成熟度，見對話中「政府補助 Program Decision Layer」）", () => {
+  const prompt = buildDiagnosisPrompt(null, null);
+
+  it("設備用途：裸陳述「要買設備」時應維持 unclear/emerging 並優先追問用途本身，不假設是否與研發相關", () => {
+    expect(prompt).toContain("設備用途");
+    expect(prompt).toContain("這台設備主要是要取代現有舊設備、擴充既有產能，還是要支援一個新的製程或技術？");
+  });
+
+  it("研發成熟度：能區分「完全還不知道要做什麼」與「已經做完驗證、準備正式化」", () => {
+    expect(prompt).toContain("研發成熟度");
+    expect(prompt).toContain("完全還不知道要做什麼");
+    expect(prompt).toContain("已經做完驗證、準備正式化");
+  });
+
+  it("創新類型：不要看到製造業就自動假設是製程/技術類需求，忽略服務或商業模式創新的可能", () => {
+    expect(prompt).toContain("創新類型");
+    expect(prompt).toContain("把原本賣產品改成訂閱式維護服務");
+  });
+
+  it("AI 場景成熟度：呼應規則 12 已有的 PoC 例子，明確要求區分「已有明確場景」與「不確定可以用在哪」兩種狀態", () => {
+    expect(prompt).toContain("AI 場景成熟度");
+    expect(prompt).toContain("知道想做 AI，但完全不確定可以用在哪、要從哪裡切入");
+  });
+
+  it("海外拓展成熟度：裸陳述「想拓展海外市場」時才需要追問準備程度，已經講清楚準備程度就不重複追問", () => {
+    expect(prompt).toContain("海外拓展成熟度");
+    expect(prompt).toContain("目前是還在評估要不要做，還是已經有具體客戶或通路在談？");
+  });
+
+  it("confirmedFacts 對照表包含新增的五個維度 key（equipmentPurpose／rdMaturity／innovationType／aiScenarioClarity／overseasStage）", () => {
+    expect(prompt).toContain("equipmentPurpose:replacement");
+    expect(prompt).toContain("rdMaturity:poc_done");
+    expect(prompt).toContain("innovationType:service_or_business_model");
+    expect(prompt).toContain("aiScenarioClarity:unclear");
+    expect(prompt).toContain("overseasStage:mature_product_lacking_channel");
+  });
+
+  it("不是 keyword hardcode：規則本身是語意描述＋範例校準，不是「if includes(...)」這種條件判斷式", () => {
+    expect(prompt).not.toMatch(/if\s*\(.*includes/i);
+  });
+
+  it("不得出現任何 AI_SERVICE_REGISTRY 的 displayName 或 key（跟既有硬規則測試同一標準）", () => {
+    for (const service of AI_SERVICE_REGISTRY) {
+      expect(prompt).not.toContain(service.displayName);
+      expect(prompt).not.toContain(service.key);
+    }
+  });
+});
+
 describe("buildDiagnosisPrompt — 既有 state 摘要（Phase 2）", () => {
   it("沒有 previousState 時，明確標示這是第一輪分析", () => {
     const prompt = buildDiagnosisPrompt(null, null);
@@ -324,5 +416,66 @@ describe("runEnterpriseDiagnosis — confirmedFacts 解析防線", () => {
     expect(result.confirmedFacts).toEqual({ hasPatent: false, mainExportMarket: "日本" });
     vi.doUnmock("./provider");
     vi.resetModules();
+  });
+});
+
+describe("buildDiagnosisPrompt — Composite Direction Clarity（複合企業訊號的清楚度判斷，見對話中「Composite Direction Clarity」）", () => {
+  const prompt = buildDiagnosisPrompt(null, null);
+
+  it("包含正面校準範例：關稅＋客戶轉單＋設備／數位化／低碳轉型屬於彼此印證同一方向，應該 clear", () => {
+    expect(prompt).toContain("Composite Direction Clarity");
+    expect(prompt).toContain("因為關稅跟主要客戶轉單，我們準備同時做設備升級、產線數位化跟低碳轉型");
+    expect(prompt).toContain("不需要再追問「三項裡哪一項最急」");
+  });
+
+  it("明確區分「共同指向同一方向」與「互斥候選原因」，不是資訊多寡本身", () => {
+    expect(prompt).toContain("共同指向同一個可辨識方向、互相印證的具體細節");
+    expect(prompt).toContain("幾個互斥、需要先分辨是哪一種的候選原因");
+  });
+
+  it("包含反面校準範例：生意不好/缺人/成本高沒有共同方向，仍應維持 emerging/unclear（避免這條規則被濫用成全面鬆綁）", () => {
+    expect(prompt).toContain("最近生意不好、缺人、成本又高");
+    expect(prompt).toContain("這種情況仍然應該維持 unclear／emerging");
+  });
+
+  it("明確排除「資訊量多／金額大」本身作為 clear 的理由（呼應規則 19(a) 設備用途）", () => {
+    expect(prompt).toContain("我想買一台三千萬設備");
+    expect(prompt).toContain("不能因為金額很大、很具體就當成方向已經清楚");
+  });
+
+  it("不是 keyword hardcode：規則本身是語意描述＋範例校準，不是「if includes(...)」這種條件判斷式", () => {
+    expect(prompt).not.toMatch(/if\s*\(.*includes/i);
+  });
+
+  it("不得出現任何 AI_SERVICE_REGISTRY 的 displayName 或 key（跟既有硬規則測試同一標準）", () => {
+    for (const service of AI_SERVICE_REGISTRY) {
+      expect(prompt).not.toContain(service.displayName);
+      expect(prompt).not.toContain(service.key);
+    }
+  });
+});
+
+describe("buildDiagnosisPrompt — Phase 6I：自由企業問題回答（informational 類型 (c)，見對話中「Free-form Enterprise Advisory / 自由企業問題回答與 No-Resource Boundary」）", () => {
+  const prompt = buildDiagnosisPrompt(null, null);
+
+  it("informational 明確擴充第三種類型：一般性企業／產業／策略知識問題（不是在描述自己公司現況）", () => {
+    expect(prompt).toContain("一般性企業／產業／策略知識問題");
+    expect(prompt).toContain("銘板產業可以怎麼轉型？");
+  });
+
+  it("明確區分：問「這類情況一般可以怎麼做」是 informational (c)，但描述「自己公司」現況仍是 business_exploration", () => {
+    expect(prompt).toContain("我們公司是做銘板的，最近訂單掉很多");
+    expect(prompt).toContain("是在描述自己公司現況，屬於下面的 business_exploration，不是 informational");
+  });
+
+  it("不是 keyword hardcode：規則本身是語意描述＋範例校準，不是「if includes(...)」這種條件判斷式", () => {
+    expect(prompt).not.toMatch(/if\s*\(.*includes/i);
+  });
+
+  it("不得出現任何 AI_SERVICE_REGISTRY 的 displayName 或 key（跟既有硬規則測試同一標準，含大小寫敏感的英文 key 子字串，例如「Enterprise」不能拼出「erp」）", () => {
+    for (const service of AI_SERVICE_REGISTRY) {
+      expect(prompt).not.toContain(service.displayName);
+      expect(prompt).not.toContain(service.key);
+    }
   });
 });

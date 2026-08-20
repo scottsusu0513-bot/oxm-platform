@@ -17,9 +17,11 @@ vi.mock("../ai/provider", () => ({
 import { finalizeInactiveAiConversations } from "./finalizeInactiveAiConversations";
 import { createConversation, appendMessage, getConversationForUser } from "../ai/conversationService";
 import { getEnterpriseMemory } from "../ai/memory";
+import { createTestFactory, deleteTestFactory } from "../_core/financeTestFixtures";
 
 const runId = `finalize-inactive-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 let userId: number;
+let factoryId: number;
 
 async function createTestUser(): Promise<number> {
   const conn = await getDb();
@@ -34,11 +36,16 @@ async function createTestUser(): Promise<number> {
 
 beforeAll(async () => {
   userId = await createTestUser();
+  // Phase 11.2：Enterprise Memory 收尾只有 approved 工廠 context 才會真的呼叫
+  // LLM（沒有工廠 context 直接安全刪除，見 server/ai/memory.ts），這裡需要
+  // 真正的 approved 工廠才能驗證「摘要成功/失敗」這件事本身。
+  factoryId = await createTestFactory(userId, `[FINALIZE_INACTIVE_TEST] ${runId}`);
 });
 
 afterAll(async () => {
   const conn = await getDb();
   if (!conn) return;
+  await deleteTestFactory(factoryId);
   await conn.execute(sql`DELETE FROM users WHERE id = ${userId}`);
 });
 
@@ -48,7 +55,7 @@ beforeEach(() => {
 
 describe("finalizeInactiveAiConversations", () => {
   it("CASE 3：模擬使用者離開超過門檻時間不回來 → 主動收尾，摘要成功、Enterprise Memory 更新、conversation/messages 刪除", async () => {
-    const conversation = await createConversation(userId, null);
+    const conversation = await createConversation(userId, factoryId);
     await appendMessage(conversation.id, "user", "我們是做銘板的，最近老客戶流失。");
     const db = await getDb();
     await db!.update(aiConversations)
@@ -68,13 +75,13 @@ describe("finalizeInactiveAiConversations", () => {
     const owned = await getConversationForUser(conversation.id, userId);
     expect(owned).toBeUndefined(); // 原文已刪除
 
-    const memory = await getEnterpriseMemory(userId);
+    const memory = await getEnterpriseMemory(factoryId);
     expect(memory?.summaryText).toBe("銘板製造；老客戶流失。");
     expect(memory?.hasMeaningfulBusinessInfo).toBe(true);
   });
 
   it("還在門檻內（剛互動過）的 conversation 不會被收尾", async () => {
-    const conversation = await createConversation(userId, null);
+    const conversation = await createConversation(userId, factoryId);
     await appendMessage(conversation.id, "user", "剛剛才講的話");
 
     const result = await finalizeInactiveAiConversations(30 * 60 * 1000);
@@ -86,7 +93,7 @@ describe("finalizeInactiveAiConversations", () => {
   });
 
   it("摘要失敗時：conversation 標記 failed，不會被刪除，統計數字反映在 stillFailing", async () => {
-    const conversation = await createConversation(userId, null);
+    const conversation = await createConversation(userId, factoryId);
     await appendMessage(conversation.id, "user", "測試 inactivity finalizer 失敗情境");
     const db = await getDb();
     await db!.update(aiConversations)

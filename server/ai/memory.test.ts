@@ -1,12 +1,17 @@
 /**
- * server/ai/memory.ts 驗證，對應「Enterprise Memory 必須採 merge / update，
- * 而不是 blind overwrite」修正後的必測案例：
+ * server/ai/memory.ts 驗證。
+ *
+ * Phase 11.2（見對話中「一、正式架構決策」）：Enterprise Memory 從
+ * user-scoped 改成 factory-scoped——unique key 是 factoryId，不是 userId。
+ * 這裡的測試全面改用 factory 當 key（createTestFactory fixture），userId 只
+ * 剩下 lastActorUserId 這個純稽核用途的角色。
+ *
+ * 對應「Enterprise Memory 必須採 merge / update，而不是 blind overwrite」的
+ * 必測案例（沿用 Phase 8 既有規格，全部改成 factory-scoped 版本）：
  * 1. 有實質內容的對話 → 摘要成功 → Enterprise Memory 存在、原文刪除。
  * 2. 沒有有效資訊的對話（寒暄、隨便看看）→ 仍然要有摘要，固定文字，
  *    hasMeaningfulBusinessInfo=false，原文一樣刪除。
  * 3. LLM 摘要失敗 → conversation/messages 保留，不能刪除，可重試。
- * 4.（見 conversationService.test.ts 的 markConversationSummaryFailed 測試：
- *    DB 寫入失敗的保留/重試機制跟 LLM 失敗共用同一條 catch 路徑。）
  * 5. 摘要成功 → messages 明確／cascade 刪除，不殘留 orphan data。
  * CASE 1（新規格）：既有記憶有內容、這次對話沒有新資訊 → summaryText 完全不
  *    變，只更新 lastInteractionAt／lastInteractionHadMeaningfulInfo。
@@ -14,14 +19,18 @@
  *    完成未知」→「ERP 已完成」）→ 呼叫模型合併，取代過時狀態，不得同時保留
  *    兩個互相矛盾的描述。
  *
+ * Phase 11.2 新增：no-factory conversation（conversation.factoryId===null）
+ * 收尾時完全不呼叫摘要模型、不讀寫 Enterprise Memory（見「二十五、三十七」）。
+ *
  * provider（LLM）用 vi.mock 隔離，不打真實 API；DB 走真實本機測試資料庫。
- * 每個測試情境都用獨立的 test user，避免同一個 user 的 Enterprise Memory
- * row 在不同測試之間互相汙染、意外觸發或跳過 merge 分支。
+ * 每個測試情境都用獨立的 test user／factory，避免同一間工廠的 Enterprise
+ * Memory row 在不同測試之間互相汙染、意外觸發或跳過 merge 分支。
  */
 import { describe, expect, it, vi, beforeEach, afterAll } from "vitest";
 import { eq, sql } from "drizzle-orm";
 import { getDb } from "../db";
 import { aiEnterpriseMemories } from "../../drizzle/schema";
+import { createTestFactory, deleteTestFactory } from "../_core/financeTestFixtures";
 
 const mockCompleteJson = vi.fn();
 vi.mock("./provider", () => ({
@@ -34,6 +43,7 @@ import {
   getEnterpriseMemory,
   mergeEnterpriseMemory,
   endConversationAndSummarize,
+  resetEnterpriseMemory,
   NO_MEANINGFUL_INFO_SUMMARY,
 } from "./memory";
 import { createConversation, appendMessage, getAllMessages, getConversationForUser } from "./conversationService";
@@ -41,6 +51,7 @@ import type { AiEnterpriseMemory } from "../../drizzle/schema";
 
 const runId = `ai-memory-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const createdUserIds: number[] = [];
+const createdFactoryIds: number[] = [];
 let userSeq = 0;
 
 async function createTestUser(): Promise<number> {
@@ -56,10 +67,21 @@ async function createTestUser(): Promise<number> {
   return id;
 }
 
+/** 每個測試情境獨立的 (userId, factoryId) 組合——owner 身分，approved 狀態。 */
+async function createTestUserWithFactory(): Promise<{ userId: number; factoryId: number }> {
+  const userId = await createTestUser();
+  const factoryId = await createTestFactory(userId, `AI Memory Test Factory ${runId}-${userSeq}`);
+  createdFactoryIds.push(factoryId);
+  return { userId, factoryId };
+}
+
 afterAll(async () => {
   const conn = await getDb();
-  if (!conn || createdUserIds.length === 0) return;
-  await conn.execute(sql`DELETE FROM users WHERE id IN (${sql.join(createdUserIds, sql`, `)})`);
+  if (!conn) return;
+  for (const factoryId of createdFactoryIds) await deleteTestFactory(factoryId);
+  if (createdUserIds.length > 0) {
+    await conn.execute(sql`DELETE FROM users WHERE id IN (${sql.join(createdUserIds, sql`, `)})`);
+  }
 });
 
 beforeEach(() => {
@@ -137,44 +159,143 @@ describe("mergeEnterpriseMemory — 決策樹的四個分支", () => {
   });
 });
 
-describe("upsertEnterpriseMemory / getEnterpriseMemory", () => {
-  it("第一次寫入後可以讀到；第二次寫入是覆寫（同一個 user 只有一筆），不是新增；lastInteractionAt／lastInteractionHadMeaningfulInfo 正確寫入", async () => {
-    const userId = await createTestUser();
+describe("upsertEnterpriseMemory / getEnterpriseMemory（factory-scoped）", () => {
+  it("第一次寫入後可以讀到；第二次寫入是覆寫（同一間工廠只有一筆），不是新增；lastInteractionAt／lastInteractionHadMeaningfulInfo 正確寫入", async () => {
+    const { userId, factoryId } = await createTestUserWithFactory();
     await upsertEnterpriseMemory({
-      userId, factoryId: null,
+      factoryId, lastActorUserId: userId,
       summaryText: "第一版摘要", hasMeaningfulBusinessInfo: true,
       lastInteractionHadMeaningfulInfo: true, sourceConversationId: 1,
     });
-    let memory = await getEnterpriseMemory(userId);
+    let memory = await getEnterpriseMemory(factoryId);
     expect(memory?.summaryText).toBe("第一版摘要");
     expect(memory?.lastInteractionHadMeaningfulInfo).toBe(true);
     expect(memory?.lastInteractionAt).toBeInstanceOf(Date);
+    expect(memory?.lastActorUserId).toBe(userId);
 
     await upsertEnterpriseMemory({
-      userId, factoryId: null,
+      factoryId, lastActorUserId: userId,
       summaryText: "第二版摘要（覆寫）", hasMeaningfulBusinessInfo: true,
       lastInteractionHadMeaningfulInfo: false, sourceConversationId: 2,
     });
-    memory = await getEnterpriseMemory(userId);
+    memory = await getEnterpriseMemory(factoryId);
     expect(memory?.summaryText).toBe("第二版摘要（覆寫）");
     expect(memory?.lastInteractionHadMeaningfulInfo).toBe(false); // 最近一次沒有新資訊，但 summaryText 這裡是測試直接指定覆寫，不透過 merge
 
     const db = await getDb();
-    const rows = await db!.select().from(aiEnterpriseMemories).where(eq(aiEnterpriseMemories.userId, userId));
+    const rows = await db!.select().from(aiEnterpriseMemories).where(eq(aiEnterpriseMemories.factoryId, factoryId));
     expect(rows).toHaveLength(1); // 覆寫，不是新增一筆
   });
 
-  it("沒有任何記錄的 user：getEnterpriseMemory 回傳 null（不是空字串或假資料）", async () => {
-    const userId = await createTestUser();
-    const memory = await getEnterpriseMemory(userId);
+  it("沒有任何記錄的 factory：getEnterpriseMemory 回傳 null（不是空字串或假資料）", async () => {
+    const { factoryId } = await createTestUserWithFactory();
+    const memory = await getEnterpriseMemory(factoryId);
     expect(memory).toBeNull();
+  });
+
+  it("resetEnterpriseMemory：清空後 getEnterpriseMemory 回傳 null；對不存在的 factoryId 是安全 no-op", async () => {
+    const { userId, factoryId } = await createTestUserWithFactory();
+    await upsertEnterpriseMemory({
+      factoryId, lastActorUserId: userId,
+      summaryText: "待清除的摘要", hasMeaningfulBusinessInfo: true,
+      lastInteractionHadMeaningfulInfo: true, sourceConversationId: 1,
+    });
+    expect(await getEnterpriseMemory(factoryId)).not.toBeNull();
+
+    const result = await resetEnterpriseMemory(factoryId);
+    expect(result.deleted).toBe(true);
+    expect(await getEnterpriseMemory(factoryId)).toBeNull();
+
+    const noop = await resetEnterpriseMemory(factoryId);
+    expect(noop.deleted).toBe(false);
   });
 });
 
-describe("endConversationAndSummarize — 基本案例 1/2/3/5", () => {
+describe("Phase 12.2 M 系列：Memory Summary JSON parse retry / structured output", () => {
+  it("M1：valid structured output——completeJson 只呼叫一次就成功解析", async () => {
+    mockCompleteJson.mockResolvedValue(JSON.stringify({
+      summaryText: "M1 測試摘要。", hasMeaningfulBusinessInfo: true,
+    }));
+    const result = await generateConversationSummary([{ role: "user", content: "M1" }]);
+    expect(result).toEqual({ summaryText: "M1 測試摘要。", hasMeaningfulBusinessInfo: true });
+    expect(mockCompleteJson).toHaveBeenCalledTimes(1);
+    // 確認真的有把 schema／較高的 token 上限傳下去（見對話「十六、十七」）。
+    const [, maxTokens, jsonSchema] = mockCompleteJson.mock.calls[0];
+    expect(maxTokens).toBe(1024);
+    expect(jsonSchema?.name).toBe("conversation_summary");
+  });
+
+  it("M2：malformed JSON（兩次都壞掉）→ 拋錯，不會回傳假資料", async () => {
+    mockCompleteJson.mockResolvedValue("這不是 JSON");
+    await expect(generateConversationSummary([{ role: "user", content: "M2" }])).rejects.toThrow();
+    expect(mockCompleteJson).toHaveBeenCalledTimes(2); // 重試過一次，兩次都壞掉才放棄
+  });
+
+  it("M3：truncated JSON（模擬真實 Phase 11.2 觀察到的 finish_reason=length 症狀，兩次都截斷）→ 拋錯", async () => {
+    // 故意用一個沒有結尾引號／大括號的字串，模擬被 max_completion_tokens 截斷的真實症狀。
+    mockCompleteJson.mockResolvedValue('{"summaryText": "銘板製造；老客戶流失，價格競爭，主要方向為品');
+    await expect(generateConversationSummary([{ role: "user", content: "M3" }])).rejects.toThrow();
+    expect(mockCompleteJson).toHaveBeenCalledTimes(2);
+  });
+
+  it("M4：第一次截斷、第二次（重試）成功 → 最終仍然回傳正確結果", async () => {
+    mockCompleteJson
+      .mockResolvedValueOnce('{"summaryText": "被截斷的字') // 第一次：truncated
+      .mockResolvedValueOnce(JSON.stringify({ summaryText: "M4 重試後的正確摘要。", hasMeaningfulBusinessInfo: true })); // 第二次：成功
+    const result = await generateConversationSummary([{ role: "user", content: "M4" }]);
+    expect(result).toEqual({ summaryText: "M4 重試後的正確摘要。", hasMeaningfulBusinessInfo: true });
+    expect(mockCompleteJson).toHaveBeenCalledTimes(2);
+  });
+
+  it("M5：finalize 收尾時兩次都拿到無法解析的 JSON → conversation 標記 failed，原文保留（跟原本 provider 直接 throw 的失敗路徑走同一條安全網）", async () => {
+    const { userId, factoryId } = await createTestUserWithFactory();
+    const conversation = await createConversation(userId, factoryId);
+    await appendMessage(conversation.id, "user", "M5 測試：兩次都截斷");
+    mockCompleteJson.mockResolvedValue('{"summaryText": "永遠截斷的字');
+
+    const result = await endConversationAndSummarize(conversation);
+
+    expect(result.success).toBe(false);
+    const owned = await getConversationForUser(conversation.id, userId);
+    expect(owned?.status).toBe("failed");
+    const messages = await getAllMessages(conversation.id);
+    expect(messages).toHaveLength(1); // 原文還在，沒有因為 parse 失敗被刪除
+    const memory = await getEnterpriseMemory(factoryId);
+    expect(memory).toBeNull(); // 沒有因為兩次失敗就寫入任何猜測出來的 Enterprise Memory
+  });
+
+  it("M6：重試發生時，每次 attempt 都各自呼叫一次 completeJson（等同各自會被 provider.ts 既有的 logAiModelCall 記一筆，見 provider.ts 對兩次呼叫都無條件記錄的既有行為）", async () => {
+    mockCompleteJson
+      .mockResolvedValueOnce("壞掉的第一次")
+      .mockResolvedValueOnce(JSON.stringify({ summaryText: "M6 摘要。", hasMeaningfulBusinessInfo: true }));
+    await generateConversationSummary([{ role: "user", content: "M6" }]);
+    expect(mockCompleteJson).toHaveBeenCalledTimes(2);
+  });
+
+  it("M7：finalize 收尾時第一次截斷、重試後成功 → Enterprise Memory 只寫入一筆，不會因為 retry 而重複 upsert", async () => {
+    const { userId, factoryId } = await createTestUserWithFactory();
+    const conversation = await createConversation(userId, factoryId);
+    await appendMessage(conversation.id, "user", "M7 測試：重試後成功");
+    mockCompleteJson
+      .mockResolvedValueOnce('{"summaryText": "截斷的字') // generateConversationSummary 第一次嘗試：截斷
+      .mockResolvedValueOnce(JSON.stringify({ summaryText: "M7 重試後成功的摘要。", hasMeaningfulBusinessInfo: true })); // 第二次：成功
+
+    const result = await endConversationAndSummarize(conversation);
+
+    expect(result.success).toBe(true);
+    const memory = await getEnterpriseMemory(factoryId);
+    expect(memory?.summaryText).toBe("M7 重試後成功的摘要。");
+
+    const db = await getDb();
+    const rows = await db!.select().from(aiEnterpriseMemories).where(eq(aiEnterpriseMemories.factoryId, factoryId));
+    expect(rows).toHaveLength(1); // 只有一筆，不是因為 retry 而重複建立
+  });
+});
+
+describe("endConversationAndSummarize — 基本案例 1/2/3/5（factory-scoped）", () => {
   it("案例 1：第一次使用、有實質內容 → 摘要成功 → Enterprise Memory 存在、原始 conversation/messages 刪除", async () => {
-    const userId = await createTestUser();
-    const conversation = await createConversation(userId, null);
+    const { userId, factoryId } = await createTestUserWithFactory();
+    const conversation = await createConversation(userId, factoryId);
     await appendMessage(conversation.id, "user", "我是做銘板的，最近老客戶一直流失。");
     mockCompleteJson.mockResolvedValue(JSON.stringify({
       summaryText: "銘板製造；老客戶流失、價格競爭；主方向品牌內容；尚未轉交。",
@@ -184,10 +305,11 @@ describe("endConversationAndSummarize — 基本案例 1/2/3/5", () => {
     const result = await endConversationAndSummarize(conversation);
 
     expect(result.success).toBe(true);
-    const memory = await getEnterpriseMemory(userId);
+    const memory = await getEnterpriseMemory(factoryId);
     expect(memory?.summaryText).toBe("銘板製造；老客戶流失、價格競爭；主方向品牌內容；尚未轉交。");
     expect(memory?.hasMeaningfulBusinessInfo).toBe(true);
     expect(memory?.lastInteractionHadMeaningfulInfo).toBe(true);
+    expect(memory?.lastActorUserId).toBe(userId);
 
     // 案例 5：原文明確刪除，不殘留 orphan data。
     const owned = await getConversationForUser(conversation.id, userId);
@@ -197,8 +319,8 @@ describe("endConversationAndSummarize — 基本案例 1/2/3/5", () => {
   });
 
   it("案例 2：從第一次都沒有透露任何資訊 → 固定文字、hasMeaningfulBusinessInfo=false，原文一樣刪除", async () => {
-    const userId = await createTestUser();
-    const conversation = await createConversation(userId, null);
+    const { userId, factoryId } = await createTestUserWithFactory();
+    const conversation = await createConversation(userId, factoryId);
     await appendMessage(conversation.id, "user", "你好");
     mockCompleteJson.mockResolvedValue(JSON.stringify({
       summaryText: NO_MEANINGFUL_INFO_SUMMARY,
@@ -208,15 +330,15 @@ describe("endConversationAndSummarize — 基本案例 1/2/3/5", () => {
     const result = await endConversationAndSummarize(conversation);
 
     expect(result.success).toBe(true);
-    const memory = await getEnterpriseMemory(userId);
+    const memory = await getEnterpriseMemory(factoryId);
     expect(memory?.summaryText).toBe(NO_MEANINGFUL_INFO_SUMMARY);
     expect(memory?.hasMeaningfulBusinessInfo).toBe(false);
     expect(memory?.lastInteractionHadMeaningfulInfo).toBe(false);
   });
 
   it("案例 3：LLM 摘要失敗 → conversation/messages 保留，不得刪除", async () => {
-    const userId = await createTestUser();
-    const conversation = await createConversation(userId, null);
+    const { userId, factoryId } = await createTestUserWithFactory();
+    const conversation = await createConversation(userId, factoryId);
     await appendMessage(conversation.id, "user", "測試摘要失敗情境");
     mockCompleteJson.mockRejectedValue(new Error("LLM summary boom"));
 
@@ -230,23 +352,23 @@ describe("endConversationAndSummarize — 基本案例 1/2/3/5", () => {
   });
 });
 
-describe("endConversationAndSummarize — 跨對話 merge/update（新規格必測 CASE 1/2/5）", () => {
+describe("endConversationAndSummarize — 跨對話 merge/update（新規格必測 CASE 1/2/5，factory-scoped）", () => {
   it("CASE 1：既有 Enterprise Memory 有內容，這次對話沒有新資訊 → summaryText 完全不變，只有 lastInteraction* 更新", async () => {
-    const userId = await createTestUser();
+    const { userId, factoryId } = await createTestUserWithFactory();
 
     // 第一次：真正有企業資訊。
-    const first = await createConversation(userId, null);
+    const first = await createConversation(userId, factoryId);
     await appendMessage(first.id, "user", "我是做銘板的，最近老客戶流失。");
     mockCompleteJson.mockResolvedValue(JSON.stringify({
       summaryText: "銘板製造；老客戶流失。",
       hasMeaningfulBusinessInfo: true,
     }));
     await endConversationAndSummarize(first);
-    const afterFirst = await getEnterpriseMemory(userId);
+    const afterFirst = await getEnterpriseMemory(factoryId);
     expect(afterFirst?.summaryText).toBe("銘板製造；老客戶流失。");
 
     // 第二次：只是打招呼，沒有新資訊。
-    const second = await createConversation(userId, null);
+    const second = await createConversation(userId, factoryId);
     await appendMessage(second.id, "user", "你好，沒事，先這樣。");
     mockCompleteJson.mockReset();
     mockCompleteJson.mockResolvedValue(JSON.stringify({
@@ -259,7 +381,7 @@ describe("endConversationAndSummarize — 跨對話 merge/update（新規格必�
     // 既有沒內容分支不呼叫模型合併，這裡只會呼叫一次（產生「這次對話」的摘要）。
     expect(mockCompleteJson).toHaveBeenCalledTimes(1);
 
-    const afterSecond = await getEnterpriseMemory(userId);
+    const afterSecond = await getEnterpriseMemory(factoryId);
     // 核心斷言：真正重要的企業資訊沒有被這次「沒事」的對話洗掉。
     expect(afterSecond?.summaryText).toBe("銘板製造；老客戶流失。");
     expect(afterSecond?.hasMeaningfulBusinessInfo).toBe(true);
@@ -268,9 +390,9 @@ describe("endConversationAndSummarize — 跨對話 merge/update（新規格必�
   });
 
   it("CASE 2：既有與新對話都有內容且互相更新 → 合併後只保留最新確定狀態，不留互相矛盾的舊描述", async () => {
-    const userId = await createTestUser();
+    const { userId, factoryId } = await createTestUserWithFactory();
 
-    const first = await createConversation(userId, null);
+    const first = await createConversation(userId, factoryId);
     await appendMessage(first.id, "user", "ERP 系統已經送出申請，但還不確定完成了沒。");
     mockCompleteJson.mockResolvedValue(JSON.stringify({
       summaryText: "ERP 已送，完成未知。",
@@ -278,7 +400,7 @@ describe("endConversationAndSummarize — 跨對話 merge/update（新規格必�
     }));
     await endConversationAndSummarize(first);
 
-    const second = await createConversation(userId, null);
+    const second = await createConversation(userId, factoryId);
     await appendMessage(second.id, "user", "跟你說一下，ERP 已經導入完成了。");
     mockCompleteJson.mockReset();
     mockCompleteJson
@@ -289,16 +411,16 @@ describe("endConversationAndSummarize — 跨對話 merge/update（新規格必�
     expect(result.success).toBe(true);
     expect(mockCompleteJson).toHaveBeenCalledTimes(2); // 兩邊都有內容，這次真的需要語意合併
 
-    const memory = await getEnterpriseMemory(userId);
+    const memory = await getEnterpriseMemory(factoryId);
     expect(memory?.summaryText).toBe("ERP 已完成。");
     expect(memory?.summaryText).not.toContain("完成未知"); // 不得同時留下互相矛盾的兩個狀態
     expect(memory?.lastInteractionHadMeaningfulInfo).toBe(true);
   });
 
   it("CASE 5：最近一次沒有企業資訊，但更早以前的記憶仍然保留，可以被下次對話用來誠實回答", async () => {
-    const userId = await createTestUser();
+    const { userId, factoryId } = await createTestUserWithFactory();
 
-    const first = await createConversation(userId, null);
+    const first = await createConversation(userId, factoryId);
     await appendMessage(first.id, "user", "我們是做銘板的，主方向是品牌內容。");
     mockCompleteJson.mockResolvedValue(JSON.stringify({
       summaryText: "銘板製造；品牌內容方向。",
@@ -306,7 +428,7 @@ describe("endConversationAndSummarize — 跨對話 merge/update（新規格必�
     }));
     await endConversationAndSummarize(first);
 
-    const second = await createConversation(userId, null);
+    const second = await createConversation(userId, factoryId);
     await appendMessage(second.id, "user", "隨便看看");
     mockCompleteJson.mockReset();
     mockCompleteJson.mockResolvedValue(JSON.stringify({
@@ -315,10 +437,62 @@ describe("endConversationAndSummarize — 跨對話 merge/update（新規格必�
     }));
     await endConversationAndSummarize(second);
 
-    const memory = await getEnterpriseMemory(userId);
+    const memory = await getEnterpriseMemory(factoryId);
     // 兩層資訊都要能被讀到：最近一次沒有新資訊、但之前仍有銘板相關企業記憶。
     expect(memory?.lastInteractionHadMeaningfulInfo).toBe(false);
     expect(memory?.hasMeaningfulBusinessInfo).toBe(true);
     expect(memory?.summaryText).toBe("銘板製造；品牌內容方向。");
+  });
+});
+
+describe("endConversationAndSummarize — 沒有 approved 工廠 context（Phase 11.2「二十五、三十七」）", () => {
+  it("conversation.factoryId===null（例如 admin 沒有 approved 工廠）→ 不呼叫摘要模型、不寫入 Enterprise Memory、直接安全刪除原文", async () => {
+    const userId = await createTestUser();
+    const conversation = await createConversation(userId, null);
+    await appendMessage(conversation.id, "user", "我是 admin，這輪沒有工廠 context。");
+
+    const result = await endConversationAndSummarize(conversation);
+
+    expect(result.success).toBe(true);
+    expect(mockCompleteJson).not.toHaveBeenCalled(); // 完全不燒 API
+
+    const owned = await getConversationForUser(conversation.id, userId);
+    expect(owned).toBeUndefined(); // 原文正常刪除
+    const messages = await getAllMessages(conversation.id);
+    expect(messages).toHaveLength(0);
+  });
+});
+
+describe("P6（Phase 11.2「三十一」）：conversation raw delete 後，usage metadata（不含逐字內容）仍然保留", () => {
+  it("刪除 conversation 後，指向它的 aiUsageTurns row 依然存在（conversationId 被 FK SET NULL，row 本身不受影響）", async () => {
+    const { userId, factoryId } = await createTestUserWithFactory();
+    const conversation = await createConversation(userId, factoryId);
+    await appendMessage(conversation.id, "user", "測試 usage metadata 不受 conversation 生命週期影響");
+
+    const db = await getDb();
+    const quotaDate = new Date().toISOString().slice(0, 10);
+    const [turnResult]: any = await db!.execute(sql`
+      INSERT INTO aiUsageTurns (factoryId, actorUserId, conversationId, clientTurnId, quotaDate, status, quotaCharged, attemptCount, createdAt)
+      VALUES (${factoryId}, ${userId}, ${conversation.id}, ${`p6-turn-${conversation.id}`}, ${quotaDate}, 'completed', TRUE, 1, NOW())
+    `);
+    const turnId = turnResult.insertId;
+
+    mockCompleteJson.mockResolvedValue(JSON.stringify({
+      summaryText: "P6 測試摘要", hasMeaningfulBusinessInfo: true,
+    }));
+    const result = await endConversationAndSummarize(conversation);
+    expect(result.success).toBe(true);
+
+    // conversation 本身確實被刪除了。
+    const owned = await getConversationForUser(conversation.id, userId);
+    expect(owned).toBeUndefined();
+
+    // 但 usage turn row 完全不受影響——只有 conversationId 被 FK SET NULL，row 本身還在。
+    const [rows] = await db!.execute(sql`SELECT id, conversationId, status FROM aiUsageTurns WHERE id = ${turnId}`) as unknown as [{ id: number; conversationId: number | null; status: string }[], unknown];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.conversationId).toBeNull();
+    expect(rows[0]!.status).toBe("completed");
+
+    await db!.execute(sql`DELETE FROM aiUsageTurns WHERE id = ${turnId}`);
   });
 });

@@ -3,7 +3,6 @@ import { useRemoveServerSeoHead } from "@/hooks/useRemoveServerSeoHead";
 import { PUBLIC_PAGE_SEO } from "@/lib/publicPageSeo";
 import { HOME_CONTENT, type TextSegment } from "@shared/content/home";
 import Navbar from "@/components/Navbar";
-import FloatingAnnouncementButton from "@/components/FloatingAnnouncementButton";
 import LoginPopupModal from "@/components/LoginPopupModal";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -854,7 +853,11 @@ export default function Home() {
       {/* 平台公告 */}
       <AnnouncementsSection navigate={navigate} />
 
-      <FloatingAnnouncementButton />
+      {/* Phase 7.4：線上預約／平台公告浮動按鈕改由全域的
+          FloatingActionStack（App.tsx）統一 render 與定位，不再由這個頁面
+          自己掛載——見 client/src/components/FloatingActionStack.tsx，僅
+          在首頁（pathname === "/"）才會顯示這個 slot，效果跟原本只有
+          Home.tsx 會 render 這個元件完全一樣。 */}
 
       {/* Footer */}
       <footer className="py-10 bg-gray-900 text-gray-400">

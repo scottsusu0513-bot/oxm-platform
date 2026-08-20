@@ -116,6 +116,17 @@ export const PUBLIC_PAGE_SEO = {
     ogImage: OG_IMAGE,
     language: BRAND.language,
   },
+  // title/description 與 client/src/pages/FAQ.tsx 既有的 Helmet 內容保持
+  // 一致，這裡只是把同一份文案也用於伺服器端初始 HTML head 注入。
+  faq: {
+    path: "/faq",
+    title: "OXM 常見問答 FAQ｜台灣製造業與傳統產業媒合平台",
+    description: "整理台灣製造業與傳統產業最常見的市場、經營轉型、資源工具與 OXM 平台相關問題，找不到答案也能直接問 OXM AI。",
+    canonical: `${BRAND.url}/faq`,
+    ogType: "website",
+    ogImage: OG_IMAGE,
+    language: BRAND.language,
+  },
 } as const satisfies Record<string, PublicPageSeo>;
 
 export type PublicPageKey = keyof typeof PUBLIC_PAGE_SEO;
@@ -131,5 +142,6 @@ export function getPublicPageSeoByPath(pathname: string): PublicPageSeo | null {
   if (normalized === "/talent") return PUBLIC_PAGE_SEO.talent;
   if (normalized === "/brand") return PUBLIC_PAGE_SEO.brand;
   if (normalized === "/community") return PUBLIC_PAGE_SEO.discussion;
+  if (normalized === "/faq") return PUBLIC_PAGE_SEO.faq;
   return null;
 }

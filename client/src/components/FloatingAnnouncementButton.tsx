@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { createPortal } from "react-dom";
 import { useLocation } from "wouter";
 import { Capacitor } from "@capacitor/core";
 import { trpc } from "@/lib/trpc";
@@ -23,11 +22,6 @@ function setLastViewed(ts: number) {
 const btnBase = `relative flex items-center gap-2 px-4 py-2.5
   text-white font-medium rounded-full shadow-lg hover:shadow-xl hover:-translate-y-0.5
   transition-all duration-200 select-none`;
-
-// On native, AppBottomNav is 56px + safe-area-inset-bottom; add clearance above it.
-const bottomStyle = isNativePlatform
-  ? "calc(56px + 1.5rem + env(safe-area-inset-bottom, 0px))"
-  : "calc(1.5rem + env(safe-area-inset-bottom, 0px))";
 
 async function openLineUrl() {
   if (isNativePlatform) {
@@ -60,13 +54,13 @@ export default function FloatingAnnouncementButton() {
     document.getElementById("announcements")?.scrollIntoView({ behavior: "smooth" });
   };
 
-  // Portal to document.body — escapes any ancestor transform/stacking-context
-  // created by NativePullToRefreshLayout's contentRef or animate-page-enter.
-  return createPortal(
-    <div
-      className="fixed right-5 z-40 flex flex-col items-end gap-2"
-      style={{ bottom: bottomStyle }}
-    >
+  // Phase 7.4（見對話中「Floating UI Stack Consolidation」）：這個元件本身
+  // 不再自己 fixed 定位／portal——positioning 與 portal 現在統一由
+  // FloatingActionStack.tsx 擁有（見該檔說明），這裡只回傳按鈕／卡片本身，
+  // 當作那個共用 flex-col stack 裡的一組 sibling children，state／查詢／
+  // 點擊行為（收藏公告已讀時間、預約卡片開合、LINE 連結）完全不變。
+  return (
+    <>
       {/* 預約說明展開卡片（點擊按鈕後顯示，預設收起） */}
       {showVisitCard && (
         <div className="w-72 max-w-[calc(100vw-2.5rem)] bg-white rounded-2xl shadow-2xl border border-orange-100 overflow-hidden">
@@ -192,7 +186,6 @@ export default function FloatingAnnouncementButton() {
           </button>
         )
       )}
-    </div>,
-    document.body,
+    </>
   );
 }

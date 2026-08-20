@@ -6,8 +6,8 @@ import { retryPendingFactorySearchNotifications } from "../ai/factorySearchReque
  * 以及 claim 卡住超過 staleness 閾值的 notifying，逐筆重新 claim + notify。
  * 不重新讀 raw conversation——aiFactorySearchRequests 本身已經是完整快照。
  *
- * 只由外部排程或人工直接執行本檔案（CLI 進入點見下方），本輪不設定正式
- * production 排程，只提供本地可手動執行的能力（見「不要 production cron」）。
+ * 只由外部排程（例如 Render Cron Job）直接執行本檔案（CLI 進入點見下方）；
+ * 建議排程頻率見 server/jobs/README.md（每 10-15 分鐘）。
  */
 const invokedDirectly = typeof process.argv[1] === "string" &&
   /retryPendingFactorySearchNotifications\.(ts|js)$/.test(process.argv[1]);
@@ -15,11 +15,11 @@ const invokedDirectly = typeof process.argv[1] === "string" &&
 if (invokedDirectly) {
   retryPendingFactorySearchNotifications()
     .then((result) => {
-      console.log(`[cron] retry-pending-factory-search-notifications: attempted=${result.attempted} succeeded=${result.succeeded} stillFailing=${result.stillFailing}`);
+      console.log(`[OXM-AI][background][layer:sourcingNotificationRetryJob] attempted=${result.attempted} succeeded=${result.succeeded} stillFailing=${result.stillFailing}`);
       process.exit(result.stillFailing > 0 ? 1 : 0);
     })
     .catch((err: unknown) => {
-      console.error("[cron] retry-pending-factory-search-notifications failed:", err instanceof Error ? err.message : "unknown error");
+      console.error("[OXM-AI][background][layer:sourcingNotificationRetryJob] failed:", err instanceof Error ? err.message : "unknown error");
       process.exit(1);
     });
 }

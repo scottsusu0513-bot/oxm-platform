@@ -4,12 +4,14 @@
 // head 注入，見 server/_core/publicPageMeta.ts）共用同一份定義，避免兩邊產生
 // 互相矛盾的 Schema。內容以 shared/seo/brand.ts 的品牌常數為單一資料來源。
 import { BRAND } from "./brand";
+import { getFaqQuestionsFlat } from "../content/faq";
 
 export type JsonLdObject = Record<string, unknown>;
 
 export const ORGANIZATION_ID = `${BRAND.url}/#organization`;
 export const WEBSITE_ID = `${BRAND.url}/#website`;
 export const ABOUT_PAGE_ID = `${BRAND.url}/about#webpage`;
+export const FAQ_PAGE_ID = `${BRAND.url}/faq#faqpage`;
 
 export function getOrganizationSchema(): JsonLdObject {
   return {
@@ -60,6 +62,37 @@ export function getAboutBreadcrumbSchema(): JsonLdObject {
     itemListElement: [
       { "@type": "ListItem", position: 1, name: "首頁", item: BRAND.url },
       { "@type": "ListItem", position: 2, name: "關於 OXM", item: `${BRAND.url}/about` },
+    ],
+  };
+}
+
+export function getFaqPageSchema(): JsonLdObject {
+  return {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    "@id": FAQ_PAGE_ID,
+    url: `${BRAND.url}/faq`,
+    name: "OXM 常見問答 FAQ",
+    isPartOf: { "@id": WEBSITE_ID },
+    inLanguage: BRAND.language,
+    mainEntity: getFaqQuestionsFlat().map((q) => ({
+      "@type": "Question",
+      name: q.question,
+      acceptedAnswer: {
+        "@type": "Answer",
+        text: q.answerParagraphs.join("\n\n"),
+      },
+    })),
+  };
+}
+
+export function getFaqBreadcrumbSchema(): JsonLdObject {
+  return {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    itemListElement: [
+      { "@type": "ListItem", position: 1, name: "首頁", item: BRAND.url },
+      { "@type": "ListItem", position: 2, name: "常見問答 FAQ", item: `${BRAND.url}/faq` },
     ],
   };
 }
