@@ -69,4 +69,17 @@ export const ENV = {
   // coming_soon，絕對不會因為忘記設定或打錯字就把還沒準備好的 AI 系統
   // 誤開放給所有使用者（見對話「十九」：預設安全策略跟 kill switch 相反）。
   aiReleaseMode: (process.env.OXM_AI_RELEASE_MODE === "live" ? "live" : "coming_soon") as "coming_soon" | "live",
+  // 註冊條款 Consent Gate 的正式啟用時間點——只有 createdAt 晚於（含等於）
+  // 這個時間的會員才會被要求完成 Consent Gate（見 shared/consent.ts 的
+  // userNeedsConsent）。刻意不給任何預設時間字串：沒有設定或格式無法解析
+  // 時一律回傳 null，由 userNeedsConsent() 自己套用「視為尚未啟用」的安全
+  // fallback（CONSENT_GATE_LAUNCH_AT_DISABLED_FALLBACK）。正式部署前，需要
+  // 由部署環境依實際上線時間明確設定這個環境變數；忘記設定時，效果是
+  // Consent Gate 對所有人都不生效，不會誤傷部署前就已存在的會員。
+  consentGateLaunchAt: (() => {
+    const raw = process.env.CONSENT_GATE_LAUNCH_AT;
+    if (!raw) return null;
+    const parsed = new Date(raw);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  })(),
 };

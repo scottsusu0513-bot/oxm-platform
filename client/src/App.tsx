@@ -17,6 +17,7 @@ import { AiShellProvider } from "@/contexts/AiShellContext";
 import { GlobalAiShell } from "@/components/ai/GlobalAiShell";
 import { FloatingActionStack } from "@/components/FloatingActionStack";
 import { isAiShellExcludedPath } from "@/lib/aiShellRoutes";
+import { ConsentGate } from "@/components/ConsentGate";
 
 // ── 公開頁面 ──────────────────────────────────────────────────────────────
 const Home                  = lazy(() => import("./pages/Home"));
@@ -504,6 +505,7 @@ function App() {
               <AppBottomNav />
               <AiShellGate />
               <FloatingActionStack />
+              <ConsentGate />
             </AiShellProvider>
           </TooltipProvider>
         </ThemeProvider>

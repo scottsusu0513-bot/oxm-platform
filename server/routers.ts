@@ -1,6 +1,7 @@
 import { COOKIE_NAME, THIRTY_DAYS_MS, COMMUNITY_FEATURE_STATUS, PLATFORM_NOTIFICATION_TYPES, COMMUNITY_PUBLIC_ENTRY_ENABLED, ADVISOR_DISPLAY_NAME } from "@shared/const";
 import { validateOrderDateChain } from "@shared/orderDateChain";
 import { COLLABORATION_ORDER_STAGE_LABELS, isStageTransitionEarly } from "@shared/collaborationOrderStage";
+import { userNeedsConsent, CURRENT_TERMS_VERSION, CURRENT_PRIVACY_VERSION } from "@shared/consent";
 import { sdk } from "./_core/sdk";
 import { enhanceSearchKeyword, getSearchIntent } from './semantic-search';
 import { sendNewInquiryEmail, sendFactoryApprovedEmail, sendFactoryRejectedEmail, sendFactorySubmittedEmail, sendReportEmail, sendSupportTicketEmail, sendReviewReplyEmail, sendNewMessageNotificationEmail, sendReportStatusUpdateEmail, sendTicketStatusUpdateEmail, sendMessageReplyNotificationEmail, sendEmailVerificationEmail, sendAdminBroadcastEmail, sendRevisionSubmittedEmail, sendRevisionApprovedEmail, sendRevisionRejectedEmail, sendUpgradeApplicationEmail, sendUpgradeNewCaseConsultantEmail, sendPlatformAnnouncementEmail, sendFirstContactEmail, sendNewsEmail } from './email';
@@ -1030,7 +1031,27 @@ export const appRouter = router({
   }),
 
   auth: router({
-    me: publicProcedure.query(opts => opts.ctx.user),
+    // needsConsent 是純衍生欄位（見 shared/consent.ts::userNeedsConsent），
+    // 在這裡計算好一起回傳，讓 client 端的 ConsentGate 只要讀
+    // useAuth().user.needsConsent，不需要自己重算一次 rollout／版本比對
+    // 邏輯，也不用另外多打一支 query。
+    me: publicProcedure.query(opts => {
+      const user = opts.ctx.user;
+      if (!user) return null;
+      return { ...user, needsConsent: userNeedsConsent(user, ENV.consentGateLaunchAt) };
+    }),
+
+    // 註冊條款 Consent Gate（見 shared/consent.ts、client/src/components/
+    // ConsentGate.tsx）：只有登入會員能呼叫；version 一律由 server 端目前
+    // 定義的固定版本常數寫入，不接受 client 自行提供版本字串，避免使用者
+    // 端偽造「已同意最新版本」。
+    acceptConsent: protectedProcedure.mutation(async ({ ctx }) => {
+      await db.acceptUserConsent(ctx.user.id, {
+        termsVersion: CURRENT_TERMS_VERSION,
+        privacyVersion: CURRENT_PRIVACY_VERSION,
+      });
+      return { success: true, termsVersion: CURRENT_TERMS_VERSION, privacyVersion: CURRENT_PRIVACY_VERSION };
+    }),
     logout: publicProcedure.mutation(({ ctx }) => {
       const isLocal = ["localhost", "127.0.0.1", "::1"].includes(ctx.req.hostname);
       const secureFlag = isLocal ? "" : "; Secure";

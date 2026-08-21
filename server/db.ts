@@ -2205,6 +2205,25 @@ export async function softDeleteUser(userId: number) {
   await db.update(users).set({ deletedAt: new Date() }).where(eq(users.id, userId));
 }
 
+/** 註冊條款 Consent Gate（見 shared/consent.ts）：一次寫入服務條款與隱私權
+ * 政策的同意時間／版本。version 由呼叫端（server/routers.ts 的
+ * auth.acceptConsent）傳入 server 端目前定義的固定版本常數，不接受
+ * client 自行提供的版本字串。 */
+export async function acceptUserConsent(
+  userId: number,
+  data: { termsVersion: string; privacyVersion: string }
+) {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  const now = new Date();
+  await db.update(users).set({
+    termsAcceptedAt: now,
+    termsVersion: data.termsVersion,
+    privacyAcceptedAt: now,
+    privacyVersion: data.privacyVersion,
+  }).where(eq(users.id, userId));
+}
+
 export async function deleteReview(id: number, userId: number) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");

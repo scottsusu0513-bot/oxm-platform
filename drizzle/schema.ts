@@ -18,6 +18,16 @@ export const users = mysqlTable("users", {
   phone: varchar("phone", { length: 30 }),
   phoneVerified: boolean("phoneVerified").default(false).notNull(),
   notificationSettings: json("notificationSettings").$type<Record<string, boolean>>(),
+  // 註冊條款 Consent Gate（見 shared/consent.ts）：服務條款與隱私權政策各自
+  // 獨立記錄同意時間與版本，不是單一欄位。NULL 代表「尚未透過這一版
+  // Consent Gate 同意過」——舊會員 migration 套用後這四欄全部是 NULL，但
+  // 是否需要被攔下來，由 shared/consent.ts 的 userNeedsConsent()
+  // 依 createdAt 是否早於 CONSENT_GATE_LAUNCH_AT 判斷，不是單純看這幾欄
+  // 是否為 NULL，因此這裡刻意不補寫任何舊會員的同意紀錄。
+  termsAcceptedAt: timestamp("termsAcceptedAt"),
+  termsVersion: varchar("termsVersion", { length: 20 }),
+  privacyAcceptedAt: timestamp("privacyAcceptedAt"),
+  privacyVersion: varchar("privacyVersion", { length: 20 }),
   deletedAt: timestamp("deletedAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
