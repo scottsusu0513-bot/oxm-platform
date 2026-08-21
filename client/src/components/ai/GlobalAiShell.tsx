@@ -267,7 +267,8 @@ export function GlobalAiShell() {
             type="button"
             onClick={closeShell}
             aria-label="關閉 OXM AI 對話"
-            className="inline-flex size-8 shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 sm:hidden"
+            title="關閉"
+            className="inline-flex size-10 shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
           >
             <X className="size-5" aria-hidden="true" />
           </button>
