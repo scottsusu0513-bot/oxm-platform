@@ -3,7 +3,6 @@ import { useLocation } from "wouter";
 import { Capacitor } from "@capacitor/core";
 import FloatingAnnouncementButton from "@/components/FloatingAnnouncementButton";
 import { AiLauncherButton } from "@/components/ai/AiLauncherButton";
-import { isAiShellExcludedPath } from "@/lib/aiShellRoutes";
 
 const isNativePlatform = Capacitor.isNativePlatform();
 
@@ -35,9 +34,14 @@ const bottomOffset = isNativePlatform
  *
  * 線上預約／平台通知目前只有首頁會顯示——這不是這次新增的規則，是
  * FloatingAnnouncementButton 過去只被 Home.tsx 引用這個既有事實（見對話中
- * 「不要強迫三個一起全顯示／全隱藏」）；AI 則依 isAiShellExcludedPath 排除
- * 少數內部頁面。兩者可能是任兩種組合，某一個不該出現時就不 render 那個
- * child，flex-col 本身的天然行為就會讓剩下的自動靠攏，不需要額外程式碼。
+ * 「不要強迫三個一起全顯示／全隱藏」）；AI launcher 按鈕（見「OXM 第 5 項」）
+ * 現在也改成只有首頁顯示（shouldShowAiLauncher），兩者剛好一致，但這是
+ * 兩條各自獨立維護的規則，不是共用同一個判斷式。**只有「按鈕是否顯示」是
+ * 首頁限定**——AI 面板本身能不能在該 route 被 programmatically 開啟，仍由
+ * client/src/lib/aiShellRoutes.ts 的 isAiShellExcludedPath（在 App.tsx 的
+ * AiShellGate 使用）決定，這裡完全不碰，FAQ 頁的 askQuestion() 因此不受
+ * 影響（見 client/src/pages/FAQ.tsx）。某一個 slot 不該出現時就不 render
+ * 那個 child，flex-col 本身的天然行為就會讓剩下的自動靠攏，不需要額外程式碼。
  *
  * z-index＝40：低於 GlobalAiShell 開啟後的面板（z-50）與 AiHandoffModal
  * 這類 Radix Dialog（見對話中「八、Z-index」）——launcher 本身不需要蓋過任何
@@ -52,10 +56,22 @@ export function shouldShowReservationSlot(pathname: string): boolean {
   return pathname === "/";
 }
 
+/**
+ * OXM 第 5 項（見對話中「AI Launcher 僅首頁顯示」）：AI 浮動按鈕本身改成
+ * 只有首頁顯示，跟 isAiShellExcludedPath 的黑名單邏輯完全脫鉤——那份規則
+ * 繼續只負責「面板能不能在該 route 被打開」（AiShellGate／FAQ 的
+ * askQuestion() 都還在用它），不是「按鈕在哪裡顯示」。這裡刻意用獨立的白
+ * 名單規則（只有 "/"），不從 isAiShellExcludedPath 反推，避免兩份語意不同
+ * 的規則被誤以為是同一件事。
+ */
+export function shouldShowAiLauncher(pathname: string): boolean {
+  return pathname === "/";
+}
+
 export function FloatingActionStack() {
   const [pathname] = useLocation();
   const showAnnouncementSlot = shouldShowReservationSlot(pathname);
-  const showAiLauncher = !isAiShellExcludedPath(pathname);
+  const showAiLauncher = shouldShowAiLauncher(pathname);
 
   if (!showAnnouncementSlot && !showAiLauncher) return null;
 
