@@ -17,8 +17,10 @@ import { AiShellProvider } from "@/contexts/AiShellContext";
 import { GlobalAiShell } from "@/components/ai/GlobalAiShell";
 import { FloatingActionStack } from "@/components/FloatingActionStack";
 import { isAiShellExcludedPath } from "@/lib/aiShellRoutes";
+import { isFooterExcludedPath } from "@/lib/footerRoutes";
 import { ConsentGate } from "@/components/ConsentGate";
 import { OnboardingTour } from "@/components/OnboardingTour";
+import { Footer } from "@/components/Footer";
 
 // ── 公開頁面 ──────────────────────────────────────────────────────────────
 const Home                  = lazy(() => import("./pages/Home"));
@@ -341,6 +343,16 @@ function AiShellGate() {
   return <GlobalAiShell />;
 }
 
+// Global Footer：App 全域掛載 + route gate，比照上面 AiShellGate 的寫法。
+// 排除清單獨立維護在 client/src/lib/footerRoutes.ts（isFooterExcludedPath），
+// 刻意不共用 isAiShellExcludedPath——兩者排除的路由集合雖然重疊，但語意不同
+// （AI 面板 vs 頁尾），合併會讓其中一份未來調整時互相牽動。
+function FooterGate() {
+  const [pathname] = useLocation();
+  if (isFooterExcludedPath(pathname)) return null;
+  return <Footer />;
+}
+
 function Router() {
   return (
     <Suspense fallback={<PageFallback />}>
@@ -503,6 +515,7 @@ function App() {
               <RouteTracker />
               <NetworkStatusOverlay />
               <Router />
+              <FooterGate />
               <AppBottomNav />
               <AiShellGate />
               <FloatingActionStack />
