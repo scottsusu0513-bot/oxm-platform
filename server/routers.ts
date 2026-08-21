@@ -2,6 +2,7 @@ import { COOKIE_NAME, THIRTY_DAYS_MS, COMMUNITY_FEATURE_STATUS, PLATFORM_NOTIFIC
 import { validateOrderDateChain } from "@shared/orderDateChain";
 import { COLLABORATION_ORDER_STAGE_LABELS, isStageTransitionEarly } from "@shared/collaborationOrderStage";
 import { userNeedsConsent, CURRENT_TERMS_VERSION, CURRENT_PRIVACY_VERSION } from "@shared/consent";
+import { userNeedsOnboarding } from "@shared/onboarding";
 import { sdk } from "./_core/sdk";
 import { enhanceSearchKeyword, getSearchIntent } from './semantic-search';
 import { sendNewInquiryEmail, sendFactoryApprovedEmail, sendFactoryRejectedEmail, sendFactorySubmittedEmail, sendReportEmail, sendSupportTicketEmail, sendReviewReplyEmail, sendNewMessageNotificationEmail, sendReportStatusUpdateEmail, sendTicketStatusUpdateEmail, sendMessageReplyNotificationEmail, sendEmailVerificationEmail, sendAdminBroadcastEmail, sendRevisionSubmittedEmail, sendRevisionApprovedEmail, sendRevisionRejectedEmail, sendUpgradeApplicationEmail, sendUpgradeNewCaseConsultantEmail, sendPlatformAnnouncementEmail, sendFirstContactEmail, sendNewsEmail } from './email';
@@ -1035,10 +1036,17 @@ export const appRouter = router({
     // 在這裡計算好一起回傳，讓 client 端的 ConsentGate 只要讀
     // useAuth().user.needsConsent，不需要自己重算一次 rollout／版本比對
     // 邏輯，也不用另外多打一支 query。
+    // needsOnboarding 同樣是純衍生欄位（見 shared/onboarding.ts::
+    // userNeedsOnboarding），一起算好回傳，讓 client 端的 OnboardingTour
+    // 只要讀 useAuth().user.needsOnboarding，不需要自己重算 rollout 邏輯。
     me: publicProcedure.query(opts => {
       const user = opts.ctx.user;
       if (!user) return null;
-      return { ...user, needsConsent: userNeedsConsent(user, ENV.consentGateLaunchAt) };
+      return {
+        ...user,
+        needsConsent: userNeedsConsent(user, ENV.consentGateLaunchAt),
+        needsOnboarding: userNeedsOnboarding(user, ENV.onboardingLaunchAt),
+      };
     }),
 
     // 註冊條款 Consent Gate（見 shared/consent.ts、client/src/components/
@@ -1051,6 +1059,17 @@ export const appRouter = router({
         privacyVersion: CURRENT_PRIVACY_VERSION,
       });
       return { success: true, termsVersion: CURRENT_TERMS_VERSION, privacyVersion: CURRENT_PRIVACY_VERSION };
+    }),
+
+    // 新會員 Spotlight 新手導引（見 shared/onboarding.ts、client/src/
+    // components/OnboardingTour.tsx）：只有登入會員能呼叫。「完成導覽」與
+    // 「略過導覽」共用這同一支 procedure——兩者的持久化效果相同（以後都不
+    // 再自動顯示導覽），client 不需要傳任何欄位（不傳 timestamp、不傳目前
+    // 走到哪一步、不傳 launch version），server 只寫入
+    // onboardingCompletedAt 這一個欄位。
+    completeOnboarding: protectedProcedure.mutation(async ({ ctx }) => {
+      await db.completeUserOnboarding(ctx.user.id);
+      return { success: true };
     }),
     logout: publicProcedure.mutation(({ ctx }) => {
       const isLocal = ["localhost", "127.0.0.1", "::1"].includes(ctx.req.hostname);

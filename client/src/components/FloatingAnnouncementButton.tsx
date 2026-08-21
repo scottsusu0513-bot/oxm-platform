@@ -7,7 +7,7 @@ import { MANUAL_ENTRY_ENABLED } from "@/lib/manual";
 
 const isNativePlatform = Capacitor.isNativePlatform();
 
-const OXM_LINE_URL = "https://page.line.me/785bsmsr";
+export const OXM_LINE_URL = "https://page.line.me/785bsmsr";
 
 const LS_KEY = "oxm:lastViewedAnnouncementsAt";
 

@@ -2224,6 +2224,17 @@ export async function acceptUserConsent(
   }).where(eq(users.id, userId));
 }
 
+/** 新會員 Spotlight 新手導引（見 shared/onboarding.ts）：標記這個 user 已
+ * 完成或略過導覽。「完成」與「略過」共用這一支函式——兩者的持久化效果相
+ * 同（以後都不再自動顯示導覽），呼叫端（server/routers.ts 的
+ * auth.completeOnboarding）不需要區分。只更新 onboardingCompletedAt 這一
+ * 個欄位，不動其他 user 資料。 */
+export async function completeUserOnboarding(userId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  await db.update(users).set({ onboardingCompletedAt: new Date() }).where(eq(users.id, userId));
+}
+
 export async function deleteReview(id: number, userId: number) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");

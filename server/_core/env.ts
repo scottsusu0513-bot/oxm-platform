@@ -82,4 +82,18 @@ export const ENV = {
     const parsed = new Date(raw);
     return Number.isNaN(parsed.getTime()) ? null : parsed;
   })(),
+  // 新會員 Spotlight 新手導引的正式啟用時間點——只有 createdAt 晚於（含等
+  // 於）這個時間的會員才會被要求看導覽（見 shared/onboarding.ts 的
+  // userNeedsOnboarding）。刻意獨立於 consentGateLaunchAt 之外（見
+  // shared/onboarding.ts 開頭的責任分離說明），沒有設定或格式無法解析時一
+  // 律回傳 null，由 userNeedsOnboarding() 自己套用「視為尚未啟用」的安全
+  // fallback（ONBOARDING_LAUNCH_AT_DISABLED_FALLBACK）。正式部署前，需要由
+  // 部署環境依實際上線時間明確設定這個環境變數；忘記設定時，效果是導覽對
+  // 所有人都不生效，不會誤傷部署前就已存在的會員。
+  onboardingLaunchAt: (() => {
+    const raw = process.env.ONBOARDING_LAUNCH_AT;
+    if (!raw) return null;
+    const parsed = new Date(raw);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  })(),
 };

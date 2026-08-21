@@ -535,7 +535,7 @@ export default function Navbar() {
         )}
 
         {/* ── Desktop: 六大方向入口（lg: 1024px+） ── */}
-        <nav className="hidden lg:flex items-center gap-3 flex-1 justify-center min-w-0 mx-2">
+        <nav data-onboarding="services-nav" className="hidden lg:flex items-center gap-3 flex-1 justify-center min-w-0 mx-2">
           {HUB_ITEMS.map((hub) => {
             if (hub.soon) {
               // 即將開放 — 不可互動，不顯示任何下拉選單（既有「即將開放」提示維持原樣）
@@ -799,7 +799,7 @@ export default function Navbar() {
               </Link>
             </>
           )}
-          <Button variant="ghost" size="sm" className="relative" onClick={() => setMobileOpen(!mobileOpen)}>
+          <Button data-onboarding="services-menu" variant="ghost" size="sm" className="relative" onClick={() => setMobileOpen(!mobileOpen)}>
             {mobileOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
             {hasAnyNotification && !mobileOpen && (
               <span className="pointer-events-none absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-orange-500 ring-2 ring-background" />

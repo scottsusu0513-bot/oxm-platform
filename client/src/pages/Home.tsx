@@ -613,6 +613,7 @@ export default function Home() {
                 </div>
 
                 <Button
+                  data-onboarding="search-factory"
                   className="w-full h-10 md:h-12 text-sm md:text-base font-semibold bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white border-0 shadow-lg shadow-orange-200/50"
                   onClick={handleSearch}
                 >
@@ -832,6 +833,7 @@ export default function Home() {
               {HOME_CONTENT.ctaSection.buttons[0].label}
             </Button>
             <Button
+              data-onboarding="create-factory"
               size="lg"
               variant="outline"
               className="text-base px-8 border-orange-300 text-orange-600 hover:bg-orange-50"

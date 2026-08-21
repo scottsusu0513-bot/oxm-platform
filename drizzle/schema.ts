@@ -28,6 +28,13 @@ export const users = mysqlTable("users", {
   termsVersion: varchar("termsVersion", { length: 20 }),
   privacyAcceptedAt: timestamp("privacyAcceptedAt"),
   privacyVersion: varchar("privacyVersion", { length: 20 }),
+  // 新會員 Spotlight 新手導引（見 shared/onboarding.ts）：NULL 代表「尚未
+  // 完成或略過這一版導覽」。同 Consent Gate 的設計，是否顯示導覽由
+  // shared/onboarding.ts 的 userNeedsOnboarding() 依 createdAt 是否早於
+  // ONBOARDING_LAUNCH_AT 判斷，不是單純看這欄是否為 NULL，因此舊會員即使
+  // 這欄是 NULL 也不會被導覽攔住。「完成」與「略過」共用同一欄位——兩者的
+  // 持久化效果相同：以後都不再自動顯示導覽。
+  onboardingCompletedAt: timestamp("onboardingCompletedAt"),
   deletedAt: timestamp("deletedAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
