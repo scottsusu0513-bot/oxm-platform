@@ -62,6 +62,10 @@ export const factories = mysqlTable("factories", {
   website: varchar("website", { length: 500 }),
   contactEmail: varchar("contactEmail", { length: 320 }),
   address: varchar("address", { length: 500 }).notNull().default(""), // 公廠地址
+  // 統一編號（8 碼數字）。只有新建立工廠（factory.create）強制必填，既有工廠
+  // 一律維持 NULL，不做任何 backfill；factory.update／submitRevision／
+  // admin 審核流程都不要求此欄位（見 migration 0092、shared/taxId.ts）。
+  taxId: varchar("taxId", { length: 8 }),
   // 平均評分（快取欄位，定期從 reviews 計算更新）
   avgRating: decimal("avgRating", { precision: 3, scale: 2 }).default("0"),
   reviewCount: int("reviewCount").default(0),

@@ -4390,8 +4390,8 @@ export async function createFactoryAtomic(
       `INSERT INTO factories (
         ownerId, name, industry, mfgModes, region, description, capitalLevel, address,
         foundedYear, avatarUrl, businessType, ownerName, contactPersonName, phone, website,
-        contactEmail, subIndustry, status, operationStatus, certified, createdAt, updatedAt
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', 'normal', FALSE, NOW(), NOW())`,
+        contactEmail, subIndustry, taxId, status, operationStatus, certified, createdAt, updatedAt
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', 'normal', FALSE, NOW(), NOW())`,
       [
         userId,
         data.name,
@@ -4410,6 +4410,9 @@ export async function createFactoryAtomic(
         (data as any).website ?? null,
         (data as any).contactEmail ?? null,
         JSON.stringify(subIndustry),
+        // 既有直接呼叫這支函式的測試 fixture（未帶 taxId）維持 NULL，不強制。
+        // 只有 factory.create 這個 tRPC 入口的 zod schema 會強制必填。
+        (data as any).taxId ?? null,
       ]
     );
 

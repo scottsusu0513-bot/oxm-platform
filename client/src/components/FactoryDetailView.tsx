@@ -109,6 +109,7 @@ export interface FactoryDetailViewFactory {
   website?: string | null;
   contactEmail?: string | null;
   address?: string | null;
+  taxId?: string | null;
   weekdayHours?: string | null;
   weekendHours?: string | null;
   businessNote?: string | null;
@@ -495,7 +496,7 @@ export function FactoryDetailView({
                       return "回覆時間較長";
                     })()}
                     label2="統一編號"
-                    val2={undefined}
+                    val2={factory.taxId ?? undefined}
                   />
                   {/* Row 11 */}
                   <InfoRow

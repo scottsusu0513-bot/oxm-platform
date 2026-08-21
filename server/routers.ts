@@ -3,6 +3,7 @@ import { validateOrderDateChain } from "@shared/orderDateChain";
 import { COLLABORATION_ORDER_STAGE_LABELS, isStageTransitionEarly } from "@shared/collaborationOrderStage";
 import { userNeedsConsent, CURRENT_TERMS_VERSION, CURRENT_PRIVACY_VERSION } from "@shared/consent";
 import { userNeedsOnboarding } from "@shared/onboarding";
+import { normalizeTaxId, isValidTaiwanTaxId } from "@shared/taxId";
 import { sdk } from "./_core/sdk";
 import { enhanceSearchKeyword, getSearchIntent } from './semantic-search';
 import { sendNewInquiryEmail, sendFactoryApprovedEmail, sendFactoryRejectedEmail, sendFactorySubmittedEmail, sendReportEmail, sendSupportTicketEmail, sendReviewReplyEmail, sendNewMessageNotificationEmail, sendReportStatusUpdateEmail, sendTicketStatusUpdateEmail, sendMessageReplyNotificationEmail, sendEmailVerificationEmail, sendAdminBroadcastEmail, sendRevisionSubmittedEmail, sendRevisionApprovedEmail, sendRevisionRejectedEmail, sendUpgradeApplicationEmail, sendUpgradeNewCaseConsultantEmail, sendPlatformAnnouncementEmail, sendFirstContactEmail, sendNewsEmail } from './email';
@@ -1326,6 +1327,14 @@ export const appRouter = router({
       description: z.string().optional(),
       capitalLevel: z.string(),
       address: z.string().min(1),
+      // 只有新建立工廠強制必填，factory.update／submitRevision 不要求此欄位
+      // （見 shared/taxId.ts、migration 0092）。三段訊息對應前端 FormErrors
+      // 的三種狀態：未填、格式不對、檢查碼不對。
+      taxId: z.string()
+        .transform((v) => normalizeTaxId(v))
+        .refine((v) => v.length > 0, "請輸入統一編號")
+        .refine((v) => /^\d{8}$/.test(v), "統一編號須為 8 碼數字")
+        .refine((v) => isValidTaiwanTaxId(v), "統一編號格式不正確，請確認輸入是否正確"),
       foundedYear: z.number().min(1800).max(2100).optional().nullable(),
       avatarUrl: z.string().regex(/^https?:\/\//, "avatarUrl 必須為 http/https URL").optional().nullable(),
       businessType: z.enum(["factory", "studio"]).default("factory"),

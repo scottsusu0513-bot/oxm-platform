@@ -12,6 +12,7 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { performLogin } from "@/const";
 import { trpc } from "@/lib/trpc";
 import { INDUSTRIES, INDUSTRY_OPTIONS, TAIWAN_REGIONS, CAPITAL_OPTIONS, MFG_MODE_OPTIONS } from "@shared/constants";
+import { normalizeTaxId, isValidTaiwanTaxId } from "@shared/taxId";
 import { useState, useEffect, useRef } from "react";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
@@ -28,6 +29,7 @@ type FormErrors = {
   capitalLevel?: string;
   address?: string;
   foundedYear?: string;
+  taxId?: string;
 };
 
 export default function FactoryRegister() {
@@ -73,6 +75,7 @@ export default function FactoryRegister() {
   const hasFactoryAccess = !!existingFactory || isCoManager;
 
   const [name, setName] = useState("");
+  const [taxId, setTaxId] = useState("");
   const [industry, setIndustry] = useState<string[]>([]);
   const [subIndustry, setSubIndustry] = useState<string[]>([]);
   const [mfgModes, setMfgModes] = useState<string[]>([]);
@@ -125,6 +128,12 @@ export default function FactoryRegister() {
   const validate = (): boolean => {
     const newErrors: FormErrors = {};
     if (!name.trim()) newErrors.name = `請輸入${typeLabel}名稱`;
+    // 三段訊息對應 shared/taxId.ts 與 server 端 factory.create 同一套規則：
+    // 未填 → 格式不對（非 8 碼數字）→ 檢查碼不對，訊息文字與後端完全一致。
+    const normalizedTaxId = normalizeTaxId(taxId);
+    if (!normalizedTaxId) newErrors.taxId = "請輸入統一編號";
+    else if (!/^\d{8}$/.test(normalizedTaxId)) newErrors.taxId = "統一編號須為 8 碼數字";
+    else if (!isValidTaiwanTaxId(normalizedTaxId)) newErrors.taxId = "統一編號格式不正確，請確認輸入是否正確";
     if (industry.length === 0) newErrors.industry = "請至少選擇一個產業分類";
     if (mfgModes.length === 0) newErrors.mfgModes = "請至少選擇一種代工模式";
     if (!region) newErrors.region = "請選擇地區";
@@ -141,7 +150,7 @@ export default function FactoryRegister() {
     try {
       // Step 1：建立工廠（不含 avatar，避免 base64 暴露在 payload）
       await createFactoryMut.mutateAsync({
-        name, industry, subIndustry: subIndustry.length > 0 ? subIndustry : undefined,
+        name, taxId: normalizeTaxId(taxId), industry, subIndustry: subIndustry.length > 0 ? subIndustry : undefined,
         mfgModes, region, description, capitalLevel, address,
         businessType,
         foundedYear: foundedYear ? parseInt(foundedYear) : undefined,
@@ -404,6 +413,21 @@ export default function FactoryRegister() {
                   className={errors.name ? "border-red-500 focus-visible:ring-red-500" : ""}
                 />
                 {errors.name && <p className="text-xs text-red-500 mt-1">{errors.name}</p>}
+              </div>
+
+              {/* 統一編號 */}
+              <div>
+                <Label htmlFor="taxId">統一編號 *</Label>
+                <Input
+                  id="taxId"
+                  inputMode="numeric"
+                  value={taxId}
+                  onChange={e => { setTaxId(e.target.value); if (errors.taxId) setErrors(p => ({ ...p, taxId: undefined })); }}
+                  placeholder="請輸入 8 碼統一編號"
+                  maxLength={8}
+                  className={errors.taxId ? "border-red-500 focus-visible:ring-red-500" : ""}
+                />
+                {errors.taxId && <p className="text-xs text-red-500 mt-1">{errors.taxId}</p>}
               </div>
 
               {/* 主產業（可複選） */}
