@@ -199,6 +199,66 @@ export default function Navbar() {
   const [menuVisible, setMenuVisible] = useState(false);
   const [menuClosing, setMenuClosing] = useState(false);
   const [loginDialogOpen, setLoginDialogOpen] = useState(false);
+  // 使用者帳號下拉（右上角）改成 controlled open：新會員導覽 Step 1（見
+  // OnboardingTour.tsx）需要自動打開這個選單才能 spotlight 裡面真正的
+  // 「工廠管理／註冊工廠」item，而不是只 highlight 觸發按鈕本身。平常點擊
+  // 觸發按鈕／選單項目／Escape／點外面關閉，仍然透過 onOpenChange 走原本
+  // Radix 行為，不受影響。
+  //
+  // factoryMenuModal 只在「由導覽程式打開」這段期間暫時關閉 Radix
+  // DropdownMenu 預設的 modal 行為（modal 開著時 Radix 會自己在 body 加
+  // data-scroll-locked + position:relative!important 鎖背景捲動）：
+  // OnboardingTour 自己已經用更完整的 body position:fixed 做全程鎖定，
+  // 兩邊同時搶著鎖 body 曾經觀察到 Radix 那份鎖在導覽快速切換 step 時沒有
+  // 正確釋放、殘留 data-scroll-locked 導致整頁永久鎖死的問題；改成導覽驅動
+  // 開啟時關掉 modal，交給 OnboardingTour 全權處理鎖定，離開時立刻恢復
+  // modal=true，一般使用者手動點選單（非導覽情境）完全不受影響，維持原本
+  // 的 modal 行為。
+  const [factoryMenuOpen, setFactoryMenuOpen] = useState(false);
+  const [factoryMenuModal, setFactoryMenuModal] = useState(true);
+
+  // 手機漢堡選單同樣改成可由導覽驅動打開：Step 1（工廠後台 item）與 Step 3
+  // （六大主要入口區塊，見 data-onboarding="services-hub-mobile"）都需要先
+  // 打開這個選單才能把真正的內容顯示出來，事件名稱不再叫「factory」，因為
+  // 現在兩個步驟共用同一個開關。
+  //
+  // mobileMenuLockSuppressed 的作用跟上面 factoryMenuModal 完全同一個道理：
+  // 這個選單自己原本就有「開啟時鎖住 body 捲動」的 effect（見下方
+  // mobileOpen 那個 position:fixed 鎖），跟 OnboardingTour 自己的全程鎖同時
+  // 搶著改 body 的 inline style，一樣會發生「導覽切換 step 時鎖沒有正確釋
+  // 放／位置跳動」的問題；改成由導覽驅動開啟時暫時關掉這個選單自己的鎖，
+  // 交給 OnboardingTour 全權處理，離開時立刻恢復——一般使用者手動點漢堡選
+  // 單完全不受影響，維持原本的鎖定行為。
+  const [mobileMenuLockSuppressed, setMobileMenuLockSuppressed] = useState(false);
+
+  useEffect(() => {
+    const openDesktop = () => {
+      setFactoryMenuModal(false);
+      setFactoryMenuOpen(true);
+    };
+    const closeDesktop = () => {
+      setFactoryMenuOpen(false);
+      setFactoryMenuModal(true);
+    };
+    const openMobile = () => {
+      setMobileMenuLockSuppressed(true);
+      setMobileOpen(true);
+    };
+    const closeMobile = () => {
+      setMobileOpen(false);
+      setMobileMenuLockSuppressed(false);
+    };
+    window.addEventListener("oxm:onboarding-open-factory-menu-desktop", openDesktop);
+    window.addEventListener("oxm:onboarding-close-factory-menu-desktop", closeDesktop);
+    window.addEventListener("oxm:onboarding-open-mobile-menu", openMobile);
+    window.addEventListener("oxm:onboarding-close-mobile-menu", closeMobile);
+    return () => {
+      window.removeEventListener("oxm:onboarding-open-factory-menu-desktop", openDesktop);
+      window.removeEventListener("oxm:onboarding-close-factory-menu-desktop", closeDesktop);
+      window.removeEventListener("oxm:onboarding-open-mobile-menu", openMobile);
+      window.removeEventListener("oxm:onboarding-close-mobile-menu", closeMobile);
+    };
+  }, []);
 
   // OXM 品牌區下拉選單（左上角）：目前有「首頁」／「關於 OXM」／「FAQ」三個項目，桌機／
   // 手機共用同一份 DOM（沒有 breakpoint 拆兩套），不需要另外處理手機版。
@@ -320,7 +380,7 @@ export default function Navbar() {
   // 這裡改用「body position:fixed + 負值 top」的做法，是目前公認在 iOS Safari／
   // Android Chrome／Capacitor WebView 都可靠的做法。
   useEffect(() => {
-    if (!mobileOpen) return;
+    if (!mobileOpen || mobileMenuLockSuppressed) return;
 
     const scrollY = window.scrollY;
     const body = document.body;
@@ -351,7 +411,7 @@ export default function Navbar() {
 
       window.scrollTo(0, scrollY);
     };
-  }, [mobileOpen]);
+  }, [mobileOpen, mobileMenuLockSuppressed]);
 
   // 手機選單內會另外開啟 LoginDialog 的兩個按鈕（註冊／登入）專用：跳過選單本身
   // 200ms 的淡出動畫、立即卸載，確保 LoginDialog 開啟當下手機選單 overlay 已經
@@ -679,7 +739,7 @@ export default function Navbar() {
 
           {/* 使用者下拉 */}
           {isAuthenticated ? (
-            <DropdownMenu>
+            <DropdownMenu open={factoryMenuOpen} onOpenChange={setFactoryMenuOpen} modal={factoryMenuModal}>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="sm" className="gap-1.5 max-w-[140px]">
                   <User className="w-4 h-4 shrink-0" />
@@ -696,7 +756,7 @@ export default function Navbar() {
                 </DropdownMenuItem>
                 {showDashboardBtn ? (
                   <DropdownMenuItem asChild>
-                    <Link href="/dashboard" className="flex items-center gap-2 cursor-pointer">
+                    <Link data-onboarding="factory-dashboard-desktop-item" href="/dashboard" className="flex items-center gap-2 cursor-pointer">
                       <LayoutDashboard className="w-4 h-4" />
                       工廠管理
                       {showFactoryBadge && (
@@ -706,7 +766,7 @@ export default function Navbar() {
                   </DropdownMenuItem>
                 ) : !coManagedQuery.isLoading ? (
                   <DropdownMenuItem asChild>
-                    <Link href="/register-factory" className="flex items-center gap-2 cursor-pointer">
+                    <Link data-onboarding="factory-dashboard-desktop-item" href="/register-factory" className="flex items-center gap-2 cursor-pointer">
                       <Factory className="w-4 h-4" />
                       註冊工廠
                     </Link>
@@ -836,7 +896,7 @@ export default function Navbar() {
         >
           {/* 六大方向入口 — 統一滿寬橫條 Accordion，一次最多展開一個 */}
           <p className="text-[10px] font-semibold text-muted-foreground/50 uppercase tracking-widest px-1 pt-1 pb-2">OXM 主要入口</p>
-          <div className="flex flex-col gap-2">
+          <div data-onboarding="services-hub-mobile" className="flex flex-col gap-2">
             {HUB_ITEMS.map((hub) => {
               const isOpen = mobileOpenHub === hub.key;
               // 有 href 但沒有真正下拉子項（例如找工廠 href="/search"、
@@ -936,7 +996,7 @@ export default function Navbar() {
               <p className="text-[10px] font-semibold text-muted-foreground/50 uppercase tracking-widest px-2 pb-0.5">我的帳戶</p>
 
               {showDashboardBtn ? (
-                <Link href="/dashboard" onClick={() => setMobileOpen(false)}>
+                <Link data-onboarding="factory-dashboard-mobile-item" href="/dashboard" onClick={() => setMobileOpen(false)}>
                   <Button variant="ghost" className="w-full justify-start relative">
                     <LayoutDashboard className="w-4 h-4 mr-2" />
                     工廠管理
@@ -946,7 +1006,7 @@ export default function Navbar() {
                   </Button>
                 </Link>
               ) : !coManagedQuery.isLoading ? (
-                <Link href="/register-factory" onClick={() => setMobileOpen(false)}>
+                <Link data-onboarding="factory-dashboard-mobile-item" href="/register-factory" onClick={() => setMobileOpen(false)}>
                   <Button variant="ghost" className="w-full justify-start">
                     <Factory className="w-4 h-4 mr-2" />
                     註冊工廠

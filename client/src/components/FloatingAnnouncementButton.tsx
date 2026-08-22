@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import { Capacitor } from "@capacitor/core";
 import { trpc } from "@/lib/trpc";
@@ -40,6 +40,22 @@ export default function FloatingAnnouncementButton() {
   const [lastViewed, setLastViewedState] = useState<number>(getLastViewed);
   const [showVisitCard, setShowVisitCard] = useState(false);
 
+  // 新會員導覽最後一步（見 OnboardingTour.tsx）會 spotlight 這顆按鈕，並希望
+  // 直接展示展開後的說明卡片內容，而不是只highlight收合狀態的按鈕本身；用
+  // window CustomEvent 溝通，避免額外把 open/close state 提升到
+  // FloatingActionStack 或另外建一個 context，維持這個元件原本自己管理
+  // showVisitCard 的既有寫法。
+  useEffect(() => {
+    const handleShow = () => setShowVisitCard(true);
+    const handleHide = () => setShowVisitCard(false);
+    window.addEventListener("oxm:onboarding-show-reservation", handleShow);
+    window.addEventListener("oxm:onboarding-hide-reservation", handleHide);
+    return () => {
+      window.removeEventListener("oxm:onboarding-show-reservation", handleShow);
+      window.removeEventListener("oxm:onboarding-hide-reservation", handleHide);
+    };
+  }, []);
+
   const hasNew = items.some(item => {
     const t = item.createdAt instanceof Date
       ? item.createdAt.getTime()
@@ -61,6 +77,13 @@ export default function FloatingAnnouncementButton() {
   // 點擊行為（收藏公告已讀時間、預約卡片開合、LINE 連結）完全不變。
   return (
     <>
+      {/* data-onboarding="reservation-button" 這次改包在卡片＋按鈕外層，而不是
+          只放在按鈕本身：新會員導覽最後一步（見 OnboardingTour.tsx）展開説明
+          卡片後，希望 spotlight 框住的是「按鈕＋展開內容」整個區塊，只量測
+          按鈕本身的話，展開卡片會落在 spotlight 範圍外面。這層 wrapper 沿用
+          外層 FloatingActionStack 同一套 flex-col items-end 排版，維持卡片在
+          上、按鈕在下的視覺順序不變。 */}
+      <div data-onboarding="reservation-button" className="flex flex-col items-end gap-2">
       {/* 預約說明展開卡片（點擊按鈕後顯示，預設收起） */}
       {showVisitCard && (
         <div className="w-72 max-w-[calc(100vw-2.5rem)] bg-white rounded-2xl shadow-2xl border border-orange-100 overflow-hidden">
@@ -102,6 +125,7 @@ export default function FloatingAnnouncementButton() {
             <div className="flex flex-col items-center gap-1.5 py-1">
               <div className="bg-white rounded-xl border border-gray-200 shadow-md p-2 inline-block">
                 <img
+                  data-onboarding="reservation-qr"
                   src="/images/oxm-line-qr.png"
                   alt="OXM 官方 LINE QR Code"
                   className="w-[130px] h-[130px] object-contain block"
@@ -131,6 +155,7 @@ export default function FloatingAnnouncementButton() {
         <CalendarCheck className="w-4 h-4 shrink-0" />
         <span className="hidden sm:inline text-sm">線上預約</span>
       </button>
+      </div>
 
       {/* 使用手冊（MANUAL_ENTRY_ENABLED 為 true 時才顯示） */}
       {MANUAL_ENTRY_ENABLED && (
