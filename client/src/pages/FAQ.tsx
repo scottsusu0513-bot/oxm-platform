@@ -13,6 +13,8 @@ import {
   AccordionTrigger,
 } from "@/components/ui/accordion";
 import { FaqAiEntry } from "@/components/faq/FaqAiEntry";
+import { renderFaqParagraph } from "@/components/faq/FaqEmphasis";
+import { FAQ_EMPHASIS } from "@/components/faq/faqEmphasisData";
 import { useAiShell } from "@/contexts/AiShellContext";
 import {
   CategoryIllustration,
@@ -173,7 +175,7 @@ export default function FAQ() {
                       <div className="max-w-[47rem] space-y-5 border-l-2 border-orange-200 pl-4 text-[15px] leading-[1.9] text-slate-600 sm:pl-6 sm:text-base sm:leading-[1.95]">
                         {q.answerParagraphs.map((paragraph, i) => (
                           <p key={i} className="whitespace-pre-line break-words">
-                            {paragraph}
+                            {renderFaqParagraph(paragraph, FAQ_EMPHASIS[q.id])}
                           </p>
                         ))}
                       </div>
