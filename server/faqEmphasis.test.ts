@@ -5,8 +5,8 @@
  *    （不得自行改寫、不得標記不存在的文字）
  * 3. FAQ.tsx 透過 renderFaqParagraph(paragraph, FAQ_EMPHASIS[q.id]) 套用重點，
  *    answerParagraphs 本身沒有被改成 ReactNode，JSON-LD／SEO 用的純文字資料不受影響
- * 4. FaqEmphasis 只有粗體＋文字色（沿用既有 text-orange-600 / text-purple-700），
- *    沒有任何黃色底色／background／underline
+ * 4. FaqEmphasis 只有粗體＋單一橘色系文字色（沿用既有 text-orange-600，
+ *    2026-08-22 起不再依 tone 分橘／紫兩色），沒有任何黃色底色／background／underline
  * 5. 沒有使用 dangerouslySetInnerHTML
  * 6. 「OXM 是什麼？」（about-1）在 FAQ_CONTENT 中仍然只有一題
  */
@@ -84,9 +84,9 @@ describe("FAQ_EMPHASIS 標記範圍——逐字存在於原文，且未被過度
 describe("client/src/components/faq/FaqEmphasis.tsx——只有粗體＋文字色，沒有黃色底色", () => {
   const source = readSource("client", "src", "components", "faq", "FaqEmphasis.tsx");
 
-  it("使用既有 OXM 品牌色 text-orange-600 / text-purple-700，沒有自訂 hex 色碼", () => {
+  it("統一使用既有 OXM 品牌色 text-orange-600，沒有自訂 hex 色碼，且不再混用 text-purple-700", () => {
     expect(source).toMatch(/text-orange-600/);
-    expect(source).toMatch(/text-purple-700/);
+    expect(source).not.toMatch(/text-purple-700/);
     expect(source).not.toMatch(/#[0-9a-fA-F]{3,6}/);
   });
 
@@ -99,6 +99,10 @@ describe("client/src/components/faq/FaqEmphasis.tsx——只有粗體＋文字�
 
   it("沒有使用 dangerouslySetInnerHTML", () => {
     expect(source).not.toMatch(/dangerouslySetInnerHTML/);
+  });
+
+  it("渲染不再依 tone 分支選色（單一橘色系粗體，不管 tone 是 orange 或 purple 視覺上都相同）", () => {
+    expect(source).not.toMatch(/tone === "orange"/);
   });
 });
 

@@ -9,23 +9,20 @@ export interface FaqEmphasisRange {
 }
 
 /**
- * FAQ 回答內文的重點樣式——只有粗體＋OXM 品牌色，不加底色／底線，
- * 對應 client/src/pages/FAQ.tsx 既有的 text-orange-600 / text-purple-700 用色慣例。
+ * FAQ 回答內文的重點樣式——單一橘色系粗體，不加底色／底線，對應
+ * 【關於OXM】品牌宣言（AboutOXM.tsx 的 brandStatementLines）同一份
+ * font-bold + text-orange-600 視覺份量，不再依 tone 分成橘／紫兩色（
+ * 2026-08-22 使用者驗收回饋：橘紫混用看起來太亂，改統一成單一橘色系）。
+ * FaqEmphasisRange.tone 這個欄位與既有 faqEmphasisData.ts 的標記資料本身
+ * 保留不動（避免牽動範圍資料），只是渲染時刻意忽略 tone 的差異。
  */
 export function FaqEmphasis({
-  tone,
   children,
 }: {
   tone: FaqEmphasisTone;
   children: ReactNode;
 }) {
-  return (
-    <strong
-      className={tone === "orange" ? "font-semibold text-orange-600" : "font-semibold text-purple-700"}
-    >
-      {children}
-    </strong>
-  );
+  return <strong className="font-bold text-orange-600">{children}</strong>;
 }
 
 /**
