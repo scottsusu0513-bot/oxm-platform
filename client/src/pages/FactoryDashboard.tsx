@@ -1069,6 +1069,10 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
               <Input disabled={isLocked} value={name} onChange={e => setName(e.target.value)} />
             </div>
             <div className="space-y-2">
+              <Label>統一編號</Label>
+              <Input disabled value={(factory as any).taxId ?? ""} placeholder="未填寫" />
+            </div>
+            <div className="space-y-2">
               <Label>主產業（可複選）</Label>
               <Popover>
                 <PopoverTrigger asChild>

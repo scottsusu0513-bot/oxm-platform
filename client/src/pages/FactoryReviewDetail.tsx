@@ -378,6 +378,10 @@ export default function FactoryReviewDetail() {
                     )}
                   </div>
                   <div>
+                    <Label className="text-gray-600">統一編號</Label>
+                    <p className="font-medium">{(factory as any).taxId || "未填寫"}</p>
+                  </div>
+                  <div>
                     <Label className="text-gray-600">地區</Label>
                     <p className="font-medium flex items-center gap-2">
                       <MapPin className="h-4 w-4" />
