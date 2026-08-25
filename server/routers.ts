@@ -6745,6 +6745,7 @@ export const appRouter = router({
     // ===== Phase 2A: Notifications =====
 
     notificationUnreadCount: protectedProcedure.query(async ({ ctx }) => {
+      checkCommunityRead(ctx.user);
       const visibleTypes = getVisibleTypesForUser(ctx.user.role);
       const count = await db.getCommunityNotificationUnreadCount(ctx.user.id, visibleTypes);
       return { count };
@@ -6756,6 +6757,7 @@ export const appRouter = router({
         pageSize: z.number().int().min(1).max(50).default(20),
       }))
       .query(async ({ ctx, input }) => {
+        checkCommunityRead(ctx.user);
         const visibleTypes = getVisibleTypesForUser(ctx.user.role);
         return db.listCommunityNotifications(ctx.user.id, input.page, input.pageSize, visibleTypes);
       }),
@@ -6763,12 +6765,14 @@ export const appRouter = router({
     notificationMarkRead: protectedProcedure
       .input(z.object({ notificationId: z.number().int() }))
       .mutation(async ({ ctx, input }) => {
+        checkCommunityWrite(ctx.user);
         const visibleTypes = getVisibleTypesForUser(ctx.user.role);
         await db.markCommunityNotificationRead(input.notificationId, ctx.user.id, visibleTypes);
         return { success: true };
       }),
 
     notificationMarkAllRead: protectedProcedure.mutation(async ({ ctx }) => {
+      checkCommunityWrite(ctx.user);
       const visibleTypes = getVisibleTypesForUser(ctx.user.role);
       await db.markAllCommunityNotificationsRead(ctx.user.id, visibleTypes);
       return { success: true };
