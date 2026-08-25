@@ -28,6 +28,19 @@ export default function FactoryDetail() {
     }
   };
 
+  // 新工廠詳情頁一律從頁首開始（回歸情境：SPA 導航不像整頁重新載入會自動重置
+  // scroll，從搜尋頁滑到很下面再點進工廠頁時，會直接沿用舊的 scrollY，落在
+  // 頁面中段甚至底部）。只鎖定「進到這個 route／這個 factoryId」這個時間點
+  // 重置一次，依賴 factoryId 是因為即使 wouter 在同一個 <Route path="/factory/:id">
+  // 底下切換不同工廠 id 時可能不會整個 unmount/remount，仍然要在那個瞬間重置；
+  // 不依賴 factory 資料本身（isLoading／isFav／review 等任何一般 state 變化都
+  // 不會重新觸發這個 effect），避免收藏、評價、資料重新整理等操作把使用者
+  // 強制拉回頁首。
+  useEffect(() => {
+    if (!factoryId) return;
+    window.scrollTo(0, 0);
+  }, [factoryId]);
+
   const { data: factory, isLoading } = trpc.factory.getById.useQuery({ id: factoryId }, { enabled: !!factoryId });
   const { data: reviewData } = trpc.review.getByFactory.useQuery({ factoryId, page: 1, pageSize: 10 }, { enabled: !!factoryId });
   const { data: isFavData } = trpc.favorite.isLiked.useQuery({ factoryId }, { enabled: !!factoryId && isAuthenticated });
