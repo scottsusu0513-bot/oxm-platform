@@ -12,6 +12,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { performLogin } from "@/const";
 import { trpc } from "@/lib/trpc";
+import { isSafeChatReturnSource } from "@/lib/chatReturnSource";
 import { useRoute, useLocation, useSearch, Link } from "wouter";
 import { useState, useRef, useEffect, useCallback } from "react";
 import { toast } from "sonner";
@@ -1009,7 +1010,25 @@ export default function ChatPage() {
   const conversationId = isNewChat ? null : Number(params?.conversationId);
 
   const [, navigate] = useLocation();
-  const backPath: string = (window.history.state as Record<string, string> | null)?.from ?? "/messages";
+  // Chat 的返回目標一律來自 history.state.from（由呼叫端 navigate(path, {state})
+  // 帶入），但必須先驗證是「可信的業務頁」才能用來 history.back()——見
+  // isSafeChatReturnSource 的規則說明（不是字串、不是站內相對路徑、或本身就是
+  // /chat/* 路由都視為不可信，改走安全 fallback）。
+  const rawSource = (window.history.state as Record<string, unknown> | null)?.from;
+  const source: string | null = isSafeChatReturnSource(rawSource) ? rawSource : null;
+  const FALLBACK_PATH = "/messages";
+  // 有可信來源時，真正的 history.back() 才是「返回」——/chat/new 進來時已經用
+  // replace 換成 /chat/:id（沒有另外多 push 一筆），所以 back() 會正確落在
+  // source 那個業務頁本身，不會多停在 /chat/new。沒有可信來源（直接開連結／
+  // 重新整理後 state 遺失／來源本身是 chat 路由）時，一律用 replace 導到安全
+  // 頁，不用 push——避免每次「沒有來源」都在 stack 多留一筆，形成新的循環。
+  const handleReturn = () => {
+    if (source && typeof window !== "undefined" && window.history.length > 1) {
+      window.history.back();
+    } else {
+      navigate(FALLBACK_PATH, { replace: true });
+    }
+  };
   const searchString = useSearch();
   const searchParams = new URLSearchParams(searchString);
   const factoryId = searchParams.get("factoryId") ? Number(searchParams.get("factoryId")) : null;
@@ -1136,8 +1155,8 @@ export default function ChatPage() {
   }, [conversationId, isAuthenticated, msgs]);
 
   useEffect(() => {
-    if (existingConv) navigate(`/chat/${existingConv.id}`, { replace: true, state: { from: backPath } });
-  }, [existingConv, navigate, backPath]);
+    if (existingConv) navigate(`/chat/${existingConv.id}`, { replace: true, state: { from: source } });
+  }, [existingConv, navigate, source]);
 
   useEffect(() => {
     if (isNewChat && factoryData && !existingConv) {
@@ -1225,7 +1244,7 @@ export default function ChatPage() {
         setMessage("");
         utils.chat.myConversations.invalidate();
         utils.chat.unreadCount.invalidate();
-        navigate(`/chat/${result.conversationId}`, { replace: true, state: { from: backPath } });
+        navigate(`/chat/${result.conversationId}`, { replace: true, state: { from: source } });
       } else if (conversationId) {
         sendMut.mutate({ conversationId, content: message.trim() });
       }
@@ -1291,8 +1310,8 @@ export default function ChatPage() {
       <Navbar />
 
       <div className="container py-4 flex-1 flex flex-col max-w-3xl overflow-hidden">
-        <Button variant="ghost" size="sm" className="mb-3 self-start" onClick={() => navigate(backPath)}>
-          <ArrowLeft className="w-4 h-4 mr-1" /> {backPath.startsWith("/dashboard") ? "返回工廠管理後台" : backPath.startsWith("/upgrade-consultant") ? "返回顧問中心" : "返回訊息列表"}
+        <Button variant="ghost" size="sm" className="mb-3 self-start" onClick={handleReturn}>
+          <ArrowLeft className="w-4 h-4 mr-1" /> 返回
         </Button>
 
         <Card className="flex-1 flex flex-col">

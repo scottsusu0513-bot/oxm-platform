@@ -632,7 +632,7 @@ export default function OrderDetail() {
 
         {/* 操作按鈕 */}
         <div className="flex gap-3">
-          <Link href={`/chat/${order.conversationId}`} className="flex-1">
+          <Link href={`/chat/${order.conversationId}`} state={{ from: `/orders/${orderId}` }} className="flex-1">
             <Button className="w-full bg-orange-500 hover:bg-orange-600 text-white" size="sm">
               <MessageCircle className="w-4 h-4 mr-1.5" />
               查看對話

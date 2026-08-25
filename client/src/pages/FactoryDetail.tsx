@@ -114,7 +114,8 @@ export default function FactoryDetail() {
     params.set("factoryId", String(factoryId));
     if (productId) params.set("productId", String(productId));
     if (productName) params.set("productName", productName);
-    navigate(`/chat/new?${params.toString()}`);
+    // 讓 Chat 的返回按鈕知道要回這間工廠，而不是 fallback 到「我的訊息」。
+    navigate(`/chat/new?${params.toString()}`, { state: { from: `/factory/${factoryId}` } });
   };
 
   const toggleFav = trpc.favorite.toggle.useMutation({

@@ -2631,7 +2631,7 @@ function ReceivedOrdersPanel({ factoryId }: { factoryId: number }) {
                     <Link href={`/orders/${order.id}?backTo=${backTo}`} className="text-xs text-orange-600 hover:underline font-medium">
                       查看訂單 →
                     </Link>
-                    <Link href={`/chat/${order.conversationId}`} className="text-xs text-blue-600 hover:underline">
+                    <Link href={`/chat/${order.conversationId}`} state={{ from: "/dashboard?tab=orders" }} className="text-xs text-blue-600 hover:underline">
                       進入對話 →
                     </Link>
                   </div>
@@ -2935,7 +2935,7 @@ function PlacedOrdersPanel({ factoryId }: { factoryId: number }) {
                   <Link href={`/orders/${order.id}?backTo=${backTo}`} className="text-xs text-orange-600 hover:underline font-medium">
                     查看訂單 →
                   </Link>
-                  <Link href={`/chat/${order.conversationId}`} className="text-xs text-blue-600 hover:underline">
+                  <Link href={`/chat/${order.conversationId}`} state={{ from: "/dashboard?tab=orders" }} className="text-xs text-blue-600 hover:underline">
                     進入對話 →
                   </Link>
                 </div>
