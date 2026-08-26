@@ -327,54 +327,89 @@ export function FactoryDetailView({
       </div>
 
       <div className="w-full lg:max-w-7xl lg:mx-auto px-4 sm:px-6 lg:px-0">
-        {/* ── Header: logo | name+description | actions ── */}
+        {/* ── Header: (logo | name+description) | action module ──
+            Logo／Intro 這一組維持自己的 sm:flex-row 排列與 Logo 既有的
+            negative margin 疊 Banner；Action module 是獨立的第二個 flex item，
+            不吃 Logo 的 negative margin，寬度在 lg 以上固定收斂、不撐滿整頁，
+            避免公司自我介紹被壓窄，也避免這區塊看起來像網站 Hero CTA。 */}
         {/* relative z-10 so this layer paints above the cover div (positioned element) */}
-        <div className="relative z-10 flex flex-col sm:flex-row sm:items-start gap-3 mb-4">
-          {/* Left: Logo — overlaps cover */}
-          <div
-            className={`w-20 h-20 md:w-24 md:h-24 rounded-2xl border-4 border-white shadow-lg bg-white overflow-hidden shrink-0 -mt-10 md:-mt-12 ${factory.avatarUrl && !isPreview ? "cursor-pointer hover:opacity-90 transition-opacity" : ""}`}
-            onClick={() => { if (factory.avatarUrl && !isPreview) { setPreviewImages([factory.avatarUrl]); setPreviewIndex(0); } }}
-          >
-            {factory.avatarUrl ? (
-              <CroppedImage src={factory.avatarUrl} crop={factory.avatarCrop} alt={factory.name} loading="eager" />
-            ) : (
-              <div className="w-full h-full flex items-center justify-center">
-                {factory.businessType === "studio"
-                  ? <Wrench className="w-8 h-8 text-purple-200" />
-                  : <FactoryIcon className="w-8 h-8 text-orange-200" />}
-              </div>
-            )}
-          </div>
-
-          {/* Center: name + description */}
-          <div className="flex-1 min-w-0 sm:pt-1">
-            <div className="flex items-center gap-2 flex-wrap mb-2">
-              <h1 className="text-xl md:text-2xl font-bold leading-tight">{factory.name}</h1>
+        <div className="relative z-10 flex flex-col lg:flex-row lg:items-start gap-4 mb-6">
+          {/* Logo + 公司名稱／簡介 */}
+          <div className="flex-1 min-w-0 flex flex-col sm:flex-row sm:items-start gap-3">
+            {/* Logo — overlaps cover */}
+            <div
+              className={`w-20 h-20 md:w-24 md:h-24 rounded-2xl border-4 border-white shadow-lg bg-white overflow-hidden shrink-0 -mt-10 md:-mt-12 ${factory.avatarUrl && !isPreview ? "cursor-pointer hover:opacity-90 transition-opacity" : ""}`}
+              onClick={() => { if (factory.avatarUrl && !isPreview) { setPreviewImages([factory.avatarUrl]); setPreviewIndex(0); } }}
+            >
+              {factory.avatarUrl ? (
+                <CroppedImage src={factory.avatarUrl} crop={factory.avatarCrop} alt={factory.name} loading="eager" />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center">
+                  {factory.businessType === "studio"
+                    ? <Wrench className="w-8 h-8 text-purple-200" />
+                    : <FactoryIcon className="w-8 h-8 text-orange-200" />}
+                </div>
+              )}
             </div>
-            {factory.description && (
-              <p className="text-sm text-muted-foreground whitespace-pre-line leading-relaxed">
-                {normalizeDescription(factory.description)}
-              </p>
-            )}
+
+            {/* 公司名稱 + 簡介 */}
+            <div className="flex-1 min-w-0 sm:pt-1">
+              <div className="flex items-center gap-2 flex-wrap mb-2">
+                <h1 className="text-xl md:text-2xl font-bold leading-tight">{factory.name}</h1>
+              </div>
+              {factory.description && (
+                <p className="text-sm text-muted-foreground whitespace-pre-line leading-relaxed">
+                  {normalizeDescription(factory.description)}
+                </p>
+              )}
+            </div>
           </div>
 
-          {/* Right: action buttons */}
-          <div className="flex gap-2 shrink-0 flex-wrap">
-            <Button onClick={() => handleChatClick()} disabled={isPreview}>
-              <MessageCircle className="w-4 h-4 mr-1.5" />聯繫工廠
-            </Button>
-            <Button variant={isFav ? "default" : "outline"} onClick={handleToggleFavClick} disabled={isPreview || favPending}>
-              <Heart className={`w-4 h-4 mr-1.5 ${isFav ? "fill-current" : ""}`} />
-              {isFav ? "已收藏" : "收藏"}
-            </Button>
-            <Button variant="outline" onClick={handleShareClick} disabled={isPreview}>
-              <Share2 className="w-4 h-4 mr-1.5" />分享
-            </Button>
-            {isAuthenticated && (
-              <Button size="sm" variant="ghost" className="text-muted-foreground hover:text-destructive" onClick={() => setShowReportDialog(true)} disabled={isPreview}>
-                <Flag className="w-4 h-4 mr-1" />檢舉
+          {/* Action module：聯繫工廠＋收藏／分享／檢舉，公司簡介右側的獨立操作卡。
+              寬度：手機佔滿內容寬度；平板（下一行）用 max-w 收斂，不無限撐大；
+              桌機（lg+）固定寬度、與 Intro 並排，讓 Intro 仍保有主要閱讀寬度。 */}
+          <div className="w-full sm:max-w-xl lg:max-w-none lg:w-[440px] lg:shrink-0 lg:pt-1">
+            <div className="flex flex-col sm:flex-row gap-3">
+              {/* 左：聯繫工廠（module 內的主要 CTA，比原本大，但不是整頁 Hero） */}
+              <Button
+                onClick={() => handleChatClick()}
+                disabled={isPreview}
+                className="flex-1 min-w-0 h-auto flex-col items-start whitespace-normal text-left gap-1 rounded-2xl px-4 py-3.5"
+              >
+                <span className="flex items-center text-base font-semibold">
+                  <MessageCircle className="w-4 h-4 mr-1.5" />聯繫工廠
+                </span>
+                {factory.contactPersonName && (
+                  <span className="w-full min-w-0 text-sm font-normal text-primary-foreground/90 break-words">
+                    聯絡窗口：{factory.contactPersonName}
+                  </span>
+                )}
+                <span className="text-xs font-normal text-primary-foreground/70">
+                  詢問商品、服務或合作方式
+                </span>
               </Button>
-            )}
+
+              {/* 右：收藏／分享／檢舉——手機三等分橫排，sm 以上（含 module 落到下一行時）改直排 */}
+              <div className="flex flex-row sm:flex-col gap-2 sm:w-28 shrink-0">
+                <Button
+                  variant={isFav ? "default" : "outline"}
+                  onClick={handleToggleFavClick}
+                  disabled={isPreview || favPending}
+                  className="flex-1"
+                >
+                  <Heart className={`w-4 h-4 mr-1.5 ${isFav ? "fill-current" : ""}`} />
+                  {isFav ? "已收藏" : "收藏"}
+                </Button>
+                <Button variant="outline" onClick={handleShareClick} disabled={isPreview} className="flex-1">
+                  <Share2 className="w-4 h-4 mr-1.5" />分享
+                </Button>
+                {isAuthenticated && (
+                  <Button variant="outline" className="flex-1 text-muted-foreground hover:text-destructive" onClick={() => setShowReportDialog(true)} disabled={isPreview}>
+                    <Flag className="w-4 h-4 mr-1.5" />檢舉
+                  </Button>
+                )}
+              </div>
+            </div>
           </div>
         </div>
 
