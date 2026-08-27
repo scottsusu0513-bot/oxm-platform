@@ -4827,7 +4827,7 @@ export const appRouter = router({
         }),
 
       rejectBid: adminProcedure
-        .input(z.object({ bidId: z.number().int(), reason: z.string().min(1).max(1000).trim() }))
+        .input(z.object({ bidId: z.number().int(), reason: z.string().trim().min(1).max(1000) }))
         .mutation(async ({ ctx, input }) => {
           const bid = await db.getCommunityBidById(input.bidId);
           if (!bid || bid.deletedAt) throw new TRPCError({ code: "NOT_FOUND", message: "找不到此需求" });
@@ -6095,8 +6095,8 @@ export const appRouter = router({
     createPost: protectedProcedure
       .input(z.object({
         spaceCode: z.string().min(1).max(60),
-        title: z.string().min(1).max(200).trim(),
-        content: z.string().min(1).max(10000).trim(),
+        title: z.string().trim().min(1).max(200),
+        content: z.string().trim().min(1).max(10000),
         images: z.array(z.string().url()).max(6).default([]),
         pinnedProductIds: z.array(z.number().int().positive()).max(5).default([]),
         commentsEnabled: z.boolean().default(true),
@@ -6110,6 +6110,12 @@ export const appRouter = router({
         checkCommunityWrite(ctx.user);
         assertValidSpaceCode(input.spaceCode);
         assertCommunityImagesOwned(input.images, ctx.user.id);
+        try {
+          await db.assertMentionTargetsValid(input.mentions);
+        } catch (e: any) {
+          if (e?.code === "MENTION_INVALID") throw new TRPCError({ code: "BAD_REQUEST", message: e.message });
+          throw e;
+        }
 
         // Enforce author identity rules: resolve which factoryId to actually use
         const identityOptions = await db.getCommunityAuthorIdentityOptions(ctx.user.id);
@@ -6251,8 +6257,8 @@ export const appRouter = router({
     updatePost: protectedProcedure
       .input(z.object({
         postId: z.number().int(),
-        title: z.string().min(1).max(200).trim().optional(),
-        content: z.string().min(1).max(10000).trim().optional(),
+        title: z.string().trim().min(1).max(200).optional(),
+        content: z.string().trim().min(1).max(10000).optional(),
         images: z.array(z.string().url()).max(6).optional(),
         pinnedProductIds: z.array(z.number().int().positive()).max(5).optional(),
         commentsEnabled: z.boolean().optional(),
@@ -6289,6 +6295,15 @@ export const appRouter = router({
               throw new TRPCError({ code: "BAD_REQUEST", message: `商品 ID ${invalid} 不存在或不屬於此工廠` });
             }
             input = { ...input, pinnedProductIds: dedupedIds };
+          }
+        }
+
+        if (input.mentions !== undefined) {
+          try {
+            await db.assertMentionTargetsValid(input.mentions);
+          } catch (e: any) {
+            if (e?.code === "MENTION_INVALID") throw new TRPCError({ code: "BAD_REQUEST", message: e.message });
+            throw e;
           }
         }
 
@@ -6374,7 +6389,7 @@ export const appRouter = router({
     createComment: protectedProcedure
       .input(z.object({
         postId: z.number().int(),
-        content: z.string().min(1).max(5000).trim(),
+        content: z.string().trim().min(1).max(5000),
         parentCommentId: z.number().int().positive().optional(),
         replyToUserId: z.number().int().positive().optional(),
         // Front-end passes the auto-resolved or user-selected factoryId
@@ -6396,6 +6411,12 @@ export const appRouter = router({
         }
         if (!post.commentsEnabled && ctx.user.role !== "admin") {
           throw new TRPCError({ code: "FORBIDDEN", message: "作者已關閉此貼文的留言功能" });
+        }
+        try {
+          await db.assertMentionTargetsValid(input.mentions);
+        } catch (e: any) {
+          if (e?.code === "MENTION_INVALID") throw new TRPCError({ code: "BAD_REQUEST", message: e.message });
+          throw e;
         }
 
         // Enforce 2-layer depth limit
@@ -6583,7 +6604,7 @@ export const appRouter = router({
     updateComment: protectedProcedure
       .input(z.object({
         commentId: z.number().int(),
-        content: z.string().min(1).max(5000).trim(),
+        content: z.string().trim().min(1).max(5000),
       }))
       .mutation(async ({ ctx, input }) => {
         checkCommunityWrite(ctx.user);
@@ -6784,8 +6805,8 @@ export const appRouter = router({
     createBid: protectedProcedure
       .input(z.object({
         spaceCode: z.string().min(1).max(60),
-        title: z.string().min(1).max(200).trim(),
-        description: z.string().min(1).max(10000).trim(),
+        title: z.string().trim().min(1).max(200),
+        description: z.string().trim().min(1).max(10000),
         quantity: z.string().max(200).trim().nullable().optional(),
         material: z.string().max(200).trim().nullable().optional(),
         specifications: z.string().max(5000).trim().nullable().optional(),
@@ -6871,8 +6892,8 @@ export const appRouter = router({
     updateBid: protectedProcedure
       .input(z.object({
         bidId: z.number().int(),
-        title: z.string().min(1).max(200).trim().optional(),
-        description: z.string().min(1).max(10000).trim().optional(),
+        title: z.string().trim().min(1).max(200).optional(),
+        description: z.string().trim().min(1).max(10000).optional(),
         quantity: z.string().max(200).trim().nullable().optional(),
         material: z.string().max(200).trim().nullable().optional(),
         specifications: z.string().max(5000).trim().nullable().optional(),
@@ -7066,7 +7087,7 @@ export const appRouter = router({
         deliveryDays: z.number().int().min(1).max(3650).nullable().optional(),
         moq: z.number().int().min(1).nullable().optional(),
         sampleAvailable: z.boolean().default(false),
-        proposal: z.string().min(1).max(5000).trim(),
+        proposal: z.string().trim().min(1).max(5000),
         commercialTerms: z.string().max(5000).trim().nullable().optional(),
         images: z.array(z.string().url()).max(6).default([]),
         pinnedProductIds: z.array(z.number().int().positive()).max(5).default([]),
@@ -7168,7 +7189,7 @@ export const appRouter = router({
         deliveryDays: z.number().int().min(1).max(3650).nullable().optional(),
         moq: z.number().int().min(1).nullable().optional(),
         sampleAvailable: z.boolean().optional(),
-        proposal: z.string().min(1).max(5000).trim().optional(),
+        proposal: z.string().trim().min(1).max(5000).optional(),
         commercialTerms: z.string().max(5000).trim().nullable().optional(),
         images: z.array(z.string().url()).max(6).optional(),
         pinnedProductIds: z.array(z.number().int().positive()).max(5).optional(),
@@ -7288,7 +7309,7 @@ export const appRouter = router({
         deliveryDays: z.number().int().min(1).max(3650).nullable().optional(),
         moq: z.number().int().min(1).nullable().optional(),
         sampleAvailable: z.boolean().optional(),
-        proposal: z.string().min(1).max(5000).trim().optional(),
+        proposal: z.string().trim().min(1).max(5000).optional(),
         commercialTerms: z.string().max(5000).trim().nullable().optional(),
         images: z.array(z.string().url()).max(6).optional(),
         pinnedProductIds: z.array(z.number().int().positive()).max(5).optional(),

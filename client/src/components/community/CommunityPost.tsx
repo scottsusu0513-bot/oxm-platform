@@ -23,6 +23,16 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import type { CommunityCommentWithMeta } from "@/lib/community-types";
 import CommunityImageUploader from "./CommunityImageUploader";
 import CommunityReactionButton from "./CommunityReactionButton";
@@ -232,6 +242,9 @@ export default function CommunityPost({ spaceCode, postId }: Props) {
   const [editingComment, setEditingComment] = useState<{ id: number; content: string } | null>(null);
   const [editingPost, setEditingPost] = useState<{ title: string; content: string; commentsEnabled: boolean; images: string[]; isUploading: boolean } | null>(null);
   const [editingPostMentions, setEditingPostMentions] = useState<MentionInput[]>([]);
+  const [confirmDeletePost, setConfirmDeletePost] = useState(false);
+  const [confirmHardDeletePost, setConfirmHardDeletePost] = useState(false);
+  const [confirmDeleteCommentId, setConfirmDeleteCommentId] = useState<number | null>(null);
 
   const { data, isLoading, isError } = trpc.community.getPost.useQuery({ postId });
 
@@ -259,6 +272,7 @@ export default function CommunityPost({ spaceCode, postId }: Props) {
 
   const deleteCommentMut = trpc.community.deleteComment.useMutation({
     onSuccess: () => {
+      setConfirmDeleteCommentId(null);
       utils.community.getPost.invalidate({ postId });
       toast.success("留言已刪除");
     },
@@ -277,6 +291,7 @@ export default function CommunityPost({ spaceCode, postId }: Props) {
 
   const deletePostMut = trpc.community.deletePost.useMutation({
     onSuccess: () => {
+      setConfirmDeletePost(false);
       toast.success("貼文已刪除");
       navigate(`/community/${spaceCode}/discussions`);
     },
@@ -316,6 +331,7 @@ export default function CommunityPost({ spaceCode, postId }: Props) {
 
   const adminDeletePostMut = trpc.admin.community.deletePost.useMutation({
     onSuccess: () => {
+      setConfirmHardDeletePost(false);
       toast.success("貼文已永久刪除");
       navigate(`/community/${spaceCode}/discussions`);
     },
@@ -567,7 +583,7 @@ export default function CommunityPost({ spaceCode, postId }: Props) {
                     {isPostAuthor && (
                       <DropdownMenuItem
                         className="text-destructive focus:text-destructive"
-                        onClick={() => deletePostMut.mutate({ postId })}
+                        onClick={() => setConfirmDeletePost(true)}
                       >
                         <Trash2 className="w-3.5 h-3.5 mr-2" />
                         刪除貼文
@@ -589,7 +605,7 @@ export default function CommunityPost({ spaceCode, postId }: Props) {
                         </DropdownMenuItem>
                         <DropdownMenuItem
                           className="text-destructive focus:text-destructive"
-                          onClick={() => adminDeletePostMut.mutate({ postId })}
+                          onClick={() => setConfirmHardDeletePost(true)}
                         >
                           <Trash2 className="w-3.5 h-3.5 mr-2" />
                           永久刪除（管理員）
@@ -640,7 +656,7 @@ export default function CommunityPost({ spaceCode, postId }: Props) {
                     }
                   }}
                   onEdit={(c) => setEditingComment({ id: c.id, content: c.content })}
-                  onDelete={(id) => deleteCommentMut.mutate({ commentId: id })}
+                  onDelete={(id) => setConfirmDeleteCommentId(id)}
                   onHide={(id, hidden) => hideCommentMut.mutate({ commentId: id, hidden })}
                 />
               ))}
@@ -731,6 +747,66 @@ export default function CommunityPost({ spaceCode, postId }: Props) {
           )}
         </section>
       </main>
+
+      <AlertDialog open={confirmDeletePost} onOpenChange={(open) => { if (!open) setConfirmDeletePost(false); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>確定要刪除這篇貼文嗎？</AlertDialogTitle>
+            <AlertDialogDescription>刪除後將無法由一般使用者查看。</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deletePostMut.isPending}>取消</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={deletePostMut.isPending}
+              onClick={() => deletePostMut.mutate({ postId })}
+            >
+              {deletePostMut.isPending && <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />}
+              確認刪除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={confirmHardDeletePost} onOpenChange={(open) => { if (!open) setConfirmHardDeletePost(false); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>確定要永久刪除這篇貼文嗎？</AlertDialogTitle>
+            <AlertDialogDescription>此操作會永久刪除貼文及相關內容，且無法復原。</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={adminDeletePostMut.isPending}>取消</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={adminDeletePostMut.isPending}
+              onClick={() => adminDeletePostMut.mutate({ postId })}
+            >
+              {adminDeletePostMut.isPending && <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />}
+              確認永久刪除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={confirmDeleteCommentId != null} onOpenChange={(open) => { if (!open) setConfirmDeleteCommentId(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>確定要刪除這則留言嗎？</AlertDialogTitle>
+            <AlertDialogDescription>刪除後這則留言將顯示為「此留言已刪除」，其下的回覆仍會保留。</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteCommentMut.isPending}>取消</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={deleteCommentMut.isPending}
+              onClick={() => confirmDeleteCommentId != null && deleteCommentMut.mutate({ commentId: confirmDeleteCommentId })}
+            >
+              {deleteCommentMut.isPending && <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />}
+              確認刪除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

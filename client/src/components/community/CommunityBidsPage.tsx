@@ -9,6 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
 import CommunityBidForm from "./CommunityBidForm";
 import type { CommunityBid } from "../../../../drizzle/schema";
+import { getEffectiveBidStatus } from "@/lib/community-types";
 
 interface Props {
   spaceCode: string;
@@ -39,11 +40,12 @@ function BidCard({ bid, onClick }: {
   bid: CommunityBid & { targetIndustries: string[] };
   onClick: () => void;
 }) {
-  const deadlineText = bid.deadline
+  const effectiveStatus = getEffectiveBidStatus(bid);
+  // Once the effective status has already flipped to "ended" (deadline passed),
+  // the primary badge covers that — this line only ever shows remaining time.
+  const remainingText = bid.deadline && effectiveStatus === "active"
     ? (() => {
-        const ms = new Date(bid.deadline).getTime() - Date.now();
-        if (ms <= 0) return "已截止";
-        const h = Math.floor(ms / 3600000);
+        const h = Math.floor((new Date(bid.deadline).getTime() - Date.now()) / 3600000);
         if (h < 24) return `剩 ${h} 小時`;
         return `剩 ${Math.floor(h / 24)} 天`;
       })()
@@ -57,11 +59,11 @@ function BidCard({ bid, onClick }: {
       <div className="flex items-start justify-between gap-3">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap mb-1">
-            <BidStatusBadge status={bid.status} />
-            {deadlineText && bid.status === "active" && (
+            <BidStatusBadge status={effectiveStatus} />
+            {remainingText && (
               <span className="flex items-center gap-1 text-xs text-muted-foreground">
                 <Clock className="w-3 h-3" />
-                {deadlineText}
+                {remainingText}
               </span>
             )}
           </div>

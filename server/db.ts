@@ -7356,6 +7356,29 @@ export async function getReactionSummaryBatch(
 
 // ===== Mentions =====
 
+/**
+ * Guards mention persistence against factory targets the mention-autocomplete
+ * would never have offered (not found / not approved). Must be called BEFORE
+ * the source row (post/comment) is written, so an invalid mention aborts the
+ * whole request instead of leaving a post/comment created with no mentions.
+ */
+export async function assertMentionTargetsValid(
+  mentions: Array<{ type: "user" | "factory"; id: number }>,
+): Promise<void> {
+  const factoryIds = Array.from(new Set(mentions.filter(m => m.type === "factory").map(m => m.id)));
+  if (factoryIds.length === 0) return;
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  const rows = await db.select({ id: factories.id, status: factories.status })
+    .from(factories)
+    .where(inArray(factories.id, factoryIds));
+  const approvedIds = new Set(rows.filter(r => r.status === "approved").map(r => r.id));
+  const hasInvalid = factoryIds.some(id => !approvedIds.has(id));
+  if (hasInvalid) {
+    throw Object.assign(new Error("無法標註此工廠"), { code: "MENTION_INVALID" });
+  }
+}
+
 export async function createMentions(
   sourceType: string,
   sourceId: number,

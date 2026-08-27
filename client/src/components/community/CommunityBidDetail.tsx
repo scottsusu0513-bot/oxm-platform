@@ -17,6 +17,7 @@ import { toast } from "sonner";
 import CommunityBidForm from "./CommunityBidForm";
 import CommunityBidOfferForm from "./CommunityBidOfferForm";
 import type { CommunityBid } from "../../../../drizzle/schema";
+import { getEffectiveBidStatus } from "@/lib/community-types";
 
 const SPACE_CODE_TO_NAME: Record<string, string> = {
   ...Object.fromEntries(Object.entries(INDUSTRY_SLUGS).map(([name, slug]) => [slug, name])),
@@ -168,11 +169,12 @@ export default function CommunityBidDetail({ spaceCode, bidId }: Props) {
   const isOwner = bid.authorUserId === user?.id;
   const isAdmin = user?.role === "admin";
 
-  const deadlineText = bid.deadline
+  const effectiveStatus = getEffectiveBidStatus(bid);
+  // Once effectiveStatus has already flipped to "ended", the primary badge
+  // covers that — this line only ever shows remaining time while still active.
+  const deadlineText = bid.deadline && effectiveStatus === "active"
     ? (() => {
-        const ms = new Date(bid.deadline).getTime() - Date.now();
-        if (ms <= 0) return "已截止";
-        const h = Math.floor(ms / 3600000);
+        const h = Math.floor((new Date(bid.deadline).getTime() - Date.now()) / 3600000);
         if (h < 24) return `${h} 小時後截止`;
         return `${Math.floor(h / 24)} 天後截止`;
       })()
@@ -194,8 +196,8 @@ export default function CommunityBidDetail({ spaceCode, bidId }: Props) {
           {/* Title + status */}
           <div>
             <div className="flex items-center gap-2 flex-wrap mb-2">
-              <StatusBadge status={bid.status} />
-              {deadlineText && bid.status === "active" && (
+              <StatusBadge status={effectiveStatus} />
+              {deadlineText && (
                 <span className="flex items-center gap-1 text-xs text-muted-foreground">
                   <Clock className="w-3 h-3" />
                   {deadlineText}
@@ -435,15 +437,19 @@ export default function CommunityBidDetail({ spaceCode, bidId }: Props) {
                         </div>
                       )}
                       <div className="flex items-center justify-between">
-                        <p className="text-sm text-muted-foreground">以工廠身分投標此需求</p>
-                        <Button
-                          size="sm"
-                          disabled={myFactories.length > 1 && !selectedBidderFactoryId}
-                          onClick={() => setShowOfferForm(true)}
-                        >
-                          <Gavel className="w-3.5 h-3.5 mr-1.5" />
-                          投標
-                        </Button>
+                        <p className="text-sm text-muted-foreground">
+                          {effectiveStatus === "active" ? "以工廠身分投標此需求" : "此需求已截止，無法再投標"}
+                        </p>
+                        {effectiveStatus === "active" && (
+                          <Button
+                            size="sm"
+                            disabled={myFactories.length > 1 && !selectedBidderFactoryId}
+                            onClick={() => setShowOfferForm(true)}
+                          >
+                            <Gavel className="w-3.5 h-3.5 mr-1.5" />
+                            投標
+                          </Button>
+                        )}
                       </div>
                     </div>
                   ) : (
@@ -461,32 +467,36 @@ export default function CommunityBidDetail({ spaceCode, bidId }: Props) {
                         {myOffer.moq && <span>MOQ：{myOffer.moq}</span>}
                         {myOffer.sampleAvailable && <span>可提供樣品</span>}
                       </div>
-                      <div className="flex gap-2">
-                        {myOffer.status === "active" && (
-                          <>
-                            <Button size="sm" variant="outline" onClick={() => setShowOfferForm(true)}>修改</Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="text-destructive border-destructive/40 hover:bg-destructive/10"
-                              disabled={withdrawOfferMutation.isPending}
-                              onClick={() => {
-                                if (confirm("確定撤回此投標？")) {
-                                  withdrawOfferMutation.mutate({ offerId: myOffer.id });
-                                }
-                              }}
-                            >
-                              {withdrawOfferMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : null}
-                              撤回
+                      {effectiveStatus !== "active" ? (
+                        <p className="text-xs text-muted-foreground">此需求已截止，無法再修改或撤回投標</p>
+                      ) : (
+                        <div className="flex gap-2">
+                          {myOffer.status === "active" && (
+                            <>
+                              <Button size="sm" variant="outline" onClick={() => setShowOfferForm(true)}>修改</Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="text-destructive border-destructive/40 hover:bg-destructive/10"
+                                disabled={withdrawOfferMutation.isPending}
+                                onClick={() => {
+                                  if (confirm("確定撤回此投標？")) {
+                                    withdrawOfferMutation.mutate({ offerId: myOffer.id });
+                                  }
+                                }}
+                              >
+                                {withdrawOfferMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : null}
+                                撤回
+                              </Button>
+                            </>
+                          )}
+                          {myOffer.status === "withdrawn" && (
+                            <Button size="sm" onClick={() => setShowOfferForm(true)}>
+                              重新投標
                             </Button>
-                          </>
-                        )}
-                        {myOffer.status === "withdrawn" && (
-                          <Button size="sm" onClick={() => setShowOfferForm(true)}>
-                            重新投標
-                          </Button>
-                        )}
-                      </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

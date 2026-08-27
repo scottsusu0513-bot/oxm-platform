@@ -1,11 +1,11 @@
-import { describe, expect, it, beforeEach, afterEach, beforeAll, vi } from "vitest";
+import { describe, expect, it, beforeEach, afterEach, beforeAll, afterAll, vi } from "vitest";
 import { appRouter } from "./routers";
 import type { TrpcContext } from "./_core/context";
 import { resolveDefaultCommunitySpace, approveCommunityBid, rejectCommunityBid, withdrawCommunityBid, softDeleteCommunityBid, getCommunityBidIndustries, listCommunityBidReviewHistory, updateCommunityBid, getCommunityBidById, getDb, createCommunityBidOffer, withdrawCommunityBidOffer, resubmitCommunityBidOffer, getCommunityBidOfferById, getCommunityBidOfferByFactory, getCommunityBidOfferByUser, getCommunityBidOfferCount, listCommunityBidOffersForOwner, getApprovedFactoriesForUser, setTestBidDeadlinePast, setTestBidStatus, updateCommunityBidOfferSafe } from "./db";
-import { communityNotifications } from "../drizzle/schema";
+import { communityNotifications, communityMentions, communityPosts, communityComments } from "../drizzle/schema";
 import { COMMUNITY_CROSS_INDUSTRY_SLUG } from "../shared/const";
 import { factories as factoriesTable } from "../drizzle/schema";
-import { and as drizzleAnd, eq as drizzleEq, ne as drizzleNe } from "drizzle-orm";
+import { and as drizzleAnd, eq as drizzleEq, ne as drizzleNe, inArray as drizzleInArray } from "drizzle-orm";
 
 type AuthenticatedUser = NonNullable<TrpcContext["user"]>;
 
@@ -915,8 +915,8 @@ describe("community.createComment mention and auto-follow", () => {
     });
     await expect(adminCaller.community.createComment({
       postId,
-      content: "Hello @TestFactory",
-      mentions: [{ type: "factory", id: 9999 }],
+      content: "Hello @someone",
+      mentions: [{ type: "user", id: 9999 }],
     })).resolves.toHaveProperty("commentId");
     await adminCaller.community.deletePost({ postId });
   }, 30000);
@@ -981,20 +981,28 @@ describe("community.searchMentionTargets", () => {
 describe("communityMentions integrity constraints", () => {
   const adminCtx = () => createAuthContext({ role: "admin" });
 
-  it("createComment with factory mention saves mention row (factory id stored)", async () => {
+  it("createComment with an approved factory mention saves mention row (factory id stored)", async () => {
+    const db_ = await getDb();
+    if (!db_) return;
+    const [approved] = await db_.select({ id: factoriesTable.id })
+      .from(factoriesTable).where(drizzleEq(factoriesTable.status, "approved")).limit(1);
+    if (!approved) return; // no approved factory in this env — skip
     const adminCaller = appRouter.createCaller(adminCtx());
     const { postId } = await adminCaller.community.createPost({
       spaceCode: "textile",
       title: "Mention factory test",
       content: "Content",
     });
-    // Factory 9999 does not exist → createMentions catches FK error (best-effort), comment still created
     const result = await adminCaller.community.createComment({
       postId,
       content: "Hello @SomeFactory",
-      mentions: [{ type: "factory", id: 9999 }],
+      mentions: [{ type: "factory", id: approved.id }],
     });
     expect(result).toHaveProperty("commentId");
+    const mentionRows = await db_.select().from(communityMentions)
+      .where(drizzleAnd(drizzleEq(communityMentions.sourceType, "comment"), drizzleEq(communityMentions.sourceId, result.commentId)));
+    expect(mentionRows).toHaveLength(1);
+    expect(mentionRows[0].mentionedFactoryId).toBe(approved.id);
     await adminCaller.community.deletePost({ postId });
   }, 30000);
 
@@ -1276,15 +1284,20 @@ describe("community.createPost with mentions", () => {
     await adminCaller.community.deletePost({ postId });
   }, 30000);
 
-  it("non-approved factory in mentions is skipped (no error)", async () => {
+  it("nonexistent factory in mentions is rejected — no post is created (Phase 4 hardening)", async () => {
     const adminCaller = appRouter.createCaller(adminCtx());
-    // factory id=99999 does not exist → skip silently, post still created
+    const db_ = await getDb();
     await expect(adminCaller.community.createPost({
       spaceCode: "textile",
-      title: "Non-approved factory mention",
+      title: "Nonexistent factory mention should be rejected",
       content: "Content",
-      mentions: [{ type: "factory", id: 99999 }],
-    })).resolves.toHaveProperty("postId");
+      mentions: [{ type: "factory", id: 999999999 }],
+    })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    if (db_) {
+      const leftover = await db_.select({ id: communityPosts.id }).from(communityPosts)
+        .where(drizzleEq(communityPosts.title, "Nonexistent factory mention should be rejected"));
+      expect(leftover).toHaveLength(0);
+    }
   }, 30000);
 });
 
@@ -1341,6 +1354,285 @@ describe("community.updatePost with mentions", () => {
     })).resolves.toMatchObject({ success: true });
     await adminCaller.community.deletePost({ postId });
   }, 30000);
+});
+
+// ===== Phase 4: mention write-side factory status validation =====
+// Autocomplete (searchMentionTargets) already filters status="approved" — these tests
+// cover the WRITE side: createPost/createComment/updatePost must independently reject
+// a factory mention whose status isn't "approved" (or that doesn't exist at all),
+// mirroring exactly what a UI bypass (direct API call) could attempt.
+describe("community mention integrity: factory status guard (Phase 4)", () => {
+  const adminCtx = () => createAuthContext({ role: "admin" });
+  const NONEXISTENT_FACTORY_ID = 999999999;
+  const nonApprovedFactoryIds: Partial<Record<"pending" | "rejected" | "delisted" | "draft", number>> = {};
+  let approvedFactoryId: number | null = null;
+
+  beforeAll(async () => {
+    const db_ = await getDb();
+    if (!db_) return;
+    const [approved] = await db_.select({ id: factoriesTable.id })
+      .from(factoriesTable).where(drizzleEq(factoriesTable.status, "approved")).limit(1);
+    approvedFactoryId = approved?.id ?? null;
+
+    const statuses = ["pending", "rejected", "delisted", "draft"] as const;
+    for (let i = 0; i < statuses.length; i++) {
+      const status = statuses[i];
+      const ownerId = 900_000_000 + (Date.now() % 1_000_000) * 10 + i;
+      const [result] = await db_.insert(factoriesTable).values({
+        ownerId,
+        name: `QA-P4-mention-guard-${status}`,
+        industry: ["其他"],
+        mfgModes: ["ODM"],
+        region: "台北市",
+        capitalLevel: "未滿500萬",
+        status,
+      } as any);
+      nonApprovedFactoryIds[status] = (result as any).insertId as number;
+    }
+  }, 30000);
+
+  afterAll(async () => {
+    const db_ = await getDb();
+    if (!db_) return;
+    const ids = Object.values(nonApprovedFactoryIds).filter((v): v is number => v != null);
+    if (ids.length > 0) {
+      await db_.delete(factoriesTable).where(drizzleInArray(factoriesTable.id, ids));
+    }
+  });
+
+  const badStatuses = ["pending", "rejected", "delisted", "draft"] as const;
+
+  it.each(badStatuses)("createPost: %s factory mention is rejected, no post is created", async (status) => {
+    const factoryId = nonApprovedFactoryIds[status];
+    if (!factoryId) return;
+    const adminCaller = appRouter.createCaller(adminCtx());
+    const title = `QA-P4 createPost reject ${status}`;
+    await expect(adminCaller.community.createPost({
+      spaceCode: "textile",
+      title,
+      content: "Content",
+      mentions: [{ type: "factory", id: factoryId }],
+    })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+
+    const db_ = await getDb();
+    if (db_) {
+      const leftover = await db_.select({ id: communityPosts.id }).from(communityPosts)
+        .where(drizzleEq(communityPosts.title, title));
+      expect(leftover).toHaveLength(0);
+    }
+  }, 30000);
+
+  it("createPost: nonexistent factory id is rejected", async () => {
+    const adminCaller = appRouter.createCaller(adminCtx());
+    await expect(adminCaller.community.createPost({
+      spaceCode: "textile",
+      title: "QA-P4 createPost reject nonexistent",
+      content: "Content",
+      mentions: [{ type: "factory", id: NONEXISTENT_FACTORY_ID }],
+    })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  }, 30000);
+
+  it("createPost: approved factory mention still succeeds", async () => {
+    if (!approvedFactoryId) return; // no approved factory in this env — skip
+    const adminCaller = appRouter.createCaller(adminCtx());
+    const { postId } = await adminCaller.community.createPost({
+      spaceCode: "textile",
+      title: "QA-P4 createPost approved mention",
+      content: "Content",
+      mentions: [{ type: "factory", id: approvedFactoryId }],
+    });
+    expect(postId).toBeGreaterThan(0);
+    const db_ = await getDb();
+    if (db_) {
+      const rows = await db_.select().from(communityMentions)
+        .where(drizzleAnd(drizzleEq(communityMentions.sourceType, "post"), drizzleEq(communityMentions.sourceId, postId)));
+      expect(rows).toHaveLength(1);
+      expect(rows[0].mentionedFactoryId).toBe(approvedFactoryId);
+    }
+    await adminCaller.community.deletePost({ postId });
+  }, 30000);
+
+  it.each(badStatuses)("createComment: %s factory mention is rejected, no mention/notification created", async (status) => {
+    const factoryId = nonApprovedFactoryIds[status];
+    if (!factoryId) return;
+    const adminCaller = appRouter.createCaller(adminCtx());
+    const { postId } = await adminCaller.community.createPost({
+      spaceCode: "textile",
+      title: `QA-P4 createComment host post (${status})`,
+      content: "Content",
+    });
+    const countBefore = await adminCaller.community.notificationUnreadCount();
+    await expect(adminCaller.community.createComment({
+      postId,
+      content: "Hello @factory",
+      mentions: [{ type: "factory", id: factoryId }],
+    })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    const countAfter = await adminCaller.community.notificationUnreadCount();
+    expect(countAfter.count).toBe(countBefore.count);
+
+    const db_ = await getDb();
+    if (db_) {
+      const mentionRows = await db_.select().from(communityMentions)
+        .where(drizzleAnd(drizzleEq(communityMentions.sourceType, "comment"), drizzleEq(communityMentions.mentionedFactoryId, factoryId)));
+      expect(mentionRows).toHaveLength(0);
+    }
+    await adminCaller.community.deletePost({ postId });
+  }, 30000);
+
+  it("createComment: nonexistent factory id is rejected", async () => {
+    const adminCaller = appRouter.createCaller(adminCtx());
+    const { postId } = await adminCaller.community.createPost({
+      spaceCode: "textile",
+      title: "QA-P4 createComment host post (nonexistent)",
+      content: "Content",
+    });
+    await expect(adminCaller.community.createComment({
+      postId,
+      content: "Hello @factory",
+      mentions: [{ type: "factory", id: NONEXISTENT_FACTORY_ID }],
+    })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await adminCaller.community.deletePost({ postId });
+  }, 30000);
+
+  it("updatePost: rejecting an invalid mention does not corrupt a pre-existing valid mention", async () => {
+    if (!approvedFactoryId) return; // no approved factory in this env — skip
+    const pendingId = nonApprovedFactoryIds.pending;
+    if (!pendingId) return;
+    const adminCaller = appRouter.createCaller(adminCtx());
+    const { postId } = await adminCaller.community.createPost({
+      spaceCode: "textile",
+      title: "QA-P4 updatePost pre-existing mention guard",
+      content: "Content",
+      mentions: [{ type: "factory", id: approvedFactoryId }],
+    });
+
+    // Attempt an update that ADDS a pending-status factory mention alongside the
+    // existing valid one — the whole update must be rejected, and the original
+    // approved mention must remain untouched (no half-synced state).
+    await expect(adminCaller.community.updatePost({
+      postId,
+      content: "Updated content",
+      mentions: [{ type: "factory", id: approvedFactoryId }, { type: "factory", id: pendingId }],
+    })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+
+    const db_ = await getDb();
+    if (db_) {
+      const rows = await db_.select().from(communityMentions)
+        .where(drizzleAnd(drizzleEq(communityMentions.sourceType, "post"), drizzleEq(communityMentions.sourceId, postId)));
+      expect(rows).toHaveLength(1);
+      expect(rows[0].mentionedFactoryId).toBe(approvedFactoryId);
+    }
+    await adminCaller.community.deletePost({ postId });
+  }, 30000);
+});
+
+// ===== Phase 4: whitespace-only content must be rejected, real content must be trimmed =====
+// Root cause fixed: `.min(1)` used to run on the RAW string before `.trim()` ran, so a
+// whitespace-only value passed validation and was written to the DB as "". The schemas
+// now `.trim()` first — these tests lock that in for every affected Community mutation.
+describe("community whitespace validation (Phase 4 hardening)", () => {
+  const adminCtx = () => createAuthContext({ role: "admin" });
+  const whitespaceOnly = ["", " ", "    ", "\n", "\t", " \n \t "];
+
+  it.each(whitespaceOnly)("createPost: whitespace-only title %j is rejected", async (title) => {
+    const adminCaller = appRouter.createCaller(adminCtx());
+    await expect(adminCaller.community.createPost({ spaceCode: "textile", title, content: "Content" }))
+      .rejects.toThrow();
+  }, 10000);
+
+  it.each(whitespaceOnly)("createPost: whitespace-only content %j is rejected", async (content) => {
+    const adminCaller = appRouter.createCaller(adminCtx());
+    await expect(adminCaller.community.createPost({ spaceCode: "textile", title: "Title", content }))
+      .rejects.toThrow();
+  }, 10000);
+
+  it("createPost: padded title/content is trimmed before being stored", async () => {
+    const adminCaller = appRouter.createCaller(adminCtx());
+    const { postId } = await adminCaller.community.createPost({
+      spaceCode: "textile",
+      title: " ABC ",
+      content: " 中文內容 ",
+    });
+    const db_ = await getDb();
+    if (db_) {
+      const [row] = await db_.select({ title: communityPosts.title, content: communityPosts.content })
+        .from(communityPosts).where(drizzleEq(communityPosts.id, postId));
+      expect(row?.title).toBe("ABC");
+      expect(row?.content).toBe("中文內容");
+    }
+    await adminCaller.community.deletePost({ postId });
+  }, 30000);
+
+  it.each(whitespaceOnly)("updatePost: whitespace-only content %j is rejected, original content untouched", async (content) => {
+    const adminCaller = appRouter.createCaller(adminCtx());
+    const { postId } = await adminCaller.community.createPost({
+      spaceCode: "textile", title: "Update whitespace guard", content: "Original content",
+    });
+    await expect(adminCaller.community.updatePost({ postId, content })).rejects.toThrow();
+    const db_ = await getDb();
+    if (db_) {
+      const [row] = await db_.select({ content: communityPosts.content }).from(communityPosts)
+        .where(drizzleEq(communityPosts.id, postId));
+      expect(row?.content).toBe("Original content");
+    }
+    await adminCaller.community.deletePost({ postId });
+  }, 30000);
+
+  it("updatePost: padded content is trimmed before being stored", async () => {
+    const adminCaller = appRouter.createCaller(adminCtx());
+    const { postId } = await adminCaller.community.createPost({
+      spaceCode: "textile", title: "Update trim guard", content: "Original",
+    });
+    await adminCaller.community.updatePost({ postId, content: "  ABC  " });
+    const db_ = await getDb();
+    if (db_) {
+      const [row] = await db_.select({ content: communityPosts.content }).from(communityPosts)
+        .where(drizzleEq(communityPosts.id, postId));
+      expect(row?.content).toBe("ABC");
+    }
+    await adminCaller.community.deletePost({ postId });
+  }, 30000);
+
+  it.each(whitespaceOnly)("createComment: whitespace-only content %j is rejected", async (content) => {
+    const adminCaller = appRouter.createCaller(adminCtx());
+    const { postId } = await adminCaller.community.createPost({
+      spaceCode: "textile", title: "Comment whitespace guard", content: "Content",
+    });
+    await expect(adminCaller.community.createComment({ postId, content })).rejects.toThrow();
+    await adminCaller.community.deletePost({ postId });
+  }, 10000);
+
+  it.each(whitespaceOnly)("updateComment: whitespace-only content %j is rejected, original content untouched", async (content) => {
+    const adminCaller = appRouter.createCaller(adminCtx());
+    const { postId } = await adminCaller.community.createPost({
+      spaceCode: "textile", title: "Comment update whitespace guard", content: "Content",
+    });
+    const { commentId } = await adminCaller.community.createComment({ postId, content: "Original comment" });
+    await expect(adminCaller.community.updateComment({ commentId, content })).rejects.toThrow();
+    const db_ = await getDb();
+    if (db_) {
+      const [row] = await db_.select({ content: communityComments.content }).from(communityComments)
+        .where(drizzleEq(communityComments.id, commentId));
+      expect(row?.content).toBe("Original comment");
+    }
+    await adminCaller.community.deletePost({ postId });
+  }, 10000);
+
+  it("updateComment: padded content is trimmed before being stored", async () => {
+    const adminCaller = appRouter.createCaller(adminCtx());
+    const { postId } = await adminCaller.community.createPost({
+      spaceCode: "textile", title: "Comment update trim guard", content: "Content",
+    });
+    const { commentId } = await adminCaller.community.createComment({ postId, content: "Original comment" });
+    await adminCaller.community.updateComment({ commentId, content: "  ABC  " });
+    const db_ = await getDb();
+    if (db_) {
+      const [row] = await db_.select({ content: communityComments.content }).from(communityComments)
+        .where(drizzleEq(communityComments.id, commentId));
+      expect(row?.content).toBe("ABC");
+    }
+    await adminCaller.community.deletePost({ postId });
+  }, 10000);
 });
 
 // ===== Navbar unread query gating: unit test via tRPC =====
@@ -2431,6 +2723,31 @@ describe("community.createBidOffer: access control + bid validation", () => {
       images: [],
       pinnedProductIds: [],
     })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  }, 60000);
+
+  // 11. Phase 4: whitespace-only proposal is rejected (same trim-before-min fix as posts/comments)
+  it.each(["", " ", "    ", "\n", "\t", " \n \t "])(
+    "whitespace-only proposal %j is rejected",
+    async (proposal) => {
+      if (!testFactory) return; // skip if no factory
+      const wsBidId = await createActiveBid("Whitespace proposal guard bid");
+      const caller = appRouter.createCaller(factoryOwnerCtx()!);
+      await expect(caller.community.createBidOffer({
+        bidId: wsBidId, bidderFactoryId: testFactory.id, proposal, images: [], pinnedProductIds: [],
+      })).rejects.toThrow();
+    },
+    60000,
+  );
+
+  it("padded proposal is trimmed before being stored", async () => {
+    if (!testFactory) return; // skip if no factory
+    const trimBidId = await createActiveBid("Trim proposal guard bid");
+    const caller = appRouter.createCaller(factoryOwnerCtx()!);
+    const { offerId } = await caller.community.createBidOffer({
+      bidId: trimBidId, bidderFactoryId: testFactory.id, proposal: "  ABC  ", images: [], pinnedProductIds: [],
+    });
+    const offer = await getCommunityBidOfferById(offerId);
+    expect(offer?.proposal).toBe("ABC");
   }, 60000);
 });
 
