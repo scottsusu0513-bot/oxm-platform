@@ -1,4 +1,5 @@
-import { useRef, useState, useCallback, useEffect } from "react";
+import { useRef, useState, useCallback, useEffect, forwardRef, useImperativeHandle } from "react";
+import { createPortal } from "react-dom";
 import { trpc } from "@/lib/trpc";
 import { Loader2, Factory, User } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -44,14 +45,30 @@ function parseMentionAtCursor(text: string, cursor: number): Mention | null {
   };
 }
 
-export default function MentionTextarea({
+// 讓外部（例如「引用」自動預填 @對象 時）可以把游標移到文字最後——
+// 純粹是 focus + setSelectionRange，不涉及任何 mention 搜尋/插入邏輯本身。
+export interface MentionTextareaHandle {
+  focusEnd: () => void;
+}
+
+const MentionTextarea = forwardRef<MentionTextareaHandle, Props>(function MentionTextarea({
   value, onChange, mentions, onMentionsChange,
   postId, placeholder, rows = 2, disabled, className, onKeyDown,
-}: Props) {
+}, ref) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [activeMention, setActiveMention] = useState<Mention | null>(null);
   const [highlightedIdx, setHighlightedIdx] = useState(0);
   const [popoverAnchor, setPopoverAnchor] = useState<{ top: number; left: number } | null>(null);
+
+  useImperativeHandle(ref, () => ({
+    focusEnd: () => {
+      const el = textareaRef.current;
+      if (!el) return;
+      el.focus();
+      const end = el.value.length;
+      el.setSelectionRange(end, end);
+    },
+  }), []);
 
   const searchEnabled = !!activeMention && activeMention.query.length >= 1;
   const searchQuery = trpc.community.searchMentionTargets.useQuery(
@@ -144,6 +161,13 @@ export default function MentionTextarea({
 
   const showDropdown = !!activeMention && (searchEnabled || searchQuery.isLoading);
 
+  // Dropdown 用 createPortal 掛到 document.body，不是就地 render 在這個元件的
+  // DOM 位置——實測發現當這個元件被用在發文 Dialog（CommunityNewPostDialog）
+  // 裡面時，Dialog content 本身也是 position:fixed，會讓子孫的 position:fixed
+  // 元素改用它當 containing block，導致這裡用 getBoundingClientRect() 算出的
+  // 「相對於 viewport」座標整個位移（下拉選單被算到 Dialog 外、看不見的地方）。
+  // Portal 到 body 之後就不再是 Dialog 的 DOM 子孫，不受它的 containing block
+  // 影響，跟這個元件本來在一般頁面（例如留言框）用起來一致。
   return (
     <div className="relative flex-1">
       <textarea
@@ -161,7 +185,7 @@ export default function MentionTextarea({
         )}
       />
 
-      {showDropdown && popoverAnchor && (
+      {showDropdown && popoverAnchor && createPortal(
         <div
           className="fixed z-50 bg-popover border border-border rounded-lg shadow-lg overflow-hidden min-w-[220px] max-w-[300px]"
           style={{ top: popoverAnchor.top, left: Math.min(popoverAnchor.left, window.innerWidth - 320) }}
@@ -204,8 +228,11 @@ export default function MentionTextarea({
               </button>
             ))
           )}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
-}
+});
+
+export default MentionTextarea;

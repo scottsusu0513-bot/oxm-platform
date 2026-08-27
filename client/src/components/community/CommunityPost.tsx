@@ -1,11 +1,11 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { trpc } from "@/lib/trpc";
 import Navbar from "@/components/Navbar";
 import { Helmet } from "react-helmet-async";
 import { Link, useLocation } from "wouter";
 import {
   ChevronLeft, Loader2, Lock, Pin, AlertTriangle,
-  Pencil, Trash2, EyeOff, Eye, MoreHorizontal, Reply, Send, X, ShoppingBag,
+  Pencil, Trash2, EyeOff, Eye, MoreHorizontal, Reply, Quote, Send, X, ShoppingBag, MessagesSquare,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -27,7 +27,8 @@ import type { CommunityCommentWithMeta } from "@/lib/community-types";
 import CommunityImageUploader from "./CommunityImageUploader";
 import CommunityReactionButton from "./CommunityReactionButton";
 import CommunityContentFollowButton from "./CommunityContentFollowButton";
-import MentionTextarea, { type MentionInput } from "./MentionTextarea";
+import MentionTextarea, { type MentionInput, type MentionTextareaHandle } from "./MentionTextarea";
+import { isSafeCommunityReturnSource } from "@/lib/communityReturnSource";
 
 interface Props {
   spaceCode: string;
@@ -57,7 +58,11 @@ interface CommentItemProps {
   comment: CommunityCommentWithMeta;
   isAdmin: boolean;
   currentUserId?: number;
-  onReply: (commentId: number, toUserId: number | null, toName: string) => void;
+  // quoteMention 只在「引用」第二層留言時帶入——parentCommentId 一律解析到
+  // 第一層（root），quoteMention 則是要自動預填進輸入框的 @對象 mention，
+  // 讓 composer 走跟使用者手動從 autocomplete 選到的完全相同的 mention state
+  // （見 CommunityPost 內 onReply 的實作與呼叫端說明）。
+  onReply: (parentCommentId: number, toUserId: number | null, toName: string, quoteMention?: MentionInput) => void;
   onEdit: (comment: CommunityCommentWithMeta) => void;
   onDelete: (commentId: number) => void;
   onHide: (commentId: number, hidden: boolean) => void;
@@ -111,10 +116,38 @@ function CommentItem({ comment, isAdmin, currentUserId, onReply, onEdit, onDelet
                 variant="ghost"
                 size="sm"
                 className="h-7 px-2 text-xs text-muted-foreground"
-                onClick={() => onReply(comment.id, comment.authorUserId, comment.authorFactoryName ?? comment.authorName ?? "對方")}
+                onClick={() => {
+                  const name = comment.authorFactoryName ?? comment.authorName ?? "對方";
+                  if (isNested) {
+                    // 引用第二層留言：parentCommentId 必須解析回第一層
+                    // （comment.parentCommentId，也就是這則留言自己所屬的
+                    // root），不能用 comment.id（自己），否則會撞到 server
+                    // 「只允許兩層留言結構」的檢查——因為 server 是檢查
+                    // 「要回覆的目標本身有沒有自己的 parent」。
+                    onReply(
+                      comment.parentCommentId!,
+                      comment.authorUserId,
+                      `@${name}`,
+                      comment.authorUserId != null
+                        ? { type: "user", id: comment.authorUserId, displayName: name }
+                        : undefined,
+                    );
+                  } else {
+                    onReply(comment.id, comment.authorUserId, name);
+                  }
+                }}
               >
-                <Reply className="w-3 h-3 mr-1" />
-                回覆
+                {isNested ? (
+                  <>
+                    <Quote className="w-3 h-3 mr-1" />
+                    引用
+                  </>
+                ) : (
+                  <>
+                    <Reply className="w-3 h-3 mr-1" />
+                    回覆
+                  </>
+                )}
               </Button>
             )}
             {canEdit && (
@@ -176,6 +209,23 @@ export default function CommunityPost({ spaceCode, postId }: Props) {
   const isAdmin = user?.role === "admin";
   const utils = trpc.useUtils();
 
+  // 返回討論區：來源一律來自 history.state.from（由 CommunitySpace 進入貼文時
+  // navigate(path, {state}) 帶入），驗證通過才用真正的 history.back()，否則
+  // 安全 fallback 到這個 spaceCode 自己的討論列表（不是 /community）——見
+  // isSafeCommunityReturnSource 的規則說明。比照 ChatPage.tsx 既有的
+  // isSafeChatReturnSource／handleReturn 寫法。
+  const rawReturnSource = (window.history.state as Record<string, unknown> | null)?.from;
+  const returnSource: string | null = isSafeCommunityReturnSource(rawReturnSource) ? rawReturnSource : null;
+  const RETURN_FALLBACK_PATH = `/community/${spaceCode}/discussions`;
+  const handleReturn = () => {
+    if (returnSource && typeof window !== "undefined" && window.history.length > 1) {
+      window.history.back();
+    } else {
+      navigate(RETURN_FALLBACK_PATH, { replace: true });
+    }
+  };
+
+  const commentTextareaRef = useRef<MentionTextareaHandle>(null);
   const [commentText, setCommentText] = useState("");
   const [commentMentions, setCommentMentions] = useState<MentionInput[]>([]);
   const [replyTo, setReplyTo] = useState<{ parentCommentId: number; replyToUserId: number | null; label: string } | null>(null);
@@ -335,7 +385,7 @@ export default function CommunityPost({ spaceCode, postId }: Props) {
   const isLocked = post.isLocked;
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-slate-50/60 dark:bg-background">
       <Helmet>
         <title>{post.title} — {spaceName} — OXM 商案討論區</title>
         <meta name="robots" content="noindex, nofollow" />
@@ -343,7 +393,7 @@ export default function CommunityPost({ spaceCode, postId }: Props) {
 
       <Navbar />
 
-      <main className="container py-8 max-w-3xl">
+      <main className="container py-5 sm:py-8 max-w-3xl">
         {/* Breadcrumb */}
         <div className="flex items-center gap-2 text-sm text-muted-foreground mb-6">
           <Link href="/community" className="hover:text-foreground transition-colors">商案討論區</Link>
@@ -351,8 +401,21 @@ export default function CommunityPost({ spaceCode, postId }: Props) {
           <Link href={`/community/${spaceCode}/discussions`} className="hover:text-foreground transition-colors">{spaceName}</Link>
         </div>
 
+        {/* 返回討論區：優先用 history.back() 回到使用者實際進來的列表頁（含
+            productId/query），沒有可信來源時才 fallback 回這個 spaceCode 的
+            討論列表——見 handleReturn／isSafeCommunityReturnSource。 */}
+        <button
+          type="button"
+          onClick={handleReturn}
+          className="inline-flex items-center gap-1.5 mb-4 h-9 px-3 -ml-3 rounded-lg text-sm font-medium text-purple-700 dark:text-purple-300 hover:bg-purple-50 dark:hover:bg-purple-950/40 transition-colors"
+        >
+          <ChevronLeft className="w-4 h-4" />
+          返回討論區
+        </button>
+
         {/* Post header */}
-        <div className="bg-card border border-border rounded-xl p-6 mb-6">
+        <article className="relative overflow-hidden bg-card border border-purple-100/80 dark:border-purple-900/40 rounded-2xl p-5 sm:p-6 mb-6 shadow-sm">
+          <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-orange-400 via-purple-500 to-purple-600" aria-hidden="true" />
           {editingPost ? (
             /* Inline edit form */
             <div className="space-y-3">
@@ -538,17 +601,21 @@ export default function CommunityPost({ spaceCode, postId }: Props) {
               )}
             </div>
           )}
-        </div>
+        </article>
 
         {/* Comments section */}
-        <div className="bg-card border border-border rounded-xl overflow-hidden">
-          <div className="px-6 py-4 border-b border-border">
+        <section className="bg-card border border-purple-100/80 dark:border-purple-900/40 rounded-2xl overflow-hidden shadow-sm">
+          <div className="px-5 sm:px-6 py-4 border-b border-purple-100/70 dark:border-purple-900/30 flex items-center gap-2">
+            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-purple-100 text-purple-700 dark:bg-purple-950/50 dark:text-purple-300">
+              <MessagesSquare className="h-4 w-4" aria-hidden="true" />
+            </span>
             <h2 className="font-semibold text-sm">{post.commentCount} 則留言</h2>
           </div>
 
           {comments.length === 0 ? (
-            <div className="py-10 text-center text-sm text-muted-foreground">
-              尚無留言，成為第一個留言的人
+            <div className="py-10 px-5 text-center text-sm text-muted-foreground">
+              <MessagesSquare className="mx-auto mb-2 h-7 w-7 text-purple-300 dark:text-purple-700" aria-hidden="true" />
+              <p>尚無留言，成為第一個留言的人</p>
             </div>
           ) : (
             <div className="divide-y divide-border px-6">
@@ -558,9 +625,20 @@ export default function CommunityPost({ spaceCode, postId }: Props) {
                   comment={comment}
                   isAdmin={isAdmin}
                   currentUserId={user?.id}
-                  onReply={(parentCommentId, replyToUserId, label) =>
-                    setReplyTo({ parentCommentId, replyToUserId, label })
-                  }
+                  onReply={(parentCommentId, replyToUserId, label, quoteMention) => {
+                    setReplyTo({ parentCommentId, replyToUserId, label });
+                    if (quoteMention) {
+                      // 引用第二層留言：預帶 @對象 進輸入框，且必須是「真正的
+                      // mention」（跟使用者手動從 autocomplete 選到的狀態一
+                      // 樣），server 才會透過 mentions[] 通知被引用的人——
+                      // replyToUserId 只掛在留言上做顯示用，真正驅動通知的是
+                      // parentCommentId 對應到的作者（root）與 mentions[]。
+                      const insertText = `@${quoteMention.displayName} `;
+                      setCommentText(insertText);
+                      setCommentMentions([quoteMention]);
+                      requestAnimationFrame(() => commentTextareaRef.current?.focusEnd());
+                    }
+                  }}
                   onEdit={(c) => setEditingComment({ id: c.id, content: c.content })}
                   onDelete={(id) => deleteCommentMut.mutate({ commentId: id })}
                   onHide={(id, hidden) => hideCommentMut.mutate({ commentId: id, hidden })}
@@ -607,6 +685,7 @@ export default function CommunityPost({ spaceCode, postId }: Props) {
               ) : (
                 <div className="flex gap-2 items-end">
                   <MentionTextarea
+                    ref={commentTextareaRef}
                     value={commentText}
                     onChange={setCommentText}
                     mentions={commentMentions}
@@ -650,7 +729,7 @@ export default function CommunityPost({ spaceCode, postId }: Props) {
               作者已關閉此貼文的留言功能
             </div>
           )}
-        </div>
+        </section>
       </main>
     </div>
   );

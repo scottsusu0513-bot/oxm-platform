@@ -1,4 +1,5 @@
 import { useLocation } from "wouter";
+import { Gavel, MessagesSquare } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -7,8 +8,8 @@ interface Props {
 }
 
 const SECTIONS = [
-  { id: "discussions" as const, label: "討論區" },
-  { id: "bids" as const, label: "競標區" },
+  { id: "discussions" as const, label: "討論區", Icon: MessagesSquare },
+  { id: "bids" as const, label: "競標區", Icon: Gavel },
 ] as const;
 
 export default function CommunitySectionTabs({ spaceCode, activeSection }: Props) {
@@ -16,7 +17,7 @@ export default function CommunitySectionTabs({ spaceCode, activeSection }: Props
 
   return (
     <div
-      className="flex gap-0 border-b border-border mt-4"
+      className="mt-3 flex gap-2 border-b border-purple-100 dark:border-purple-900/40"
       role="tablist"
       aria-label="討論區或競標區"
     >
@@ -27,13 +28,14 @@ export default function CommunitySectionTabs({ spaceCode, activeSection }: Props
           aria-selected={activeSection === sec.id}
           onClick={() => navigate(`/community/${spaceCode}/${sec.id}`)}
           className={cn(
-            "px-4 py-2 text-sm font-medium transition-colors",
-            "border-b-2 -mb-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1",
+            "-mb-px inline-flex items-center gap-1.5 border-b-2 px-4 py-2.5 text-sm font-medium transition-colors",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-500 focus-visible:ring-offset-1",
             activeSection === sec.id
-              ? "border-orange-500 text-foreground"
+              ? "border-orange-500 text-purple-700 dark:text-purple-300"
               : "border-transparent text-muted-foreground hover:text-foreground"
           )}
         >
+          <sec.Icon className={cn("h-4 w-4", activeSection === sec.id && "text-orange-500")} aria-hidden="true" />
           {sec.label}
         </button>
       ))}

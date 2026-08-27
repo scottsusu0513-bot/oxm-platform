@@ -1,5 +1,6 @@
 import { useRef, useEffect } from "react";
 import { useLocation } from "wouter";
+import { Factory, Network } from "lucide-react";
 import { INDUSTRY_OPTIONS, INDUSTRY_SLUGS } from "@shared/constants";
 import { COMMUNITY_CROSS_INDUSTRY_NAME, COMMUNITY_CROSS_INDUSTRY_SLUG } from "@shared/const";
 import { cn } from "@/lib/utils";
@@ -25,29 +26,34 @@ export default function CommunityIndustryTabs({ activeSpaceCode }: Props) {
 
   return (
     <div
-      className="flex overflow-x-auto overflow-y-hidden border-b border-border [&::-webkit-scrollbar]:hidden"
+      className="flex gap-1 overflow-x-auto overflow-y-hidden rounded-xl border border-purple-100/80 bg-white/90 p-1.5 shadow-sm dark:border-purple-900/40 dark:bg-card [&::-webkit-scrollbar]:hidden"
       style={{ scrollbarWidth: "none" }}
       role="tablist"
       aria-label="選擇產業看板"
     >
-      {TABS.map(tab => (
-        <button
-          key={tab.slug}
-          ref={tab.slug === activeSpaceCode ? activeRef : undefined}
-          role="tab"
-          aria-selected={tab.slug === activeSpaceCode}
-          onClick={() => navigate(`/community/${tab.slug}/discussions`)}
-          className={cn(
-            "shrink-0 px-3.5 py-2.5 text-sm font-medium whitespace-nowrap transition-colors",
-            "border-b-2 -mb-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1",
-            tab.slug === activeSpaceCode
-              ? "border-orange-500 text-orange-600 dark:text-orange-400"
-              : "border-transparent text-muted-foreground hover:text-foreground hover:border-muted-foreground/30"
-          )}
-        >
-          {tab.name}
-        </button>
-      ))}
+      {TABS.map(tab => {
+        const isActive = tab.slug === activeSpaceCode;
+        const Icon = tab.slug === COMMUNITY_CROSS_INDUSTRY_SLUG ? Network : Factory;
+        return (
+          <button
+            key={tab.slug}
+            ref={isActive ? activeRef : undefined}
+            role="tab"
+            aria-selected={isActive}
+            onClick={() => navigate(`/community/${tab.slug}/discussions`)}
+            className={cn(
+              "flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium transition-[background-color,color,box-shadow,transform] duration-150",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-500 focus-visible:ring-offset-1",
+              isActive
+                ? "bg-purple-600 text-white shadow-sm"
+                : "text-muted-foreground hover:-translate-y-px hover:bg-purple-50 hover:text-purple-700 dark:hover:bg-purple-950/30 dark:hover:text-purple-300"
+            )}
+          >
+            <Icon className={cn("h-3.5 w-3.5 shrink-0", isActive && "text-orange-200")} aria-hidden="true" />
+            {tab.name}
+          </button>
+        );
+      })}
     </div>
   );
 }

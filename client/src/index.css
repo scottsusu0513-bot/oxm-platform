@@ -296,6 +296,44 @@
 }
 
 @layer components {
+  /* Keep long community boards visibly scrollable without introducing a nested
+     list viewport. The stable gutter prevents horizontal layout shift. */
+  .community-page {
+    min-height: 100dvh;
+  }
+
+  html:has(.community-page) {
+    overflow-x: clip;
+    overflow-y: auto;
+  }
+
+  @media (min-width: 640px) {
+    html:has(.community-page) {
+      overflow-y: scroll;
+      scrollbar-gutter: stable;
+      scrollbar-color: rgba(124, 58, 237, 0.42) rgba(245, 243, 255, 0.72);
+    }
+
+    html:has(.community-page)::-webkit-scrollbar {
+      width: 10px;
+    }
+
+    html:has(.community-page)::-webkit-scrollbar-track {
+      background: rgba(245, 243, 255, 0.72);
+    }
+
+    html:has(.community-page)::-webkit-scrollbar-thumb {
+      min-height: 48px;
+      border: 2px solid rgba(245, 243, 255, 0.72);
+      border-radius: 999px;
+      background: rgba(124, 58, 237, 0.42);
+    }
+
+    html:has(.community-page)::-webkit-scrollbar-thumb:hover {
+      background: rgba(124, 58, 237, 0.62);
+    }
+  }
+
   .container {
     width: 100%;
     margin-left: auto;
