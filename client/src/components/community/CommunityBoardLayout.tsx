@@ -44,7 +44,7 @@ export default function CommunityBoardLayout({ spaceCode, section }: Props) {
         {/* Compact brand hero: artwork stays secondary to discussion content. */}
         <section className="relative mb-4 overflow-hidden rounded-2xl border border-purple-100/80 bg-gradient-to-br from-white via-purple-50/35 to-orange-50/55 px-5 py-4 shadow-sm dark:border-purple-900/40 dark:from-card dark:via-purple-950/20 dark:to-orange-950/10 sm:px-7">
           <div className="pointer-events-none absolute -right-10 -top-16 h-48 w-48 rounded-full border-[28px] border-purple-100/45 dark:border-purple-900/20" aria-hidden="true" />
-          <div className="relative grid items-center sm:min-h-[132px] sm:grid-cols-[minmax(0,1fr)_minmax(240px,32%)] sm:gap-6">
+          <div className="relative grid items-center gap-2 sm:min-h-[140px] sm:grid-cols-[minmax(0,1fr)_minmax(260px,36%)] sm:gap-6">
             <div className="max-w-2xl py-1">
               <span className="mb-2 inline-flex items-center gap-1.5 rounded-full border border-purple-100 bg-white/80 px-2.5 py-1 text-xs font-semibold tracking-wide text-purple-700 shadow-sm dark:border-purple-900/50 dark:bg-purple-950/30 dark:text-purple-300">
                 <MessageSquareText className="h-3.5 w-3.5" />
@@ -55,7 +55,7 @@ export default function CommunityBoardLayout({ spaceCode, section }: Props) {
                 依產業切換看板，分享實務經驗、交流技術問題，找到下一個合作機會。
               </p>
             </div>
-            <CommunityHeroArtwork className="pointer-events-none hidden h-[136px] w-full sm:block" />
+            <CommunityHeroArtwork className="pointer-events-none mx-auto h-[108px] w-full max-w-[340px] sm:h-[148px] sm:max-w-none" />
           </div>
         </section>
 
