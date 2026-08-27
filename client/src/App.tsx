@@ -347,6 +347,12 @@ function AiShellGate() {
 // 排除清單獨立維護在 client/src/lib/footerRoutes.ts（isFooterExcludedPath），
 // 刻意不共用 isAiShellExcludedPath——兩者排除的路由集合雖然重疊，但語意不同
 // （AI 面板 vs 頁尾），合併會讓其中一份未來調整時互相牽動。
+//
+// 這個元件實際 render 的位置在下面 Router() 的 <Suspense> 之內（跟 <Switch>
+// 同一層），不是直接掛在 App() 裡——刻意讓它跟著頁面一起被 Suspense 接管：
+// 路由切換到尚未載入過的 lazy page 時，Suspense fallback 期間 Footer 也必須
+// 一起消失，只留 AppLoading 全螢幕載入畫面，不能讓 Footer 在頁面內容還沒
+// ready 時就先閃出來（過去掛在 Suspense 外面時，就是這個問題的根因）。
 function FooterGate() {
   const [pathname] = useLocation();
   if (isFooterExcludedPath(pathname)) return null;
@@ -441,6 +447,7 @@ function Router() {
         <Route path="/404" component={NotFound} />
         <Route component={NotFound} />
       </Switch>
+      <FooterGate />
     </Suspense>
   );
 }
@@ -515,7 +522,6 @@ function App() {
               <RouteTracker />
               <NetworkStatusOverlay />
               <Router />
-              <FooterGate />
               <AppBottomNav />
               <AiShellGate />
               <FloatingActionStack />
