@@ -1,4 +1,4 @@
-import { COOKIE_NAME, THIRTY_DAYS_MS, COMMUNITY_FEATURE_STATUS, PLATFORM_NOTIFICATION_TYPES, COMMUNITY_PUBLIC_ENTRY_ENABLED, ADVISOR_DISPLAY_NAME } from "@shared/const";
+import { COOKIE_NAME, THIRTY_DAYS_MS, COMMUNITY_FEATURE_STATUS, PLATFORM_NOTIFICATION_TYPES, COMMUNITY_PUBLIC_ENTRY_ENABLED, ADVISOR_DISPLAY_NAME, COMMUNITY_IMAGE_MAX_BYTES, COMMUNITY_IMAGE_MAX_MB } from "@shared/const";
 import { validateOrderDateChain } from "@shared/orderDateChain";
 import { COLLABORATION_ORDER_STAGE_LABELS, isStageTransitionEarly } from "@shared/collaborationOrderStage";
 import { userNeedsConsent, CURRENT_TERMS_VERSION, CURRENT_PRIVACY_VERSION } from "@shared/consent";
@@ -156,6 +156,16 @@ const imageCropInputSchema = imageCropObjectSchema.nullable().optional()
 // 整個欄位省略的 imageCropInputSchema 分開。
 const imageCropArrayItemSchema = imageCropObjectSchema.nullable()
   .transform(v => (v === null ? null : clampImageCrop(v)));
+
+// Community post images: { url, crop }[] embedded directly in the existing
+// `images` JSON column (see drizzle/schema.ts CommunityPostImage) — reuses the
+// same crop object schema + clampImageCrop() as every other crop-accepting
+// mutation in this file rather than trusting the client's values as-is.
+const communityImageInputSchema = z.object({
+  url: z.string().url(),
+  crop: imageCropObjectSchema.nullable().optional()
+    .transform(v => (v == null ? null : clampImageCrop(v))),
+});
 
 // ── chat.send 與「首次送出」原子 mutation 共用的通知邏輯 ─────────────────
 // 抽出來讓 chat.send（買家傳給已存在對話）與新的 chat.sendFirstMessage
@@ -6080,10 +6090,10 @@ export const appRouter = router({
         checkCommunityWrite(ctx.user);
         const base64Data = input.base64.includes(",") ? input.base64.split(",")[1] : input.base64;
         const buffer = Buffer.from(base64Data, "base64");
-        if (buffer.byteLength > 8 * 1024 * 1024) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: "圖片不得超過 8MB" });
+        if (buffer.byteLength > COMMUNITY_IMAGE_MAX_BYTES) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: `圖片不得超過 ${COMMUNITY_IMAGE_MAX_MB}MB` });
         }
-        const validation = await validateImageUpload(buffer);
+        const validation = await validateImageUpload(buffer, COMMUNITY_IMAGE_MAX_BYTES);
         if (!validation.valid) throw new TRPCError({ code: "BAD_REQUEST", message: validation.error ?? "圖片格式不正確" });
         const ext = input.mimeType.includes("png") ? "png" : input.mimeType.includes("webp") ? "webp" : "jpg";
         const key = `community-posts/${ctx.user.id}/${nanoid()}.${ext}`;
@@ -6097,7 +6107,7 @@ export const appRouter = router({
         spaceCode: z.string().min(1).max(60),
         title: z.string().trim().min(1).max(200),
         content: z.string().trim().min(1).max(10000),
-        images: z.array(z.string().url()).max(6).default([]),
+        images: z.array(communityImageInputSchema).max(6).default([]),
         pinnedProductIds: z.array(z.number().int().positive()).max(5).default([]),
         commentsEnabled: z.boolean().default(true),
         authorFactoryId: z.number().int().positive().optional(),
@@ -6109,7 +6119,7 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         checkCommunityWrite(ctx.user);
         assertValidSpaceCode(input.spaceCode);
-        assertCommunityImagesOwned(input.images, ctx.user.id);
+        assertCommunityImagesOwned(input.images.map(img => img.url), ctx.user.id);
         try {
           await db.assertMentionTargetsValid(input.mentions);
         } catch (e: any) {
@@ -6259,7 +6269,7 @@ export const appRouter = router({
         postId: z.number().int(),
         title: z.string().trim().min(1).max(200).optional(),
         content: z.string().trim().min(1).max(10000).optional(),
-        images: z.array(z.string().url()).max(6).optional(),
+        images: z.array(communityImageInputSchema).max(6).optional(),
         pinnedProductIds: z.array(z.number().int().positive()).max(5).optional(),
         commentsEnabled: z.boolean().optional(),
         mentions: z.array(z.object({
@@ -6278,7 +6288,7 @@ export const appRouter = router({
           throw new TRPCError({ code: "FORBIDDEN", message: "此貼文已鎖定，無法編輯" });
         }
         if (input.images !== undefined) {
-          assertCommunityImagesOwned(input.images, ctx.user.id);
+          assertCommunityImagesOwned(input.images.map(img => img.url), ctx.user.id);
         }
 
         // Validate pinnedProductIds if being updated

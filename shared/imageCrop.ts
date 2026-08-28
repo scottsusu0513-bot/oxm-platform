@@ -91,6 +91,33 @@ export function computeCoverFitSize(
  * 若某一軸向的渲染尺寸小於等於容器尺寸（沒有可拖曳餘裕），該軸向的位移會
  * 被忽略，避免除以極小值或負值造成不合理的百分比跳動。
  */
+export interface ImageWithCrop {
+  url: string;
+  crop: ImageCropData | null;
+}
+
+/**
+ * Normalizes one entry of an image-array JSON column that has been upgraded
+ * in-place from plain `string[]` to `{ url, crop }[]` (no migration — JSON
+ * columns don't enforce a fixed shape at the DB level, so older rows still
+ * physically contain bare strings). Handles both shapes so callers never see
+ * the legacy form: a bare string becomes `{ url, crop: null }`, which
+ * `imageCropToStyle()`/`CroppedImage` already render identically to the
+ * pre-crop-feature center-crop behavior — old posts don't change appearance.
+ * Returns null for anything unrecognizable so callers can safely filter it out
+ * rather than rendering a broken image.
+ */
+export function normalizeImageEntry(
+  entry: string | { url?: unknown; crop?: unknown } | null | undefined,
+): ImageWithCrop | null {
+  if (entry == null) return null;
+  if (typeof entry === "string") return { url: entry, crop: null };
+  if (typeof entry === "object" && typeof entry.url === "string") {
+    return { url: entry.url, crop: entry.crop ? clampImageCrop(entry.crop as Partial<ImageCropData>) : null };
+  }
+  return null;
+}
+
 export function applyDragDelta(
   current: ImageCropData,
   dx: number,

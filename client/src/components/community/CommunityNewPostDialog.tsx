@@ -20,7 +20,7 @@ import {
 } from "@/components/ui/select";
 import { toast } from "sonner";
 import { Loader2, ShoppingBag } from "lucide-react";
-import CommunityImageUploader from "./CommunityImageUploader";
+import CommunityPostImageUploader, { type CommunityImage } from "./CommunityPostImageUploader";
 import MentionTextarea, { type MentionInput } from "./MentionTextarea";
 
 interface Props {
@@ -35,7 +35,7 @@ export default function CommunityNewPostDialog({ spaceCode, spaceName, onClose, 
   const [content, setContent] = useState("");
   const [mentions, setMentions] = useState<MentionInput[]>([]);
   const [commentsEnabled, setCommentsEnabled] = useState(true);
-  const [images, setImages] = useState<string[]>([]);
+  const [images, setImages] = useState<CommunityImage[]>([]);
   const [isUploading, setIsUploading] = useState(false);
   const [selectedProductIds, setSelectedProductIds] = useState<number[]>([]);
   // For multi-factory users: stores the selected factoryId as string for Select
@@ -177,7 +177,7 @@ export default function CommunityNewPostDialog({ spaceCode, spaceName, onClose, 
           {/* Images */}
           <div className="space-y-1.5">
             <Label className="text-sm">附加圖片（最多 6 張）</Label>
-            <CommunityImageUploader
+            <CommunityPostImageUploader
               images={images}
               onChange={setImages}
               disabled={createPostMut.isPending}

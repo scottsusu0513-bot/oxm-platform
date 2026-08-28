@@ -2,9 +2,14 @@ import { useRef, useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { X, ImagePlus, Loader2 } from "lucide-react";
 import { toast } from "sonner";
+import { COMMUNITY_IMAGE_MAX_BYTES, COMMUNITY_IMAGE_MAX_MB } from "@shared/const";
 
 const MAX_IMAGES = 6;
-const MAX_BYTES = 8 * 1024 * 1024;
+// Phase 6: was hardcoded to 8MB here while the server (community.uploadPostImage)
+// actually enforced 5MB — this component is shared by bid/bid-offer image upload
+// (CommunityBidForm/CommunityBidOfferForm), which stay on the plain non-crop flow
+// this phase; only the size constant is unified here.
+const MAX_BYTES = COMMUNITY_IMAGE_MAX_BYTES;
 const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
 type AllowedMime = (typeof ALLOWED_TYPES)[number];
 
@@ -42,7 +47,7 @@ export default function CommunityImageUploader({
       if (!ALLOWED_TYPES.includes(file.type as AllowedMime)) {
         toast.error(`不支援的格式：${file.name}（支援 jpg / png / webp）`);
       } else if (file.size > MAX_BYTES) {
-        toast.error(`${file.name} 超過 8MB 上限`);
+        toast.error(`${file.name} 超過 ${COMMUNITY_IMAGE_MAX_MB}MB 上限`);
       } else {
         valid.push(file);
       }

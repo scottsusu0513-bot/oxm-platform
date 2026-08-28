@@ -34,11 +34,12 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import type { CommunityCommentWithMeta } from "@/lib/community-types";
-import CommunityImageUploader from "./CommunityImageUploader";
+import CommunityPostImageUploader, { type CommunityImage } from "./CommunityPostImageUploader";
 import CommunityReactionButton from "./CommunityReactionButton";
 import CommunityContentFollowButton from "./CommunityContentFollowButton";
 import MentionTextarea, { type MentionInput, type MentionTextareaHandle } from "./MentionTextarea";
 import { isSafeCommunityReturnSource } from "@/lib/communityReturnSource";
+import { CroppedImage } from "@/components/CroppedImage";
 
 interface Props {
   spaceCode: string;
@@ -240,7 +241,7 @@ export default function CommunityPost({ spaceCode, postId }: Props) {
   const [commentMentions, setCommentMentions] = useState<MentionInput[]>([]);
   const [replyTo, setReplyTo] = useState<{ parentCommentId: number; replyToUserId: number | null; label: string } | null>(null);
   const [editingComment, setEditingComment] = useState<{ id: number; content: string } | null>(null);
-  const [editingPost, setEditingPost] = useState<{ title: string; content: string; commentsEnabled: boolean; images: string[]; isUploading: boolean } | null>(null);
+  const [editingPost, setEditingPost] = useState<{ title: string; content: string; commentsEnabled: boolean; images: CommunityImage[]; isUploading: boolean } | null>(null);
   const [editingPostMentions, setEditingPostMentions] = useState<MentionInput[]>([]);
   const [confirmDeletePost, setConfirmDeletePost] = useState(false);
   const [confirmHardDeletePost, setConfirmHardDeletePost] = useState(false);
@@ -460,7 +461,7 @@ export default function CommunityPost({ spaceCode, postId }: Props) {
               />
               <div className="space-y-1.5">
                 <Label className="text-sm">附加圖片（最多 6 張）</Label>
-                <CommunityImageUploader
+                <CommunityPostImageUploader
                   images={editingPost.images}
                   onChange={(urls) => setEditingPost({ ...editingPost, images: urls })}
                   disabled={updatePostMut.isPending}
@@ -508,16 +509,14 @@ export default function CommunityPost({ spaceCode, postId }: Props) {
                 </div>
                 <p className="text-sm leading-relaxed whitespace-pre-wrap break-words">{post.content}</p>
 
-                {/* Post images */}
+                {/* Post images — fixed aspect-[4/3] container so the crop editor's
+                    preview (same ratio, see CommunityImageUploader) always matches
+                    what's actually displayed here, at every viewport. */}
                 {(post.images ?? []).length > 0 && (
                   <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 gap-2">
-                    {(post.images as string[]).map((url, i) => (
-                      <a key={i} href={url} target="_blank" rel="noopener noreferrer">
-                        <img
-                          src={url}
-                          alt={`附圖 ${i + 1}`}
-                          className="w-full h-32 object-cover rounded-lg border border-border hover:opacity-90 transition-opacity"
-                        />
+                    {(post.images ?? []).map((img, i) => (
+                      <a key={i} href={img.url} target="_blank" rel="noopener noreferrer" className="block aspect-[4/3] rounded-lg overflow-hidden border border-border hover:opacity-90 transition-opacity">
+                        <CroppedImage src={img.url} crop={img.crop} alt={`附圖 ${i + 1}`} />
                       </a>
                     ))}
                   </div>
@@ -575,7 +574,7 @@ export default function CommunityPost({ spaceCode, postId }: Props) {
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
                     {isPostAuthor && !isLocked && (
-                      <DropdownMenuItem onClick={() => { setEditingPost({ title: post.title, content: post.content, commentsEnabled: post.commentsEnabled, images: (post.images ?? []) as string[], isUploading: false }); setEditingPostMentions((data.postMentions ?? []).map(m => ({ type: m.type, id: m.id }))); }}>
+                      <DropdownMenuItem onClick={() => { setEditingPost({ title: post.title, content: post.content, commentsEnabled: post.commentsEnabled, images: post.images ?? [], isUploading: false }); setEditingPostMentions((data.postMentions ?? []).map(m => ({ type: m.type, id: m.id }))); }}>
                         <Pencil className="w-3.5 h-3.5 mr-2" />
                         編輯貼文
                       </DropdownMenuItem>

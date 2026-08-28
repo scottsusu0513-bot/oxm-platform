@@ -7,6 +7,7 @@
 import { describe, expect, it } from "vitest";
 import {
   imageCropToStyle, computeCoverFitSize, applyDragDelta, clampImageCrop,
+  normalizeImageEntry,
   DEFAULT_IMAGE_CROP, IMAGE_CROP_ZOOM_MIN, IMAGE_CROP_ZOOM_MAX,
 } from "../shared/imageCrop";
 
@@ -116,5 +117,56 @@ describe("applyDragDelta：拖曳像素位移轉換成 posX/posY 百分比", () 
     const lowZoomDelta = Math.abs(lowZoom.posX - 50);
     const highZoomDelta = Math.abs(highZoom.posX - 50);
     expect(highZoomDelta).toBeLessThan(lowZoomDelta);
+  });
+});
+
+// Phase 6: Community post images upgraded in-place from string[] to
+// { url, crop }[] in the same JSON column (no migration). These lock in the
+// backward-compat contract that makes old posts keep rendering unchanged.
+describe("normalizeImageEntry：communityPosts.images 從 string[] 升級成 {url,crop}[] 的相容層", () => {
+  it("legacy 純字串（舊貼文，從未有 crop 概念）→ { url, crop: null }", () => {
+    expect(normalizeImageEntry("https://cdn.example.com/a.jpg")).toEqual({
+      url: "https://cdn.example.com/a.jpg",
+      crop: null,
+    });
+  });
+
+  it("新格式 { url, crop } 原樣保留（crop 會先經過 clampImageCrop 夾範圍）", () => {
+    expect(normalizeImageEntry({ url: "https://cdn.example.com/b.jpg", crop: { zoom: 2, posX: 30, posY: 70 } }))
+      .toEqual({ url: "https://cdn.example.com/b.jpg", crop: { zoom: 2, posX: 30, posY: 70 } });
+  });
+
+  it("新格式但 crop 為 null（使用者上傳時沒調整過，維持置中 fallback）→ crop: null", () => {
+    expect(normalizeImageEntry({ url: "https://cdn.example.com/c.jpg", crop: null }))
+      .toEqual({ url: "https://cdn.example.com/c.jpg", crop: null });
+  });
+
+  it("新格式但 crop 是被竄改過的不合理數值 → 仍會被 clampImageCrop 夾回合理範圍，不是原樣放行", () => {
+    const result = normalizeImageEntry({ url: "https://cdn.example.com/d.jpg", crop: { zoom: 999, posX: -50, posY: 500 } });
+    expect(result).toEqual({ url: "https://cdn.example.com/d.jpg", crop: { zoom: IMAGE_CROP_ZOOM_MAX, posX: 0, posY: 100 } });
+  });
+
+  it("null／undefined 條目 → null（呼叫端可以安全過濾掉，不會渲染壞圖）", () => {
+    expect(normalizeImageEntry(null)).toBeNull();
+    expect(normalizeImageEntry(undefined)).toBeNull();
+  });
+
+  it("格式不明的物件（沒有 url 欄位）→ null，不會丟出例外", () => {
+    expect(normalizeImageEntry({} as any)).toBeNull();
+    expect(normalizeImageEntry({ crop: null } as any)).toBeNull();
+  });
+
+  it("混合陣列（一部分舊字串、一部分新物件）逐筆正確轉換——模擬一則貼文編輯後新增圖片、舊圖片維持原狀的真實情境", () => {
+    const raw = [
+      "https://cdn.example.com/old1.jpg",
+      { url: "https://cdn.example.com/new1.jpg", crop: { zoom: 1.5, posX: 20, posY: 80 } },
+      "https://cdn.example.com/old2.jpg",
+    ];
+    const result = raw.map(normalizeImageEntry);
+    expect(result).toEqual([
+      { url: "https://cdn.example.com/old1.jpg", crop: null },
+      { url: "https://cdn.example.com/new1.jpg", crop: { zoom: 1.5, posX: 20, posY: 80 } },
+      { url: "https://cdn.example.com/old2.jpg", crop: null },
+    ]);
   });
 });

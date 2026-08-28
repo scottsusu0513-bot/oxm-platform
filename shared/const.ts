@@ -27,6 +27,17 @@ export const COMMUNITY_CROSS_INDUSTRY_SLUG = "cross-industry" as const;
 // Set to false to hide all public entries while keeping /community route + API functional for internal testing.
 export const COMMUNITY_PUBLIC_ENTRY_ENABLED = false;
 
+// Single source of truth for the Community post image upload size limit —
+// client (CommunityImageUploader) and server (community.uploadPostImage) both
+// read this instead of each hardcoding a number. Matches the project's actual
+// site-wide default (server/_core/security.ts validateImageUpload()'s own
+// default maxBytes is 5MB; only 找消息/News explicitly overrides to 10MB).
+// Phase 3/6 found Community's own UI text ("≤8MB") and a redundant manual
+// pre-check both disagreed with this real 5MB enforcement — this constant is
+// the fix, not a size-limit increase.
+export const COMMUNITY_IMAGE_MAX_MB = 5;
+export const COMMUNITY_IMAGE_MAX_BYTES = COMMUNITY_IMAGE_MAX_MB * 1024 * 1024;
+
 // ===== 通知中心：eventType 分群 =====
 // Platform notifications: always visible to all logged-in users
 export const PLATFORM_NOTIFICATION_TYPES = new Set<string>([

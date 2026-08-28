@@ -52,6 +52,8 @@ import {
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 import type { ImageCropData } from "../shared/imageCrop";
+import { normalizeImageEntry } from "../shared/imageCrop";
+import type { CommunityPostImage } from "../drizzle/schema";
 import { ADJACENT_REGIONS, INDUSTRY_SLUGS, INDUSTRY_OPTIONS } from "../shared/constants";
 import { COMMUNITY_FEATURE_STATUS, COMMUNITY_CROSS_INDUSTRY_SLUG, NEWS_NEW_WINDOW_MS, ADVISOR_DISPLAY_NAME } from "../shared/const";
 import { sortBadgeIds, sanitizeBadgeAssignment, appendCertificationEvidenceImage } from "../shared/badges";
@@ -6784,10 +6786,13 @@ export async function getUserDefaultCommunitySpace(userId: number): Promise<stri
   return resolveDefaultCommunitySpace([...ownedRows, ...coMgrRows]);
 }
 
-export interface CommunityPostWithMeta extends CommunityPost {
+export interface CommunityPostWithMeta extends Omit<CommunityPost, "images"> {
   authorName: string | null;
   authorFactoryName: string | null;
   commentCount: number;
+  // Always normalized to { url, crop }[] regardless of the raw stored shape —
+  // see getCommunityPostById()/listCommunityPosts() and normalizeImageEntry().
+  images: CommunityPostImage[];
 }
 
 export interface CommunityCommentWithMeta extends CommunityComment {
@@ -6868,6 +6873,7 @@ export async function listCommunityPosts(
     authorFactoryName: r.post.authorUserId == null
       ? null
       : (r.factoryName ?? r.post.authorFactoryNameSnapshot ?? null),
+    images: ((r.post.images ?? []) as unknown[]).map((e: unknown) => normalizeImageEntry(e as any)).filter((v): v is CommunityPostImage => v != null),
     commentCount: commentCountMap[r.post.id] ?? 0,
   }));
   return { items, total };
@@ -6899,6 +6905,7 @@ export async function getCommunityPostById(postId: number): Promise<CommunityPos
       ? null
       : (r.factoryName ?? r.post.authorFactoryNameSnapshot ?? null),
     commentCount: Number(ccResult?.count ?? 0),
+    images: ((r.post.images ?? []) as unknown[]).map((e: unknown) => normalizeImageEntry(e as any)).filter((v): v is CommunityPostImage => v != null),
   };
 }
 
@@ -6972,7 +6979,7 @@ export async function createCommunityPost(input: {
   authorRoleSnapshot?: string | null;
   title: string;
   content: string;
-  images?: string[];
+  images?: CommunityPostImage[];
   pinnedProductIds?: number[];
   commentsEnabled?: boolean;
 }): Promise<number> {
@@ -6997,7 +7004,7 @@ export async function createCommunityPost(input: {
 export async function updateCommunityPost(postId: number, input: {
   title?: string;
   content?: string;
-  images?: string[];
+  images?: CommunityPostImage[];
   pinnedProductIds?: number[];
   commentsEnabled?: boolean;
 }): Promise<void> {

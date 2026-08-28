@@ -3,7 +3,7 @@ import { appRouter } from "./routers";
 import type { TrpcContext } from "./_core/context";
 import { resolveDefaultCommunitySpace, approveCommunityBid, rejectCommunityBid, withdrawCommunityBid, softDeleteCommunityBid, getCommunityBidIndustries, listCommunityBidReviewHistory, updateCommunityBid, getCommunityBidById, getDb, createCommunityBidOffer, withdrawCommunityBidOffer, resubmitCommunityBidOffer, getCommunityBidOfferById, getCommunityBidOfferByFactory, getCommunityBidOfferByUser, getCommunityBidOfferCount, listCommunityBidOffersForOwner, getApprovedFactoriesForUser, setTestBidDeadlinePast, setTestBidStatus, updateCommunityBidOfferSafe } from "./db";
 import { communityNotifications, communityMentions, communityPosts, communityComments } from "../drizzle/schema";
-import { COMMUNITY_CROSS_INDUSTRY_SLUG } from "../shared/const";
+import { COMMUNITY_CROSS_INDUSTRY_SLUG, COMMUNITY_IMAGE_MAX_BYTES, COMMUNITY_IMAGE_MAX_MB } from "../shared/const";
 import { factories as factoriesTable } from "../drizzle/schema";
 import { and as drizzleAnd, eq as drizzleEq, ne as drizzleNe, inArray as drizzleInArray, sql as drizzleSql } from "drizzle-orm";
 
@@ -231,6 +231,49 @@ describe("community.uploadPostImage", () => {
     await expect(caller.community.uploadPostImage({ base64: "abc", mimeType: "image/jpeg" }))
       .rejects.toMatchObject({ code: "FORBIDDEN" });
   });
+
+  // Phase 6: 5MB/8MB mismatch fix — lock in that client constant, server
+  // pre-check, and validateImageUpload()'s own maxBytes all agree on the exact
+  // same real byte boundary via COMMUNITY_IMAGE_MAX_BYTES.
+  function fakeJpegBase64(byteLength: number): string {
+    const buf = Buffer.alloc(byteLength, 0);
+    buf[0] = 0xff; buf[1] = 0xd8; buf[2] = 0xff; // real JPEG magic bytes
+    return `data:image/jpeg;base64,${buf.toString("base64")}`;
+  }
+
+  // This test env has no AWS_S3_BUCKET configured, so a file that passes size/
+  // format validation still fails later at the actual storagePut() call — that's
+  // an unrelated environmental limitation, not something this test asserts on.
+  // What we're locking in here is that the size+magic-byte validation itself
+  // does NOT reject a file at exactly the limit (no BAD_REQUEST from that layer).
+  it(`does not reject a file at exactly the ${COMMUNITY_IMAGE_MAX_MB}MB limit for size/format reasons`, async () => {
+    const caller = appRouter.createCaller(createAuthContext({ role: "admin" }));
+    try {
+      await caller.community.uploadPostImage({
+        base64: fakeJpegBase64(COMMUNITY_IMAGE_MAX_BYTES),
+        mimeType: "image/jpeg",
+      });
+    } catch (err: any) {
+      expect(err?.code).not.toBe("BAD_REQUEST");
+    }
+  }, 15000);
+
+  it(`rejects a file 1 byte over the ${COMMUNITY_IMAGE_MAX_MB}MB limit`, async () => {
+    const caller = appRouter.createCaller(createAuthContext({ role: "admin" }));
+    await expect(caller.community.uploadPostImage({
+      base64: fakeJpegBase64(COMMUNITY_IMAGE_MAX_BYTES + 1),
+      mimeType: "image/jpeg",
+    })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  }, 15000);
+
+  it("rejects a well-formed-looking file well under the limit but with a fake (non-magic-byte) header", async () => {
+    const caller = appRouter.createCaller(createAuthContext({ role: "admin" }));
+    const buf = Buffer.alloc(1024, 0x41); // "AAAA..." — not any real image magic number
+    await expect(caller.community.uploadPostImage({
+      base64: `data:image/jpeg;base64,${buf.toString("base64")}`,
+      mimeType: "image/jpeg",
+    })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  }, 15000);
 });
 
 // ===== community.createPost =====
@@ -572,6 +615,9 @@ describe("community image security", () => {
   const BASE = `https://${BUCKET}.s3.${REGION}.amazonaws.com`;
   const ownPrefix = `${BASE}/community-posts/1/`;
   const validUrl = `${ownPrefix}abc.jpg`;
+  // Phase 6: images is now { url, crop }[], not string[] — this tiny helper
+  // keeps every ownership/security case below focused on the URL under test.
+  const img = (url: string) => ({ url, crop: null });
 
   beforeEach(() => {
     process.env.AWS_S3_BUCKET = BUCKET;
@@ -596,7 +642,7 @@ describe("community image security", () => {
         spaceCode: "textile",
         title: "Image security test: valid own URL",
         content: "Content",
-        images: [validUrl],
+        images: [img(validUrl)],
       });
     } catch (err: any) {
       expect(err?.code).not.toBe("FORBIDDEN");
@@ -612,7 +658,7 @@ describe("community image security", () => {
         spaceCode: "textile",
         title: "Test",
         content: "Content",
-        images: [otherUrl],
+        images: [img(otherUrl)],
       }),
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
@@ -625,7 +671,7 @@ describe("community image security", () => {
         spaceCode: "textile",
         title: "Test",
         content: "Content",
-        images: ["https://evil.com/community-posts/1/steal.jpg"],
+        images: [img("https://evil.com/community-posts/1/steal.jpg")],
       }),
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
@@ -639,7 +685,7 @@ describe("community image security", () => {
         spaceCode: "textile",
         title: "Test",
         content: "Content",
-        images: [traversalUrl],
+        images: [img(traversalUrl)],
       }),
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
@@ -653,7 +699,7 @@ describe("community image security", () => {
         spaceCode: "textile",
         title: "Test",
         content: "Content",
-        images: [traversalUrl],
+        images: [img(traversalUrl)],
       }),
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
@@ -667,7 +713,7 @@ describe("community image security", () => {
         spaceCode: "textile",
         title: "Image security test: query string",
         content: "Content",
-        images: [urlWithQuery],
+        images: [img(urlWithQuery)],
       });
     } catch (err: any) {
       expect(err?.code).not.toBe("FORBIDDEN");
@@ -677,7 +723,7 @@ describe("community image security", () => {
   // 7. More than 6 images → zod rejects (max(6))
   it("rejects more than 6 images via zod", async () => {
     const caller = appRouter.createCaller(createAuthContext({ role: "admin" }));
-    const tooMany = Array(7).fill(validUrl);
+    const tooMany = Array(7).fill(img(validUrl));
     await expect(
       caller.community.createPost({
         spaceCode: "textile",
@@ -712,7 +758,7 @@ describe("community image security", () => {
           spaceCode: "textile",
           title: "Test",
           content: "Content",
-          images: ["https://example.com/img.jpg"],
+          images: [img("https://example.com/img.jpg")],
         }),
       ).rejects.toMatchObject({ code: "INTERNAL_SERVER_ERROR" });
     } finally {
@@ -727,12 +773,12 @@ describe("community image security", () => {
       spaceCode: "textile",
       title: "Edit image preservation test",
       content: "Content",
-      images: [validUrl],
+      images: [img(validUrl)],
     });
     try {
       await caller.community.updatePost({
         postId,
-        images: [validUrl],
+        images: [img(validUrl)],
       });
     } catch (err: any) {
       expect(err?.code).not.toBe("FORBIDDEN");
@@ -750,7 +796,7 @@ describe("community image security", () => {
     });
     const foreignUrl = `${BASE}/community-posts/999/foreign.jpg`;
     await expect(
-      caller.community.updatePost({ postId, images: [foreignUrl] }),
+      caller.community.updatePost({ postId, images: [img(foreignUrl)] }),
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
     await caller.community.deletePost({ postId });
   }, 30000);
@@ -763,10 +809,114 @@ describe("community image security", () => {
         spaceCode: "textile",
         title: "Test",
         content: "Content",
-        images: ["not-a-url" as unknown as `http${string}`],
+        images: [{ url: "not-a-url", crop: null }],
       }),
     ).rejects.toThrow(); // zod url() rejects this before assertCommunityImagesOwned
   });
+});
+
+// ===== Phase 6: image crop metadata persistence (real data transformation, not string-match) =====
+describe("community post image crop metadata (Phase 6)", () => {
+  const adminCtx = () => createAuthContext({ role: "admin" });
+
+  it("round-trips crop metadata through create → getPost (simulates reload)", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    const crop = { zoom: 1.8, posX: 25, posY: 75 };
+    const { postId } = await caller.community.createPost({
+      spaceCode: "textile",
+      title: "Crop round-trip test",
+      content: "Content",
+      images: [{ url: "https://cdn.example.com/community-posts/1/a.jpg", crop }],
+    });
+    const { post } = await caller.community.getPost({ postId });
+    expect(post.images).toEqual([{ url: "https://cdn.example.com/community-posts/1/a.jpg", crop }]);
+    await caller.community.deletePost({ postId });
+  }, 30000);
+
+  it("an image with no crop (crop: null) stays null through create → getPost, not defaulted to some fabricated center object", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    const { postId } = await caller.community.createPost({
+      spaceCode: "textile",
+      title: "No-crop test",
+      content: "Content",
+      images: [{ url: "https://cdn.example.com/community-posts/1/b.jpg", crop: null }],
+    });
+    const { post } = await caller.community.getPost({ postId });
+    expect(post.images).toEqual([{ url: "https://cdn.example.com/community-posts/1/b.jpg", crop: null }]);
+    await caller.community.deletePost({ postId });
+  }, 30000);
+
+  it("updatePost replacing images with a new crop overwrites the stored value correctly", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    const { postId } = await caller.community.createPost({
+      spaceCode: "textile",
+      title: "Crop update test",
+      content: "Content",
+      images: [{ url: "https://cdn.example.com/community-posts/1/c.jpg", crop: { zoom: 1, posX: 50, posY: 50 } }],
+    });
+    const newCrop = { zoom: 2.5, posX: 10, posY: 90 };
+    await caller.community.updatePost({
+      postId,
+      images: [{ url: "https://cdn.example.com/community-posts/1/c.jpg", crop: newCrop }],
+    });
+    const { post } = await caller.community.getPost({ postId });
+    expect(post.images).toEqual([{ url: "https://cdn.example.com/community-posts/1/c.jpg", crop: newCrop }]);
+    await caller.community.deletePost({ postId });
+  }, 30000);
+
+  it("server clamps an out-of-range crop before storing it (defense against a tampered request, not just trusting the client)", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    const { postId } = await caller.community.createPost({
+      spaceCode: "textile",
+      title: "Crop clamp test",
+      content: "Content",
+      images: [{ url: "https://cdn.example.com/community-posts/1/d.jpg", crop: { zoom: 999, posX: -50, posY: 500 } as any }],
+    });
+    const { post } = await caller.community.getPost({ postId });
+    expect(post.images[0].crop).toEqual({ zoom: 3, posX: 0, posY: 100 });
+    await caller.community.deletePost({ postId });
+  }, 30000);
+
+  // Backward compatibility: old posts created before Phase 6 physically stored
+  // images as plain string[] in the same JSON column. Directly write that legacy
+  // shape (bypassing the router, which would now always write the new shape) to
+  // simulate a real pre-existing row, then confirm reads don't break.
+  it("a legacy post whose images column is still a plain string[] reads back normalized, without crashing", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    const { postId } = await caller.community.createPost({
+      spaceCode: "textile",
+      title: "Legacy image format test",
+      content: "Content",
+    });
+    const db_ = await getDb();
+    if (db_) {
+      await db_.execute(
+        `UPDATE communityPosts SET images = '["https://cdn.example.com/community-posts/1/legacy.jpg"]' WHERE id = ${postId}` as any,
+      );
+    }
+    const { post } = await caller.community.getPost({ postId });
+    expect(post.images).toEqual([{ url: "https://cdn.example.com/community-posts/1/legacy.jpg", crop: null }]);
+    await caller.community.deletePost({ postId });
+  }, 30000);
+
+  it("listPosts also normalizes legacy string[] images without crashing the list query", async () => {
+    const caller = appRouter.createCaller(adminCtx());
+    const { postId } = await caller.community.createPost({
+      spaceCode: "textile",
+      title: "Legacy image format list test",
+      content: "Content",
+    });
+    const db_ = await getDb();
+    if (db_) {
+      await db_.execute(
+        `UPDATE communityPosts SET images = '["https://cdn.example.com/community-posts/1/legacy2.jpg"]' WHERE id = ${postId}` as any,
+      );
+    }
+    const { items } = await caller.community.listPosts({ spaceCode: "textile", page: 1, pageSize: 50 });
+    const found = items.find(p => p.id === postId);
+    expect(found?.images).toEqual([{ url: "https://cdn.example.com/community-posts/1/legacy2.jpg", crop: null }]);
+    await caller.community.deletePost({ postId });
+  }, 30000);
 });
 
 // ===== Phase 2A: Board Follow =====

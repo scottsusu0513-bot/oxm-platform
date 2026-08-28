@@ -906,6 +906,13 @@ export const pushNotificationTokens = mysqlTable("pushNotificationTokens", {
 
 export type PushNotificationToken = typeof pushNotificationTokens.$inferSelect;
 
+// Phase 6: images used to be plain string[] (URL only, no crop control). Upgraded
+// in-place to { url, crop }[] — same JSON column, no migration needed since JSON
+// columns don't enforce a fixed shape. Old rows still physically contain bare
+// strings; read paths must go through shared/imageCrop.ts's normalizeImageEntry()
+// rather than assuming this type at runtime (see server/db.ts getCommunityPostById).
+export type CommunityPostImage = { url: string; crop: ImageCropData | null };
+
 // ===== 商案討論區：貼文表 =====
 // authorUserId nullable + ON DELETE SET NULL：帳號刪除後貼文保留。
 // 快照欄位保存發布當下的作者名稱，避免帳號刪除後顯示空白。
@@ -919,7 +926,7 @@ export const communityPosts = mysqlTable("communityPosts", {
   authorRoleSnapshot: varchar("authorRoleSnapshot", { length: 50 }),
   title: varchar("title", { length: 200 }).notNull(),
   content: text("content").notNull(),
-  images: json("images").$type<string[]>().default([]),
+  images: json("images").$type<CommunityPostImage[]>().default([]),
   pinnedProductIds: json("pinnedProductIds").$type<number[]>().default([]),
   commentsEnabled: boolean("commentsEnabled").notNull().default(true),
   isPinned: boolean("isPinned").notNull().default(false),
