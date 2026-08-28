@@ -8745,8 +8745,9 @@ export const appRouter = router({
     })).mutation(async ({ ctx, input }) => {
       const item = await db.getShortVideoCaseById(input.caseId);
       if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "找不到案件" });
+      let consultant: Awaited<ReturnType<typeof db.getShortVideoConsultantById>> | undefined;
       if (input.consultantId != null) {
-        const consultant = await db.getShortVideoConsultantById(input.consultantId);
+        consultant = await db.getShortVideoConsultantById(input.consultantId);
         if (!consultant) throw new TRPCError({ code: "NOT_FOUND", message: "找不到顧問" });
         if (!consultant.isActive) throw new TRPCError({ code: "BAD_REQUEST", message: "此顧問目前已停用，無法指派承辦" });
         if (consultant.userId == null) throw new TRPCError({ code: "BAD_REQUEST", message: "此顧問尚未綁定使用者帳號，無法指派承辦" });
@@ -8755,6 +8756,22 @@ export const appRouter = router({
         await db.adminAssignShortVideoConsultant(input.caseId, input.consultantId, { userId: ctx.user!.id, name: db.resolveActorNameSnapshot(ctx.user!) });
       } catch (err) {
         throw new TRPCError({ code: "BAD_REQUEST", message: err instanceof Error ? err.message : "指派失敗" });
+      }
+      // 指派給某人（不是解除指派）時通知新承辦顧問——原本這裡完全沒有通知。
+      // dedupeKey 刻意獨立於建立當下 auto-assign 用的 short_video_new_case:${id}，
+      // 並帶入 consultantId：避免與建立時的通知共用同一把 key 而被全域唯一
+      // 索引擋下（communityNotifications.cn_dedupe_uq 是全域唯一，不是
+      // per-recipient），也讓案件在不同顧問之間改派時，每一位新承辦人都能
+      // 各自收到一次通知。
+      if (consultant?.userId) {
+        notifyUser(consultant.userId, {
+          eventType: "short_video_new_case",
+          eventGroup: "short_video",
+          message: `新短影音與品牌內容行銷案件「${item.companyNameSnapshot}」已分派給您，請儘速查收`,
+          actionUrl: "/short-video-consultant/cases",
+          titleSnapshot: item.companyNameSnapshot,
+          dedupeKey: `short_video_assigned:${item.id}:${consultant.id}`,
+        });
       }
       return { success: true };
     }),

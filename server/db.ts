@@ -9656,6 +9656,27 @@ function matchesShortVideoConsultant(
   return servicesWanted.some(s => areas.includes(s));
 }
 
+/**
+ * 找出短影音「預設承接顧問」：candidates 不是剛好一位（0 位或多位，
+ * auto-assign 判斷不出唯一對象）時的最後防線，避免案件直接卡進
+ * unassigned、沒有任何一位顧問看得到。做法與 findFallbackCertificationConsultant
+ * （ISO Phase 2）／findFallbackErpConsultant（ERP Phase 2）完全對稱：不用
+ * 固定 userId 或姓名字串比對，改成完全重用平台既有、唯一的管理員身分來源
+ * db.getAdminUserIds()。
+ *
+ * 在（已經鎖定、已經是 isActive=true 的）候選顧問清單裡，找出 userId 屬於
+ * 目前管理員白名單的那幾筆：剛好一筆才視為預設承接顧問；零筆或多筆一樣不
+ * 猜，回傳 null，維持原本「回 unassigned、通知管理員手動分派」的安全行為。
+ */
+async function findFallbackShortVideoConsultant(
+  allActiveConsultants: ShortVideoConsultant[],
+): Promise<ShortVideoConsultant | null> {
+  const adminIds = await getAdminUserIds();
+  if (adminIds.length === 0) return null;
+  const fallbackCandidates = allActiveConsultants.filter(c => c.userId != null && adminIds.includes(c.userId));
+  return fallbackCandidates.length === 1 ? fallbackCandidates[0] : null;
+}
+
 export async function createShortVideoCaseWithAutoAssign(
   data: Omit<InsertShortVideoCase, "assignedConsultantId" | "status"> & { servicesWanted: string[]; isUnsure: boolean },
 ): Promise<{ id: number; assignedConsultant: ShortVideoConsultant | null }> {
@@ -9666,7 +9687,12 @@ export async function createShortVideoCaseWithAutoAssign(
       .where(eq(shortVideoConsultants.isActive, true))
       .for("update");
     const candidates = allConsultants.filter(c => matchesShortVideoConsultant(c, data.servicesWanted, data.isUnsure));
-    const assignedConsultant = candidates.length === 1 ? candidates[0] : null;
+    // candidates 剛好一位：沿用原本 auto-assign 判斷，不受 fallback 影響。
+    // 否則（0 位或多位，判斷不出唯一對象）才嘗試預設承接顧問；如果連預設
+    // 承接顧問也判斷不出唯一對象，才真的維持 unassigned。
+    const assignedConsultant = candidates.length === 1
+      ? candidates[0]
+      : await findFallbackShortVideoConsultant(allConsultants);
     const [result] = await tx.insert(shortVideoCases).values({
       ...data,
       assignedConsultantId: assignedConsultant?.id ?? null,
@@ -9809,14 +9835,34 @@ export async function updateShortVideoCaseNotes(id: number, notes: string | null
   }).where(eq(shortVideoCases.id, id));
 }
 
+/**
+ * 管理員手動指派／改派承辦顧問。
+ *
+ * Phase 1 QA 發現：這裡原本只改 assignedConsultantId，不會動 status——如果
+ * 案件當下還是 unassigned（待取件），指派後就會卡在「已經有承辦人，但看板
+ * 仍顯示待取件」的中間狀態，顧問點下「取件」會因為 claimShortVideoCase 檢查
+ * assignedConsultantId 已非 null 而直接失敗。與 ISO Phase 2／ERP Phase 2
+ * 修正的 adminAssignCertificationConsultant／adminAssignErpConsultant 是
+ * 同一款 bug，這裡採用完全對稱的修法。
+ *
+ * 修正：同一個 transaction 內，只有「原本狀態就是 unassigned、且這次是指派
+ * 給某人（不是解除指派）」才順帶把 status 一併轉成 new，並比照
+ * updateShortVideoCaseStatus／claimShortVideoCase 的既有寫法，寫入
+ * statusTimeline／statusHistory（action 標記為 admin_assign）。原本已經是
+ * 其他狀態的案件改派顧問，只換承辦人、狀態完全不變，不會意外把案件進度
+ * 往前或往後推。
+ *
+ * claimedAt 刻意不寫：語意上專屬「顧問自助取件」（見 claimShortVideoCase），
+ * auto-assign 建立當下也一律留 null，這裡維持同一套語意。
+ */
 export async function adminAssignShortVideoConsultant(
   id: number,
   consultantId: number | null,
   updatedBy?: CaseUpdatedBy,
-): Promise<void> {
+): Promise<{ movedToNew: boolean }> {
   const db_ = await getDb();
-  if (!db_) return;
-  await withDeadlockRetry(() => db_.transaction(async (tx) => {
+  if (!db_) return { movedToNew: false };
+  return withDeadlockRetry(() => db_.transaction(async (tx) => {
     if (consultantId != null) {
       const [consultant] = await tx.select().from(shortVideoConsultants)
         .where(eq(shortVideoConsultants.id, consultantId))
@@ -9825,10 +9871,30 @@ export async function adminAssignShortVideoConsultant(
       if (!consultant.isActive) throw new Error("此顧問目前已停用，無法指派承辦");
       if (consultant.userId == null) throw new Error("此顧問尚未綁定使用者帳號，無法指派承辦");
     }
-    await tx.update(shortVideoCases).set({
+    const [item] = await tx.select().from(shortVideoCases).where(eq(shortVideoCases.id, id)).for("update");
+    if (!item) throw new Error("找不到案件，無法指派承辦");
+
+    const movedToNew = item.status === "unassigned" && consultantId != null;
+    const updateData: Partial<typeof shortVideoCases.$inferInsert> = {
       assignedConsultantId: consultantId,
       ...(updatedBy ? { lastUpdatedByUserId: updatedBy.userId, lastUpdatedByNameSnapshot: updatedBy.name } : {}),
-    }).where(eq(shortVideoCases.id, id));
+    };
+    if (movedToNew) {
+      const nowIso = new Date().toISOString();
+      const existingTl = (item.statusTimeline ?? {}) as Record<string, string>;
+      const newTl = { ...existingTl };
+      if (!newTl.new) newTl.new = nowIso;
+      const newHistory = appendCaseStatusHistory(item.statusHistory as CaseStatusHistoryEntry[] | null, {
+        status: "new", at: nowIso,
+        byUserId: updatedBy?.userId ?? 0, byName: updatedBy?.name ?? "",
+        action: "admin_assign",
+      });
+      updateData.status = "new";
+      updateData.statusTimeline = newTl;
+      updateData.statusHistory = newHistory;
+    }
+    await tx.update(shortVideoCases).set(updateData).where(eq(shortVideoCases.id, id));
+    return { movedToNew };
   }));
 }
 
