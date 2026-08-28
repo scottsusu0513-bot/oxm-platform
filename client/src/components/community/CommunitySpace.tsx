@@ -65,7 +65,7 @@ export default function CommunitySpace({ spaceCode }: Props) {
               </p>
             </div>
           </div>
-          <DiscussionCtaArtwork className="pointer-events-none hidden h-[84px] w-40 shrink-0 lg:block" />
+          <DiscussionCtaArtwork className="pointer-events-none hidden h-[84px] w-40 shrink-0 rounded-xl object-cover shadow-sm ring-1 ring-purple-100/70 lg:block dark:ring-purple-900/40" />
           {user && (
             <div className="flex shrink-0 items-center gap-2 self-end sm:self-auto">
               <CommunityBoardFollowButton spaceCode={spaceCode} />
@@ -97,8 +97,8 @@ export default function CommunitySpace({ spaceCode }: Props) {
       ) : (
         <div className="divide-y divide-purple-100/70 overflow-hidden rounded-2xl border border-purple-100/80 bg-card shadow-sm dark:divide-purple-900/30 dark:border-purple-900/40">
           {!data?.items || data.items.length === 0 ? (
-            <div className="flex min-h-[320px] flex-col items-center justify-center px-5 py-10 text-center">
-              <DiscussionEmptyArtwork className="mb-2 h-40 w-64 max-w-full" />
+            <div className="flex min-h-[390px] flex-col items-center justify-center px-5 py-10 text-center sm:min-h-[420px]">
+              <DiscussionEmptyArtwork className="mb-4 w-full max-w-[360px] rounded-2xl object-cover shadow-sm ring-1 ring-purple-100/70 dark:ring-purple-900/40" />
               <h3 className="text-base font-semibold text-slate-900 dark:text-foreground">目前還沒有相關討論</h3>
               <p className="mt-1 max-w-sm text-sm leading-relaxed text-muted-foreground">
                 成為第一個提出問題的人，讓產業夥伴一起交流經驗。
