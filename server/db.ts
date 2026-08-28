@@ -8749,7 +8749,9 @@ export function resolveActorNameSnapshot(user: { id: number; name: string | null
  * ISO／ERP／短影音三個新服務共用的 append-only 狀態歷程項目——每次
  * claimXCase／updateXCaseStatus／adminForceXCaseStatus 都會推入一筆，不覆蓋
  * 先前紀錄。action 區分「一般狀態轉移」與「取件」，forced 標記管理員略過
- * 轉移規則的強制修正（一律連同 reason 一起記錄，供事後稽核）。
+ * 轉移規則的強制修正（一律連同 reason 一起記錄，供事後稽核）。admin_assign
+ * 專指 adminAssignCertificationConsultant 把 unassigned 案件同步轉成 new
+ * 狀態時寫入的那一筆（純換承辦人、狀態不變時不會寫這筆）。
  */
 export type CaseStatusHistoryEntry = {
   status: string;
@@ -8758,7 +8760,7 @@ export type CaseStatusHistoryEntry = {
   byName: string;
   reason?: string;
   forced?: boolean;
-  action?: "claim" | "status_update" | "admin_force";
+  action?: "claim" | "status_update" | "admin_force" | "admin_assign";
 };
 
 function appendCaseStatusHistory(
@@ -9948,6 +9950,35 @@ function matchesCertificationConsultant(
   return servicesWanted.some(s => areas.includes(s));
 }
 
+/**
+ * 找出「預設承接顧問」：candidates 不是剛好一位（0 位或多位，auto-assign
+ * 判斷不出唯一對象）時的最後防線，避免案件直接卡進 unassigned、沒有任何一位
+ * 顧問看得到。
+ *
+ * 刻意不用固定 userId 或姓名字串比對——這兩者都需要在 production code 寫死
+ * 一個特定的人，日後這個人異動（離職／換帳號）就要改程式碼才能修正。改成
+ * 完全重用平台既有、唯一的管理員身分來源：ADMIN_WHITELIST_EMAILS／
+ * OWNER_OPEN_ID（見 server/_core/admin.ts isAdminUser()、
+ * db.getAdminUserIds()，notifyAdmins() 也是靠這支函式決定要通知誰）。判定
+ * 邏輯：在（已經鎖定、已經是 isActive=true 的）候選顧問清單裡，找出
+ * userId 屬於目前管理員白名單的那幾筆——如果剛好只有一筆，視為預設承接
+ * 顧問；如果零筆或多筆（例如未來有兩位管理員都各自綁定了顧問身分），一樣
+ * 不猜，回傳 null，維持原本「回 unassigned、通知管理員手動分派」的安全
+ * 行為，不會因為新增這個 fallback 反而錯派給不明確的對象。
+ *
+ * 直接從呼叫端已經 `.for("update")` 鎖定、查過 isActive=true 的
+ * allActiveConsultants 裡篩選，不額外多一次查詢／多一層鎖，鎖定順序與既有
+ * transaction 完全相同，不會引入新的 deadlock 風險。
+ */
+async function findFallbackCertificationConsultant(
+  allActiveConsultants: CertificationConsultant[],
+): Promise<CertificationConsultant | null> {
+  const adminIds = await getAdminUserIds();
+  if (adminIds.length === 0) return null;
+  const fallbackCandidates = allActiveConsultants.filter(c => c.userId != null && adminIds.includes(c.userId));
+  return fallbackCandidates.length === 1 ? fallbackCandidates[0] : null;
+}
+
 export async function createCertificationCaseWithAutoAssign(
   data: Omit<InsertCertificationCase, "assignedConsultantId" | "status"> & { servicesWanted: string[]; isUnsure: boolean },
 ): Promise<{ id: number; assignedConsultant: CertificationConsultant | null }> {
@@ -9958,7 +9989,12 @@ export async function createCertificationCaseWithAutoAssign(
       .where(eq(certificationConsultants.isActive, true))
       .for("update");
     const candidates = allConsultants.filter(c => matchesCertificationConsultant(c, data.servicesWanted, data.isUnsure));
-    const assignedConsultant = candidates.length === 1 ? candidates[0] : null;
+    // candidates 剛好一位：沿用原本 auto-assign 判斷，不受 fallback 影響。
+    // 否則（0 位或多位，判斷不出唯一對象）才嘗試預設承接顧問；如果連預設
+    // 承接顧問也判斷不出唯一對象，才真的維持 unassigned。
+    const assignedConsultant = candidates.length === 1
+      ? candidates[0]
+      : await findFallbackCertificationConsultant(allConsultants);
     const [result] = await tx.insert(certificationCases).values({
       ...data,
       assignedConsultantId: assignedConsultant?.id ?? null,
@@ -10105,14 +10141,38 @@ export async function updateCertificationCaseNotes(id: number, notes: string | n
   }).where(eq(certificationCases.id, id));
 }
 
+/**
+ * 管理員手動指派／改派承辦顧問。
+ *
+ * Phase 1 QA 發現：這裡原本只改 assignedConsultantId，不會動 status——如果
+ * 案件當下還是 unassigned（待取件），指派後就會卡在「已經有承辦人，但看板
+ * 仍顯示待取件」的中間狀態：案件繼續出現在公開的待取件看板上，且任何人
+ * （包含剛被指派的顧問本人）點下「取件」都會因為 claimCertificationCase
+ * 檢查 assignedConsultantId 已非 null 而直接失敗，變成看得到、但取件按鈕
+ * 一定會報錯的死案件，需要管理員另外再手動推一次狀態才會恢復正常。
+ *
+ * 修正：同一個 transaction 內，只有「原本狀態就是 unassigned、且這次是指派
+ * 給某人（不是解除指派）」才順帶把 status 一併轉成 new，並比照
+ * updateCertificationCaseStatus／claimCertificationCase 的既有寫法，寫入
+ * statusTimeline／statusHistory（action 標記為 admin_assign，供事後稽核
+ * 分辨這是管理員指派、不是顧問自己取件）。原本已經是其他狀態（evaluating
+ * 之後任何一個狀態）的案件改派顧問，只換承辦人、狀態完全不變，不會意外把
+ * 案件進度往前或往後推。
+ *
+ * claimedAt 刻意不寫：claimedAt 語意上專屬「顧問自助取件」（見
+ * claimCertificationCase 的取件時間），auto-assign 建立當下也一律留
+ * null——這裡維持同一套語意，不假裝管理員指派等於顧問本人來取件過；client
+ * 端（CertificationConsultantCases.tsx）本來就是 `{item.claimedAt && ...}`
+ * 條件渲染，null 不顯示「取件時間」，行為已經一致。
+ */
 export async function adminAssignCertificationConsultant(
   id: number,
   consultantId: number | null,
   updatedBy?: CaseUpdatedBy,
-): Promise<void> {
+): Promise<{ movedToNew: boolean }> {
   const db_ = await getDb();
-  if (!db_) return;
-  await withDeadlockRetry(() => db_.transaction(async (tx) => {
+  if (!db_) return { movedToNew: false };
+  return withDeadlockRetry(() => db_.transaction(async (tx) => {
     if (consultantId != null) {
       const [consultant] = await tx.select().from(certificationConsultants)
         .where(eq(certificationConsultants.id, consultantId))
@@ -10121,10 +10181,30 @@ export async function adminAssignCertificationConsultant(
       if (!consultant.isActive) throw new Error("此顧問目前已停用，無法指派承辦");
       if (consultant.userId == null) throw new Error("此顧問尚未綁定使用者帳號，無法指派承辦");
     }
-    await tx.update(certificationCases).set({
+    const [item] = await tx.select().from(certificationCases).where(eq(certificationCases.id, id)).for("update");
+    if (!item) throw new Error("找不到案件，無法指派承辦");
+
+    const movedToNew = item.status === "unassigned" && consultantId != null;
+    const updateData: Partial<typeof certificationCases.$inferInsert> = {
       assignedConsultantId: consultantId,
       ...(updatedBy ? { lastUpdatedByUserId: updatedBy.userId, lastUpdatedByNameSnapshot: updatedBy.name } : {}),
-    }).where(eq(certificationCases.id, id));
+    };
+    if (movedToNew) {
+      const nowIso = new Date().toISOString();
+      const existingTl = (item.statusTimeline ?? {}) as Record<string, string>;
+      const newTl = { ...existingTl };
+      if (!newTl.new) newTl.new = nowIso;
+      const newHistory = appendCaseStatusHistory(item.statusHistory as CaseStatusHistoryEntry[] | null, {
+        status: "new", at: nowIso,
+        byUserId: updatedBy?.userId ?? 0, byName: updatedBy?.name ?? "",
+        action: "admin_assign",
+      });
+      updateData.status = "new";
+      updateData.statusTimeline = newTl;
+      updateData.statusHistory = newHistory;
+    }
+    await tx.update(certificationCases).set(updateData).where(eq(certificationCases.id, id));
+    return { movedToNew };
   }));
 }
 
