@@ -15,9 +15,14 @@ interface Props {
 export default function CommunityReactionButton({ targetType, targetId, initialCount = 0, initialReacted = false, disabled }: Props) {
   const utils = trpc.useUtils();
 
+  // 不可用 initialData 塞入硬編碼 0／false——全域 staleTime 是 60 秒，
+  // initialData 會被視為「剛剛才取得」的新鮮資料，導致 mount 後不會真的打
+  // API 覆蓋掉這個假值，使用者重新整理／回訪時會看到錯誤的「未按讚、0
+  // 個讚」，即使伺服器端資料正確。改為讓 query 自然 fetch，loading 階段的
+  // 顯示只靠下面的 render-time fallback（?? initialCount／?? initialReacted），
+  // 不寫回 cache。
   const summaryQuery = trpc.community.reactionSummary.useQuery(
     { targetType, targetId, reactionType: "helpful" },
-    { initialData: { count: initialCount, viewerReacted: initialReacted } },
   );
 
   const toggleMut = trpc.community.toggleReaction.useMutation({
