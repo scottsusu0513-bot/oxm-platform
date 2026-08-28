@@ -680,3 +680,99 @@ describe("loginPopup.toShow / markViewed: 每日一次規則", () => {
     await expect(caller.loginPopup.update({ id: 1, isActive: true })).rejects.toThrow();
   });
 });
+
+// ── 6. adminList 排序：啟用中優先於已停用（小型 UX 修正） ─────────────────
+// 這個資料庫累積了大量既有測試留下的 loginPopups 資料，adminList() 回傳的是
+// 全部資料、不是分頁，所以下面一律只看「自己這次建立的幾個 id 之間的相對
+// 順序」（用 findIndex 比對），不假設整份清單的長度或內容，避免受其他測試
+// 的殘留資料影響而變得不穩定。
+describe("loginPopup.adminList: 啟用中優先於已停用", () => {
+  async function forceSameUpdatedAt(ids: number[], when: Date) {
+    const conn = await getDb();
+    if (!conn) throw new Error("no db");
+    for (const id of ids) {
+      await conn.execute(sql`UPDATE loginPopups SET updatedAt = ${when} WHERE id = ${id}`);
+    }
+  }
+
+  it("啟用中的項目排在已停用之前，即使已停用那筆比較新／id 比較大", async () => {
+    const admin = appRouter.createCaller(adminCtx());
+    const inactiveNewer = await admin.loginPopup.create({
+      title: "排序測試-已停用（較新）", summary: "短文", announcementId: newsAnnouncementId, isActive: false,
+    });
+    const activeOlder = await admin.loginPopup.create({
+      title: "排序測試-啟用中（較舊）", summary: "短文", announcementId: newsAnnouncementId, isActive: true,
+    });
+    // 兩筆 updatedAt 刻意設成完全相同，確認排序真的是靠 isActive 分組，
+    // 不是恰好因為建立時間差異而分開。
+    await forceSameUpdatedAt([inactiveNewer.id, activeOlder.id], new Date());
+
+    try {
+      const list = await admin.loginPopup.adminList();
+      const activeIdx = list.findIndex(p => p.id === activeOlder.id);
+      const inactiveIdx = list.findIndex(p => p.id === inactiveNewer.id);
+      expect(activeIdx).toBeGreaterThanOrEqual(0);
+      expect(inactiveIdx).toBeGreaterThanOrEqual(0);
+      expect(activeIdx).toBeLessThan(inactiveIdx);
+    } finally {
+      await deactivate(admin, activeOlder.id);
+    }
+  });
+
+  it("同一個啟用狀態內，維持原本的 updatedAt DESC、id DESC 次要排序", async () => {
+    const admin = appRouter.createCaller(adminCtx());
+    const lowerId = await admin.loginPopup.create({
+      title: "次要排序測試-較小 id", summary: "短文", announcementId: newsAnnouncementId, isActive: true,
+    });
+    const higherId = await admin.loginPopup.create({
+      title: "次要排序測試-較大 id", summary: "短文", announcementId: newsAnnouncementId, isActive: true,
+    });
+    const sameTimestamp = new Date();
+    await forceSameUpdatedAt([lowerId.id, higherId.id], sameTimestamp);
+
+    try {
+      const list = await admin.loginPopup.adminList();
+      const lowerIdx = list.findIndex(p => p.id === lowerId.id);
+      const higherIdx = list.findIndex(p => p.id === higherId.id);
+      // id DESC：較大的 id（較新建立）排在較小 id 之前，這條既有規則本次
+      // 修正不應改變。
+      expect(higherIdx).toBeLessThan(lowerIdx);
+    } finally {
+      await deactivate(admin, lowerId.id);
+      await deactivate(admin, higherId.id);
+    }
+  });
+
+  it("切換啟用／停用後，adminList 立即反映新的分組順序，不需要額外處理", async () => {
+    const admin = appRouter.createCaller(adminCtx());
+    const wasActive = await admin.loginPopup.create({
+      title: "切換測試-原本啟用", summary: "短文", announcementId: newsAnnouncementId, isActive: true,
+    });
+    const wasInactive = await admin.loginPopup.create({
+      title: "切換測試-原本停用", summary: "短文", announcementId: newsAnnouncementId, isActive: false,
+    });
+
+    try {
+      // 切換前：wasActive 在 wasInactive 之前。
+      const before = await admin.loginPopup.adminList();
+      expect(before.findIndex(p => p.id === wasActive.id))
+        .toBeLessThan(before.findIndex(p => p.id === wasInactive.id));
+
+      // 對調狀態：原本啟用的停用，原本停用的啟用。
+      await admin.loginPopup.update({ id: wasActive.id, isActive: false });
+      await admin.loginPopup.update({ id: wasInactive.id, isActive: true });
+
+      // 切換後：不需要 reload／額外處理，重新查詢就會反映新的分組——
+      // wasInactive（現在啟用）必須排到 wasActive（現在停用）之前。
+      const after = await admin.loginPopup.adminList();
+      const afterActiveIdx = after.findIndex(p => p.id === wasInactive.id);
+      const afterInactiveIdx = after.findIndex(p => p.id === wasActive.id);
+      expect(after.find(p => p.id === wasInactive.id)?.isActive).toBe(true);
+      expect(after.find(p => p.id === wasActive.id)?.isActive).toBe(false);
+      expect(afterActiveIdx).toBeLessThan(afterInactiveIdx);
+    } finally {
+      await deactivate(admin, wasActive.id);
+      await deactivate(admin, wasInactive.id);
+    }
+  });
+});

@@ -3886,7 +3886,11 @@ export async function getLoginPopupsForAdmin(): Promise<LoginPopupAdminRow[]> {
   })
     .from(loginPopups)
     .leftJoin(announcements, eq(loginPopups.announcementId, announcements.id))
-    .orderBy(desc(loginPopups.updatedAt), desc(loginPopups.id));
+    // 啟用中優先於已停用（isActive DESC），同一狀態內維持原本的
+    // updatedAt DESC、id DESC 次要排序——切換啟用／停用後 client 端
+    // invalidate 重新 fetch 到的就已經是正確分組順序，不需要額外的
+    // client-side sort。
+    .orderBy(desc(loginPopups.isActive), desc(loginPopups.updatedAt), desc(loginPopups.id));
 
   let activeRankCounter = 0;
   return rows.map(r => {
