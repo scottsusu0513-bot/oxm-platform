@@ -24,16 +24,12 @@ import path from "node:path";
 import { sql } from "drizzle-orm";
 import type { TrpcContext } from "./_core/context";
 
-// runId／ERP_TEST_ADMIN_EMAIL／ADMIN_WHITELIST_EMAILS 覆寫必須在任何會動態
-// 載入 ./routers（遞移載入 server/_core/env.ts，模組頂層就會把
-// ADMIN_WHITELIST_EMAILS 讀進快取的 ENV.adminWhitelistEmails 常數）之前完成，
-// 否則 adminProcedure（isAdminUser()）永遠不會認得下面 adminCtx() 建立的
-// 測試管理員 email，即使之後在 beforeAll 裡再設一次 process.env 也沒用——
-// 同樣的手法與說明見 server/financeOptimization.test.ts 開頭。
+// Shared Cleanup（見對話「Vitest ADMIN_WHITELIST_EMAILS env race」）：覆寫搬到
+// beforeAll，理由同 certificationCaseFallback.test.ts 開頭註解——
+// ENV.adminWhitelistEmails 現在是 getter，不再需要搶在 import 之前設定。
 const runId = `erp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const ORIGINAL_ADMIN_WHITELIST_EMAILS = process.env.ADMIN_WHITELIST_EMAILS;
 const ERP_TEST_ADMIN_EMAIL = `erp-test-admin-${runId}@example.test`;
-process.env.ADMIN_WHITELIST_EMAILS = JSON.stringify([ERP_TEST_ADMIN_EMAIL]);
 
 const { appRouter } = await import("./routers");
 const db = await import("./db");
@@ -98,6 +94,7 @@ const cleanupConsultantIds: number[] = [];
 const cleanupOwnerIds: number[] = [];
 
 beforeAll(async () => {
+  process.env.ADMIN_WHITELIST_EMAILS = JSON.stringify([ERP_TEST_ADMIN_EMAIL]);
   ownerAId = await ensureTestUser(`${runId}-ownerA`, "ERP 測試申請人A");
   ownerBId = await ensureTestUser(`${runId}-ownerB`, "ERP 測試申請人B");
   ownerPendingId = await ensureTestUser(`${runId}-ownerPending`, "ERP 測試申請人-待審");

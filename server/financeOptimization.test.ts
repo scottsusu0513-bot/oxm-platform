@@ -59,7 +59,13 @@ const PREFIX = `[FIN_TEST_${runId}]`;
 // 獨立的 process.env），結束後在 afterAll 還原成原始值。
 const FIN_TEST_ADMIN_EMAIL = `fin-test-admin-${runId}@example.test`;
 const ORIGINAL_ADMIN_WHITELIST_EMAILS = process.env.ADMIN_WHITELIST_EMAILS;
-process.env.ADMIN_WHITELIST_EMAILS = JSON.stringify([FIN_TEST_ADMIN_EMAIL]);
+// Shared Cleanup（見對話「Vitest ADMIN_WHITELIST_EMAILS env race」）：覆寫本身
+// 搬到 beforeAll 執行（見下方），不再留在模組頂層——server/_core/env.ts 的
+// ENV.adminWhitelistEmails 現在是 getter（每次存取才重新讀 process.env），不
+// 再需要「覆寫必須搶在任何動態 import 完成前」這個時序限制；模組頂層是
+// Vitest collect 階段執行的程式碼，多個測試檔的 collect 階段可能交錯，留在
+// 頂層會讓多檔案互相搶著改同一個全域 process.env。這個 const 仍在頂層宣告
+// （純值運算，不需要延後），只是「真正寫入 process.env」的動作延後到 beforeAll。
 
 // ── Fail-closed 安全閘門：真正的執行順序保證 ────────────────────────────────
 // ESM 的 static import 會在模組載入階段被 hoist，實際評估順序永遠早於同檔案
@@ -268,6 +274,7 @@ function restoreAdminWhitelistEmails(): void {
 }
 
 beforeAll(async () => {
+  process.env.ADMIN_WHITELIST_EMAILS = JSON.stringify([FIN_TEST_ADMIN_EMAIL]);
   try {
     ownerAId = await ensureTestUser(`test-fin-ownerA-${runId}`, "財務測試申請人A");
     ownerBId = await ensureTestUser(`test-fin-ownerB-${runId}`, "財務測試申請人B");

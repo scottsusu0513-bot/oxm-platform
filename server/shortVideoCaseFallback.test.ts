@@ -34,8 +34,10 @@ const runId = `svcf-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const ORIGINAL_ADMIN_WHITELIST_EMAILS = process.env.ADMIN_WHITELIST_EMAILS;
 const SVCF_TEST_ADMIN_EMAIL_A = `svcf-test-admin-a-${runId}@example.test`;
 const SVCF_TEST_ADMIN_EMAIL_B = `svcf-test-admin-b-${runId}@example.test`;
-process.env.ADMIN_WHITELIST_EMAILS = JSON.stringify([SVCF_TEST_ADMIN_EMAIL_A, SVCF_TEST_ADMIN_EMAIL_B]);
-
+// Shared Cleanup（見對話「Vitest ADMIN_WHITELIST_EMAILS env race」）：覆寫搬到
+// beforeAll，理由同 certificationCaseFallback.test.ts 開頭註解——
+// ENV.adminWhitelistEmails 現在是 getter，不再需要在模組頂層（collect 階段）
+// 搶著改 process.env。
 const { appRouter } = await import("./routers");
 const db = await import("./db");
 const { getDb } = db;
@@ -113,6 +115,7 @@ async function cleanupOwnerFactory(ownerId: number, factoryId: number): Promise<
 }
 
 beforeAll(async () => {
+  process.env.ADMIN_WHITELIST_EMAILS = JSON.stringify([SVCF_TEST_ADMIN_EMAIL_A, SVCF_TEST_ADMIN_EMAIL_B]);
   adminUserIdA = await ensureTestUser(`${runId}-admin-a`, "短影音 Fallback 測試管理員甲", SVCF_TEST_ADMIN_EMAIL_A);
   adminUserIdB = await ensureTestUser(`${runId}-admin-b`, "短影音 Fallback 測試管理員乙", SVCF_TEST_ADMIN_EMAIL_B);
 });

@@ -30,16 +30,16 @@ import path from "node:path";
 import { sql } from "drizzle-orm";
 import type { TrpcContext } from "./_core/context";
 
-// runId／SVM_TEST_ADMIN_EMAIL／ADMIN_WHITELIST_EMAILS 覆寫必須在任何會動態
-// 載入 ./routers（遞移載入 server/_core/env.ts，模組頂層就會把
-// ADMIN_WHITELIST_EMAILS 讀進快取的 ENV.adminWhitelistEmails 常數）之前完成，
-// 否則 adminProcedure（isAdminUser()）永遠不會認得下面 adminCtx() 建立的
-// 測試管理員 email，即使之後在 beforeAll 裡再設一次 process.env 也沒用——
-// 同樣的手法與說明見 server/financeOptimization.test.ts 開頭。
+// Shared Cleanup（見對話「Vitest ADMIN_WHITELIST_EMAILS env race」）：
+// server/_core/env.ts 的 ENV.adminWhitelistEmails 現在是 getter（每次存取才
+// 重新讀 process.env），不再是模組載入當下算一次就凍結的值——下面的覆寫
+// 因此不需要再搶在任何動態 import 完成之前，改到 beforeAll 才真正寫入
+// process.env（模組頂層程式碼是 Vitest collect 階段執行，多檔案的 collect
+// 階段可能交錯，留在頂層會讓多個測試檔互相搶著改同一個全域
+// process.env）。
 const runId = `svm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const ORIGINAL_ADMIN_WHITELIST_EMAILS = process.env.ADMIN_WHITELIST_EMAILS;
 const SVM_TEST_ADMIN_EMAIL = `svm-test-admin-${runId}@example.test`;
-process.env.ADMIN_WHITELIST_EMAILS = JSON.stringify([SVM_TEST_ADMIN_EMAIL]);
 
 const { appRouter } = await import("./routers");
 const db = await import("./db");
@@ -107,6 +107,7 @@ const cleanupConsultantIds: number[] = [];
 const cleanupOwnerIds: number[] = [];
 
 beforeAll(async () => {
+  process.env.ADMIN_WHITELIST_EMAILS = JSON.stringify([SVM_TEST_ADMIN_EMAIL]);
   ownerAId = await ensureTestUser(`${runId}-ownerA`, "短影音測試申請人A");
   ownerBId = await ensureTestUser(`${runId}-ownerB`, "短影音測試申請人B");
   ownerPendingId = await ensureTestUser(`${runId}-ownerPending`, "短影音測試申請人-待審");

@@ -31,8 +31,8 @@ import type { TrpcContext } from "./_core/context";
 const runId = `ccc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const ORIGINAL_ADMIN_WHITELIST_EMAILS = process.env.ADMIN_WHITELIST_EMAILS;
 const CCC_TEST_ADMIN_EMAIL = `ccc-test-admin-${runId}@example.test`;
-process.env.ADMIN_WHITELIST_EMAILS = JSON.stringify([CCC_TEST_ADMIN_EMAIL]);
-
+// Shared Cleanup（見對話「Vitest ADMIN_WHITELIST_EMAILS env race」）：覆寫搬到
+// beforeAll，理由同 certificationCaseFallback.test.ts 開頭註解。
 const { appRouter } = await import("./routers");
 const db = await import("./db");
 const { getDb } = db;
@@ -151,6 +151,7 @@ async function createCaseFactory(): Promise<number> {
 }
 
 beforeAll(async () => {
+  process.env.ADMIN_WHITELIST_EMAILS = JSON.stringify([CCC_TEST_ADMIN_EMAIL]);
   ownerId = await ensureTestUser(`${runId}-owner`, "取件測試申請人");
   adminUserId = await ensureTestUser(`${runId}-admin`, "取件測試管理員", CCC_TEST_ADMIN_EMAIL);
   consultantAUserId = await ensureTestUser(`${runId}-consultantA`, "取件測試顧問甲");

@@ -33,8 +33,16 @@ import type { TrpcContext } from "./_core/context";
 const runId = `ccf-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const ORIGINAL_ADMIN_WHITELIST_EMAILS = process.env.ADMIN_WHITELIST_EMAILS;
 const CCF_TEST_ADMIN_EMAIL = `ccf-test-admin-${runId}@example.test`;
-process.env.ADMIN_WHITELIST_EMAILS = JSON.stringify([CCF_TEST_ADMIN_EMAIL]);
-
+// Shared Cleanup（見對話「Vitest ADMIN_WHITELIST_EMAILS env race」）：這裡刻意
+// 不在模組頂層（import 當下）覆寫 process.env.ADMIN_WHITELIST_EMAILS，改到
+// beforeAll 才設定——server/_core/env.ts 的 ENV.adminWhitelistEmails 現在是
+// getter（每次存取才重新讀 process.env），已經不需要「覆寫必須搶在任何動態
+// import 完成前」這個時序限制。模組頂層程式碼是在 Vitest 的 collect 階段
+// 執行，多個測試檔的 collect 階段可能交錯甚至並行，如果覆寫留在頂層，多個
+// 檔案會在 collect 階段就互相搶著改同一個全域 process.env，等到真正執行
+// 測試時已經不知道是誰的值——搬進 beforeAll 之後，覆寫只會在這個檔案自己
+// 的測試真正開始跑（run 階段）當下才發生，不受其他檔案 collect 階段時序
+// 影響。
 const { appRouter } = await import("./routers");
 const db = await import("./db");
 const { getDb } = db;
@@ -109,6 +117,7 @@ async function cleanupOwnerFactory(ownerId: number, factoryId: number): Promise<
 }
 
 beforeAll(async () => {
+  process.env.ADMIN_WHITELIST_EMAILS = JSON.stringify([CCF_TEST_ADMIN_EMAIL]);
   await db.ensureCertificationServiceCatalogSeeded();
   const catalog = await db.listPublicCertificationServices();
   if (catalog.length < 1) throw new Error("測試前置條件失敗：現有已上架認證服務目錄為空");

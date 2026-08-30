@@ -17,22 +17,33 @@ export const ENV = {
   lineChannelId: process.env.LINE_CHANNEL_ID ?? "",
   lineChannelSecret: process.env.LINE_CHANNEL_SECRET ?? "",
   lineRedirectUri: process.env.LINE_REDIRECT_URI ?? "https://www.oxmmatch.com/api/oauth/line/callback",
-  adminWhitelistOpenIds: (() => {
+  // Shared Cleanup（見對話「Vitest ADMIN_WHITELIST_EMAILS env race」）：這兩個
+  // 欄位刻意用 getter（每次存取才重新讀 process.env），不是像其餘 ENV 欄位那樣
+  // 在模組載入當下算一次就凍結——凍結版本在正式環境沒有差別（production
+  // process.env 開機後不會再變），但會讓多個測試檔各自覆寫
+  // process.env.ADMIN_WHITELIST_EMAILS 後動態 import 這個模組時，永遠是「不論
+  // 哪個測試檔最先觸發這個模組被 import，它的值就對整個測試執行過程凍結」，
+  // 其餘測試檔案的覆寫完全無效——這是比一般 race 更嚴重的 bug（不是偶發，而
+  // 是整份測試執行期間都固定用同一個錯的值）。改成 getter 後，每次呼叫
+  // isAdminUser()／getAdminUserIds() 都會讀當下最新的 process.env，讓覆寫在
+  // 呼叫當下正確生效；production 語意不變（開機後 process.env 本來就不會變，
+  // getter 每次算出來的值永遠相同）。
+  get adminWhitelistOpenIds(): string[] {
     try {
       const raw = process.env.ADMIN_WHITELIST_OPEN_IDS ?? "[]";
       return JSON.parse(raw) as string[];
     } catch {
       return [] as string[];
     }
-  })(),
-  adminWhitelistEmails: (() => {
+  },
+  get adminWhitelistEmails(): string[] {
     try {
       const raw = process.env.ADMIN_WHITELIST_EMAILS ?? "[]";
       return JSON.parse(raw) as string[];
     } catch {
       return [] as string[];
     }
-  })(),
+  },
   aiSearchProvider: (process.env.AI_SEARCH_PROVIDER ?? 'disabled') as 'openai' | 'anthropic' | 'disabled',
   aiSearchModel:    process.env.AI_SEARCH_MODEL ?? 'gpt-4o-mini',
   openaiApiKey:     process.env.OPENAI_API_KEY ?? '',

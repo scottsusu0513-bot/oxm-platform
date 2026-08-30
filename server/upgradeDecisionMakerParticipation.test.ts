@@ -27,8 +27,8 @@ import type { TrpcContext } from "./_core/context";
 const runId = `updm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const ORIGINAL_ADMIN_WHITELIST_EMAILS = process.env.ADMIN_WHITELIST_EMAILS;
 const TEST_ADMIN_EMAIL = `updm-test-admin-${runId}@example.test`;
-process.env.ADMIN_WHITELIST_EMAILS = JSON.stringify([TEST_ADMIN_EMAIL]);
-
+// Shared Cleanup（見對話「Vitest ADMIN_WHITELIST_EMAILS env race」）：覆寫搬到
+// beforeAll，理由同 certificationCaseFallback.test.ts 開頭註解。
 const { appRouter } = await import("./routers");
 const db = await import("./db");
 const { getDb } = db;
@@ -81,6 +81,7 @@ const cleanupAppIds: number[] = [];
 let ownerAppId: number;
 
 beforeAll(async () => {
+  process.env.ADMIN_WHITELIST_EMAILS = JSON.stringify([TEST_ADMIN_EMAIL]);
   ownerOwnerId = await ensureTestUser(`${runId}-owner-owner`, "測試申請人-owner");
   ownerManagerId = await ensureTestUser(`${runId}-owner-manager`, "測試申請人-manager");
   ownerUnavailableId = await ensureTestUser(`${runId}-owner-unavailable`, "測試申請人-unavailable");
