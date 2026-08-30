@@ -18,11 +18,12 @@
  * AWS SDK（本機沒有設定 AWS_PRIVATE_FILES_BUCKET，procedure 內部的
  * isPrivateStorageConfigured() 檢查會在碰到 AWS SDK 之前就先 throw）。
  */
-import { describe, it, expect } from "vitest";
+import { afterAll, describe, it, expect } from "vitest";
 import { sql } from "drizzle-orm";
 import { appRouter } from "./routers";
 import type { TrpcContext } from "./_core/context";
 import { isAdminUser } from "./_core/admin";
+import { ENV } from "./_core/env";
 import { getDb } from "./db";
 import type { User } from "../drizzle/schema";
 
@@ -59,13 +60,45 @@ async function deleteTestUser(id: number | undefined): Promise<void> {
   await conn.execute(sql`DELETE FROM users WHERE id = ${id}`);
 }
 
-/** 用真實存在、通過 ADMIN_WHITELIST_EMAILS 白名單的既有使用者，不新建一筆假的「管理員」。 */
+/**
+ * Test fixture 缺口修正：優先重用資料庫裡本來就存在、通過
+ * ADMIN_WHITELIST_EMAILS／ADMIN_WHITELIST_OPEN_IDS 白名單的既有使用者——
+ * 這是這支測試原本的設計精神（驗證真實白名單機制，不是靠 mock ctx.user.role
+ * 抄捷徑）。但 oxm_test 是每個環境各自獨立、乾淨的隔離測試庫，不會天生就有
+ * 跟 .env 白名單對得上的使用者列——如果真的找不到，改成在這裡（run 階段，
+ * 不是模組頂層）建立一筆通過白名單、值只在這個測試 process 存在的 fixture，
+ * 一樣是「真實 DB row + 真實 isAdminUser() 判斷」，不是 mock，只是補上
+ * oxm_test 原本就沒有的資料，afterAll 清乾淨、不留在 oxm_test。
+ */
+let createdFixtureAdminId: number | undefined;
+
+afterAll(async () => {
+  if (createdFixtureAdminId != null) {
+    const conn = await getDb();
+    if (conn) await conn.execute(sql`DELETE FROM users WHERE id = ${createdFixtureAdminId}`);
+  }
+});
+
 async function getRealWhitelistedAdminUser(): Promise<User> {
   const conn = await getDb();
   if (!conn) throw new Error("no db");
   const [rows] = await conn.execute(sql`SELECT * FROM users WHERE role = 'admin' LIMIT 5`) as unknown as [User[], unknown];
-  const admin = rows.find(u => isAdminUser(u));
-  if (!admin) throw new Error("本機資料庫找不到通過 isAdminUser() 白名單的使用者，無法驗證 admin 路徑");
+  const existing = rows.find(u => isAdminUser(u));
+  if (existing) return existing;
+
+  const whitelistedEmail = ENV.adminWhitelistEmails[0];
+  if (!whitelistedEmail) {
+    throw new Error("本機 .env 沒有設定 ADMIN_WHITELIST_EMAILS，無法建立通過白名單的 fixture 使用者");
+  }
+  const openId = `pdfwiring-admin-fixture-${runId}`;
+  await conn.execute(sql`
+    INSERT INTO users (openId, name, email, role)
+    VALUES (${openId}, ${`PDF Wiring Test Admin ${runId}`}, ${whitelistedEmail}, 'admin')
+  `);
+  const [created] = await conn.execute(sql`SELECT * FROM users WHERE openId = ${openId} LIMIT 1`) as unknown as [User[], unknown];
+  const admin = created[0];
+  if (!admin || !isAdminUser(admin)) throw new Error("建立的 fixture 使用者未能通過 isAdminUser() 白名單判斷");
+  createdFixtureAdminId = admin.id;
   return admin;
 }
 

@@ -80,8 +80,12 @@ describe("Navbar.tsx: 手機版六入口 Accordion 使用單一 state", () => {
   });
 
   it("mobileOpen 開啟時存在 body scroll lock 邏輯（非只有 overflow:hidden）", () => {
+    // production 現況已經加上 mobileMenuLockSuppressed（見 Navbar.tsx 第 227
+    // 行附近註解：避免跟 OnboardingTour 自己的全螢幕 scroll lock 衝突），
+    // 這裡的 regex 更新成目前真正的條件式與 dependency array，而不是把
+    // production 改回舊版單一 mobileOpen 判斷。
     const lockEffectMatch = source.match(
-      /useEffect\(\(\) => \{\s*\n\s*if \(!mobileOpen\) return;[\s\S]*?\}, \[mobileOpen\]\);/
+      /useEffect\(\(\) => \{\s*if \(!mobileOpen \|\| mobileMenuLockSuppressed\) return;[\s\S]*?\}, \[mobileOpen, mobileMenuLockSuppressed\]\);/
     );
     expect(lockEffectMatch, "找不到 mobileOpen 的 body scroll lock useEffect").not.toBeNull();
     const lockEffect = lockEffectMatch![0];
@@ -95,8 +99,12 @@ describe("Navbar.tsx: 手機版六入口 Accordion 使用單一 state", () => {
   });
 
   it("scroll lock cleanup 會恢復 body 原本 inline styles 並呼叫 window.scrollTo 還原 scrollY", () => {
+    // production 現況已經加上 mobileMenuLockSuppressed（見 Navbar.tsx 第 227
+    // 行附近註解：避免跟 OnboardingTour 自己的全螢幕 scroll lock 衝突），
+    // 這裡的 regex 更新成目前真正的條件式與 dependency array，而不是把
+    // production 改回舊版單一 mobileOpen 判斷。
     const lockEffectMatch = source.match(
-      /useEffect\(\(\) => \{\s*\n\s*if \(!mobileOpen\) return;[\s\S]*?\}, \[mobileOpen\]\);/
+      /useEffect\(\(\) => \{\s*if \(!mobileOpen \|\| mobileMenuLockSuppressed\) return;[\s\S]*?\}, \[mobileOpen, mobileMenuLockSuppressed\]\);/
     );
     const lockEffect = lockEffectMatch![0];
 

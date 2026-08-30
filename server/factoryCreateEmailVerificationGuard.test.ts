@@ -53,6 +53,10 @@ const MINIMAL_FACTORY_INPUT = {
   capitalLevel: "1000萬以下",
   address: "新竹市東區某路 1 號",
   businessType: "factory" as const,
+  // Test fixture 缺口修正：factory.create 新增 taxId 為必填欄位（見
+  // migration 0092／shared/taxId.ts），這個 fixture 是舊版遺留，補上一個
+  // 檢查碼合法、其他測試檔（factoryTaxId.test.ts）已經在用的有效值。
+  taxId: "00000016",
 };
 
 describe("factory.create 拒絕路徑：後端 primaryEmailVerifiedAt 硬性防線仍然有效", () => {

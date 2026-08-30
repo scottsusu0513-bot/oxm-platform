@@ -1,8 +1,30 @@
-import { describe, expect, it } from "vitest";
+import { beforeAll, afterAll, describe, expect, it } from "vitest";
 import { appRouter } from "./routers";
 import type { TrpcContext } from "./_core/context";
 
 type AuthenticatedUser = NonNullable<TrpcContext["user"]>;
+
+/**
+ * Test fixture 缺口修正（Full Vitest baseline 修復）：`adminProcedure`
+ * （server/_core/trpc.ts）實際判斷 admin 身分是呼叫 isAdminUser(ctx.user)
+ * 重新比對 ADMIN_WHITELIST_EMAILS／ADMIN_WHITELIST_OPEN_IDS 白名單，不是看
+ * mock context 上隨便設的 `role: "admin"` 欄位——這裡原本寫死一個看起來像
+ * 真實 openId 的字串（"SWjqDMVNedahKJ4az5GpAs"），實際上從來就不在白名單
+ * 裡，這幾個 admin.* 測試很可能從 adminProcedure 改成白名單制之後就沒有
+ * 真的驗證過 admin 路徑。這裡改成跟 ISO/ERP/短影音等測試檔一致的既有慣例：
+ * beforeAll 才覆寫 ADMIN_WHITELIST_EMAILS（server/_core/env.ts 的
+ * ENV.adminWhitelistEmails 現在是 getter，run 階段覆寫即可生效），
+ * afterAll 還原。
+ */
+const FACTORY_TEST_ADMIN_EMAIL = "factory-test-admin@example.test";
+const ORIGINAL_ADMIN_WHITELIST_EMAILS = process.env.ADMIN_WHITELIST_EMAILS;
+
+beforeAll(() => {
+  process.env.ADMIN_WHITELIST_EMAILS = JSON.stringify([FACTORY_TEST_ADMIN_EMAIL]);
+});
+afterAll(() => {
+  process.env.ADMIN_WHITELIST_EMAILS = ORIGINAL_ADMIN_WHITELIST_EMAILS;
+});
 
 function createPublicContext(): TrpcContext {
   return {
@@ -17,7 +39,7 @@ function createAuthContext(overrides?: Partial<AuthenticatedUser>): TrpcContext 
   const user: AuthenticatedUser = {
     id: 1,
     openId: isAdmin ? "SWjqDMVNedahKJ4az5GpAs" : "test-user-1",
-    email: "test@example.com",
+    email: isAdmin ? FACTORY_TEST_ADMIN_EMAIL : "test@example.com",
     name: "Test User",
     loginMethod: isAdmin ? "google" : "manus",
     role: "user",
@@ -46,12 +68,15 @@ describe("factory.search", () => {
   }, 15000);
 
   it("accepts all filter parameters", async () => {
+    // industry／region／capitalLevel 已經改成複選（見 CLAUDE.md「地區、資本額、
+    // 產業下拉改為複選」），server 端 zod schema 相應改成 z.array(z.string())，
+    // 舊版單一字串會被 BAD_REQUEST 擋下——這裡更新成目前真正的陣列格式。
     const ctx = createPublicContext();
     const caller = appRouter.createCaller(ctx);
     const result = await caller.factory.search({
-      industry: "紡織",
-      region: "台北市",
-      capitalLevel: "100萬以下",
+      industry: ["紡織"],
+      region: ["台北市"],
+      capitalLevel: ["100萬以下"],
       mfgMode: "ODM",
       keyword: "測試",
       page: 1,
@@ -364,12 +389,24 @@ describe("favorite.toggle", () => {
   });
 
   it("toggles factory favorite status", async () => {
-    const ctx = createAuthContext({ id: 1, openId: "test-user-1" });
-    const caller = appRouter.createCaller(ctx);
-    const result1 = await caller.favorite.toggle({ factoryId: 1 });
-    expect(result1.isFavorited).toBe(true);
-    const result2 = await caller.favorite.toggle({ factoryId: 1 });
-    expect(result2.isFavorited).toBe(false);
+    // Test fixture 缺口修正：favorites 表對 users/factories 都有 FK，寫死
+    // id=1 假設 oxm_test 剛好已經有這兩筆資料——全新／清空過的 oxm_test 並不
+    // 保證這件事，改成用既有 ensureTestUser／createTestFactory 建立真正存在
+    // 的 fixture，結束後清乾淨。
+    const { ensureTestUser, createTestFactory, deleteTestFactory, deleteTestUser } = await import("./_core/financeTestFixtures");
+    const userId = await ensureTestUser("factory-test-favorite-user", "Favorite Toggle Test User");
+    const factoryId = await createTestFactory(userId, "Favorite Toggle Test Factory", "approved");
+    try {
+      const ctx = createAuthContext({ id: userId, openId: "factory-test-favorite-user" });
+      const caller = appRouter.createCaller(ctx);
+      const result1 = await caller.favorite.toggle({ factoryId });
+      expect(result1.isFavorited).toBe(true);
+      const result2 = await caller.favorite.toggle({ factoryId });
+      expect(result2.isFavorited).toBe(false);
+    } finally {
+      await deleteTestFactory(factoryId);
+      await deleteTestUser(userId);
+    }
   }, 15000);
 });
 

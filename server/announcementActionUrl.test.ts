@@ -258,7 +258,11 @@ describe("其他公告顯示入口：不得渲染「了解更多」按鈕", () =
       path.resolve(import.meta.dirname, "..", "client", "src", "pages", "Home.tsx"),
       "utf-8"
     );
-    const sectionMatch = source.match(/function AnnouncementsSection\([\s\S]*?\n\}\n/);
+    // 用 \r?\n 而不是單純 \n：這個檔案在 Windows checkout 下可能是 CRLF
+    // 換行（`}\r\n`），單純的 \n 會要求 `}` 後面緊接著裸 \n，在 CRLF 檔案裡
+    // 永遠比對不到（`}` 後面實際是 \r），造成這個純粹环境差異被誤判成「找不到
+    // AnnouncementsSection 函式」。
+    const sectionMatch = source.match(/function AnnouncementsSection\([\s\S]*?\r?\n\}\r?\n/);
     expect(sectionMatch, "找不到 AnnouncementsSection 函式").not.toBeNull();
     const section = sectionMatch![0];
     expect(section).not.toMatch(/actionUrl/);
