@@ -19,9 +19,14 @@ describe("/resources 找資源總覽入口", () => {
     expect(readSource("client", "src", "App.tsx")).toMatch(/path="\/resources" component=\{ResourceCenter\}/);
   });
 
-  it("About 的資源相關 CTA 導向政府補助專區（維持既有頁面既有行為，本輪未變動）", () => {
+  it("About 六大服務的「找資源」導向 /resources 總覽（GEO Phase 2：主入口語意層級須與特定子服務區分，不可用 /upgrade-center 取代整體找資源）", () => {
     const about = readSource("client", "src", "pages", "AboutOXM.tsx");
-    expect(about).toMatch(/action: \{ label: "前往政府補助專區", href: "\/upgrade-center" \}/);
+    expect(about).toMatch(/action: \{ label: "前往找資源總覽", href: "\/resources" \}/);
+  });
+
+  it("About 頁尾 CTA 仍可指向特定子服務（政府補助／企業升級中心），與六大服務主入口語意層級不同", () => {
+    const aboutContent = readSource("shared", "content", "about.ts");
+    expect(aboutContent).toMatch(/href: "\/upgrade-center"/);
   });
 
   it("Navbar 的找資源主入口重新導向 /resources 總覽頁，下拉額外提供政府補助專區快速連結", () => {

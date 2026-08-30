@@ -77,7 +77,7 @@ const SERVICES: AboutService[] = [
     title: ABOUT_CONTENT.serviceNames[1],
     description: "從資金、認證、系統到品牌行銷\n依企業目前問題選擇專業服務\n在同一入口找到清楚的改善方向",
     statusLabel: "已開放",
-    action: { label: "前往政府補助專區", href: "/upgrade-center" },
+    action: { label: "前往找資源總覽", href: "/resources" },
     theme: {
       section: "bg-gradient-to-br from-purple-50/80 via-white to-indigo-50",
       icon: "bg-purple-100 text-purple-700",
@@ -124,8 +124,8 @@ const SERVICES: AboutService[] = [
     eyebrow: "產業情報",
     title: ABOUT_CONTENT.serviceNames[4],
     description: "彙整政府政策、補助公告、法規異動\n整理產業活動、展覽等重要資訊\n讓工廠更容易掌握第一手產業消息",
-    statusLabel: "規劃中",
-    disabledLabel: "即將推出",
+    statusLabel: "已開放",
+    action: { label: "前往看產業消息", href: "/news" },
     theme: {
       section: "bg-gradient-to-br from-blue-50/80 via-white to-indigo-50",
       icon: "bg-blue-100 text-blue-700",
@@ -164,7 +164,7 @@ const ECOSYSTEM_BOTTOM = [
   { icon: MessageSquare, label: "交流合作", tone: "text-violet-600 bg-violet-50 border-violet-100" },
 ];
 
-const AUDIENCE_ROLE_ICONS = [Search, Rocket, Factory, Briefcase, Users];
+const AUDIENCE_ROLE_ICONS = [Search, Factory, Rocket, Briefcase, Users];
 const AUDIENCE_ROLES = ABOUT_CONTENT.audienceRoles.map((role, index) => ({
   ...role,
   icon: AUDIENCE_ROLE_ICONS[index],

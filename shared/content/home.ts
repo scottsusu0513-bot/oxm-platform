@@ -22,6 +22,8 @@
 // 橘色、「產業服務」用紫色），用一組 segment（純文字或帶 highlight 標記）表示，
 // Home.tsx 可以照樣重建帶顏色的 <span>，而 prerender 腳本只需要把每段文字
 // 接起來即可、不需要在意顏色——避免同一句話在兩處各自維護一份純文字複本。
+import { INDUSTRY_OPTIONS } from "../constants";
+
 export type TextSegment = { text: string; highlight?: "orange" | "purple" };
 
 export function segmentsToPlainText(segments: TextSegment[]): string {
@@ -76,40 +78,49 @@ export const HOME_CONTENT = {
   },
 
   statsSection: {
+    // Hotfix（GEO Phase 2）：原本的「500+ 工廠」「300+ 設計工作室」「4.8
+    // 平均評分」都是沒有資料來源、無法驗證的行銷佔位數字（HOME_CONTENT
+    // 是純靜態文案檔，不會即時查 DB），已直接移除、不再用另一組假數字取代。
+    // 保留的 4 個項目全部可對應到目前程式碼裡真實存在的能力/資料：
+    // 合作型態（businessType enum：factory/studio，見 drizzle/schema.ts）、
+    // 代工模式（ODM/OEM/OBM，見 Home.tsx 的代工模式篩選）、產業類別（直接
+    // 從 shared/constants.ts 的 INDUSTRIES 陣列算長度，taxonomy 增減時
+    // 這裡會自動同步、不會變成過時的寫死數字）、地區涵蓋（REGION_GROUPS
+    // 涵蓋北中南全台，非單一縣市）。
     items: [
-      { num: "500+", label: "工廠" },
-      { num: "300+", label: "設計工作室" },
-      { num: "4.8", label: "平均評分" },
-      { num: "10+", label: "產業類別" },
+      { num: "2", label: "合作型態" },
+      { num: "3", label: "代工模式" },
+      { num: String(INDUSTRY_OPTIONS.length), label: "產業類別" },
+      { num: "全台", label: "地區涵蓋" },
     ],
   },
 
   featuresSection: {
     title: "為什麼選擇 OXM？",
-    subtitle: "最完整的代工媒合服務，工廠與工作室都在這裡",
+    subtitle: "從工廠媒合開始，更快找到需要的台灣傳產資源",
     items: [
       { title: "精準搜尋", description: "依產業、地區、資本額篩選，快速鎖定夥伴" },
-      { title: "即時詢問", description: "直接與業主線上溝通，即時取得報價" },
+      { title: "即時詢問", description: "直接與業主線上溝通，加速報價與洽談" },
       { title: "評價系統", description: "真實評分讓你選擇更有信心" },
-      { title: "資訊透明", description: "規格、價格區間一目了然" },
+      { title: "資訊透明", description: "工廠資訊與商品內容，一次看清楚" },
     ],
   },
 
   ctaSection: {
     title: "準備好開始了嗎？",
     descriptionParts: [
-      { text: "不論你是尋找合作夥伴的品牌商，還是想要曝光的" },
+      { text: "不論你是正在尋找製造夥伴的企業，還是想讓更多買家看到的" },
       { text: "工廠", highlight: "orange" },
       { text: "或" },
       { text: "工作室", highlight: "purple" },
-      { text: "業主，OXM 都是你最佳的選擇！" },
+      { text: "，OXM 都能協助你更快找到彼此。" },
     ] satisfies TextSegment[],
     buttons: [
       { label: "開始搜尋", href: "/search" },
       // 首頁這顆按鈕在已登入且有工廠管理權限時會導向 /dashboard，其餘情況
       // （包含匿名訪客／爬蟲，也就是預渲染會看到的狀態）導向 /register-factory，
       // 預渲染固定用未登入時的真實行為，不假設使用者已登入。
-      { label: "免費刊登工廠／工作室", href: "/register-factory" },
+      { label: "免費上架工廠", href: "/register-factory" },
     ],
   },
 };
