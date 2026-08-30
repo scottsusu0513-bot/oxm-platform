@@ -11,6 +11,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { toast } from "sonner";
+import { getFriendlyFormError } from "@/lib/formErrors";
 import {
   Building2, Phone, MapPin, Clock, User as UserIcon, Loader2, ShieldAlert,
   ArrowRight, Save, LogIn,
@@ -89,7 +90,7 @@ function NotesEditor({ applicationId, initialNotes, onMutated }: { applicationId
       toast.success("備註已儲存");
       onMutated();
     },
-    onError: (err) => toast.error(err.message || "儲存失敗"),
+    onError: (err) => toast.error(getFriendlyFormError(err, "儲存失敗，請稍後再試。")),
   });
   return (
     <div className="space-y-2">
@@ -120,7 +121,7 @@ function AssignConsultantControl({ applicationId, currentConsultantId, onMutated
       toast.success("已更新承辦顧問");
       onMutated();
     },
-    onError: (err) => toast.error(err.message || "指派失敗"),
+    onError: (err) => toast.error(getFriendlyFormError(err, "指派失敗，請稍後再試。")),
   });
   // 只列出啟用中且已綁定使用者帳號的顧問——見
   // client/src/pages/financeConsultantCasesViewState.ts 的
@@ -150,7 +151,7 @@ function CaseCard({ item, isAdmin, onMutated }: { item: any; isAdmin: boolean; o
       toast.success("狀態已更新");
       onMutated();
     },
-    onError: (err) => toast.error(err.message || "更新失敗"),
+    onError: (err) => toast.error(getFriendlyFormError(err, "更新失敗，請稍後再試。")),
   });
   const info = statusInfo(item.status);
   const nextOptions = NEXT_STATUS_OPTIONS[item.status] ?? [];
@@ -328,7 +329,7 @@ export default function FinanceConsultantCases() {
   const items = selectMergedFinanceCases(paginationState);
   const total = casesQuery.data?.total ?? items.length;
   const hasMore = total > items.length;
-  const isAdmin = user?.role === "admin";
+  const isAdmin = !!user?.isAdmin;
 
   const statusCounts: Record<string, number> = {};
   for (const c of items) {

@@ -12,6 +12,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { toast } from "sonner";
+import { getFriendlyFormError } from "@/lib/formErrors";
 import {
   Building2, Phone, Clock, User as UserIcon, Loader2, ShieldAlert,
   ArrowRight, Save, LogIn, Inbox, History,
@@ -77,7 +78,7 @@ function NotesEditor({ caseId, initialNotes, onMutated }: { caseId: number; init
   const [value, setValue] = useState(initialNotes ?? "");
   const mutation = trpc.certificationConsultant.updateCaseNotes.useMutation({
     onSuccess: () => { toast.success("備註已儲存"); onMutated(); },
-    onError: (err) => toast.error(err.message || "儲存失敗"),
+    onError: (err) => toast.error(getFriendlyFormError(err, "儲存失敗，請稍後再試。")),
   });
   return (
     <div className="space-y-2">
@@ -94,7 +95,7 @@ function AssignConsultantControl({ caseId, currentConsultantId, onMutated }: { c
   const { data: consultants } = trpc.certificationConsultant.adminListConsultants.useQuery();
   const mutation = trpc.certificationConsultant.adminAssignConsultant.useMutation({
     onSuccess: () => { toast.success("已更新承辦顧問"); onMutated(); },
-    onError: (err) => toast.error(err.message || "指派失敗"),
+    onError: (err) => toast.error(getFriendlyFormError(err, "指派失敗，請稍後再試。")),
   });
   const assignable = (consultants ?? []).filter(c => c.isActive && c.userId != null);
   return (
@@ -141,7 +142,7 @@ function StatusAdvanceControls({ item, onMutated }: { item: any; onMutated: () =
   const [reason, setReason] = useState("");
   const statusMutation = trpc.certificationConsultant.updateCaseStatus.useMutation({
     onSuccess: () => { toast.success("狀態已更新"); setPending(null); setReason(""); onMutated(); },
-    onError: (err) => toast.error(err.message || "更新失敗"),
+    onError: (err) => toast.error(getFriendlyFormError(err, "更新失敗，請稍後再試。")),
   });
   const nextOptions = CERTIFICATION_STATUS_TRANSITIONS[item.status as CertificationCaseStatus] ?? [];
   if (nextOptions.length === 0) return null;
@@ -210,8 +211,8 @@ function CaseCard({ item, isAdmin, serviceNameByCode, onMutated }: { item: any; 
 
         <div className="text-sm space-y-1">
           <p><span className="text-muted-foreground">想了解的認證服務：</span>{services.join("、")}</p>
-          {item.additionalNotes && <p className="text-xs text-muted-foreground">補充需求：{item.additionalNotes}</p>}
-          {item.statusReason && <p className="text-xs text-muted-foreground">最近一次例外原因：{item.statusReason}</p>}
+          {item.additionalNotes && <p className="text-xs text-muted-foreground whitespace-pre-wrap break-words">補充需求：{item.additionalNotes}</p>}
+          {item.statusReason && <p className="text-xs text-muted-foreground whitespace-pre-wrap break-words">最近一次例外原因：{item.statusReason}</p>}
         </div>
 
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground border-t border-border pt-2">
@@ -245,7 +246,7 @@ function UnassignedCaseCard({ item, serviceNameByCode, onClaimed }: { item: any;
         toast.error("案件已由其他顧問承接，請重新整理");
         onClaimed();
       } else {
-        toast.error(err.message || "取件失敗");
+        toast.error(getFriendlyFormError(err, "取件失敗，請稍後再試。"));
       }
     },
   });

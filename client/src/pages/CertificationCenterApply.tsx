@@ -17,6 +17,7 @@ import LoginDialog from "@/components/LoginDialog";
 import { ArrowLeft, CheckCircle2, Loader2, Building2, LogIn, Clock, XCircle, AlertCircle } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
+import { getFriendlyFormError } from "@/lib/formErrors";
 import { resolveAnyFactoryStatus } from "./financeOptimizationApplyStatus";
 import { CERTIFICATION_OPEN_STATUSES, CERTIFICATION_STATUS_LABELS } from "@shared/certificationCase";
 import { useAiHandoff } from "@/hooks/useAiHandoff";
@@ -112,7 +113,7 @@ export default function CertificationCenterApply() {
 
   const applyMutation = trpc.certificationCenter.submitApplication.useMutation({
     onSuccess: () => setSubmitted(true),
-    onError: (err) => toast.error(err.message || "送出失敗，請稍後再試"),
+    onError: (err) => toast.error(getFriendlyFormError(err, "送出失敗，請稍後再試。")),
   });
 
   const {
@@ -428,20 +429,20 @@ export default function CertificationCenterApply() {
             <legend className="px-1 text-sm font-semibold text-muted-foreground">聯絡資料</legend>
             <div className="space-y-2">
               <Label htmlFor="contactName">聯絡人 <span className="text-destructive">*</span></Label>
-              <Input id="contactName" placeholder="姓名" {...register("contactName", { required: "請填寫聯絡人姓名" })} />
+              <Input id="contactName" placeholder="姓名" maxLength={100} {...register("contactName", { required: "請填寫聯絡人姓名" })} />
               {errors.contactName && <p className="text-xs text-destructive">{errors.contactName.message}</p>}
             </div>
             <div className="space-y-2">
               <Label htmlFor="phone">聯絡電話 <span className="text-destructive">*</span></Label>
               <Input
-                id="phone" type="tel" placeholder="0912-345-678"
+                id="phone" type="tel" placeholder="0912-345-678" maxLength={30}
                 {...register("phone", { required: "請填寫聯絡電話", pattern: { value: /^[\d\-+() ]{7,20}$/, message: "電話格式不正確" } })}
               />
               {errors.phone && <p className="text-xs text-destructive">{errors.phone.message}</p>}
             </div>
             <div className="space-y-2">
               <Label htmlFor="contactTime">方便聯絡時間 <span className="text-destructive">*</span></Label>
-              <Input id="contactTime" placeholder="例：平日上午 10:00-12:00" {...register("contactTime", { required: "請填寫方便聯絡時間" })} />
+              <Input id="contactTime" placeholder="例：平日上午 10:00-12:00" maxLength={100} {...register("contactTime", { required: "請填寫方便聯絡時間" })} />
               {errors.contactTime && <p className="text-xs text-destructive">{errors.contactTime.message}</p>}
             </div>
           </fieldset>
@@ -472,7 +473,7 @@ export default function CertificationCenterApply() {
 
           <fieldset className="space-y-2 rounded-xl border border-border p-6">
             <legend className="px-1 text-sm font-semibold text-muted-foreground">想補充的需求（選填）</legend>
-            <Textarea rows={4} placeholder="例如：目標認證時程、既有管理系統狀況等" {...register("additionalNotes")} />
+            <Textarea rows={4} placeholder="例如：目標認證時程、既有管理系統狀況等" maxLength={2000} {...register("additionalNotes")} />
           </fieldset>
 
           <div className="flex items-start gap-3 rounded-xl border border-border bg-muted/30 p-4">
