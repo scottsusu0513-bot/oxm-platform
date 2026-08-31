@@ -102,18 +102,37 @@ const CAROUSEL_EXTS = [".png", ".jpg", ".jpeg", ".webp"] as const;
 // 首頁輪播圖建議統一尺寸：2640 × 1000 px，比例約 2.64:1。
 // 若圖片比例不同，手機版 object-contain 會避免裁切，但可能產生留白（以模糊背景層填補）。
 // 要完全沒有裁切與留白，所有圖片必須先裁成相同比例。
-const carouselImages = [
-  { id: "01", alt: "OXM 首頁輪播圖片 1" },
-  { id: "02", alt: "OXM 首頁輪播圖片 2" },
-  { id: "03", alt: "OXM 首頁輪播圖片 3" },
-  { id: "04", alt: "OXM 首頁輪播圖片 4" },
-  { id: "05", alt: "OXM 首頁輪播圖片 5" },
-  { id: "06", alt: "OXM 首頁輪播圖片 6" },
-].sort((a, b) => parseInt(b.id) - parseInt(a.id));
+//
+// 陣列順序＝實際播放順序（由小到大），故意不用 .sort() 排序——直接照數字
+// 由小到大寫死在陣列裡，比「陣列可能亂寫、靠 .sort() 補救」更不容易未來
+// 又不小心排錯或漏改（先前版本用 .sort((a,b) => parseInt(b.id) -
+// parseInt(a.id)) 讓播放順序整個反過來，變成 06→05→...→01，就是靠 sort
+// 掩蓋陣列本身順序問題的例子）。目前資料夾沒有 05（缺號是允許的——HeroImage
+// Carousel 本身用逐張 probe 判斷圖片是否存在，probe 不到的 id 會被過濾掉，
+// 不會顯示空白 slide、不會出現 broken image、也不會擋住後面的圖片繼續播放）。
+// exported purely for the ordering/skip-resilience regression test
+// (client/src/pages/Home.carousel.test.tsx) — no behavior change.
+export const carouselImages = [
+  { id: "01", alt: "OXM｜台灣 OEM/ODM 工廠媒合平台品牌介紹" },
+  { id: "02", alt: "OXM App 全面上架，Google Play／App Store 下載" },
+  { id: "03", alt: "工廠不是沒訂單能力，是客戶找不到你——工廠曝光痛點" },
+  { id: "04", alt: "企業想轉型升級，卻不知道補助、顧問、資源去哪找" },
+  { id: "06", alt: "政府補助專區：SBIR、CITD 等補助資訊與申請流程整合" },
+  { id: "07", alt: "企業財務優化：資金調度、成本分析、稅務與融資媒合" },
+  { id: "08", alt: "ISO／低碳認證：協助工廠取得國際認證與碳盤查" },
+  { id: "09", alt: "ERP／MES／產線優化：整合訂單、生產與庫存管理" },
+  { id: "10", alt: "短影音／品牌行銷：打造工廠曝光與品牌信任" },
+  { id: "11", alt: "討論區／產業交流：產業前輩經驗分享與人脈媒合" },
+  { id: "12", alt: "OXM AI：智慧媒合找工廠、找資源、找人才等六大入口" },
+];
 
 type ResolvedImage = { id: string; src: string; alt: string };
 
-function HeroImageCarousel() {
+// exported (only addition made purely for testability — no behavior change)
+// so a jsdom test can render this specific sub-component in isolation
+// without needing to mount the whole Home page (which has Navbar/tRPC
+// dependencies unrelated to the carousel itself).
+export function HeroImageCarousel() {
   const [resolved, setResolved] = useState<ResolvedImage[] | null>(null);
   const [current, setCurrent] = useState(0);
   const [paused, setPaused] = useState(false);
