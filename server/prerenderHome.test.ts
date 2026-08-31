@@ -150,11 +150,13 @@ describe("injectPrerenderedBody (multi-page: / and /about)", () => {
     expect(html).toContain(ABOUT_CONTENT.heroH1);
   });
 
-  it("does not inject any prerendered body for a route with no registered fragment (e.g. /upgrade-center)", () => {
-    // GEO Phase 3A：/search 現在也有自己的固定語意殼（見
-    // server/prerenderResourcesNewsSearch.test.ts），不再是「沒有預渲染」的
-    // 範例，改用同樣沒有註冊片段的 /upgrade-center。
-    expect(injectPrerenderedBody(BASE_HTML, "/upgrade-center")).toBeNull();
+  it("does not inject any prerendered body for a route with no registered fragment (e.g. /talent)", () => {
+    // GEO Final Cleanup：/upgrade-center 現在也有自己的固定語意殼（見
+    // server/prerenderUpgradeCenter.test.ts），不再是「沒有預渲染」的範例
+    // （/search 也因同樣理由被換掉，見 server/prerenderResourcesNewsSearch
+    // .test.ts）。改用 /talent——noindex,follow 的 Coming Soon 頁，本來就
+    // 不該有 prerender 片段。
+    expect(injectPrerenderedBody(BASE_HTML, "/talent")).toBeNull();
   });
 
   it("/search gets its own fixed semantic-shell fragment, not home's/about's content (GEO Phase 3A)", () => {

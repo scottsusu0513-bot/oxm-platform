@@ -108,11 +108,13 @@ describe("injectPrerenderedBody", () => {
     }
   });
 
-  it("does not affect other SPA routes with no registered fragment (e.g. /upgrade-center)", () => {
-    // GEO Phase 3A：/search 現在也有自己的固定語意殼（見
-    // server/prerenderResourcesNewsSearch.test.ts），不再適合當「沒有註冊
-    // 預渲染片段的路由」範例，改用同樣沒有註冊片段的 /upgrade-center。
-    expect(injectPrerenderedBody(BASE_HTML, "/upgrade-center")).toBeNull();
+  it("does not affect other SPA routes with no registered fragment (e.g. /talent)", () => {
+    // GEO Final Cleanup：/upgrade-center 現在也有自己的固定語意殼（見
+    // server/prerenderUpgradeCenter.test.ts），不再適合當「沒有註冊預渲染
+    // 片段的路由」範例（在此之前 /search 也因同樣理由被換掉，見
+    // server/prerenderResourcesNewsSearch.test.ts）。改用 /talent——noindex,
+    // follow 的 Coming Soon 頁，本來就不該有 prerender 片段。
+    expect(injectPrerenderedBody(BASE_HTML, "/talent")).toBeNull();
   });
 
   it("returns null (no-op) if there is no empty #root div to inject into", () => {
