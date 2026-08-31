@@ -137,8 +137,10 @@ describe("injectPrerenderedBody(\"/faq\") — /faq 已加入 PRERENDERED_PAGES",
     }
   });
 
-  it("不影響其他沒有註冊預渲染片段的路由（例如 /search）", () => {
-    expect(injectPrerenderedBody(BASE_HTML, "/search")).toBeNull();
+  it("不影響其他沒有註冊預渲染片段的路由（例如 /upgrade-center）", () => {
+    // GEO Phase 3A：/search 現在也有自己的固定語意殼，不再適合當「沒有
+    // 註冊預渲染片段的路由」範例，改用同樣沒有註冊片段的 /upgrade-center。
+    expect(injectPrerenderedBody(BASE_HTML, "/upgrade-center")).toBeNull();
   });
 });
 

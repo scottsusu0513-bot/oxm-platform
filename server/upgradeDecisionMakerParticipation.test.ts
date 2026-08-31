@@ -297,8 +297,11 @@ describe("client/src/pages/EnterpriseUpgradeCenter.tsx — 頁首紅色提醒文
     const source = readSource("client", "src", "pages", "EnterpriseUpgradeCenter.tsx");
     expect(source).toContain("補助申請涉及公司投資、預算及執行決策，安排顧問洽談時，請盡量由公司負責人或具決策權之管理階層一同參與，以避免因資訊轉達造成申請進度延誤。");
     expect(source).toMatch(/text-xs leading-relaxed text-red-600/);
-    // 說明文字是 text-sm，提醒文字是 text-xs，字級確實較小
-    expect(source).toContain(`<p className="mt-4 text-sm leading-7 text-slate-600 md:text-base">OXM 協助媒合適合企業階段的政府計畫`);
+    // 說明文字是 text-sm，提醒文字是 text-xs，字級確實較小。GEO Final
+    // Cleanup：說明文字改引用 shared/content/upgradeCenter.ts 的
+    // UPGRADE_CENTER_CONTENT.programsIntro（同一句話，供 prerender 共用），
+    // className／結構本身沒有變動。
+    expect(source).toContain(`<p className="mt-4 text-sm leading-7 text-slate-600 md:text-base">{UPGRADE_CENTER_CONTENT.programsIntro}</p>`);
     // 右側「XX 項方案」區塊未被改動
     expect(source).toContain(`{String(upgradePrograms.length).padStart(2, "0")}`);
     expect(source).toContain(`<span className="text-xs font-semibold tracking-wider text-slate-400">項方案</span>`);

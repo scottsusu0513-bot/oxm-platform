@@ -150,8 +150,20 @@ describe("injectPrerenderedBody (multi-page: / and /about)", () => {
     expect(html).toContain(ABOUT_CONTENT.heroH1);
   });
 
-  it("does not inject any prerendered body for /search", () => {
-    expect(injectPrerenderedBody(BASE_HTML, "/search")).toBeNull();
+  it("does not inject any prerendered body for a route with no registered fragment (e.g. /upgrade-center)", () => {
+    // GEO Phase 3A：/search 現在也有自己的固定語意殼（見
+    // server/prerenderResourcesNewsSearch.test.ts），不再是「沒有預渲染」的
+    // 範例，改用同樣沒有註冊片段的 /upgrade-center。
+    expect(injectPrerenderedBody(BASE_HTML, "/upgrade-center")).toBeNull();
+  });
+
+  it("/search gets its own fixed semantic-shell fragment, not home's/about's content (GEO Phase 3A)", () => {
+    const out = injectPrerenderedBody(BASE_HTML, "/search");
+    if (out !== null) {
+      expect(out).toContain('data-oxm-prerendered="search"');
+      expect(out).not.toContain(HOME_CONTENT.compareSection.title);
+      expect(out).not.toContain(ABOUT_CONTENT.whatIsTitle);
+    }
   });
 
   it("home and about fragments do not cross-contaminate each other", () => {

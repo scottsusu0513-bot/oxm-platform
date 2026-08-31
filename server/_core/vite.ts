@@ -5,7 +5,7 @@ import { nanoid } from "nanoid";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import viteConfig from "../../vite.config";
-import { buildFactoryMeta, injectMetaIntoHtml, parseFactoryPath, stripQueryString, extractQueryString, DEFAULT_OG_IMAGE } from "./ogMeta";
+import { buildFactoryMeta, buildNewsMeta, injectMetaIntoHtml, parseFactoryPath, parseNewsPath, stripQueryString, extractQueryString, DEFAULT_OG_IMAGE } from "./ogMeta";
 import { injectPublicPageSeo } from "./publicPageMeta";
 import { injectPrerenderedBody } from "./prerenderedBody";
 import { parseIndustryPath, buildIndustryPageMeta } from "@shared/seo/industryPages";
@@ -88,6 +88,18 @@ export async function setupVite(app: Express, server: Server) {
           status: 200,
           noindex: searchMeta.noindex,
         });
+        // GEO Phase 3A：固定的 H1＋intro 語意殼（不含搜尋結果），所有查詢
+        // 參數組合都注入同一份 build-time 片段，見 scripts/prerender-search.ts。
+        const searchBodyPage = injectPrerenderedBody(page, pathname);
+        if (searchBodyPage !== null) page = searchBodyPage;
+      } else if (parseNewsPath(pathname)) {
+        // /news/:slug 個別消息頁：DB-backed，與工廠頁共用同一套 marker-based
+        // 注入函式，額外多帶 ogType="article" 與 NewsArticle JSON-LD。找不到
+        // （不存在／草稿／已下架，getPublishedNewsBySlug 已經在 DB 層統一過濾
+        // 成同一種「找不到」)一律 404 + noindex，不洩漏是哪一種狀態。
+        const newsMeta = await buildNewsMeta(parseNewsPath(pathname)!.slug, pathname);
+        statusCode = newsMeta.status;
+        page = injectMetaIntoHtml(page, newsMeta);
       } else {
         const industryPath = parseIndustryPath(pathname);
         const industryMeta = industryPath ? buildIndustryPageMeta(industryPath.slug, industryPath.subSlug) : null;
@@ -201,7 +213,7 @@ export function serveStatic(app: Express) {
       try {
         const template = await getCachedTemplate();
         const searchMeta = buildSearchPageMeta(extractQueryString(req.originalUrl));
-        const page = injectMetaIntoHtml(template, {
+        let page = injectMetaIntoHtml(template, {
           title: searchMeta.title,
           description: searchMeta.description,
           image: DEFAULT_OG_IMAGE,
@@ -209,10 +221,35 @@ export function serveStatic(app: Express) {
           status: 200,
           noindex: searchMeta.noindex,
         });
+        // GEO Phase 3A：固定的 H1＋intro 語意殼（不含搜尋結果），所有查詢
+        // 參數組合都注入同一份 build-time 片段，見 scripts/prerender-search.ts。
+        const searchBodyPage = injectPrerenderedBody(page, pathname);
+        if (searchBodyPage !== null) page = searchBodyPage;
         res.status(200).set({ "Content-Type": "text/html" }).end(page);
       } catch (err) {
         console.error(
           "[ogMeta] serveStatic search meta injection failed:",
+          err instanceof Error ? err.message : String(err)
+        );
+        res.sendFile(indexPath);
+      }
+      return;
+    }
+
+    // /news/:slug：DB-backed，與工廠頁共用同一套 marker-based 注入函式，
+    // 額外多帶 ogType="article" 與 NewsArticle JSON-LD。找不到（不存在／
+    // 草稿／已下架，getPublishedNewsBySlug 已經在 DB 層統一過濾成同一種
+    // 「找不到」)一律 404 + noindex，不洩漏是哪一種狀態。
+    const newsPath = parseNewsPath(pathname);
+    if (newsPath) {
+      try {
+        const template = await getCachedTemplate();
+        const meta = await buildNewsMeta(newsPath.slug, pathname);
+        const page = injectMetaIntoHtml(template, meta);
+        res.status(meta.status).set({ "Content-Type": "text/html" }).end(page);
+      } catch (err) {
+        console.error(
+          "[ogMeta] serveStatic news meta injection failed:",
           err instanceof Error ? err.message : String(err)
         );
         res.sendFile(indexPath);

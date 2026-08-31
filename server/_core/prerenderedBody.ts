@@ -40,6 +40,18 @@ const PRERENDERED_PAGES: Record<string, { file: string; marker: string }> = {
   "/": { file: resolvePrerenderedFile("home.html"), marker: "home" },
   "/about": { file: resolvePrerenderedFile("about.html"), marker: "about" },
   "/faq": { file: resolvePrerenderedFile("faq.html"), marker: "faq" },
+  // GEO Phase 3A：/resources 是固定內容（不查 DB），完整正文可以直接預渲染。
+  // /news 只預渲染「沒有消息資料時仍成立」的固定語意殼（H1／intro／固定
+  // 分類標籤），不含任何一篇實際消息——見 scripts/prerender-news.ts 開頭說明。
+  "/resources": { file: resolvePrerenderedFile("resources.html"), marker: "resources" },
+  "/news": { file: resolvePrerenderedFile("news.html"), marker: "news" },
+  // /search：固定的 H1＋一句 intro，不含搜尋結果／篩選狀態——所有查詢參數
+  // 組合都指向同一份靜態片段，見 scripts/prerender-search.ts 開頭說明。
+  "/search": { file: resolvePrerenderedFile("search.html"), marker: "search" },
+  // GEO Final Cleanup：/upgrade-center 是固定內容（不查 DB），Hero 即時
+  // 統計、政府補助方案清單、使用者申請進度皆刻意排除，見
+  // scripts/prerender-upgrade-center.ts 開頭說明。
+  "/upgrade-center": { file: resolvePrerenderedFile("upgrade-center.html"), marker: "upgrade-center" },
 };
 
 const cache = new Map<string, string | null>();

@@ -6,8 +6,23 @@
     <meta
       name="viewport"
       content="width=device-width, initial-scale=1.0, maximum-scale=1, viewport-fit=cover" />
-    <title>OXM｜全台最齊全工廠與工作室媒合平台（OEM / ODM）</title>
-    <meta name="description" content="找代工不再浪費時間。OXM 幫你快速找到合適廠商、直接聯繫、有效比對，讓媒合更透明、更有效率。" />
+    <!--
+      GEO Phase 3A：這是全站唯一沒有 server-specific meta 注入路徑時的最終
+      fallback（例如 /news/:slug 這類動態路由，見任務討論）。舊版字串是
+      Phase 2 校準前、已被淘汰的舊 OXM 定位敘述（見 server/indexHtmlFallback
+      .test.ts 的說明與斷言），任何沒有專屬 SEO 分支的路由都會直接外露那段
+      舊敘述給不執行 JS 的爬蟲／AI。
+
+      這裡的 description 刻意不是逐字複製 shared/seo/brand.ts 的
+      BRAND.description——那句話還提到了找人才／找形象這兩個目前尚未完全
+      正式公開的入口所屬的服務類別，寫進「完全沒有專屬設定時的通用
+      fallback」裡等同把它們講得像現有成熟服務。這裡改用只提工廠媒合為
+      核心、企業升級與產業資訊這兩項已經真正開放的能力的保守版本。純靜態
+      HTML 無法在建置時 import TS 常數，所以是刻意維護的字串複本
+      （fallback duplicate），不是共用同一份程式碼。
+    -->
+    <title>OXM｜台灣傳統產業數位資源平台</title>
+    <meta name="description" content="OXM 是台灣傳統產業的數位資源平台，以工廠媒合為核心，串聯企業升級、產業資訊與合作所需資源。" />
     <link rel="icon" type="image/png" href="/favicon.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />

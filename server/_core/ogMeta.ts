@@ -1,4 +1,6 @@
 import * as db from "../db";
+import { BRAND } from "@shared/seo/brand";
+import { toSafeJsonLdString, type JsonLdObject } from "@shared/seo/schema";
 
 const SITE_BASE_URL = "https://www.oxmmatch.com";
 // exported so other dynamic (non-DB-backed) pages, e.g. /industry/:slug
@@ -79,6 +81,10 @@ export interface FactoryMeta {
   status: 200 | 404 | 410;
   /** true 時會在注入的 meta 區塊加上 <meta name="robots" content="noindex">。 */
   noindex: boolean;
+  /** 省略時 renderMetaHtml 預設 "website"；/news/:slug 這類真正的文章頁會傳 "article"。 */
+  ogType?: string;
+  /** 省略時不注入任何 JSON-LD；有值時原樣序列化成一個 <script type="application/ld+json"> 附加在同一個 marker 區塊內。 */
+  jsonLd?: JsonLdObject;
 }
 
 function buildTitle(name: string): string {
@@ -214,6 +220,103 @@ export async function buildFactoryMeta(rawId: string, pathname: string): Promise
   }
 }
 
+/** Extracts the slug segment out of a request pathname like "/news/abc-123", or null if the path isn't a news-detail path. Deliberately does not match bare "/news" (no slug segment), which keeps its own separate fixed-page SEO handling untouched. */
+export function parseNewsPath(pathname: string): { slug: string } | null {
+  const m = pathname.match(/^\/news\/([^/]+)\/?$/);
+  return m ? { slug: m[1] } : null;
+}
+
+const NEWS_GENERIC_FALLBACK = {
+  title: `找消息｜${SITE_NAME}`,
+  description: "OXM 整理台灣製造業與傳統產業的政府、協會、競賽、展覽與產業資訊。",
+  image: DEFAULT_OG_IMAGE,
+};
+
+function buildNewsTitle(title: string): string {
+  const safeTitle = normalizeText(title, 60) || "消息內容";
+  return normalizeText(`${safeTitle}｜OXM 找消息`, 70);
+}
+
+function buildNewsDescription(summary: string): string {
+  return normalizeText(summary, 155) || "OXM 整理的台灣製造業與傳統產業消息。";
+}
+
+function buildNewsArticleSchema(article: {
+  title: string;
+  summary: string;
+  url: string;
+  publishedAt: Date | string | null;
+  coverImageUrl: string | null;
+}): JsonLdObject {
+  const schema: JsonLdObject = {
+    "@context": "https://schema.org",
+    "@type": "NewsArticle",
+    headline: article.title,
+    description: article.summary,
+    url: article.url,
+    publisher: {
+      "@type": "Organization",
+      name: BRAND.name,
+      url: BRAND.url,
+      logo: { "@type": "ImageObject", url: BRAND.logo },
+    },
+  };
+  // firstPublishedAt／publishedAt 皆可能為 null（尚未真正發布過的資料理論上
+  // 不會走到這裡，getPublishedNewsBySlug 已經過濾成只剩 published，但型別上
+  // 欄位仍是 nullable）——沒有可信值時完全不寫這個欄位，不假造發布時間。
+  if (article.publishedAt) {
+    schema.datePublished = new Date(article.publishedAt).toISOString();
+  }
+  // 沒有真實封面圖片時完全不加 image，不用 DEFAULT_OG_IMAGE 這種通用站徽
+  // 冒充「這篇文章的圖片」（那是給社群分享卡片用的合理 fallback，但寫進
+  // NewsArticle 結構化資料裡代表對搜尋引擎宣稱「這是文章圖片」，會失真）。
+  const safeImage = toSafeAbsoluteImageUrl(article.coverImageUrl);
+  if (safeImage) {
+    schema.image = safeImage;
+  }
+  return schema;
+}
+
+/**
+ * Builds the meta (+ NewsArticle JSON-LD) for a /news/:slug request. Mirrors
+ * buildFactoryMeta's fail-open/fail-closed split: a genuine DB error falls
+ * back to generic OXM meta at 200 (a transient outage must never de-index a
+ * real article); a slug that doesn't resolve to a *published* article
+ * (missing, draft, or withdrawn — getPublishedNewsBySlug already filters all
+ * three down to "not found", the same 404 treatment NewsDetail.tsx's client
+ * code already gives them) gets a real 404 + noindex, and never leaks which
+ * of those three cases it actually was.
+ */
+export async function buildNewsMeta(slug: string, pathname: string): Promise<FactoryMeta> {
+  const url = `${SITE_BASE_URL}${pathname}`;
+
+  try {
+    const article = await db.getPublishedNewsBySlug(slug);
+    if (!article) {
+      return { ...NEWS_GENERIC_FALLBACK, url, status: 404, noindex: true };
+    }
+
+    const title = buildNewsTitle(article.title);
+    const description = buildNewsDescription(article.summary);
+    const image = toSafeAbsoluteImageUrl(article.coverImageUrl) ?? DEFAULT_OG_IMAGE;
+    const jsonLd = buildNewsArticleSchema({
+      title: article.title,
+      summary: article.summary,
+      url,
+      publishedAt: article.publishedAt,
+      coverImageUrl: article.coverImageUrl,
+    });
+
+    return { title, description, image, url, status: 200, noindex: false, ogType: "article", jsonLd };
+  } catch (err) {
+    console.error(
+      `[ogMeta] buildNewsMeta failed for slug=${slug}:`,
+      err instanceof Error ? err.message : String(err)
+    );
+    return { ...NEWS_GENERIC_FALLBACK, url, status: 200, noindex: false };
+  }
+}
+
 function renderMetaHtml(meta: FactoryMeta): string {
   const title = escapeHtml(meta.title);
   const description = escapeHtml(meta.description);
@@ -224,7 +327,7 @@ function renderMetaHtml(meta: FactoryMeta): string {
     META_MARKER_START,
     ...(meta.noindex ? [`<meta name="robots" content="noindex">`] : []),
     `<link rel="canonical" href="${url}">`,
-    `<meta property="og:type" content="website">`,
+    `<meta property="og:type" content="${escapeHtml(meta.ogType ?? "website")}">`,
     `<meta property="og:title" content="${title}">`,
     `<meta property="og:description" content="${description}">`,
     `<meta property="og:image" content="${image}">`,
@@ -234,6 +337,7 @@ function renderMetaHtml(meta: FactoryMeta): string {
     `<meta name="twitter:title" content="${title}">`,
     `<meta name="twitter:description" content="${description}">`,
     `<meta name="twitter:image" content="${image}">`,
+    ...(meta.jsonLd ? [`<script type="application/ld+json">${toSafeJsonLdString(meta.jsonLd)}</script>`] : []),
     META_MARKER_END,
   ].join("\n    ");
 }

@@ -13,6 +13,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { INDUSTRIES, INDUSTRY_OPTIONS, TAIWAN_REGIONS } from "@shared/constants";
 import { buildSearchPageMeta } from "@shared/seo/searchPage";
+import { SEARCH_CONTENT } from "@shared/content/search";
 import { trpc } from "@/lib/trpc";
 import { useLocation, Link } from "wouter";
 import { useState, useMemo, useEffect, useRef } from "react";
@@ -469,7 +470,7 @@ export default function Search() {
       <FloatingBackButton fallbackHref="/" />
       <div className={`container py-6 ${cart.length > 0 ? "pb-20 lg:pb-6" : ""}`}>
         <h1 className="sr-only">
-          {seoIndustry ? `${seoIndustry}工廠` : "台灣工廠搜尋"}
+          {seoIndustry ? `${seoIndustry}工廠` : SEARCH_CONTENT.heroH1}
         </h1>
 
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">

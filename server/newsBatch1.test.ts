@@ -203,13 +203,16 @@ describe("News.tsx Hero：新增「產業情報中心」eyebrow 小標，不取�
     return fs.readFileSync(path.resolve(__dirname, "..", "client", "src", "pages", "News.tsx"), "utf-8");
   }
 
-  it("Hero 區塊內有「產業情報中心」文字，且主要標題「OXM，給你傳產需要的第一手消息」仍然存在", () => {
+  it("Hero 區塊內有「產業情報中心」文字，且主要標題仍然存在（GEO Phase 3A：H1 改引用 shared/content/news.ts 的 NEWS_CONTENT.heroH1，不再是頁面內的字面量）", () => {
     const source = readNewsPageSource();
     const heroStart = source.indexOf("Hero：左側文字");
     const heroEnd = source.indexOf("NewsHeroArt();", heroStart);
     const heroBlock = source.slice(heroStart, heroEnd);
     expect(heroBlock).toMatch(/產業情報中心/);
-    expect(heroBlock).toMatch(/OXM，給你傳產需要的第一手消息/);
+    expect(heroBlock).toMatch(/\{NEWS_CONTENT\.heroH1\}/);
+
+    const newsContent = fs.readFileSync(path.resolve(__dirname, "..", "shared", "content", "news.ts"), "utf-8");
+    expect(newsContent).toMatch(/heroH1: "OXM，給你傳產需要的第一手消息"/);
   });
 
   it("eyebrow 用橘紫漸層文字（bg-clip-text text-transparent），沿用 OXM 品牌配色", () => {

@@ -4,6 +4,8 @@ import { Link } from "wouter";
 import Navbar from "@/components/Navbar";
 import { FloatingBackButton } from "@/components/FloatingBackButton";
 import { useRemoveServerSeoHead } from "@/hooks/useRemoveServerSeoHead";
+import { PUBLIC_PAGE_SEO } from "@/lib/publicPageSeo";
+import { RESOURCES_CONTENT } from "@shared/content/resources";
 import {
   ArrowRight,
   BadgeCheck,
@@ -51,16 +53,13 @@ const CATEGORY_OPTIONS: { key: ResourceCategory; label: string; description: str
   { key: "brand", label: "品牌與市場", description: "內容、曝光、行銷" },
 ];
 
-const RESOURCE_SERVICES: ResourceService[] = [
+// UI-only（分類 key／icon／配色）依 RESOURCES_CONTENT.services 相同順序對應，
+// 可見文字（title/subtitle/description/tags/href/available）皆來自共用內容
+// 檔，避免與 prerender 腳本各自維護兩份文案。
+const RESOURCE_SERVICE_UI: { category: Exclude<ResourceCategory, "all">; icon: typeof Lightbulb; tone: ResourceService["tone"] }[] = [
   {
-    title: "政府補助與企業升級",
-    subtitle: "從適用計畫到申請準備",
-    description: "協助企業了解 SBIR、CITD、SIIR 等補助方向，先釐清需求與資格，再媒合適合的顧問資源。",
-    href: "/upgrade-center",
-    available: true,
     category: "funding",
     icon: Lightbulb,
-    tags: ["政府補助", "資格初判", "顧問媒合"],
     tone: {
       border: "border-amber-200",
       surface: "from-amber-50 via-white to-orange-50",
@@ -70,14 +69,8 @@ const RESOURCE_SERVICES: ResourceService[] = [
     },
   },
   {
-    title: "企業財務優化",
-    subtitle: "看懂資金、成本與營運體質",
-    description: "從財務現況盤點、融資準備到管理資訊整理，協助企業辨識問題並建立可執行的改善方向。",
-    href: "/finance-optimization",
-    available: false,
     category: "funding",
     icon: BarChart3,
-    tags: ["財務健檢", "融資準備", "管理改善"],
     tone: {
       border: "border-blue-200",
       surface: "from-blue-50 via-white to-indigo-50",
@@ -87,14 +80,8 @@ const RESOURCE_SERVICES: ResourceService[] = [
     },
   },
   {
-    title: "ISO 與低碳認證",
-    subtitle: "從需求判斷到制度與查驗準備",
-    description: "依企業需求協助判斷 ISO 管理系統、溫室氣體盤查、產品碳足跡與政府碳標籤等服務方向。",
-    href: "/certification-center",
-    available: false,
     category: "operations",
     icon: ShieldCheck,
-    tags: ["ISO", "碳盤查", "查驗協調"],
     tone: {
       border: "border-emerald-200",
       surface: "from-emerald-50 via-white to-teal-50",
@@ -104,14 +91,8 @@ const RESOURCE_SERVICES: ResourceService[] = [
     },
   },
   {
-    title: "ERP、MES 與產線優化",
-    subtitle: "先理順流程，再選擇系統與改善方式",
-    description: "盤點訂單、採購、庫存、生產資訊與現場動線，協助判斷 ERP、MES、產線改善或整合導入方向。",
-    href: "/erp-optimization",
-    available: false,
     category: "operations",
     icon: Factory,
-    tags: ["ERP／MES", "流程盤點", "產線動線"],
     tone: {
       border: "border-violet-200",
       surface: "from-violet-50 via-white to-purple-50",
@@ -121,14 +102,8 @@ const RESOURCE_SERVICES: ResourceService[] = [
     },
   },
   {
-    title: "短影音與品牌內容行銷",
-    subtitle: "讓製造能力成為能被理解的品牌內容",
-    description: "從短影音企劃、拍攝、社群內容到媒體與訪談製作，依企業目標選擇合適的品牌內容服務。",
-    href: "/short-video-marketing",
-    available: false,
     category: "brand",
     icon: Clapperboard,
-    tags: ["短影音", "品牌內容", "社群行銷"],
     tone: {
       border: "border-rose-200",
       surface: "from-rose-50 via-white to-orange-50",
@@ -138,6 +113,11 @@ const RESOURCE_SERVICES: ResourceService[] = [
     },
   },
 ];
+
+const RESOURCE_SERVICES: ResourceService[] = RESOURCES_CONTENT.services.map((service, index) => ({
+  ...service,
+  ...RESOURCE_SERVICE_UI[index],
+}));
 
 function ResourceCompassArtwork() {
   const nodes = [
@@ -181,9 +161,9 @@ export default function ResourceCenter() {
   return (
     <div className="min-h-screen bg-white">
       <Helmet>
-        <title>找資源｜企業升級與傳統產業專業資源｜OXM</title>
-        <meta name="description" content="OXM 為企業整理的專業資源入口，目前提供政府補助與企業升級服務媒合；財務優化、ISO 與低碳認證、ERP 與產線優化、短影音與品牌行銷等服務準備中。" />
-        <link rel="canonical" href="https://www.oxmmatch.com/resources" />
+        <title>{PUBLIC_PAGE_SEO.resources.title}</title>
+        <meta name="description" content={PUBLIC_PAGE_SEO.resources.description} />
+        <link rel="canonical" href={PUBLIC_PAGE_SEO.resources.canonical} />
       </Helmet>
 
       <Navbar />
@@ -199,7 +179,7 @@ export default function ResourceCenter() {
               <div className="mb-7 flex items-center gap-2 text-xs text-slate-500"><Link href="/" className="hover:text-purple-700">首頁</Link><span>/</span><span>找資源</span></div>
               <span className="mb-5 inline-flex items-center gap-2 rounded-full border border-purple-100 bg-white/80 px-3 py-1.5 text-xs font-semibold tracking-[0.14em] text-purple-700 shadow-sm"><Sparkles className="h-3.5 w-3.5 text-orange-500" />RESOURCE CENTER</span>
               <h1 className="mb-6 text-4xl font-black leading-[1.12] tracking-tight text-slate-950 sm:text-5xl lg:text-[3.55rem]">先找到問題，<br className="hidden sm:block" />再選擇適合的資源</h1>
-              <p className="mb-5 max-w-xl text-base leading-relaxed text-slate-600 sm:text-lg">找資源不是單一服務，而是 OXM 為企業整理的專業資源入口。依照目前最需要解決的問題，選擇適合的服務方向。</p>
+              <p className="mb-5 max-w-xl text-base leading-relaxed text-slate-600 sm:text-lg">{RESOURCES_CONTENT.heroIntro}</p>
               <div className="flex flex-wrap gap-2">
                 {["資金與補助", "營運與制度", "品牌與市場"].map(label => <span key={label} className="rounded-full border border-white bg-white/80 px-3 py-1.5 text-xs font-semibold text-slate-600 shadow-sm"><BadgeCheck className="mr-1.5 inline h-3.5 w-3.5 text-purple-600" />{label}</span>)}
               </div>

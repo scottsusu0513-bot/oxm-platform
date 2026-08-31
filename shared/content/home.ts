@@ -99,7 +99,13 @@ export const HOME_CONTENT = {
     title: "為什麼選擇 OXM？",
     subtitle: "從工廠媒合開始，更快找到需要的台灣傳產資源",
     items: [
-      { title: "精準搜尋", description: "依產業、地區、資本額篩選，快速鎖定夥伴" },
+      // GEO Phase 3A：原本寫「依產業、地區、資本額篩選」，但 /search 目前
+      // UI 完全沒有資本額篩選控制項（後端 factory.search／searchFactories
+      // 確實支援 capitalLevel 參數，見 server/routers.ts、server/db.ts，
+      // 但沒有任何買家看得到的介面可以使用）。改成 /search 頁面真的存在、
+      // 使用者看得到並能操作的三個篩選：主產業、地區（皆為 MultiSelect）、
+      // 代工模式（ODM／OEM／OBM 選項，見 Search.tsx）。
+      { title: "精準搜尋", description: "依產業、地區、代工模式篩選，快速鎖定夥伴" },
       { title: "即時詢問", description: "直接與業主線上溝通，加速報價與洽談" },
       { title: "評價系統", description: "真實評分讓你選擇更有信心" },
       { title: "資訊透明", description: "工廠資訊與商品內容，一次看清楚" },

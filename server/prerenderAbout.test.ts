@@ -108,8 +108,11 @@ describe("injectPrerenderedBody", () => {
     }
   });
 
-  it("does not affect other SPA routes (e.g. /search)", () => {
-    expect(injectPrerenderedBody(BASE_HTML, "/search")).toBeNull();
+  it("does not affect other SPA routes with no registered fragment (e.g. /upgrade-center)", () => {
+    // GEO Phase 3A：/search 現在也有自己的固定語意殼（見
+    // server/prerenderResourcesNewsSearch.test.ts），不再適合當「沒有註冊
+    // 預渲染片段的路由」範例，改用同樣沒有註冊片段的 /upgrade-center。
+    expect(injectPrerenderedBody(BASE_HTML, "/upgrade-center")).toBeNull();
   });
 
   it("returns null (no-op) if there is no empty #root div to inject into", () => {

@@ -14,6 +14,8 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { getGuestReadIds, isGuestNewsRead } from "@/lib/newsReadTracking";
 import LoginDialog from "@/components/LoginDialog";
 import { useRemoveServerSeoHead } from "@/hooks/useRemoveServerSeoHead";
+import { PUBLIC_PAGE_SEO } from "@/lib/publicPageSeo";
+import { NEWS_CONTENT } from "@shared/content/news";
 import { toast } from "sonner";
 import {
   Newspaper, Star, Trophy, Building2, Globe, Factory, FileText, BellPlus, BellRing, Loader2, Check, ChevronDown,
@@ -21,8 +23,8 @@ import {
 } from "lucide-react";
 
 const BASE = "https://www.oxmmatch.com";
-const pageTitle = "找消息｜台灣製造業與傳統產業情報｜OXM";
-const pageDesc = "整合產業動態、競賽資訊、展覽活動與重要消息，讓台灣傳產更快掌握市場機會。";
+const pageTitle = PUBLIC_PAGE_SEO.news.title;
+const pageDesc = PUBLIC_PAGE_SEO.news.description;
 
 // 「跨產業資訊」是獨立固定看板（boardKey="cross-industry"，跟 important／
 // competition／exhibition 同一層級），不是 `industry:${string}` 這個由
@@ -557,7 +559,7 @@ export default function News() {
                 <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-orange-500 to-purple-500 flex items-center justify-center shadow shrink-0">
                   <Newspaper className="w-5 h-5 text-white" />
                 </div>
-                <h1 className="text-2xl sm:text-3xl font-extrabold">OXM，給你傳產需要的第一手消息</h1>
+                <h1 className="text-2xl sm:text-3xl font-extrabold">{NEWS_CONTENT.heroH1}</h1>
               </div>
               <p className="text-sm sm:text-base text-muted-foreground max-w-2xl">{pageDesc}</p>
             </div>

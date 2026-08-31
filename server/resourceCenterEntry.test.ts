@@ -43,7 +43,8 @@ describe("/resources 找資源總覽入口", () => {
     expect(resourceHub.match(/href: "\/(upgrade-center|finance-optimization|certification-center|erp-optimization|short-video-marketing)"/g)).toHaveLength(1);
   });
 
-  it("總覽完整提供五項既有服務的精確路徑，但只有政府補助專區標記為 available", () => {
+  it("總覽完整提供五項既有服務的精確路徑，但只有政府補助專區標記為 available（GEO Phase 3A：可見文字/href/available 已抽到 shared/content/resources.ts，與 prerender 腳本共用同一份）", () => {
+    const resourcesContent = readSource("shared", "content", "resources.ts");
     for (const href of [
       "/upgrade-center",
       "/finance-optimization",
@@ -51,13 +52,16 @@ describe("/resources 找資源總覽入口", () => {
       "/erp-optimization",
       "/short-video-marketing",
     ]) {
-      expect(resourceCenter).toContain(`href: "${href}"`);
+      expect(resourcesContent).toContain(`href: "${href}"`);
     }
     // 只有第一項（政府補助與企業升級）標記 available: true，其餘四項
     // available: false（卡片顯示「敬請期待」，不可點擊，但 route／component
     // 仍完整保留，已知網址的人仍可直接輸入進入）。
-    expect(resourceCenter.match(/available: true/g)).toHaveLength(1);
-    expect(resourceCenter.match(/available: false/g)).toHaveLength(4);
+    expect(resourcesContent.match(/available: true/g)).toHaveLength(1);
+    expect(resourcesContent.match(/available: false/g)).toHaveLength(4);
+    // ResourceCenter.tsx 本身只是把 shared 內容跟 UI-only 的 icon/tone/category 合併，
+    // 不再各自維護一份 href/available 字面量。
+    expect(resourceCenter).toContain("RESOURCES_CONTENT.services.map");
   });
 
   it("敬請期待卡片不是 <Link>，可用的服務才用 <Link href>", () => {

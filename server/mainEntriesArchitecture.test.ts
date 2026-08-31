@@ -262,8 +262,12 @@ describe("shared/seo/publicPages.ts：找消息／找資源／找人才／找形
   });
 
   it("News.tsx 的 client 端 title 與 shared/seo/publicPages.ts 的伺服器端設定一致（避免掛載前後 title 不一致）", () => {
+    // GEO Phase 3A：News.tsx 不再各自寫死一份字面量字串，改直接引用
+    // PUBLIC_PAGE_SEO.news.title——比對「兩份各自維護的字面量剛好相同」
+    // 更強的保證是「本來就是同一份資料」，不會日後改一邊漏改另一邊。
     const newsSource = readSource("client", "src", "pages", "News.tsx");
-    expect(newsSource).toMatch(/const pageTitle = "找消息｜台灣製造業與傳統產業情報｜OXM"/);
+    expect(newsSource).toMatch(/import \{ PUBLIC_PAGE_SEO \} from "@\/lib\/publicPageSeo"/);
+    expect(newsSource).toMatch(/const pageTitle = PUBLIC_PAGE_SEO\.news\.title/);
     expect(newsSource).toMatch(/useRemoveServerSeoHead\(\)/);
   });
 

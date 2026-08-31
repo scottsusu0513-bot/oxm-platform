@@ -19,6 +19,7 @@ import {
   UpgradeProgramCard,
   UpgradeProgramSkeleton,
 } from "@/components/upgrade/UpgradeProgramCard";
+import { UPGRADE_CENTER_CONTENT } from "@shared/content/upgradeCenter";
 import {
   ArrowRight, CheckCircle, Building2, Users,
   ClipboardList, ClipboardCheck, FileText, Send,
@@ -152,56 +153,23 @@ const floatingBtnBottom = isNativePlatform
 
 // ── 申請流程 ──────────────────────────────────────────────────────────────────
 
-const PROCESS_STEPS = [
-  {
-    Icon: ClipboardList,
-    num: "01",
-    title: "填寫評估資料",
-    desc: "提供企業基本資訊、研發能力與財務狀況，5 分鐘完成初步評估表單",
-    accent: "from-orange-500 to-amber-500",
-    stepCls: "text-orange-500",
-  },
-  {
-    Icon: ClipboardCheck,
-    num: "02",
-    title: "OXM 資格初審",
-    desc: "OXM 專業團隊審查資料，確認符合政府補助基本申請資格",
-    accent: "from-amber-500 to-yellow-500",
-    stepCls: "text-amber-500",
-  },
-  {
-    Icon: Users,
-    num: "03",
-    title: "媒合合作顧問",
-    desc: "依企業類型與目標計畫，媒合最適合的政府計畫顧問團隊",
-    accent: "from-teal-500 to-green-500",
-    stepCls: "text-teal-500",
-  },
-  {
-    Icon: Building2,
-    num: "04",
-    title: "專人到廠評估",
-    desc: "顧問親赴貴廠進行深度訪查，全面評估申請條件與優化方向",
-    accent: "from-sky-500 to-cyan-500",
-    stepCls: "text-sky-500",
-  },
-  {
-    Icon: FileText,
-    num: "05",
-    title: "撰寫計畫",
-    desc: "顧問協助撰寫完整政府計畫書，確保內容符合審查標準",
-    accent: "from-indigo-500 to-violet-500",
-    stepCls: "text-indigo-500",
-  },
-  {
-    Icon: Send,
-    num: "06",
-    title: "送出申請",
-    desc: "提交完整計畫書至主管機關，OXM 全程追蹤審查進度",
-    accent: "from-violet-500 to-purple-600",
-    stepCls: "text-violet-500",
-  },
+// UI-only（icon／編號／配色）依 UPGRADE_CENTER_CONTENT.processSteps 相同
+// 順序對應，可見文字（title/desc）皆來自共用內容檔，避免與 prerender 腳本
+// 各自維護兩份文案。
+const PROCESS_STEPS_UI = [
+  { Icon: ClipboardList, num: "01", accent: "from-orange-500 to-amber-500", stepCls: "text-orange-500" },
+  { Icon: ClipboardCheck, num: "02", accent: "from-amber-500 to-yellow-500", stepCls: "text-amber-500" },
+  { Icon: Users, num: "03", accent: "from-teal-500 to-green-500", stepCls: "text-teal-500" },
+  { Icon: Building2, num: "04", accent: "from-sky-500 to-cyan-500", stepCls: "text-sky-500" },
+  { Icon: FileText, num: "05", accent: "from-indigo-500 to-violet-500", stepCls: "text-indigo-500" },
+  { Icon: Send, num: "06", accent: "from-violet-500 to-purple-600", stepCls: "text-violet-500" },
 ];
+
+const PROCESS_STEPS = UPGRADE_CENTER_CONTENT.processSteps.map((step, index) => ({
+  title: step.title,
+  desc: step.description,
+  ...PROCESS_STEPS_UI[index],
+}));
 
 const fmt = (n: number, digits: number) => String(n).padStart(digits, "0");
 
@@ -219,6 +187,14 @@ function MetricTile({ label, value, unit, accent }: { label: string; value: stri
 
 type UpgradeMeaning = "resources" | "stages" | "transformation";
 
+// UI-only（kind／編號／eyebrow／插畫配色）依 UPGRADE_CENTER_CONTENT.meaningItems
+// 相同順序對應，可見文字（title/text）皆來自共用內容檔。
+const UPGRADE_MEANING_ITEMS_UI: { kind: UpgradeMeaning; number: string; eyebrow: string; artClassName: string }[] = [
+  { kind: "resources", number: "01", eyebrow: "資訊整理", artClassName: "border-orange-100 bg-gradient-to-br from-orange-50 via-white to-violet-50" },
+  { kind: "stages", number: "02", eyebrow: "路徑辨識", artClassName: "border-sky-100 bg-gradient-to-br from-amber-50 via-white to-sky-50" },
+  { kind: "transformation", number: "03", eyebrow: "目標推進", artClassName: "border-emerald-100 bg-gradient-to-br from-emerald-50 via-white to-violet-50" },
+];
+
 const UPGRADE_MEANING_ITEMS: {
   kind: UpgradeMeaning;
   number: string;
@@ -226,32 +202,11 @@ const UPGRADE_MEANING_ITEMS: {
   title: string;
   text: string;
   artClassName: string;
-}[] = [
-  {
-    kind: "resources",
-    number: "01",
-    eyebrow: "資訊整理",
-    title: "理解資源",
-    text: "將分散的政府方案整理成可閱讀的企業語言。",
-    artClassName: "border-orange-100 bg-gradient-to-br from-orange-50 via-white to-violet-50",
-  },
-  {
-    kind: "stages",
-    number: "02",
-    eyebrow: "路徑辨識",
-    title: "對應階段",
-    text: "從研發、製程、數位到市場布局辨識方向。",
-    artClassName: "border-sky-100 bg-gradient-to-br from-amber-50 via-white to-sky-50",
-  },
-  {
-    kind: "transformation",
-    number: "03",
-    eyebrow: "目標推進",
-    title: "推進轉型",
-    text: "讓補助評估與企業真正要完成的升級目標連結。",
-    artClassName: "border-emerald-100 bg-gradient-to-br from-emerald-50 via-white to-violet-50",
-  },
-];
+}[] = UPGRADE_CENTER_CONTENT.meaningItems.map((item, index) => ({
+  title: item.title,
+  text: item.description,
+  ...UPGRADE_MEANING_ITEMS_UI[index],
+}));
 
 function UpgradeMeaningIllustration({ kind }: { kind: UpgradeMeaning }) {
   if (kind === "resources") {
@@ -462,7 +417,7 @@ export default function EnterpriseUpgradeCenter() {
                 把政府補助，<br />轉成企業升級的<span className="whitespace-nowrap bg-gradient-to-r from-orange-400 to-violet-400 bg-clip-text text-transparent">下一步</span>
               </h1>
               <p className="mt-6 max-w-xl text-base leading-8 text-slate-300 sm:text-lg">
-                從研發、製程改善到海外布局，OXM 協助台灣企業辨識合適資源，媒合專業顧問，讓轉型計畫更有方向。
+                {UPGRADE_CENTER_CONTENT.heroIntro}
               </p>
               <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:items-center">
                 <Button onClick={handleApplyClick} disabled={accessChecking && !!user} className="h-12 rounded-full bg-orange-500 px-6 font-bold text-white shadow-lg shadow-orange-950/40 hover:bg-orange-600">
@@ -505,7 +460,7 @@ export default function EnterpriseUpgradeCenter() {
             <p className="text-xs font-bold tracking-[.2em] text-orange-500">WHY IT MATTERS</p>
             <h2 className="mt-4 text-3xl font-black leading-tight text-slate-950 md:text-4xl">補助不是終點，<br className="hidden sm:block" />而是升級路徑的一部分</h2>
             <p className="mt-5 max-w-xl text-sm leading-7 text-slate-600 md:text-base md:leading-8">
-              不同企業階段，對應的研發、技術與市場資源也不同。先看懂方案方向，再進入資格評估，能讓後續準備更聚焦。
+              {UPGRADE_CENTER_CONTENT.whyMattersIntro}
             </p>
           </div>
           <div className="grid gap-px overflow-hidden rounded-2xl border border-slate-200 bg-slate-200 sm:grid-cols-3">
@@ -532,8 +487,8 @@ export default function EnterpriseUpgradeCenter() {
           <div className="mb-9 flex flex-col gap-4 md:mb-12 md:flex-row md:items-end md:justify-between">
             <div className="max-w-3xl">
               <p className="text-xs font-bold tracking-[.2em] text-violet-600">PROGRAM DIRECTORY</p>
-              <h2 className="mt-3 text-3xl font-black text-slate-950 md:text-4xl">政府補助方案</h2>
-              <p className="mt-4 text-sm leading-7 text-slate-600 md:text-base">OXM 協助媒合適合企業階段的政府計畫；實際資格與受理內容依主管機關公告及顧問評估為準。</p>
+              <h2 className="mt-3 text-3xl font-black text-slate-950 md:text-4xl">{UPGRADE_CENTER_CONTENT.programsTitle}</h2>
+              <p className="mt-4 text-sm leading-7 text-slate-600 md:text-base">{UPGRADE_CENTER_CONTENT.programsIntro}</p>
               {/* 決策者參與提醒：小字紅色提示，緊接在說明文字下方，不使用警告框，
                   不影響右側「XX 項方案」區塊（同一 flex 列的另一個子元素）。 */}
               <p className="mt-2 text-xs leading-relaxed text-red-600 lg:whitespace-nowrap lg:text-[11px]">補助申請涉及公司投資、預算及執行決策，安排顧問洽談時，請盡量由公司負責人或具決策權之管理階層一同參與，以避免因資訊轉達造成申請進度延誤。</p>
@@ -566,8 +521,8 @@ export default function EnterpriseUpgradeCenter() {
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
           <div className="mb-10 max-w-2xl">
             <p className="text-xs font-bold tracking-[.2em] text-orange-500">HOW IT WORKS</p>
-            <h2 className="mt-3 text-3xl font-black text-slate-950 md:text-4xl">六個步驟，讓評估有跡可循</h2>
-            <p className="mt-4 text-sm leading-7 text-slate-600 md:text-base">從資料填寫、資格初審到送出申請，OXM 顧問依既有流程全程陪跑。</p>
+            <h2 className="mt-3 text-3xl font-black text-slate-950 md:text-4xl">{UPGRADE_CENTER_CONTENT.processTitle}</h2>
+            <p className="mt-4 text-sm leading-7 text-slate-600 md:text-base">{UPGRADE_CENTER_CONTENT.processIntro}</p>
           </div>
           <div className="grid gap-px overflow-hidden rounded-2xl border border-slate-200 bg-slate-200 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
             {PROCESS_STEPS.map((step) => (
@@ -590,14 +545,14 @@ export default function EnterpriseUpgradeCenter() {
           <div className="grid gap-10 lg:grid-cols-[.75fr_1.25fr] lg:items-start lg:gap-20">
             <div>
               <p className="text-xs font-bold tracking-[.2em] text-orange-400">OXM SUPPORT</p>
-              <h2 className="mt-4 text-3xl font-black leading-tight md:text-4xl">把複雜的申請路徑，整理成清楚的行動</h2>
-              <p className="mt-5 text-sm leading-7 text-slate-400 md:text-base">OXM 串接企業需求與專業顧問，協助企業從初步判讀一路走到實際送件。</p>
+              <h2 className="mt-4 text-3xl font-black leading-tight md:text-4xl">{UPGRADE_CENTER_CONTENT.supportTitle}</h2>
+              <p className="mt-5 text-sm leading-7 text-slate-400 md:text-base">{UPGRADE_CENTER_CONTENT.supportIntro}</p>
             </div>
             <div className="grid gap-4 sm:grid-cols-3">
               {[
-                { Icon: FileSearch, title: "先釐清", text: "從企業現況與目標開始，聚焦適合評估的方案方向。" },
-                { Icon: Users, title: "再媒合", text: "依企業類型與計畫目標，銜接合適的政府計畫顧問團隊。" },
-                { Icon: ClipboardCheck, title: "持續陪跑", text: "從資料準備、計畫撰寫到送件，保留清楚的案件進度。" },
+                { Icon: FileSearch, title: UPGRADE_CENTER_CONTENT.supportItems[0].title, text: UPGRADE_CENTER_CONTENT.supportItems[0].description },
+                { Icon: Users, title: UPGRADE_CENTER_CONTENT.supportItems[1].title, text: UPGRADE_CENTER_CONTENT.supportItems[1].description },
+                { Icon: ClipboardCheck, title: UPGRADE_CENTER_CONTENT.supportItems[2].title, text: UPGRADE_CENTER_CONTENT.supportItems[2].description },
               ].map(({ Icon, title, text }) => (
                 <div key={title} className="rounded-2xl border border-white/10 bg-white/[.035] p-5">
                   <Icon className="h-5 w-5 text-violet-400" />
@@ -617,8 +572,8 @@ export default function EnterpriseUpgradeCenter() {
             <div className="absolute inset-y-0 left-0 w-1.5 bg-gradient-to-b from-orange-500 to-violet-500" aria-hidden="true" />
             <div className="relative flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
               <div>
-                <h2 className="text-2xl font-black text-slate-950 md:text-3xl">不確定適合哪項補助？</h2>
-                <p className="mt-2 text-sm leading-6 text-slate-600 md:text-base">讓 OXM 協助免費評估，找到適合您企業階段的計畫方向。</p>
+                <h2 className="text-2xl font-black text-slate-950 md:text-3xl">{UPGRADE_CENTER_CONTENT.ctaTitle}</h2>
+                <p className="mt-2 text-sm leading-6 text-slate-600 md:text-base">{UPGRADE_CENTER_CONTENT.ctaIntro}</p>
               </div>
               <Button onClick={handleApplyClick} disabled={accessChecking && !!user} className="h-12 shrink-0 rounded-full bg-slate-950 px-7 font-bold text-white hover:bg-orange-600">
                 立即免費評估<ArrowRight className="ml-2 h-4 w-4" />
