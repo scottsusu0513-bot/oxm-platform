@@ -82,6 +82,12 @@ const NOINDEX_EXACT_PATHS = new Set<string>([
   "/certification-center", "/certification-center/apply",
   "/erp-optimization", "/erp-optimization/apply",
   "/short-video-marketing", "/short-video-marketing/apply",
+  // 正式開站前 Index/Noindex 稽核發現：/finance-optimization 與其 /apply
+  // 是跟上面三組完全同一種「顧問服務隱藏預覽頁」（同樣有 Helmet title、
+  // 同樣沒有 canonical、同樣是尚未正式公開的顧問媒合服務），但先前建立
+  // NOINDEX_EXACT_PATHS 清單時漏掉了，導致這兩頁一直是可被索引的狀態。
+  // 這裡補齊，不是新增規則，是修正既有規則的遺漏。
+  "/finance-optimization", "/finance-optimization/apply",
 ]);
 
 /**

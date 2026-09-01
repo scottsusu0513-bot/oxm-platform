@@ -121,7 +121,7 @@ const SERVICES: AboutService[] = [
   {
     icon: Newspaper,
     artwork: "news",
-    eyebrow: "產業情報",
+    eyebrow: "產業情報中心",
     title: ABOUT_CONTENT.serviceNames[4],
     description: "彙整政府政策、補助公告、法規異動\n整理產業活動、展覽等重要資訊\n讓工廠更容易掌握第一手產業消息",
     statusLabel: "已開放",
@@ -137,7 +137,7 @@ const SERVICES: AboutService[] = [
   {
     icon: MessageSquare,
     artwork: "discussion",
-    eyebrow: "商務交流",
+    eyebrow: "臺灣傳產論壇",
     title: ABOUT_CONTENT.serviceNames[5],
     description: "提供產業交流、需求發布、公開競標\n建立合作討論與商務交流的空間\n讓工廠與產業夥伴發現更多合作機會",
     statusLabel: "準備中",

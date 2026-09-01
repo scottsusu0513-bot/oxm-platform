@@ -167,8 +167,12 @@ async function startServer() {
     urls.push(entry(`${BASE}/search`, "0.9", "daily", today));
     urls.push(entry(`${BASE}/announcements`, "0.6", "weekly", today));
     urls.push(entry(`${BASE}/news`, "0.6", "daily", today));
-    urls.push(entry(`${BASE}/privacy`, "0.3", "monthly", today));
-    urls.push(entry(`${BASE}/terms`, "0.3", "monthly", today));
+    // 正式開站前最後 sitemap 微調：/privacy、/terms 是必要的法律頁面，維持
+    // 正常公開、可被索引（不加 noindex、robots.txt 不 Disallow、canonical
+    // 不變、Footer 連結不變），但故意不再放進 sitemap——sitemap 是「主動
+    // 向搜尋引擎強調的核心內容入口」清單，不等於「允許索引」的白名單，兩者
+    // 是不同的訊號。移出 sitemap 純粹是降低這兩頁在網站資訊架構裡的相對
+    // 權重，不影響 Google 依內部連結（Footer）自然發現並索引這兩頁。
     urls.push(entry(`${BASE}/upgrade-center`, "0.6", "monthly"));
     // 找資源六大主入口代表頁：內容完整（五項服務分類介紹），非 thin page，
     // 維持可索引，見 shared/seo/publicPages.ts 的 resources 設定。找人才

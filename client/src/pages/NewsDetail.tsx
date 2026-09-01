@@ -165,10 +165,10 @@ export default function NewsDetail() {
   // 狀態切換」就能繞開，不需要額外的 document.title effect。
   const canonicalUrl = item ? `${BASE}/news/${item.slug}` : undefined;
   const headTitle = item
-    ? `${item.title}｜OXM 找消息`
+    ? `${item.title}｜OXM 產業情報中心`
     : !isLoading
       ? "找不到消息｜OXM"
-      : "消息內容｜OXM 找消息";
+      : "消息內容｜OXM 產業情報中心";
 
   const handleShare = () => {
     if (!item || !canonicalUrl) return;

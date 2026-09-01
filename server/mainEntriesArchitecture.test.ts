@@ -165,8 +165,8 @@ describe("找討論 Coming Soon 頁：沿用既有 /community route，不建立�
   it("CommunityComingSoon.tsx 改用共用的 SectionComingSoon 元件，不是自己另一套版面", () => {
     const component = readSource("client", "src", "components", "community", "CommunityComingSoon.tsx");
     expect(component).toMatch(/import \{ SectionComingSoon \} from "@\/components\/SectionComingSoon"/);
-    expect(component).toMatch(/title="找討論"/);
-    expect(component).toMatch(/tagline="讓傳統產業經驗、問題與合作需求有地方交流"/);
+    expect(component).toMatch(/title="臺灣傳產論壇"/);
+    expect(component).toMatch(/tagline="交流傳產經驗、實務問題與合作需求"/);
     expect(component).toMatch(/secondaryCta=\{\{ label: "先找工廠", href: "\/search" \}\}/);
   });
 
@@ -178,7 +178,7 @@ describe("找討論 Coming Soon 頁：沿用既有 /community route，不建立�
 
   it("找討論 Coming Soon 的 Helmet 帶 noindex,follow，title／canonical 正確", () => {
     const component = readSource("client", "src", "components", "community", "CommunityComingSoon.tsx");
-    expect(component).toMatch(/<title>找討論｜傳統產業交流與企業討論｜OXM<\/title>/);
+    expect(component).toMatch(/<title>臺灣傳產論壇｜產業交流、技術討論與合作需求｜OXM<\/title>/);
     expect(component).toMatch(/<link rel="canonical" href="https:\/\/www\.oxmmatch\.com\/community" \/>/);
     expect(component).toMatch(/<meta name="robots" content="noindex,follow" \/>/);
   });
@@ -225,12 +225,34 @@ describe("sitemap／noindex 一致性（server/_core/index.ts、server/_core/sec
     expect(sitemapSource).toMatch(/INDUSTRY_SLUGS/);
     expect(sitemapSource).toMatch(/PHASE1_SUB_INDUSTRY_PAGES/);
   });
+
+  it("正式開站前最後微調：sitemap 不再包含 /privacy、/terms（降低相對權重，不等於 noindex）", () => {
+    expect(sitemapSource).not.toMatch(/\$\{BASE\}\/privacy/);
+    expect(sitemapSource).not.toMatch(/\$\{BASE\}\/terms/);
+  });
+
+  it("/privacy、/terms 移出 sitemap 後仍是正常可索引公開頁：頁面本身沒有 noindex，Footer 連結不變", () => {
+    const privacyPage = readSource("client", "src", "pages", "PrivacyPolicyPage.tsx");
+    const termsPage = readSource("client", "src", "pages", "TermsPage.tsx");
+    expect(privacyPage).not.toMatch(/noindex/);
+    expect(termsPage).not.toMatch(/noindex/);
+
+    const footer = readSource("client", "src", "components", "Footer.tsx");
+    expect(footer).toMatch(/<Link href="\/privacy"/);
+    expect(footer).toMatch(/<Link href="\/terms"/);
+
+    // robots.txt 不得因為這次調整順帶 Disallow 這兩頁——sitemap 收錄與
+    // robots.txt 允許存取是兩件事，移出 sitemap 不代表要擋爬蟲讀取頁面。
+    const robotsSource = readSource("server", "_core", "index.ts").match(/app\.get\("\/robots\.txt"[\s\S]*?\n {2}\}\);/)?.[0] ?? "";
+    expect(robotsSource).not.toMatch(/Disallow: \/privacy/);
+    expect(robotsSource).not.toMatch(/Disallow: \/terms/);
+  });
 });
 
 describe("shared/seo/publicPages.ts：找消息／找資源／找人才／找形象／找討論的 title／description／canonical", () => {
   it("getPublicPageSeoByPath 對五個新／更新路徑回傳正確的 title 與自我 canonical", () => {
     const news = getPublicPageSeoByPath("/news");
-    expect(news?.title).toBe("找消息｜台灣製造業與傳統產業情報｜OXM");
+    expect(news?.title).toBe("產業情報中心｜台灣傳統產業消息、展覽與產業資訊｜OXM");
     expect(news?.canonical).toBe("https://www.oxmmatch.com/news");
 
     const resources = getPublicPageSeoByPath("/resources");
@@ -246,7 +268,7 @@ describe("shared/seo/publicPages.ts：找消息／找資源／找人才／找形
     expect(brand?.canonical).toBe("https://www.oxmmatch.com/brand");
 
     const discussion = getPublicPageSeoByPath("/community");
-    expect(discussion?.title).toBe("找討論｜傳統產業交流與企業討論｜OXM");
+    expect(discussion?.title).toBe("臺灣傳產論壇｜產業交流、技術討論與合作需求｜OXM");
     expect(discussion?.canonical).toBe("https://www.oxmmatch.com/community");
   });
 

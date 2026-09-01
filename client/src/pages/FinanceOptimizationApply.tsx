@@ -196,7 +196,7 @@ export default function FinanceOptimizationApply() {
   if (!user) {
     return (
       <div className="min-h-screen bg-background">
-        <Helmet><title>免費申請企業財務健檢｜OXM</title></Helmet>
+        <Helmet><title>免費申請企業財務健檢｜OXM</title><meta name="robots" content="noindex, nofollow, noarchive, nosnippet" /></Helmet>
         <Navbar />
         <GateView
           icon={<LogIn className="w-8 h-8 text-blue-600" />}
@@ -226,7 +226,7 @@ export default function FinanceOptimizationApply() {
   if (!hasAnyFactory && ownedFactory === null && coManaged !== undefined) {
     return (
       <div className="min-h-screen bg-background">
-        <Helmet><title>免費申請企業財務健檢｜OXM</title></Helmet>
+        <Helmet><title>免費申請企業財務健檢｜OXM</title><meta name="robots" content="noindex, nofollow, noarchive, nosnippet" /></Helmet>
         <Navbar />
         <GateView
           icon={<Building2 className="w-8 h-8 text-blue-600" />}
@@ -264,7 +264,7 @@ export default function FinanceOptimizationApply() {
 
     return (
       <div className="min-h-screen bg-background">
-        <Helmet><title>免費申請企業財務健檢｜OXM</title></Helmet>
+        <Helmet><title>免費申請企業財務健檢｜OXM</title><meta name="robots" content="noindex, nofollow, noarchive, nosnippet" /></Helmet>
         <Navbar />
         <GateView
           icon={<StatusIcon className={`w-8 h-8 ${iconColor}`} />}
@@ -294,7 +294,7 @@ export default function FinanceOptimizationApply() {
     const statusLabel = CASE_STATUS_LABELS[selectedOpenCase.status] ?? selectedOpenCase.status;
     return (
       <div className="min-h-screen bg-background">
-        <Helmet><title>免費申請企業財務健檢｜OXM</title></Helmet>
+        <Helmet><title>免費申請企業財務健檢｜OXM</title><meta name="robots" content="noindex, nofollow, noarchive, nosnippet" /></Helmet>
         <Navbar />
         <GateView
           icon={<CheckCircle2 className="w-8 h-8 text-green-500" />}
@@ -323,7 +323,7 @@ export default function FinanceOptimizationApply() {
   if (eligibleFactories.length > 1 && selectedFactoryId == null) {
     return (
       <div className="min-h-screen bg-background">
-        <Helmet><title>免費申請企業財務健檢｜OXM</title></Helmet>
+        <Helmet><title>免費申請企業財務健檢｜OXM</title><meta name="robots" content="noindex, nofollow, noarchive, nosnippet" /></Helmet>
         <Navbar />
         <div className="container py-16 max-w-md mx-auto space-y-6">
           <h1 className="text-xl font-bold text-center">請選擇本次申請的公司</h1>
@@ -365,6 +365,7 @@ export default function FinanceOptimizationApply() {
       <Helmet>
         <title>免費申請企業財務健檢｜OXM</title>
         <meta name="description" content="填寫聯絡資料，OXM 合作財務顧問將為您安排免費企業財務健檢。" />
+        <meta name="robots" content="noindex, nofollow, noarchive, nosnippet" />
       </Helmet>
       <Navbar />
 

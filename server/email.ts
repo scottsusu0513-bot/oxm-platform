@@ -905,10 +905,10 @@ export async function sendNewsEmail(params: {
   await resend.emails.send({
     from: FROM_EMAIL,
     to: params.toEmail,
-    subject: `【OXM 找消息】${params.newsTitle}`,
+    subject: `【OXM 產業情報中心】${params.newsTitle}`,
     html: `
       <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
-        <h2 style="color: #f97316;">OXM 找消息</h2>
+        <h2 style="color: #f97316;">OXM 產業情報中心</h2>
         <p>親愛的 ${safeToName}，您好：</p>
         <h3 style="color: #1f2937; margin: 16px 0 8px;">${safeTitle}</h3>
         <div style="background: #f5f5f5; padding: 16px; border-radius: 8px; margin: 16px 0; color: #4b5563;">
@@ -920,7 +920,7 @@ export async function sendNewsEmail(params: {
         </a>
         <p style="color: #999; font-size: 12px; margin-top: 24px;">
           此信件由 OXM 平台自動發送，請勿直接回覆。<br>
-          如不希望收到此類通知，可至 <a href="${appUrl}/member" style="color: #f97316;">會員中心 → 通知設定</a> 關閉「找消息」Email 通知。
+          如不希望收到此類通知，可至 <a href="${appUrl}/member" style="color: #f97316;">會員中心 → 通知設定</a> 關閉「產業情報中心」Email 通知。
         </p>
       </div>
     `,

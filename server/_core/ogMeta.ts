@@ -227,14 +227,14 @@ export function parseNewsPath(pathname: string): { slug: string } | null {
 }
 
 const NEWS_GENERIC_FALLBACK = {
-  title: `找消息｜${SITE_NAME}`,
+  title: `產業情報中心｜${SITE_NAME}`,
   description: "OXM 整理台灣製造業與傳統產業的政府、協會、競賽、展覽與產業資訊。",
   image: DEFAULT_OG_IMAGE,
 };
 
 function buildNewsTitle(title: string): string {
   const safeTitle = normalizeText(title, 60) || "消息內容";
-  return normalizeText(`${safeTitle}｜OXM 找消息`, 70);
+  return normalizeText(`${safeTitle}｜OXM 產業情報中心`, 70);
 }
 
 function buildNewsDescription(summary: string): string {

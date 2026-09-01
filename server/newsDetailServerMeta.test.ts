@@ -93,10 +93,10 @@ describe("buildNewsMeta：已發布消息 → 200，metadata 是這篇文章專�
     expect(meta.noindex).toBe(false);
   });
 
-  it("title 包含真實文章標題，且符合「{標題}｜OXM 找消息」慣例（跟 NewsDetail.tsx 的 headTitle 一致）", async () => {
+  it("title 包含真實文章標題，且符合「{標題}｜OXM 產業情報中心」慣例（跟 NewsDetail.tsx 的 headTitle 一致）", async () => {
     const meta = await buildNewsMeta(publishedSlug, `/news/${publishedSlug}`);
     expect(meta.title).toContain(`GEO測試消息-已發布-${runId}`);
-    expect(meta.title).toContain("OXM 找消息");
+    expect(meta.title).toContain("OXM 產業情報中心");
   });
 
   it("description 來自 summary，不是完整 content", async () => {

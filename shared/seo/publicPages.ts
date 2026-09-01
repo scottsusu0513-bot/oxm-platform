@@ -55,10 +55,18 @@ export const PUBLIC_PAGE_SEO = {
   // title/description 與 client/src/pages/News.tsx 既有的 Helmet 內容保持
   // 一致，這裡只是把同一份文案也用於伺服器端初始 HTML head 注入（該頁原本
   // 完全沒有伺服器端注入，raw HTML 顯示的是全站通用預設 title）。
+  //
+  // 正式開站前命名統一：導覽列短名稱維持「找消息」，但頁面正式品牌名稱
+  // 統一為「產業情報中心」（title／description／OG／個別文章 title 皆同步，
+  // 見 server/_core/ogMeta.ts buildNewsTitle／NEWS_GENERIC_FALLBACK、
+  // client/src/pages/NewsDetail.tsx headTitle）。H1 本身（NEWS_CONTENT.heroH1）
+  // 維持既有的自然語句，不強改成純品牌名稱——「產業情報中心」已經透過
+  // eyebrow 小標籤（News.tsx Hero 區塊）、title、Navbar 下拉主名稱等多處
+  // 清楚出現，不需要犧牲 H1 的可讀性。
   news: {
     path: "/news",
-    title: "找消息｜台灣製造業與傳統產業情報｜OXM",
-    description: "整合產業動態、競賽資訊、展覽活動與重要消息，讓台灣傳產更快掌握市場機會。",
+    title: "產業情報中心｜台灣傳統產業消息、展覽與產業資訊｜OXM",
+    description: "OXM 產業情報中心整理台灣傳統產業的重要消息、競賽、展覽與產業資訊，協助企業掌握產業動態。",
     canonical: `${BRAND.url}/news`,
     ogType: "website",
     ogImage: OG_IMAGE,
@@ -102,15 +110,26 @@ export const PUBLIC_PAGE_SEO = {
   // 找討論：七大主入口第三個「準備開放中」Landing Page，沿用既有 /community
   // route（見 client/src/pages/Community.tsx 的 canAccessCommunity 權限判斷
   // 與 client/src/components/community/CommunityComingSoon.tsx），不是新建
-  // 的獨立路由。title/description 與該元件自己的 Helmet 保持一致。目前
-  // noindex,follow（見 server/_core/security.ts 的 NOINDEX_FOLLOW_EXACT_PATHS）
-  // ——內容篇幅較短，先不索引，日後正式開放、內容補齊後再移除該清單即可
-  // 恢復索引。這筆設定只影響 /community 這個精確路徑（bare path）的伺服器端
-  // 注入，不影響 /community/:spaceCode/... 等子路徑。
+  // 的獨立路由。title/description 與該元件自己的 Helmet 保持一致。
+  //
+  // 正式開站前命名統一：導覽列短名稱維持「找討論」，頁面正式品牌名稱統一為
+  // 「臺灣傳產論壇」。**索引狀態刻意維持 noindex,follow**——shared/const.ts
+  // 的 COMMUNITY_FEATURE_STATUS 目前是 "beta"，client/src/pages/Community.tsx
+  // 的 canAccessCommunity() 對非管理員一律回傳 false，任何匿名訪客／
+  // Googlebot 實際看到的都還是 CommunityComingSoon 的「準備中」畫面，不是
+  // 真正的討論版內容。這是產品明確決策（見任務回報）：先把命名／SEO 文案
+  // 準備好，索引狀態留待 COMMUNITY_FEATURE_STATUS 正式切換為 "live" 後再
+  // 一併處理，這輪不切換、不解除 noindex、不加入 sitemap。
+  //
+  // description 使用的是「臺灣傳產論壇」的正式概念描述（未提及準備中），
+  // 這是刻意的產品決策——因為目前 noindex，這段文字不會出現在 Google
+  // 搜尋結果，只有 og:description（社群分享預覽卡片）可能用到；頁面上
+  // 實際顯示給訪客的內容仍然透過 SectionComingSoon 元件本身的「準備開放
+  // 中・敬請期待」狀態徽章清楚傳達尚未開放，不會誤導真正造訪頁面的使用者。
   discussion: {
     path: "/community",
-    title: "找討論｜傳統產業交流與企業討論｜OXM",
-    description: "OXM 找討論正在準備中，未來將提供產業交流、經驗分享與企業問題討論空間。",
+    title: "臺灣傳產論壇｜產業交流、技術討論與合作需求｜OXM",
+    description: "臺灣傳產論壇是 OXM 提供給台灣傳統產業交流實務經驗、技術問題與合作需求的產業討論空間。",
     canonical: `${BRAND.url}/community`,
     ogType: "website",
     ogImage: OG_IMAGE,

@@ -26,10 +26,10 @@ export default function CommunityComingSoon() {
     return (
       <div className="min-h-screen bg-background">
         <Helmet>
-          <title>OXM 商案討論區｜即將推出</title>
+          <title>OXM 臺灣傳產論壇｜即將推出</title>
           <meta
             name="description"
-            content="OXM 商案討論區，專為台灣傳統產業設計的商案交流空間。依產業分類討論區與競標區，即將正式推出。"
+            content="臺灣傳產論壇，OXM 為台灣傳統產業設計的產業交流空間。依產業分類討論區與競標區，即將正式推出。"
           />
           <meta name="robots" content="noindex, nofollow" />
           <link rel="canonical" href="https://www.oxmmatch.com/community" />
@@ -49,7 +49,7 @@ export default function CommunityComingSoon() {
             <div className="space-y-3">
               <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight">
                 <span className="bg-gradient-to-r from-orange-500 via-amber-400 to-violet-500 bg-clip-text text-transparent">
-                  OXM 商案討論區
+                  OXM 臺灣傳產論壇
                 </span>
               </h1>
               <p className="text-xl text-muted-foreground font-medium">系統維護中，請稍後再試</p>
@@ -76,16 +76,16 @@ export default function CommunityComingSoon() {
   return (
     <>
       <Helmet>
-        <title>找討論｜傳統產業交流與企業討論｜OXM</title>
-        <meta name="description" content="OXM 找討論正在準備中，未來將提供產業交流、經驗分享與企業問題討論空間。" />
+        <title>臺灣傳產論壇｜產業交流、技術討論與合作需求｜OXM</title>
+        <meta name="description" content="臺灣傳產論壇是 OXM 提供給台灣傳統產業交流實務經驗、技術問題與合作需求的產業討論空間。" />
         <link rel="canonical" href="https://www.oxmmatch.com/community" />
         <meta name="robots" content="noindex,follow" />
       </Helmet>
 
       <SectionComingSoon
-        title="找討論"
-        tagline="讓傳統產業經驗、問題與合作需求有地方交流"
-        description="OXM 找討論正在準備中，未來將提供產業交流、經驗分享與企業問題討論空間。"
+        title="臺灣傳產論壇"
+        tagline="交流傳產經驗、實務問題與合作需求"
+        description="臺灣傳產論壇是 OXM 提供給台灣傳統產業交流實務經驗、技術問題與合作需求的產業討論空間。"
         Icon={MessageSquare}
         gradientFrom="from-rose-500"
         gradientTo="to-pink-600"

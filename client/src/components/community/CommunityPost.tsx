@@ -404,7 +404,7 @@ export default function CommunityPost({ spaceCode, postId }: Props) {
   return (
     <div className="min-h-screen bg-slate-50/60 dark:bg-background">
       <Helmet>
-        <title>{post.title} — {spaceName} — OXM 商案討論區</title>
+        <title>{post.title}｜{spaceName}｜臺灣傳產論壇｜OXM</title>
         <meta name="robots" content="noindex, nofollow" />
       </Helmet>
 
@@ -413,7 +413,7 @@ export default function CommunityPost({ spaceCode, postId }: Props) {
       <main className="container py-5 sm:py-8 max-w-3xl">
         {/* Breadcrumb */}
         <div className="flex items-center gap-2 text-sm text-muted-foreground mb-6">
-          <Link href="/community" className="hover:text-foreground transition-colors">商案討論區</Link>
+          <Link href="/community" className="hover:text-foreground transition-colors">臺灣傳產論壇</Link>
           <ChevronLeft className="w-3 h-3 rotate-180" />
           <Link href={`/community/${spaceCode}/discussions`} className="hover:text-foreground transition-colors">{spaceName}</Link>
         </div>

@@ -631,7 +631,7 @@ type TrpcUserCtx = { role: "user" | "admin"; id: number } | null | undefined;
 
 function checkCommunityRead(user: TrpcUserCtx): void {
   if (COMMUNITY_FEATURE_STATUS === "coming_soon" || COMMUNITY_FEATURE_STATUS === "maintenance") {
-    throw new TRPCError({ code: "FORBIDDEN", message: "商案討論區尚未開放" });
+    throw new TRPCError({ code: "FORBIDDEN", message: "臺灣傳產論壇尚未開放" });
   }
   if (COMMUNITY_FEATURE_STATUS === "beta" && user?.role !== "admin") {
     throw new TRPCError({ code: "FORBIDDEN", message: "此功能目前僅限管理員內測使用" });

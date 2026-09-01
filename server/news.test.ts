@@ -1136,9 +1136,9 @@ describe("NewsDetail.tsx：production document.title 空白修正（原始碼內
     const end = source.indexOf("const handleShare");
     const block = source.slice(start, end);
 
-    expect(block).toMatch(/`\$\{item\.title\}｜OXM 找消息`/); // 正常消息
+    expect(block).toMatch(/`\$\{item\.title\}｜OXM 產業情報中心`/); // 正常消息
     expect(block).toMatch(/"找不到消息｜OXM"/); // 查無資料／已下架
-    expect(block).toMatch(/"消息內容｜OXM 找消息"/); // loading fallback
+    expect(block).toMatch(/"消息內容｜OXM 產業情報中心"/); // loading fallback
     // 三個分支都是字面上的非空字串或字串樣板，不是可能為 falsy 的變數本身
     expect(block).not.toMatch(/:\s*item\?\.title\s*[,)]/);
   });

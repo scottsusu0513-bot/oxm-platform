@@ -187,7 +187,9 @@ const HUB_ITEMS: HubItem[] = [
     cardHover: "hover:from-rose-500/20 hover:to-pink-600/20 hover:border-rose-400/60 hover:shadow-sm hover:shadow-rose-500/10 hover:-translate-y-px",
     mCard: "from-rose-500/15 to-pink-600/15 border-rose-300/50", mText: "text-rose-700",
     dropdownItems: [
-      { title: "找討論", description: "讓傳統產業經驗、問題與合作需求有地方交流", href: "/community", Icon: MessageSquare },
+      // 正式開站命名統一：Navigation 短名稱「找討論」維持不變（上面的 short
+      // 欄位），這裡下拉卡片顯示的正式品牌名稱統一為「臺灣傳產論壇」。
+      { title: "臺灣傳產論壇", description: "交流傳產經驗、實務問題與合作需求", href: "/community", Icon: MessageSquare },
     ],
   },
 ];

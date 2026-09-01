@@ -29,11 +29,11 @@ export default function CommunityBoardLayout({ spaceCode, section }: Props) {
     <div className="community-page min-h-screen overflow-x-clip bg-slate-50/60 dark:bg-background">
       <Helmet>
         <title>
-          {section === "discussions" ? `${spaceName} 討論區` : `${spaceName} 競標區`} — OXM 商案討論區
+          {section === "discussions" ? `${spaceName} 討論區` : `${spaceName} 競標區`}｜臺灣傳產論壇｜OXM
         </title>
         <meta
           name="description"
-          content={`OXM 商案討論區 ${spaceName} — 台灣製造業 B2B 商案交流平台`}
+          content={`臺灣傳產論壇．${spaceName} — 交流傳統產業實務經驗、技術問題與合作需求`}
         />
         <meta name="robots" content="noindex, nofollow" />
       </Helmet>
@@ -48,9 +48,9 @@ export default function CommunityBoardLayout({ spaceCode, section }: Props) {
             <div className="max-w-2xl py-1">
               <span className="mb-2 inline-flex items-center gap-1.5 rounded-full border border-purple-100 bg-white/80 px-2.5 py-1 text-xs font-semibold tracking-wide text-purple-700 shadow-sm dark:border-purple-900/50 dark:bg-purple-950/30 dark:text-purple-300">
                 <MessageSquareText className="h-3.5 w-3.5" />
-                OXM 產業交流
+                OXM 臺灣傳產交流
               </span>
-              <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-foreground sm:text-3xl">商案討論區</h1>
+              <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-foreground sm:text-3xl">臺灣傳產論壇</h1>
               <p className="mt-1.5 max-w-xl text-sm leading-relaxed text-slate-600 dark:text-muted-foreground sm:text-[15px]">
                 依產業切換看板，分享實務經驗、交流技術問題，找到下一個合作機會。
               </p>

@@ -496,12 +496,18 @@ function ServicesCycle() {
 export default function FinanceOptimization() {
   return (
     <div className="min-h-screen overflow-x-hidden bg-white dark:bg-background">
+      {/* 隱藏預覽頁：頁面 meta robots 是第一層防線，Express 端 X-Robots-Tag
+          （server/_core/security.ts setupNoIndexRoutes）是第二層，即使爬蟲
+          不執行 JS 也能看到。禁止移除或放寬這兩層任何一層——正式開站前
+          Index/Noindex 稽核發現這頁先前漏掉了兩層防線，這裡補齊，不是
+          新增規則。 */}
       <Helmet>
         <title>企業財務優化｜OXM</title>
         <meta
           name="description"
           content="合法節稅、融資優化、資金更靈活。專業顧問從稅務、融資、負債與現金流全面檢視企業體質，初次諮詢與企業財務體檢免費。"
         />
+        <meta name="robots" content="noindex, nofollow, noarchive, nosnippet" />
       </Helmet>
       <Navbar />
 

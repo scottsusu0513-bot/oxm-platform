@@ -19,8 +19,8 @@ export default function CommunityHome() {
   return (
     <div className="min-h-screen bg-background">
       <Helmet>
-        <title>OXM 商案討論區</title>
-        <meta name="description" content="OXM 商案討論區 — 台灣傳統產業商案交流平台，選擇你的產業空間開始討論。" />
+        <title>臺灣傳產論壇｜OXM</title>
+        <meta name="description" content="臺灣傳產論壇 — OXM 提供給台灣傳統產業交流的產業討論空間，選擇你的產業空間開始討論。" />
         <meta name="robots" content="noindex, nofollow" />
       </Helmet>
 
@@ -28,7 +28,7 @@ export default function CommunityHome() {
 
       <main className="container py-10 max-w-4xl">
         <div className="mb-8">
-          <h1 className="text-3xl font-extrabold tracking-tight mb-1">商案討論區</h1>
+          <h1 className="text-3xl font-extrabold tracking-tight mb-1">臺灣傳產論壇</h1>
           <p className="text-muted-foreground">選擇你的產業空間，發布需求、交流技術、尋找合作機會</p>
         </div>
 

@@ -64,8 +64,8 @@ describe("CommunityPost.tsx: 返回討論區——context-aware，優先 history
     expect(match![0]).toMatch(/返回討論區/);
   });
 
-  it("既有 breadcrumb（商案討論區／{spaceName}）維持不變，沒有被返回按鈕取代", () => {
-    expect(source).toMatch(/<Link href="\/community" className="hover:text-foreground transition-colors">商案討論區<\/Link>/);
+  it("既有 breadcrumb（臺灣傳產論壇／{spaceName}）維持不變，沒有被返回按鈕取代", () => {
+    expect(source).toMatch(/<Link href="\/community" className="hover:text-foreground transition-colors">臺灣傳產論壇<\/Link>/);
     expect(source).toMatch(/<Link href=\{`\/community\/\$\{spaceCode\}\/discussions`\} className="hover:text-foreground transition-colors">\{spaceName\}<\/Link>/);
   });
 });

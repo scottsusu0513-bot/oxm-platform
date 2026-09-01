@@ -164,8 +164,8 @@ describe("/search 篩選網址 noindex — 伺服器端原始 HTML（server/_cor
   });
 });
 
-describe("三個隱藏服務仍然沒有進 sitemap、沒有公開導覽入口、維持 noindex（本次 SEO 修正不得順帶公開它們）", () => {
-  it("server/_core/security.ts 的 NOINDEX_EXACT_PATHS 仍包含三個隱藏服務首頁", () => {
+describe("四個隱藏服務仍然沒有進 sitemap、沒有公開導覽入口、維持 noindex（本次 SEO 修正不得順帶公開它們）", () => {
+  it("server/_core/security.ts 的 NOINDEX_EXACT_PATHS 仍包含四個隱藏服務首頁與 /apply 頁（正式開站前 Index/Noindex 稽核補上先前漏掉的 /finance-optimization）", () => {
     const source = readSource("server", "_core", "security.ts");
     const match = source.match(/NOINDEX_EXACT_PATHS = new Set<string>\(\[([^\]]*)\]\)/);
     expect(match).toBeTruthy();
@@ -173,6 +173,8 @@ describe("三個隱藏服務仍然沒有進 sitemap、沒有公開導覽入口�
     expect(stringLiterals).toContain('"/certification-center"');
     expect(stringLiterals).toContain('"/erp-optimization"');
     expect(stringLiterals).toContain('"/short-video-marketing"');
+    expect(stringLiterals).toContain('"/finance-optimization"');
+    expect(stringLiterals).toContain('"/finance-optimization/apply"');
   });
 
   it("client/src/components/Navbar.tsx 沒有任何隱藏服務連結或字樣", () => {
@@ -180,5 +182,17 @@ describe("三個隱藏服務仍然沒有進 sitemap、沒有公開導覽入口�
     expect(source).not.toMatch(/certification-center/i);
     expect(source).not.toMatch(/erp-optimization/i);
     expect(source).not.toMatch(/short-video-marketing/i);
+    expect(source).not.toMatch(/finance-optimization/i);
+  });
+
+  it("FinanceOptimization.tsx／FinanceOptimizationApply.tsx 的 Helmet 都帶 noindex,nofollow,noarchive,nosnippet（雙層防線的第一層）", () => {
+    const page = readSource("client", "src", "pages", "FinanceOptimization.tsx");
+    expect(page).toMatch(/<meta name="robots" content="noindex, nofollow, noarchive, nosnippet" \/>/);
+
+    const applyPage = readSource("client", "src", "pages", "FinanceOptimizationApply.tsx");
+    const robotsCount = (applyPage.match(/noindex, nofollow, noarchive, nosnippet/g) ?? []).length;
+    // 每一個 render 分支（loading／error／各種表單狀態）各自的 Helmet 都要有，
+    // 不能只有其中一支分支漏加。
+    expect(robotsCount).toBeGreaterThanOrEqual(6);
   });
 });
