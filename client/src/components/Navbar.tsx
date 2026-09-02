@@ -149,13 +149,15 @@ const HUB_ITEMS: HubItem[] = [
   {
     key: "brand",
     label: "產業採購與資源中心", short: "找形象", soon: false,
-    // 說明同找人才：改為真正可進入的 Coming Soon 頁，不再鎖定。
+    // 找形象已從 Coming Soon 頁正式轉為服務 Hub（見 client/src/pages/Brand.tsx），
+    // 整合短影音與品牌內容行銷、工廠形象攝影兩項服務。下拉維持單一項目導向
+    // /brand Hub 本身，不逐一列出子服務細節。
     Icon: Package, iconCls: "text-amber-600", triggerIconCls: "text-amber-600", ring: "focus-visible:ring-amber-400",
     card: "bg-gradient-to-br from-amber-500/10 to-orange-600/10 border-amber-300/40 text-amber-700",
     cardHover: "hover:from-amber-500/20 hover:to-orange-600/20 hover:border-amber-400/60 hover:shadow-sm hover:shadow-amber-500/10 hover:-translate-y-px",
     mCard: "from-amber-500/15 to-orange-600/15 border-amber-300/50", mText: "text-amber-700",
     dropdownItems: [
-      { title: "找形象", description: "企業品牌、內容與數位形象資源入口", href: "/brand", Icon: Package },
+      { title: "找形象", description: "用影像與內容呈現企業專業與品牌價值", href: "/brand", Icon: Package },
     ],
   },
   {

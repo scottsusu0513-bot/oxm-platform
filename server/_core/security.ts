@@ -91,13 +91,18 @@ const NOINDEX_EXACT_PATHS = new Set<string>([
 ]);
 
 /**
- * 七大主入口的「準備開放中」Coming Soon 頁（找人才 /talent、找形象 /brand、
- * 找討論 /community，見 client/src/components/SectionComingSoon.tsx）：跟
- * 上面完全隱藏的預覽頁不同，這三頁本身是正式主要入口、有真實品牌內容與
- * 清楚頁面目的，只是文案篇幅較短、尚未有正式功能——只需要暫時 noindex，但
- * 仍允許爬蟲追蹤頁面上的連結（follow），不像上面的隱藏預覽頁需要完全
- * nofollow/noarchive/nosnippet。日後正式開放、內容補齊後，只要從這個清單
- * 移除即可恢復索引，不需要改動其他地方。
+ * 七大主入口與其正式子頁的「準備開放中」頁面（找人才 /talent、找形象 /brand，
+ * 見 client/src/components/SectionComingSoon.tsx；找討論 /community）：跟
+ * 上面完全隱藏的預覽頁不同，這些頁面本身是正式主要入口或其正式子頁、有真實
+ * 品牌內容與清楚頁面目的，只是尚未經人工確認可以正式開放索引——只需要暫時
+ * noindex，但仍允許爬蟲追蹤頁面上的連結（follow），不像上面的隱藏預覽頁需要
+ * 完全 nofollow/noarchive/nosnippet。日後正式開放、內容補齊後，只要從這個
+ * 清單移除即可恢復索引，不需要改動其他地方。
+ *
+ * /factory-photography（工廠形象攝影服務介紹頁）：找形象 Hub（/brand）正式
+ * 上線後新建的公開子頁，本輪只做產品架構與頁面準備，尚未經人工確認 UI，
+ * 先比照 /brand 同一批次 noindex,follow，不加入 sitemap（見
+ * server/_core/index.ts 的 /sitemap.xml，本輪未改動）。
  *
  * /community 只精準比對 bare path，不影響 /community/:spaceCode/... 等子
  * 路徑——那些子路徑目前只有 canAccessCommunity() 允許的使用者才能實際看到
@@ -106,6 +111,7 @@ const NOINDEX_EXACT_PATHS = new Set<string>([
 const NOINDEX_FOLLOW_EXACT_PATHS = new Set<string>([
   "/talent",
   "/brand",
+  "/factory-photography",
   "/community",
 ]);
 

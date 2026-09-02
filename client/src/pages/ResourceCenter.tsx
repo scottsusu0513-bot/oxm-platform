@@ -11,7 +11,6 @@ import {
   BadgeCheck,
   Banknote,
   BarChart3,
-  Clapperboard,
   Clock,
   Compass,
   Factory,
@@ -24,7 +23,7 @@ import {
   TrendingUp,
 } from "lucide-react";
 
-type ResourceCategory = "all" | "funding" | "operations" | "brand";
+type ResourceCategory = "all" | "funding" | "operations";
 
 type ResourceService = {
   title: string;
@@ -50,7 +49,6 @@ const CATEGORY_OPTIONS: { key: ResourceCategory; label: string; description: str
   { key: "all", label: "全部服務", description: "查看所有資源" },
   { key: "funding", label: "資金與補助", description: "補助申請、財務體質" },
   { key: "operations", label: "營運與制度", description: "認證、系統、產線" },
-  { key: "brand", label: "品牌與市場", description: "內容、曝光、行銷" },
 ];
 
 // UI-only（分類 key／icon／配色）依 RESOURCES_CONTENT.services 相同順序對應，
@@ -99,17 +97,6 @@ const RESOURCE_SERVICE_UI: { category: Exclude<ResourceCategory, "all">; icon: t
       icon: "bg-violet-600 text-white",
       accent: "text-violet-700",
       glow: "bg-violet-300/40",
-    },
-  },
-  {
-    category: "brand",
-    icon: Clapperboard,
-    tone: {
-      border: "border-rose-200",
-      surface: "from-rose-50 via-white to-orange-50",
-      icon: "bg-rose-500 text-white",
-      accent: "text-rose-700",
-      glow: "bg-rose-300/40",
     },
   },
 ];
@@ -181,7 +168,7 @@ export default function ResourceCenter() {
               <h1 className="mb-6 text-4xl font-black leading-[1.12] tracking-tight text-slate-950 sm:text-5xl lg:text-[3.55rem]">先找到問題，<br className="hidden sm:block" />再選擇適合的資源</h1>
               <p className="mb-5 max-w-xl text-base leading-relaxed text-slate-600 sm:text-lg">{RESOURCES_CONTENT.heroIntro}</p>
               <div className="flex flex-wrap gap-2">
-                {["資金與補助", "營運與制度", "品牌與市場"].map(label => <span key={label} className="rounded-full border border-white bg-white/80 px-3 py-1.5 text-xs font-semibold text-slate-600 shadow-sm"><BadgeCheck className="mr-1.5 inline h-3.5 w-3.5 text-purple-600" />{label}</span>)}
+                {["資金與補助", "營運與制度"].map(label => <span key={label} className="rounded-full border border-white bg-white/80 px-3 py-1.5 text-xs font-semibold text-slate-600 shadow-sm"><BadgeCheck className="mr-1.5 inline h-3.5 w-3.5 text-purple-600" />{label}</span>)}
               </div>
             </div>
             <ResourceCompassArtwork />

@@ -138,9 +138,13 @@ export default function ShortVideoMarketing() {
     <div className="min-h-screen bg-background">
       {/* 隱藏預覽頁：頁面 meta robots 是第一層防線，Express 端 X-Robots-Tag
           （server/_core/security.ts setupNoIndexRoutes）是第二層，即使爬蟲
-          不執行 JS 也能看到。禁止移除或放寬這兩層任何一層。網站內任何位置
-          都不得加入連結入口（首頁／Navbar／手機選單／找形象／Footer／推薦區／
-          搜尋捷徑／sitemap 一律不列入），只能直接輸入網址開啟。 */}
+          不執行 JS 也能看到。禁止移除或放寬這兩層任何一層。
+          正式產品決策更新：本頁上層分類已從「找資源」改為「找形象」，現在由
+          /brand Hub 的服務卡提供真正 crawlable 的連結入口（見
+          client/src/pages/Brand.tsx）；除了 /brand 之外，網站內其他位置
+          （Navbar／手機選單／找資源／Footer／推薦區／搜尋捷徑／sitemap）仍不
+          得加入連結入口。noindex,nofollow 維持不變，即使被 /brand 連結也不會
+          被索引，只是不再是「只能直接輸入網址」的完全隱藏頁。 */}
       <Helmet>
         <title>短影音與品牌內容行銷｜OXM</title>
         <meta
@@ -151,7 +155,22 @@ export default function ShortVideoMarketing() {
       </Helmet>
 
       <Navbar />
-      <FloatingBackButton fallbackHref="/" />
+      <FloatingBackButton fallbackHref="/brand" />
+
+      {/* breadcrumb：讓使用者與爬蟲理解上層是「找形象」，不做大型 routing
+          refactor，沿用 ResourceCenter.tsx／Brand.tsx 同一種輕量 breadcrumb 樣式。
+          pt-16（而非較小的 pt-6）是必要值，不是隨意留白：FloatingBackButton
+          是 fixed 定位、top 落在 Navbar 高度（h-16＝64px）+0.75rem 處，實測
+          （390px 寬度）pt-6 會讓「返回」按鈕蓋住breadcrumb「首頁」字樣；pt-16
+          讓總間距對齊 Brand.tsx／FactoryPhotography.tsx 這兩個新頁面 Hero 區塊
+          自己的頂部留白量級，兩者都沒有這個重疊問題。 */}
+      <div className="max-w-6xl mx-auto px-4 pt-16">
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Link href="/" className="hover:text-orange-700">首頁</Link><span>/</span>
+          <Link href="/brand" className="hover:text-orange-700">找形象</Link><span>/</span>
+          <span>短影音與品牌內容行銷</span>
+        </div>
+      </div>
 
       {/* ── 1. Hero：左側文案＋五個服務標籤＋單一 CTA，右側 code-native 直式
           影片／分鏡工作台視覺（純 CSS／div 呈現四個內容類型段落，不使用任何

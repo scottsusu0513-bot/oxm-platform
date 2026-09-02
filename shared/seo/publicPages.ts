@@ -72,21 +72,23 @@ export const PUBLIC_PAGE_SEO = {
     ogImage: OG_IMAGE,
     language: BRAND.language,
   },
-  // 找資源六大主入口代表頁：/resources 本身內容完整（五項服務分類介紹），
+  // 找資源六大主入口代表頁：/resources 本身內容完整（四項服務分類介紹），
   // 不是 thin page，維持可索引。title/description 與
   // client/src/pages/ResourceCenter.tsx 既有的 Helmet 內容保持一致。
+  // 「短影音與品牌內容行銷」正式改分類至找形象（/brand），description 同步
+  // 移除，不再提及。
   resources: {
     path: "/resources",
     title: "找資源｜企業升級與傳統產業專業資源｜OXM",
-    description: "OXM 為企業整理的專業資源入口，目前提供政府補助與企業升級服務媒合；財務優化、ISO 與低碳認證、ERP 與產線優化、短影音與品牌行銷等服務準備中。",
+    description: "OXM 為企業整理的專業資源入口，目前提供政府補助與企業升級服務媒合；財務優化、ISO 與低碳認證、ERP 與產線優化等服務準備中。",
     canonical: `${BRAND.url}/resources`,
     ogType: "website",
     ogImage: OG_IMAGE,
     language: BRAND.language,
   },
-  // 找人才／找形象：六大主入口的「準備開放中」Landing Page，見
+  // 找人才：六大主入口的「準備開放中」Landing Page，見
   // client/src/components/SectionComingSoon.tsx。title/description 與頁面
-  // 自己的 Helmet 保持一致。這兩頁目前設 noindex,follow（見
+  // 自己的 Helmet 保持一致。目前設 noindex,follow（見
   // server/_core/security.ts 的 NOINDEX_FOLLOW_EXACT_PATHS）——內容篇幅較短，
   // 先不索引，日後正式開放、內容補齊後再移除該清單即可恢復索引。
   talent: {
@@ -98,11 +100,32 @@ export const PUBLIC_PAGE_SEO = {
     ogImage: OG_IMAGE,
     language: BRAND.language,
   },
+  // 找形象：正式從 Coming Soon 頁改為真正的服務 Hub（見
+  // client/src/pages/Brand.tsx），整合短影音與品牌內容行銷（/short-video-marketing，
+  // 沿用既有 route）與工廠形象攝影（/factory-photography，本輪新建）兩項服務。
+  // title/description 與頁面自己的 Helmet 保持一致。本輪只做產品架構與頁面
+  // 準備，仍維持 noindex,follow（見 server/_core/security.ts 的
+  // NOINDEX_FOLLOW_EXACT_PATHS），等下一輪人工確認 UI 後再移除該清單、正式
+  // 開放索引與加入 sitemap。
   brand: {
     path: "/brand",
-    title: "找形象｜企業品牌與數位形象資源｜OXM",
-    description: "OXM 找形象正在準備中，未來將整合品牌設計、企業形象、商業攝影與相關專業資源，敬請期待。",
+    title: "找形象｜工廠攝影與企業影音內容服務｜OXM",
+    description: "OXM 找形象整合工廠形象攝影與短影音品牌內容服務，協助傳統產業呈現設備、製程、產品與企業專業，建立可持續使用的品牌視覺素材。",
     canonical: `${BRAND.url}/brand`,
+    ogType: "website",
+    ogImage: OG_IMAGE,
+    language: BRAND.language,
+  },
+  // 工廠形象攝影：找形象 Hub 底下正式子頁，本輪新建的服務介紹頁（非顧問案件
+  // 系統，見 client/src/pages/FactoryPhotography.tsx）。title/description 與
+  // 頁面自己的 Helmet 保持一致。同樣維持 noindex,follow（見
+  // server/_core/security.ts 的 NOINDEX_FOLLOW_EXACT_PATHS），不加入
+  // sitemap，等下一輪人工確認 UI 後再正式開放索引。
+  factoryPhotography: {
+    path: "/factory-photography",
+    title: "工廠形象攝影｜企業商業攝影與品牌視覺｜OXM",
+    description: "OXM 工廠形象攝影服務協助傳統產業拍攝廠房、設備、製程、產品與企業團隊，建立可應用於官網、型錄、社群與品牌宣傳的專業視覺素材。",
+    canonical: `${BRAND.url}/factory-photography`,
     ogType: "website",
     ogImage: OG_IMAGE,
     language: BRAND.language,
@@ -160,6 +183,7 @@ export function getPublicPageSeoByPath(pathname: string): PublicPageSeo | null {
   if (normalized === "/resources") return PUBLIC_PAGE_SEO.resources;
   if (normalized === "/talent") return PUBLIC_PAGE_SEO.talent;
   if (normalized === "/brand") return PUBLIC_PAGE_SEO.brand;
+  if (normalized === "/factory-photography") return PUBLIC_PAGE_SEO.factoryPhotography;
   if (normalized === "/community") return PUBLIC_PAGE_SEO.discussion;
   if (normalized === "/faq") return PUBLIC_PAGE_SEO.faq;
   return null;

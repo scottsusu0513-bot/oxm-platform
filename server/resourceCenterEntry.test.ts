@@ -1,8 +1,10 @@
 /**
  * 找資源總覽（/resources）的靜態入口契約。
  *
- * 這個頁面是五項既有企業服務的單一導覽入口；ISO、ERP、短影音三個服務雖可
+ * 這個頁面是四項企業經營／升級資源服務的單一導覽入口；ISO、ERP 兩個服務雖可
  * 由此進入，原有 noindex／noarchive、sitemap 與 prerender 限制仍維持不變。
+ * 「短影音與品牌內容行銷」已正式改分類至找形象（/brand），不再屬於找資源，
+ * 見 server/mainEntriesArchitecture.test.ts 的找形象 Hub 相關測試。
  */
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
@@ -43,22 +45,23 @@ describe("/resources 找資源總覽入口", () => {
     expect(resourceHub.match(/href: "\/(upgrade-center|finance-optimization|certification-center|erp-optimization|short-video-marketing)"/g)).toHaveLength(1);
   });
 
-  it("總覽完整提供五項既有服務的精確路徑，但只有政府補助專區標記為 available（GEO Phase 3A：可見文字/href/available 已抽到 shared/content/resources.ts，與 prerender 腳本共用同一份）", () => {
+  it("總覽完整提供四項企業經營／升級資源服務的精確路徑，但只有政府補助專區標記為 available（GEO Phase 3A：可見文字/href/available 已抽到 shared/content/resources.ts，與 prerender 腳本共用同一份）", () => {
     const resourcesContent = readSource("shared", "content", "resources.ts");
     for (const href of [
       "/upgrade-center",
       "/finance-optimization",
       "/certification-center",
       "/erp-optimization",
-      "/short-video-marketing",
     ]) {
       expect(resourcesContent).toContain(`href: "${href}"`);
     }
-    // 只有第一項（政府補助與企業升級）標記 available: true，其餘四項
+    // 「短影音與品牌內容行銷」不再屬於找資源，改歸類找形象（/brand）。
+    expect(resourcesContent).not.toContain('href: "/short-video-marketing"');
+    // 只有第一項（政府補助與企業升級）標記 available: true，其餘三項
     // available: false（卡片顯示「敬請期待」，不可點擊，但 route／component
     // 仍完整保留，已知網址的人仍可直接輸入進入）。
     expect(resourcesContent.match(/available: true/g)).toHaveLength(1);
-    expect(resourcesContent.match(/available: false/g)).toHaveLength(4);
+    expect(resourcesContent.match(/available: false/g)).toHaveLength(3);
     // ResourceCenter.tsx 本身只是把 shared 內容跟 UI-only 的 icon/tone/category 合併，
     // 不再各自維護一份 href/available 字面量。
     expect(resourceCenter).toContain("RESOURCES_CONTENT.services.map");

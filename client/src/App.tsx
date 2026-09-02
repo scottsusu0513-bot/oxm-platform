@@ -41,6 +41,7 @@ const FAQ                   = lazy(() => import("./pages/FAQ"));
 const ResourceCenter        = lazy(() => import("./pages/ResourceCenter"));
 const Talent                = lazy(() => import("./pages/Talent"));
 const Brand                 = lazy(() => import("./pages/Brand"));
+const FactoryPhotography    = lazy(() => import("./pages/FactoryPhotography"));
 const PrivacyPolicyPage     = lazy(() => import("./pages/PrivacyPolicyPage"));
 const TermsPage             = lazy(() => import("./pages/TermsPage"));
 const VerifyEmailPage       = lazy(() => import("./pages/VerifyEmailPage"));
@@ -415,8 +416,9 @@ function Router() {
         <Route path="/erp-optimization/apply" component={ErpOptimizationApply} />
         <Route path="/erp-optimization" component={ErpOptimization} />
         <Route path="/erp-consultant/cases" component={ErpConsultantCases} />
-        {/* 短影音與品牌內容行銷專區：同上，僅由 /resources 提供受控入口；
-            noindex／nofollow、sitemap 與 prerender 限制維持不變。
+        {/* 短影音與品牌內容行銷專區：正式改分類至找形象（/brand 提供受控入口，
+            見 client/src/pages/Brand.tsx 的服務卡連結），不再由 /resources
+            連結；noindex／nofollow、sitemap 與 prerender 限制維持不變。
             /apply 為真正可送出的申請表單，同樣隱藏、同樣 noindex。
             /short-video-consultant/cases 需登入且具顧問身份，不算公開隱藏
             預覽頁，故不在 NOINDEX_EXACT_PATHS 內（同 /finance-consultant/cases 慣例）。 */}
@@ -429,7 +431,12 @@ function Router() {
         <Route path="/faq" component={FAQ} />
         <Route path="/resources" component={ResourceCenter} />
         <Route path="/talent" component={Talent} />
+        {/* 找形象正式 Hub：/brand 兩張服務卡分別連到 /short-video-marketing
+            （隱藏預覽頁，noindex／nofollow 不變）與 /factory-photography
+            （新建服務介紹頁，noindex,follow）。/brand 本身維持既有
+            noindex,follow gate，等下一輪人工確認 UI 後再正式開放索引。 */}
         <Route path="/brand" component={Brand} />
+        <Route path="/factory-photography" component={FactoryPhotography} />
         <Route path="/privacy" component={PrivacyPolicyPage} />
         <Route path="/terms" component={TermsPage} />
         <Route path="/verify-email" component={VerifyEmailPage} />

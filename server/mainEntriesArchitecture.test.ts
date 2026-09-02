@@ -101,18 +101,15 @@ describe("Navbar 主要入口順序與可進入性（client/src/components/Navba
   });
 });
 
-describe("找人才／找形象 Coming Soon 頁", () => {
-  it("App.tsx 註冊 /talent、/brand 兩條路由", () => {
+describe("找人才 Coming Soon 頁", () => {
+  it("App.tsx 註冊 /talent 路由", () => {
     const app = readSource("client", "src", "App.tsx");
     expect(app).toMatch(/path="\/talent" component=\{Talent\}/);
-    expect(app).toMatch(/path="\/brand" component=\{Brand\}/);
   });
 
-  it("Talent.tsx／Brand.tsx 共用同一個 SectionComingSoon 元件，不是各自複製一套版面", () => {
+  it("Talent.tsx 使用共用的 SectionComingSoon 元件，不是自己複製一套版面", () => {
     const talent = readSource("client", "src", "pages", "Talent.tsx");
-    const brand = readSource("client", "src", "pages", "Brand.tsx");
     expect(talent).toMatch(/import \{ SectionComingSoon \} from "@\/components\/SectionComingSoon"/);
-    expect(brand).toMatch(/import \{ SectionComingSoon \} from "@\/components\/SectionComingSoon"/);
     expect(fs.existsSync(path.resolve(import.meta.dirname, "..", "client", "src", "components", "SectionComingSoon.tsx"))).toBe(true);
   });
 
@@ -123,29 +120,111 @@ describe("找人才／找形象 Coming Soon 頁", () => {
     expect(component).toMatch(/準備開放中・敬請期待/);
   });
 
-  it("Talent.tsx／Brand.tsx 的 Helmet 帶 noindex,follow（不是完全 nofollow，也不是直接可索引）", () => {
+  it("Talent.tsx 的 Helmet 帶 noindex,follow（不是完全 nofollow，也不是直接可索引）", () => {
     const talent = readSource("client", "src", "pages", "Talent.tsx");
-    const brand = readSource("client", "src", "pages", "Brand.tsx");
     expect(talent).toMatch(/<meta name="robots" content="noindex,follow" \/>/);
-    expect(brand).toMatch(/<meta name="robots" content="noindex,follow" \/>/);
   });
 
-  it("server/_core/security.ts 的 NOINDEX_FOLLOW_EXACT_PATHS 含 /talent、/brand、/community，且 header 值是 noindex, follow（不是完全隱藏頁那組 nofollow/noarchive/nosnippet）", () => {
+  it("server/_core/security.ts 的 NOINDEX_FOLLOW_EXACT_PATHS 含 /talent、/brand、/factory-photography、/community，且 header 值是 noindex, follow（不是完全隱藏頁那組 nofollow/noarchive/nosnippet）", () => {
     const source = readSource("server", "_core", "security.ts");
     const match = source.match(/NOINDEX_FOLLOW_EXACT_PATHS = new Set<string>\(\[([^\]]*)\]\)/);
     expect(match).toBeTruthy();
     const paths = match![1].match(/"[^"]*"/g) ?? [];
     expect(paths).toContain('"/talent"');
     expect(paths).toContain('"/brand"');
+    expect(paths).toContain('"/factory-photography"');
     expect(paths).toContain('"/community"');
     expect(source).toMatch(/res\.setHeader\("X-Robots-Tag", "noindex, follow"\)/);
   });
 
-  it("Talent.tsx／Brand.tsx 都有可回到已開放功能的第二顆 CTA（先找工廠）", () => {
+  it("Talent.tsx 有可回到已開放功能的第二顆 CTA（先找工廠）", () => {
     const talent = readSource("client", "src", "pages", "Talent.tsx");
-    const brand = readSource("client", "src", "pages", "Brand.tsx");
     expect(talent).toMatch(/secondaryCta=\{\{ label: "先找工廠", href: "\/search" \}\}/);
-    expect(brand).toMatch(/secondaryCta=\{\{ label: "先找工廠", href: "\/search" \}\}/);
+  });
+});
+
+describe("找形象正式 Hub（/brand）：從 Coming Soon 改為真正的服務 Hub", () => {
+  it("App.tsx 註冊 /brand、/factory-photography 兩條路由", () => {
+    const app = readSource("client", "src", "App.tsx");
+    expect(app).toMatch(/path="\/brand" component=\{Brand\}/);
+    expect(app).toMatch(/path="\/factory-photography" component=\{FactoryPhotography\}/);
+  });
+
+  it("Brand.tsx 不再使用 SectionComingSoon（不是 Coming Soon 頁）", () => {
+    const brand = readSource("client", "src", "pages", "Brand.tsx");
+    expect(brand).not.toMatch(/SectionComingSoon/);
+    expect(brand).not.toMatch(/準備中|敬請期待/);
+  });
+
+  it("Brand.tsx 含 Navbar、正式 Hero 文案，且有兩張服務卡分別連到 /short-video-marketing、/factory-photography", () => {
+    const brand = readSource("client", "src", "pages", "Brand.tsx");
+    expect(brand).toMatch(/<Navbar \/>/);
+    expect(brand).toMatch(/讓專業被看見，建立企業品牌形象/);
+    expect(brand).toMatch(/短影音與品牌內容行銷/);
+    expect(brand).toMatch(/工廠形象攝影/);
+    // 必須是真正 crawlable 的 <Link href>，不是只靠 onClick。
+    expect(brand).toMatch(/href:\s*"\/short-video-marketing"/);
+    expect(brand).toMatch(/href:\s*"\/factory-photography"/);
+    expect(brand).toMatch(/<Link href=\{service\.href\}/);
+  });
+
+  it("Brand.tsx／FactoryPhotography.tsx 的 Helmet 帶 noindex,follow，title／canonical 引用 shared/seo/publicPages.ts（本輪仍未正式開放索引）", () => {
+    const brand = readSource("client", "src", "pages", "Brand.tsx");
+    const photography = readSource("client", "src", "pages", "FactoryPhotography.tsx");
+    expect(brand).toMatch(/<meta name="robots" content="noindex,follow" \/>/);
+    expect(photography).toMatch(/<meta name="robots" content="noindex,follow" \/>/);
+    expect(brand).toMatch(/PUBLIC_PAGE_SEO\.brand\.(title|description|canonical)/);
+    expect(photography).toMatch(/PUBLIC_PAGE_SEO\.factoryPhotography\.(title|description|canonical)/);
+  });
+
+  it("FactoryPhotography.tsx 有 breadcrumb 指向 /brand，讓使用者／爬蟲理解上層是找形象", () => {
+    const photography = readSource("client", "src", "pages", "FactoryPhotography.tsx");
+    expect(photography).toMatch(/<Link href="\/brand"/);
+    expect(photography).toMatch(/找形象/);
+  });
+
+  it("FactoryPhotography.tsx 的 CTA 使用既有客服信箱 mailto 聯絡機制，不是虛構的申請 API", () => {
+    const photography = readSource("client", "src", "pages", "FactoryPhotography.tsx");
+    expect(photography).toMatch(/CONTACT_EMAIL = "scottsusu@oxmmatch\.com"/);
+    expect(photography).toMatch(/mailto:\$\{CONTACT_EMAIL\}/);
+    expect(photography).not.toMatch(/trpc\.|useMutation|fetch\(/);
+  });
+
+  it("FactoryPhotography.tsx 明確聲明不保證成交／流量／詢價成長等不存在的交付規格", () => {
+    const photography = readSource("client", "src", "pages", "FactoryPhotography.tsx");
+    expect(photography).toMatch(/不保證成交/);
+    expect(photography).toMatch(/不保證流量/);
+    expect(photography).toMatch(/不保證詢價成長/);
+  });
+
+  it("ShortVideoMarketing.tsx 上層分類已改為找形象：有 breadcrumb 連回 /brand，且不再宣稱網站內完全沒有連結入口", () => {
+    const shortVideo = readSource("client", "src", "pages", "ShortVideoMarketing.tsx");
+    expect(shortVideo).toMatch(/<Link href="\/brand"/);
+    expect(shortVideo).toMatch(/noindex, nofollow, noarchive, nosnippet/);
+  });
+
+  it("ResourceCenter.tsx／shared/content/resources.ts 已移除短影音服務卡（真正從清單移除，不是 CSS 隱藏）", () => {
+    const resourcesContent = readSource("shared", "content", "resources.ts");
+    // 只檢查 services 陣列本身不再有短影音的服務物件（title／href），允許
+    // 說明性註解提及該服務已改分類至找形象。
+    expect(resourcesContent).not.toMatch(/title: "短影音與品牌內容行銷"/);
+    expect(resourcesContent).not.toMatch(/href: "\/short-video-marketing"/);
+    const resourceCenter = readSource("client", "src", "pages", "ResourceCenter.tsx");
+    expect(resourceCenter).not.toMatch(/display:\s*none/);
+  });
+
+  it("ResourceCenter.tsx 移除短影音服務卡後，分類篩選 tab 與 Hero 標籤同步移除「品牌與市場」，不留下對應不到任何服務的空分類", () => {
+    const resourceCenter = readSource("client", "src", "pages", "ResourceCenter.tsx");
+    expect(resourceCenter).not.toMatch(/key: "brand"/);
+    expect(resourceCenter).not.toMatch(/品牌與市場/);
+    expect(resourceCenter).toMatch(/type ResourceCategory = "all" \| "funding" \| "operations";/);
+  });
+
+  it("Navbar.tsx 找形象下拉說明已更新為正式服務文案，不再顯示 Coming Soon／敬請期待字樣", () => {
+    const navbar = readSource("client", "src", "components", "Navbar.tsx");
+    const block = navbar.match(/key: "brand"[\s\S]*?\n  \},/)?.[0] ?? "";
+    expect(block).toMatch(/href: "\/brand"/);
+    expect(block).toMatch(/用影像與內容呈現企業專業與品牌價值/);
   });
 });
 
@@ -208,9 +287,10 @@ describe("sitemap／noindex 一致性（server/_core/index.ts、server/_core/sec
     expect(sitemapSource).toMatch(/\$\{BASE\}\/resources/);
   });
 
-  it("sitemap 不包含 /talent、/brand 或 /community（noindex 頁面不送入 sitemap，避免矛盾訊號）", () => {
+  it("sitemap 不包含 /talent、/brand、/factory-photography 或 /community（noindex 頁面不送入 sitemap，避免矛盾訊號）", () => {
     expect(sitemapSource).not.toMatch(/\$\{BASE\}\/talent/);
     expect(sitemapSource).not.toMatch(/\$\{BASE\}\/brand/);
+    expect(sitemapSource).not.toMatch(/\$\{BASE\}\/factory-photography/);
     expect(sitemapSource).not.toMatch(/\$\{BASE\}\/community/);
   });
 
@@ -250,7 +330,7 @@ describe("sitemap／noindex 一致性（server/_core/index.ts、server/_core/sec
 });
 
 describe("shared/seo/publicPages.ts：找消息／找資源／找人才／找形象／找討論的 title／description／canonical", () => {
-  it("getPublicPageSeoByPath 對五個新／更新路徑回傳正確的 title 與自我 canonical", () => {
+  it("getPublicPageSeoByPath 對新／更新路徑回傳正確的 title 與自我 canonical", () => {
     const news = getPublicPageSeoByPath("/news");
     expect(news?.title).toBe("產業情報中心｜台灣傳統產業消息、展覽與產業資訊｜OXM");
     expect(news?.canonical).toBe("https://www.oxmmatch.com/news");
@@ -263,9 +343,15 @@ describe("shared/seo/publicPages.ts：找消息／找資源／找人才／找形
     expect(talent?.title).toBe("找人才｜傳統產業人才媒合｜OXM");
     expect(talent?.canonical).toBe("https://www.oxmmatch.com/talent");
 
+    // 找形象正式從 Coming Soon 頁改為服務 Hub，title/description 同步更新
+    // 為工廠攝影＋短影音的正式定位文案。
     const brand = getPublicPageSeoByPath("/brand");
-    expect(brand?.title).toBe("找形象｜企業品牌與數位形象資源｜OXM");
+    expect(brand?.title).toBe("找形象｜工廠攝影與企業影音內容服務｜OXM");
     expect(brand?.canonical).toBe("https://www.oxmmatch.com/brand");
+
+    const photography = getPublicPageSeoByPath("/factory-photography");
+    expect(photography?.title).toBe("工廠形象攝影｜企業商業攝影與品牌視覺｜OXM");
+    expect(photography?.canonical).toBe("https://www.oxmmatch.com/factory-photography");
 
     const discussion = getPublicPageSeoByPath("/community");
     expect(discussion?.title).toBe("臺灣傳產論壇｜產業交流、技術討論與合作需求｜OXM");

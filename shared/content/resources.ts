@@ -58,13 +58,8 @@ export const RESOURCES_CONTENT = {
       available: false,
       tags: ["ERP／MES", "流程盤點", "產線動線"],
     },
-    {
-      title: "短影音與品牌內容行銷",
-      subtitle: "讓製造能力成為能被理解的品牌內容",
-      description: "從短影音企劃、拍攝、社群內容到媒體與訪談製作，依企業目標選擇合適的品牌內容服務。",
-      href: "/short-video-marketing",
-      available: false,
-      tags: ["短影音", "品牌內容", "社群行銷"],
-    },
+    // 「短影音與品牌內容行銷」正式改分類至「找形象」（見 client/src/pages/
+    // Brand.tsx），不再屬於找資源。服務本身（/short-video-marketing route／
+    // 申請流程／後台）完整保留，只是上層分類與導覽入口改變，不在這裡列出。
   ] satisfies ResourceServiceContent[],
 };
