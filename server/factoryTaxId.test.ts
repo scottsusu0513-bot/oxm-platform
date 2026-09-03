@@ -177,4 +177,62 @@ describe("工廠統一編號必填 — server 端", () => {
       expect((factory as any)?.taxId).toBeNull();
     });
   });
+
+  // OXM Final Public Release urgent fix 2（見對話「統編不能填寫，造成工廠無法
+  // 上架」）：既有工廠原本無法補填統編（FactoryDashboard.tsx 的欄位原本
+  // unconditionally disabled、factory.update 的 zod schema 原本也不接受
+  // taxId），這裡補上 factory.update 支援 taxId 的專屬 regression。
+  describe("factory.update 補填統一編號（urgent fix 2：既有工廠可補填/更正 taxId）", () => {
+    let ownerId: number;
+    let factoryId: number;
+
+    beforeAll(async () => {
+      ownerId = await createVerifiedTestUser();
+      factoryId = await db.createFactoryAtomic(ownerId, { ...BASE_FACTORY_INPUT, name: `${runId} UpdateTaxId` } as any);
+    });
+
+    it("draft 工廠原本 taxId 為 NULL，補填有效 8 碼 → 成功，DB 存正規化後的字串", async () => {
+      const caller = appRouter.createCaller(await ctxForUserId(ownerId));
+      await expect(
+        caller.factory.update({ id: factoryId, taxId: "  00000016  " }),
+      ).resolves.toBeTruthy();
+      const after = await db.getFactoryById(factoryId);
+      expect((after as any)?.taxId).toBe("00000016");
+    });
+
+    it("補填非 8 碼數字 → 拒絕，訊息「統一編號須為 8 碼數字」，且不覆蓋既有值", async () => {
+      const caller = appRouter.createCaller(await ctxForUserId(ownerId));
+      await expect(
+        caller.factory.update({ id: factoryId, taxId: "1234567" }),
+      ).rejects.toMatchObject({ message: expect.stringContaining("統一編號須為 8 碼數字") });
+      const after = await db.getFactoryById(factoryId);
+      expect((after as any)?.taxId).toBe("00000016");
+    });
+
+    it("補填檢查碼不對的 8 碼數字 → 拒絕，訊息「統一編號格式不正確，請確認輸入是否正確」", async () => {
+      const caller = appRouter.createCaller(await ctxForUserId(ownerId));
+      await expect(
+        caller.factory.update({ id: factoryId, taxId: "00000017" }),
+      ).rejects.toMatchObject({ message: expect.stringContaining("統一編號格式不正確") });
+    });
+
+    it("taxId 帶空字串 → 視為「本次不更動」，不拋錯、也不清空既有值", async () => {
+      const caller = appRouter.createCaller(await ctxForUserId(ownerId));
+      await expect(
+        caller.factory.update({ id: factoryId, taxId: "" }),
+      ).resolves.toBeTruthy();
+      const after = await db.getFactoryById(factoryId);
+      expect((after as any)?.taxId).toBe("00000016");
+    });
+
+    it("payload 完全沒帶 taxId 欄位 → 其餘欄位仍可正常更新，既有 taxId 不受影響", async () => {
+      const caller = appRouter.createCaller(await ctxForUserId(ownerId));
+      await expect(
+        caller.factory.update({ id: factoryId, description: "只更新描述，不動 taxId" }),
+      ).resolves.toBeTruthy();
+      const after = await db.getFactoryById(factoryId);
+      expect((after as any)?.taxId).toBe("00000016");
+      expect((after as any)?.description).toBe("只更新描述，不動 taxId");
+    });
+  });
 });

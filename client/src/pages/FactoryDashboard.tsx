@@ -15,6 +15,7 @@ import { AppLoading } from "@/components/AppLoading";
 import { trpc } from "@/lib/trpc";
 import { compressImage } from "@/lib/compressImage";
 import { INDUSTRIES, INDUSTRY_OPTIONS, TAIWAN_REGIONS, CAPITAL_OPTIONS, MFG_MODE_OPTIONS } from "@shared/constants";
+import { normalizeTaxId, isValidTaiwanTaxId } from "@shared/taxId";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useLocation, useSearch, Link } from "wouter";
 import { toast } from "sonner";
@@ -365,6 +366,13 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
   const [website, setWebsite] = useState(factory.website ?? "");
   const [contactEmail, setContactEmail] = useState(factory.contactEmail ?? "");
   const [address, setAddress] = useState(factory.address ?? "");
+  // 統一編號：既有工廠可能是 NULL（建立時尚未強制必填，見 shared/taxId.ts、
+  // migration 0092），這裡跟其餘選填欄位一樣用空字串代表「尚未填寫」。只有
+  // draft／rejected 狀態可編輯（見下方 disabled 條件與 factory.update
+  // procedure 本身對 status==='approved' 的拒絕邏輯）——已上線工廠仍需透過
+  // 「修改申請」流程，本輪刻意不把 taxId 串進 submitRevision／
+  // buildProposedData，避免重構整套 Factory workflow。
+  const [taxId, setTaxId] = useState((factory as any).taxId ?? "");
   const [operationStatus, setOperationStatus] = useState<"normal" | "busy" | "full">(factory.operationStatus ?? "normal");
   const [weekdayHours, setWeekdayHours] = useState((factory as any).weekdayHours ?? "");
   const [weekendHours, setWeekendHours] = useState((factory as any).weekendHours ?? "");
@@ -437,6 +445,7 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
     website: (factory.website ?? "") as string,
     contactEmail: (factory.contactEmail ?? "") as string,
     address: (factory.address ?? "") as string,
+    taxId: ((factory as any).taxId ?? "") as string,
     operationStatus: (factory.operationStatus ?? "normal") as "normal" | "busy" | "full",
     weekdayHours: ((factory as any).weekdayHours ?? "") as string,
     weekendHours: ((factory as any).weekendHours ?? "") as string,
@@ -475,6 +484,7 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
     website !== initialForm.current.website ||
     contactEmail !== initialForm.current.contactEmail ||
     address !== initialForm.current.address ||
+    taxId !== initialForm.current.taxId ||
     operationStatus !== initialForm.current.operationStatus ||
     weekdayHours !== initialForm.current.weekdayHours ||
     weekendHours !== initialForm.current.weekendHours ||
@@ -711,6 +721,14 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
     if (!isDirty) return;
     if (avatarUploading) { toast.error("圖片上傳中，請稍候"); return; }
     if (foundedYear && foundedYear.length !== 4) { toast.error("成立年份請輸入4位數西元年"); return; }
+    // 統一編號：有填才驗證（既有工廠可保持 NULL/空字串不受影響），驗證邏輯
+    // 與 FactoryRegister.tsx／server/routers.ts 的 factory.update 共用同一份
+    // shared/taxId.ts，避免前後端各自維護一套規則。
+    const normalizedTaxId = normalizeTaxId(taxId);
+    if (normalizedTaxId) {
+      if (!/^\d{8}$/.test(normalizedTaxId)) { toast.error("統一編號須為 8 碼數字"); return; }
+      if (!isValidTaiwanTaxId(normalizedTaxId)) { toast.error("統一編號格式不正確，請確認輸入是否正確"); return; }
+    }
 
     if (factory.status === 'approved') {
       // Open revision dialog for approved factories
@@ -722,7 +740,7 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
     const snapshot = {
       name, industry: [...industry], subIndustry: [...subIndustry], mfgModes: [...mfgModes],
       region, description, capitalLevel, foundedYear, ownerName, contactPersonName, phone, website, contactEmail,
-      address, operationStatus, weekdayHours, weekendHours, businessNote,
+      address, taxId: normalizedTaxId, operationStatus, weekdayHours, weekendHours, businessNote,
       avatarUrl: avatarUrl ?? null,
       avatarCrop: avatarCrop ?? null,
       certificationBadges: sortBadgeIds(certificationBadges),
@@ -733,6 +751,7 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
       industry: industry.length > 0 ? industry : undefined,
       subIndustry: subIndustry.length > 0 ? subIndustry : undefined,
       mfgModes, region, description, capitalLevel, address,
+      taxId: normalizedTaxId || undefined,
       operationStatus,
       weekdayHours: weekdayHours || undefined,
       weekendHours: weekendHours || undefined,
@@ -1070,7 +1089,22 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
             </div>
             <div className="space-y-2">
               <Label>統一編號</Label>
-              <Input disabled value={(factory as any).taxId ?? ""} placeholder="未填寫" />
+              {/* 修復：先前這個 input 一律 disabled（不像其他欄位用
+                  disabled={isLocked}），既有工廠若當初未填 taxId
+                  （欄位新增前建立、或建立時漏填），完全沒有管道補填——這是
+                  客戶回報「統編不能填寫」的實際 root cause 之一。已上線
+                  （approved）工廠仍維持唯讀，需比照其他欄位透過「修改申請」
+                  流程處理，本輪刻意不把 taxId 串進 submitRevision，避免重構
+                  整套 Factory workflow；draft／rejected／審核中
+                  （isLocked）以外的狀態即可直接編輯並儲存。 */}
+              <Input
+                disabled={isLocked || factory.status === "approved"}
+                inputMode="numeric"
+                value={taxId}
+                onChange={e => setTaxId(e.target.value)}
+                maxLength={8}
+                placeholder={isLocked || factory.status === "approved" ? "未填寫" : "請輸入 8 碼統一編號"}
+              />
             </div>
             <div className="space-y-2">
               <Label>主產業（可複選）</Label>

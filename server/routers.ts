@@ -758,10 +758,19 @@ export const appRouter = router({
     // 輸入框畫成 disabled，而不是先假裝可以送出、開了面板才發現被擋下來。
     // entitlementStatus 刻意只在面板打開時才查（見該 query 的 enabled:
     // isOpen 註解，避免每一頁都連帶查 entitlement/quota），這裡另外提供一支
-    // 極輕量、無需登入、不查 DB 的獨立 query，只回傳 ENV.aiReleaseMode 本身
-    // ——與 entitlementStatus／ai.chat 判斷 coming_soon 用的是同一個
+    // 極輕量、不查 DB 的獨立 query，只回傳 ENV.aiReleaseMode 本身——與
+    // entitlementStatus／ai.chat 判斷 coming_soon 用的是同一個
     // server-authoritative 來源，不是另一套判斷邏輯。
-    releaseMode: publicProcedure.query(() => ({ mode: ENV.aiReleaseMode })),
+    //
+    // Admin-only Release（產品決策更新，見 entitlementStatus／ai.chat 同一批
+    // 修改的註解）：Admin 一律回報 "live"，即使 ENV.aiReleaseMode 仍是
+    // "coming_soon"，讓 FaqAiEntry 這類提前判斷 comingSoon 的入口對 Admin
+    // 也正確顯示為可用，跟 GlobalAiShell 面板本身（靠 entitlementStatus 判斷）
+    // 的行為一致，不是兩套互相矛盾的訊號。回傳型別維持不變（"coming_soon" |
+    // "live"），只是 Admin 這個身分讓值本身不同，不是新增第二種判斷機制。
+    releaseMode: publicProcedure.query(({ ctx }) => ({
+      mode: ENV.aiReleaseMode !== "live" && ctx.user?.isAdmin ? "live" as const : ENV.aiReleaseMode,
+    })),
 
     // Phase 8.1（見對話中「一」）：guest／已登入但非已審核工廠成員一律不可
     // 使用 AI，client 用這支 query 決定要顯示哪一種 deterministic UX（不是
@@ -773,7 +782,16 @@ export const appRouter = router({
       // 應該讓使用者先看到「請登入」「維護中」這類 entitlement/kill-switch
       // 相關文案，一律先看到「敬請期待」。這裡刻意不呼叫 resolveAiEntitlement
       // （見「十三」：coming_soon 階段不需要先揭露 guest/no_factory 狀態）。
-      if (ENV.aiReleaseMode !== "live") {
+      //
+      // Admin-only Release（產品決策更新）：OXM AI 目前因使用成本考量暫不
+      // 對一般使用者開放，但 Admin 必須能正常使用（站方自行測試／使用）。
+      // 這裡改為「release mode 短路只套用在非 Admin」——Admin 略過這一層，
+      // 繼續往下走到 resolveAiEntitlement，才會正確得到 kind:"admin"
+      // （已有完整 quota bypass，見 aiQuota.ts 的 bypassQuota）。這是先前
+      // 「不做 Admin bypass」決策的明確更新，不是重新設計一套權限系統——
+      // 沿用既有 ctx.user?.isAdmin 訊號（與下面 resolveAiEntitlement 呼叫、
+      // ai.chat 用的是同一個來源）。
+      if (ENV.aiReleaseMode !== "live" && !ctx.user?.isAdmin) {
         return { kind: "coming_soon" as const };
       }
       // Phase 12.2（見對話「三」）：讓前端能提前知道 aiEnabled，避免使用者
@@ -819,14 +837,19 @@ export const appRouter = router({
         })).max(40).optional(),
       }))
       .mutation(async ({ ctx, input }) => {
-        // Phase 13.0（見對話「六、七、二十」）：release mode 是比 kill
-        // switch 更外層的短路，順序：release mode → kill switch →
-        // entitlement → concurrency/quota。coming_soon 時，不管 Admin
-        // 與否、不管 kill switch 開關，一律直接拒絕，完全不觸碰
-        // entitlement／quota／aiUsageTurns／任何 provider／任何 side
-        // effect（這是產品發布狀態，不是 entitlement 判斷，見「二十」：
-        // 不做 Admin bypass）。
-        if (ENV.aiReleaseMode !== "live") {
+        // Phase 13.0（見對話「六、七、二十」，Admin-only Release 更新）：
+        // release mode 是比 kill switch 更外層的短路，順序：release mode
+        // （非 Admin 才短路）→ kill switch → entitlement →
+        // concurrency/quota。coming_soon 時，非 Admin 一律直接拒絕，完全不
+        // 觸碰 entitlement／quota／aiUsageTurns／任何 provider／任何 side
+        // effect。Admin 略過這一層短路，繼續往下走到 kill switch／
+        // entitlement／quota（quota 已有既有 bypassQuota，見下方
+        // entitlement.kind === "admin"），不是另外給 Admin 開一條不受任何
+        // 限制的後門——kill switch 與 entitlement 判斷本身仍然適用於 Admin。
+        // 這是先前「不做 Admin bypass」決策的明確更新（產品決策：OXM AI
+        // 暫不對一般使用者開放，但 Admin 必須能正常使用），沿用既有
+        // ctx.user?.isAdmin 訊號，不是新增第二套權限系統。
+        if (ENV.aiReleaseMode !== "live" && !ctx.user?.isAdmin) {
           return { status: "denied" as const, reason: "coming_soon" as const };
         }
 
@@ -1389,6 +1412,19 @@ export const appRouter = router({
       avatarUrl: z.string().regex(/^https?:\/\//, "avatarUrl 必須為 http/https URL").optional(),
       avatarCrop: imageCropInputSchema,
       address: z.string().optional(),
+      // 統一編號：修復「既有工廠無法補填統編」——先前 factory.update 完全不
+      // 接受這個欄位（見上方 create 的註解「factory.update／submitRevision
+      // 都不要求此欄位」），本輪改為選填但可補填：空字串視為「不變更」
+      // （client 端 taxId || undefined 就不會送出這個 key，這裡的 refine 只
+      // 是雙重防線），非空字串必須通過與 create 相同的 8 碼數字＋檢查碼驗證，
+      // 不允許把已存在的合法統編改成格式錯誤的值。approved 工廠仍會在上面
+      // status routing 被直接拒絕整個 update（含這個欄位），維持既有「已上線
+      // 工廠需走修改申請流程」規則不變。
+      taxId: z.string()
+        .transform((v) => normalizeTaxId(v))
+        .refine((v) => v.length === 0 || /^\d{8}$/.test(v), "統一編號須為 8 碼數字")
+        .refine((v) => v.length === 0 || isValidTaiwanTaxId(v), "統一編號格式不正確，請確認輸入是否正確")
+        .optional(),
       operationStatus: z.enum(["normal", "busy", "full"]).optional(),
       weekdayHours: z.string().max(50).optional(),
       weekendHours: z.string().max(50).optional(),
@@ -1424,6 +1460,14 @@ export const appRouter = router({
       // imageKeys 合併，不能直接拿工廠端送來的內容整個覆蓋，否則會把已透過
       // uploadBadgeEvidence 綁定的圖片洗掉。
       const mergedData: Record<string, any> = { ...data };
+      // 空字串代表「本次不更動統編」（見上方 zod schema 的註解）——db.updateFactory
+      // 用 Drizzle 的 .set() 動態展開所有存在的 key，若把 taxId: "" 原樣放進
+      // mergedData 會真的把既有合法統編覆蓋成空字串，等於沒有實作到註解宣稱的
+      // 「雙重防線」。這裡把它從要更新的欄位中移除，讓空字串真正等於不觸碰
+      // 這個欄位，而不是只在 zod 層允許通過。
+      if (mergedData.taxId === "") {
+        delete mergedData.taxId;
+      }
       if ("certificationBadges" in data || "certificationEvidence" in data) {
         const certificationBadges = sortBadgeIds(Array.isArray((data as any).certificationBadges) ? (data as any).certificationBadges : []);
         mergedData.certificationBadges = certificationBadges;

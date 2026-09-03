@@ -217,6 +217,11 @@ export async function updateFactory(id: number, ownerId: number, data: Partial<I
     (normalized as any).certificationEvidence = certificationEvidence;
   }
 
+  // Drizzle 的 .set({}) 會直接丟「No values to set」——呼叫端（例如
+  // factory.update 把 taxId 空字串視為「不變更」而整個移除該 key 後）可能
+  // 剛好只剩空物件，這種情況本來就該是成功的 no-op，不是錯誤。
+  if (Object.keys(normalized).length === 0) return;
+
   if (ownerId === -1) {
     await db.update(factories).set(normalized).where(eq(factories.id, id));
   } else {

@@ -83,9 +83,9 @@ describe("comingSoon 狀態來源：AiShellContext 的 isAiComingSoon（server-a
     expect(source).toMatch(/isAiComingSoon\s*=\s*releaseModeQuery\.data\?\.mode\s*!==\s*"live"/);
   });
 
-  it("server/routers.ts 的 ai.releaseMode 直接回傳 ENV.aiReleaseMode，跟 entitlementStatus／ai.chat 判斷 coming_soon 用同一個來源", () => {
+  it("server/routers.ts 的 ai.releaseMode 以 ENV.aiReleaseMode 為底、Admin 一律回報 live（Admin-only Release），跟 entitlementStatus／ai.chat 判斷 coming_soon 用同一個 ctx.user?.isAdmin 來源", () => {
     const source = readSource("server", "routers.ts");
-    expect(source).toMatch(/releaseMode: publicProcedure\.query\(\(\) => \(\{ mode: ENV\.aiReleaseMode \}\)\)/);
+    expect(source).toMatch(/releaseMode: publicProcedure\.query\(\(\{ ctx \}\) => \(\{\s*mode: ENV\.aiReleaseMode !== "live" && ctx\.user\?\.isAdmin \? "live" as const : ENV\.aiReleaseMode,\s*\}\)\)/);
   });
 });
 
