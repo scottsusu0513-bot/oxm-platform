@@ -615,7 +615,11 @@ describe("Navbar「找消息」入口：第五輪正式開放（下拉選單模�
   it("七大主入口 SEO 架構調整後：找人才／找形象／找討論都已改為開放中的 Coming Soon 頁（soon: false）", () => {
     const navbarSource = readNavbarSource();
     for (const key of ["talent", "brand", "discussion"]) {
-      const m = navbarSource.match(new RegExp(`key: "${key}",\\s*\\n\\s*label: "[^"]*", short: "[^"]*", soon: (true|false)`));
+      // (?: href: "[^"]*",)? 是刻意允許的彈性：找形象已補上 href: "/brand"
+      // （見 client/src/components/Navbar.tsx，主入口點擊需直接導向 /brand，
+      // 不再只是切換下拉選單），短／討論兩個入口目前仍沒有主入口 href，這裡
+      // 只驗證 soon 狀態，不因為找形象多了 href 欄位就整條 regex 比對不到。
+      const m = navbarSource.match(new RegExp(`key: "${key}",\\s*\\n\\s*label: "[^"]*", short: "[^"]*",(?: href: "[^"]*",)? soon: (true|false)`));
       expect(m).not.toBeNull();
       expect(m![1]).toBe("false");
     }

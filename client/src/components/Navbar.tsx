@@ -148,10 +148,13 @@ const HUB_ITEMS: HubItem[] = [
   },
   {
     key: "brand",
-    label: "產業採購與資源中心", short: "找形象", soon: false,
+    label: "產業採購與資源中心", short: "找形象", href: "/brand", soon: false,
     // 找形象已從 Coming Soon 頁正式轉為服務 Hub（見 client/src/pages/Brand.tsx），
-    // 整合短影音與品牌內容行銷、工廠形象攝影兩項服務。下拉維持單一項目導向
-    // /brand Hub 本身，不逐一列出子服務細節。
+    // 整合短影音與品牌內容行銷（已正式提供）、工廠形象攝影（Coming Soon）兩項
+    // 服務。主入口補上 href="/brand"（沿用找工廠 href="/search" 的同一套「有
+    // href 就用 Link 包住、hover 仍可額外展開下拉」模式，見 renderDesktopHub），
+    // 修正先前點擊「找形象」只會切換下拉選單、無法直接進入 /brand 的問題。
+    // 下拉維持單一項目導向 /brand Hub 本身，不逐一列出子服務細節。
     Icon: Package, iconCls: "text-amber-600", triggerIconCls: "text-amber-600", ring: "focus-visible:ring-amber-400",
     card: "bg-gradient-to-br from-amber-500/10 to-orange-600/10 border-amber-300/40 text-amber-700",
     cardHover: "hover:from-amber-500/20 hover:to-orange-600/20 hover:border-amber-400/60 hover:shadow-sm hover:shadow-amber-500/10 hover:-translate-y-px",

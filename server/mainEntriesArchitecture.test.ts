@@ -62,6 +62,14 @@ describe("Navbar 主要入口順序與可進入性（client/src/components/Navba
     expect(block).not.toMatch(/disabled: true/);
   });
 
+  it("找形象主入口本身要有 href: \"/brand\"（不能只有下拉選單裡的子項目有連結）——回歸測試：先前只有 dropdownItems 內的子項連到 /brand，主入口物件本身沒有 href 欄位，導致桌面版點擊「找形象」只會切換下拉選單開關、不會導頁，見 renderDesktopHub 的 hub.href 分流邏輯", () => {
+    const block = hubItemsSource.match(/key: "brand"[\s\S]*?\n  \},/)?.[0] ?? "";
+    // 只比對 dropdownItems 陣列「之前」的區塊，確保 href 是主入口物件自己的
+    // 欄位，不是誤配到下拉子項目裡同樣名為 href 的欄位。
+    const beforeDropdownItems = block.split("dropdownItems:")[0];
+    expect(beforeDropdownItems).toMatch(/href:\s*"\/brand"/);
+  });
+
   it("找討論：soon:false（不再鎖定），下拉有真實連結到既有 /community route（不是新建的重複 route）", () => {
     const block = hubItemsSource.match(/key: "discussion"[\s\S]*?\n  \},/)?.[0] ?? "";
     expect(block).toMatch(/soon: false/);
@@ -150,13 +158,13 @@ describe("找形象正式 Hub（/brand）：從 Coming Soon 改為真正的服�
     expect(app).toMatch(/path="\/factory-photography" component=\{FactoryPhotography\}/);
   });
 
-  it("Brand.tsx 不再使用 SectionComingSoon（不是 Coming Soon 頁）", () => {
+  it("Brand.tsx 不再使用 SectionComingSoon（/brand 本身不是 Coming Soon 頁，即使其中一張服務卡是）", () => {
     const brand = readSource("client", "src", "pages", "Brand.tsx");
     expect(brand).not.toMatch(/SectionComingSoon/);
-    expect(brand).not.toMatch(/準備中|敬請期待/);
+    expect(brand).not.toMatch(/準備中/);
   });
 
-  it("Brand.tsx 含 Navbar、正式 Hero 文案，且有兩張服務卡分別連到 /short-video-marketing、/factory-photography", () => {
+  it("Brand.tsx 含 Navbar、正式 Hero 文案，兩張服務卡標題／說明都在，但只有短影音卡連到 /short-video-marketing", () => {
     const brand = readSource("client", "src", "pages", "Brand.tsx");
     expect(brand).toMatch(/<Navbar \/>/);
     expect(brand).toMatch(/讓專業被看見，建立企業品牌形象/);
@@ -164,8 +172,24 @@ describe("找形象正式 Hub（/brand）：從 Coming Soon 改為真正的服�
     expect(brand).toMatch(/工廠形象攝影/);
     // 必須是真正 crawlable 的 <Link href>，不是只靠 onClick。
     expect(brand).toMatch(/href:\s*"\/short-video-marketing"/);
-    expect(brand).toMatch(/href:\s*"\/factory-photography"/);
+    expect(brand).toMatch(/available:\s*true/);
     expect(brand).toMatch(/<Link href=\{service\.href\}/);
+  });
+
+  it("Brand.tsx 工廠形象攝影卡改為 Coming Soon：available:false、有「即將開放」badge／CTA，且完全沒有可互動的 /factory-photography 連結入口", () => {
+    const brand = readSource("client", "src", "pages", "Brand.tsx");
+    expect(brand).toMatch(/available:\s*false/);
+    // 即將開放：不得是 <a>/<Link>，不得保留 href，需 aria-disabled，避免鍵盤
+    // focus 到一個實際不能操作的假連結（沿用 ResourceCenter.tsx 已驗收的
+    // 「敬請期待」pattern，只是文案改為使用者這輪指定的「即將開放」）。
+    expect(brand).toMatch(/即將開放/);
+    expect(brand).toMatch(/aria-disabled="true"/);
+    // href: "/factory-photography" 仍保留在資料裡（方便未來一鍵切換
+    // available:true 重新開放），但不得出現在任何 <Link href="/factory-photography"
+    // 或 <a href="/factory-photography" 這種真正可點擊的渲染路徑。
+    expect(brand).toMatch(/href:\s*"\/factory-photography"/);
+    expect(brand).not.toMatch(/<Link href="\/factory-photography"/);
+    expect(brand).not.toMatch(/<a[^>]+href="\/factory-photography"/);
   });
 
   it("Brand.tsx／FactoryPhotography.tsx 的 Helmet 帶 noindex,follow，title／canonical 引用 shared/seo/publicPages.ts（本輪仍未正式開放索引）", () => {
