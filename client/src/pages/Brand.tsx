@@ -103,7 +103,6 @@ export default function Brand() {
         <title>{PUBLIC_PAGE_SEO.brand.title}</title>
         <meta name="description" content={PUBLIC_PAGE_SEO.brand.description} />
         <link rel="canonical" href={PUBLIC_PAGE_SEO.brand.canonical} />
-        <meta name="robots" content="noindex,follow" />
       </Helmet>
 
       <Navbar />

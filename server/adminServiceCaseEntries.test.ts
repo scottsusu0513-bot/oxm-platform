@@ -152,18 +152,18 @@ describe("五個顧問案件看板路徑不曾出現在任何「所有訪客都�
 });
 
 describe("三個公開申請頁（/apply）本身的 noindex 設定不受本輪影響", () => {
-  it("server/_core/security.ts 的 NOINDEX_EXACT_PATHS 仍包含三個公開服務頁與其 /apply 子頁，且不含任何顧問案件看板路徑", () => {
+  it("server/_core/security.ts 的 NOINDEX_EXACT_PATHS 仍包含三個服務的 /apply 子頁（Final Public Index Release 後，Landing Page 本身已移出這個清單，只剩申請表單維持 noindex），且不含任何顧問案件看板路徑", () => {
     const source = readSource("server", "_core", "security.ts");
     const match = source.match(/NOINDEX_EXACT_PATHS = new Set<string>\(\[([^\]]*)\]\)/);
     expect(match).toBeTruthy();
     const listed = match![1];
     const stringLiterals = listed.match(/"[^"]*"/g) ?? [];
-    expect(stringLiterals).toContain('"/certification-center"');
     expect(stringLiterals).toContain('"/certification-center/apply"');
-    expect(stringLiterals).toContain('"/erp-optimization"');
     expect(stringLiterals).toContain('"/erp-optimization/apply"');
-    expect(stringLiterals).toContain('"/short-video-marketing"');
     expect(stringLiterals).toContain('"/short-video-marketing/apply"');
+    expect(stringLiterals).not.toContain('"/certification-center"');
+    expect(stringLiterals).not.toContain('"/erp-optimization"');
+    expect(stringLiterals).not.toContain('"/short-video-marketing"');
     for (const p of Object.values(CONSULTANT_PATHS)) {
       expect(stringLiterals).not.toContain(`"${p}"`);
     }

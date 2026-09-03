@@ -1,10 +1,12 @@
 /**
- * 短影音與品牌內容行銷專區（/short-video-marketing）— 隱藏預覽頁靜態原始碼
- * 契約測試，與 /erp-optimization、/certification-center（見
+ * 短影音與品牌內容行銷專區（/short-video-marketing）— 靜態原始碼契約測試，
+ * 與 /erp-optimization、/certification-center（見
  * server/erpOptimizationNoPublicEntry.test.ts、
- * server/certificationCenterNoPublicEntry.test.ts）完全同一套慣例：本頁面
- * 目前只允許由 /resources 資源總覽進入，不在 Navbar 直達項目／首頁／Footer／
- * APP 底部導覽／sitemap／prerender 清單中出現。
+ * server/certificationCenterNoPublicEntry.test.ts）完全同一套慣例：Final
+ * Public Index Release 已從「隱藏預覽頁」正式轉為公開索引的服務 Landing
+ * Page，加入 sitemap，移除 X-Robots-Tag noindex。上層分類是「找形象」，由
+ * /brand Hub 的服務卡提供 crawlable 連結入口，仍不在 Navbar 直達項目／
+ * 首頁／Footer／APP 底部導覽出現。
  */
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
@@ -14,7 +16,7 @@ function readSource(...segments: string[]): string {
   return fs.readFileSync(path.resolve(import.meta.dirname, "..", ...segments), "utf-8");
 }
 
-describe("/short-video-marketing 沒有資源總覽以外的主要導覽直達連結", () => {
+describe("/short-video-marketing 沒有 /brand（找形象 Hub）以外的主要導覽直達連結", () => {
   it("client/src/components/Navbar.tsx 完全沒有 short-video-marketing 連結（含找資源下拉選單也暫時隱藏）", () => {
     const source = readSource("client", "src", "components", "Navbar.tsx");
     expect(source).not.toMatch(/short-video-marketing/i);
@@ -53,13 +55,16 @@ describe("/short-video-marketing 沒有資源總覽以外的主要導覽直達�
   });
 });
 
-describe("/short-video-marketing 不在 sitemap 或 prerender 清單中", () => {
-  it("server/_core/index.ts 的 sitemap.xml 產生邏輯沒有任何 short-video-marketing 項目", () => {
+describe("/short-video-marketing 正式加入 sitemap（Final Public Index Release），但仍不在 prerender 清單中", () => {
+  it("server/_core/index.ts 的 sitemap.xml 產生邏輯含 /short-video-marketing，但不含 /short-video-marketing/apply", () => {
     const source = readSource("server", "_core", "index.ts");
-    expect(source).not.toMatch(/short-video-marketing/i);
+    const sitemapMatch = source.match(/app\.get\("\/sitemap\.xml"[\s\S]*?\n {2}\}\);/);
+    const sitemapSource = sitemapMatch ? sitemapMatch[0] : "";
+    expect(sitemapSource).toMatch(/\$\{BASE\}\/short-video-marketing/);
+    expect(sitemapSource).not.toMatch(/short-video-marketing\/apply/);
   });
 
-  it("server/_core/prerenderedBody.ts 的 PRERENDERED_PAGES 清單沒有 /short-video-marketing", () => {
+  it("server/_core/prerenderedBody.ts 的 PRERENDERED_PAGES 清單沒有 /short-video-marketing（本輪未新增 build-time prerender）", () => {
     const source = readSource("server", "_core", "prerenderedBody.ts");
     expect(source).not.toMatch(/short-video-marketing/i);
   });
@@ -74,15 +79,15 @@ describe("/short-video-marketing 與 /short-video-marketing/apply 路由本身�
   });
 });
 
-describe("noindex／X-Robots-Tag 套用在短影音兩個公開隱藏頁，且不波及其他頁面", () => {
-  it("server/_core/security.ts 的 NOINDEX_EXACT_PATHS 包含短影音兩個路徑", () => {
+describe("noindex／X-Robots-Tag 只套用在 /short-video-marketing/apply 申請表單，不影響 Landing Page 或其他頁面", () => {
+  it("server/_core/security.ts 的 NOINDEX_EXACT_PATHS 包含 /short-video-marketing/apply，但不含 Landing Page 本身", () => {
     const source = readSource("server", "_core", "security.ts");
     const match = source.match(/NOINDEX_EXACT_PATHS = new Set<string>\(\[([\s\S]*?)\]\)/);
     expect(match).toBeTruthy();
     const listed = match![1];
     const stringLiterals = listed.match(/"[^"]*"/g) ?? [];
-    expect(stringLiterals).toContain('"/short-video-marketing"');
     expect(stringLiterals).toContain('"/short-video-marketing/apply"');
+    expect(stringLiterals).not.toContain('"/short-video-marketing"');
     // 需登入的顧問看板不算公開隱藏預覽頁，同 /finance-consultant/cases 慣例，不應列入。
     expect(stringLiterals).not.toContain('"/short-video-consultant/cases"');
   });
@@ -92,8 +97,8 @@ describe("noindex／X-Robots-Tag 套用在短影音兩個公開隱藏頁，且�
     expect(source).not.toMatch(/NOINDEX_EXACT_PATHS[\s\S]{0,300}"\/"/);
   });
 
-  it("ShortVideoMarketing.tsx 與 ShortVideoMarketingApply.tsx 都有完整的 meta robots 限制", () => {
-    expect(readSource("client", "src", "pages", "ShortVideoMarketing.tsx")).toMatch(/noindex, nofollow, noarchive, nosnippet/);
+  it("ShortVideoMarketingApply.tsx 仍有完整的 meta robots 限制，ShortVideoMarketing.tsx（Landing Page 本身）已不再有", () => {
+    expect(readSource("client", "src", "pages", "ShortVideoMarketing.tsx")).not.toMatch(/<meta name="robots"/);
     expect(readSource("client", "src", "pages", "ShortVideoMarketingApply.tsx")).toMatch(/noindex, nofollow, noarchive, nosnippet/);
   });
 });

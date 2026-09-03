@@ -1,8 +1,10 @@
 import { useMemo, useState } from "react";
-import { useLocation } from "wouter";
+import { Link, useLocation } from "wouter";
 import { Helmet } from "react-helmet-async";
 import Navbar from "@/components/Navbar";
 import { FloatingBackButton } from "@/components/FloatingBackButton";
+import { useRemoveServerSeoHead } from "@/hooks/useRemoveServerSeoHead";
+import { PUBLIC_PAGE_SEO } from "@/lib/publicPageSeo";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -79,6 +81,7 @@ type ServiceItem = {
 };
 
 export default function CertificationCenter() {
+  useRemoveServerSeoHead();
   const [, navigate] = useLocation();
   const [keyword, setKeyword] = useState("");
   const [activeCategory, setActiveCategory] = useState<string>("all");
@@ -99,16 +102,32 @@ export default function CertificationCenter() {
 
   return (
     <div className="min-h-screen bg-background">
-      {/* 隱藏預覽頁：頁面 meta robots 是第一層防線，Express 端 X-Robots-Tag
-          （server/_core/security.ts setupNoIndexRoutes）是第二層，即使爬蟲
-          不執行 JS 也能看到。禁止移除或放寬這兩層任何一層。 */}
+      {/* 正式開放服務 Landing Page：Final Public Index Release 已移除
+          server/_core/security.ts NOINDEX_EXACT_PATHS 裡的隱藏 gate，title
+          移除先前「（專區預覽）」字樣，description/canonical 改引用
+          shared/seo/publicPages.ts，與伺服器端初始 HTML head 注入共用同一份
+          資料。/certification-center/apply 是申請表單，非內容型 Landing
+          Page，仍維持 noindex，不受本次開放影響。 */}
       <Helmet>
-        <title>ISO 與低碳認證專區｜OXM（專區預覽）</title>
-        <meta name="robots" content="noindex, nofollow, noarchive, nosnippet" />
+        <title>{PUBLIC_PAGE_SEO.certificationCenter.title}</title>
+        <meta name="description" content={PUBLIC_PAGE_SEO.certificationCenter.description} />
+        <link rel="canonical" href={PUBLIC_PAGE_SEO.certificationCenter.canonical} />
       </Helmet>
 
       <Navbar />
-      <FloatingBackButton fallbackHref="/" />
+      <FloatingBackButton fallbackHref="/resources" />
+
+      {/* breadcrumb：讓使用者與爬蟲理解上層是「找資源」，沿用
+          ShortVideoMarketing.tsx／Brand.tsx 同一種輕量 breadcrumb 樣式。
+          pt-16（而非較小的 pt-6）避開 FloatingBackButton——見
+          ShortVideoMarketing.tsx 同樣的 pt-16 說明，這裡沿用同一個數值。 */}
+      <div className="max-w-4xl mx-auto px-4 pt-16">
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Link href="/" className="hover:text-emerald-700">首頁</Link><span>/</span>
+          <Link href="/resources" className="hover:text-emerald-700">找資源</Link><span>/</span>
+          <span>ISO 與低碳認證</span>
+        </div>
+      </div>
 
       {/* ── 1. 首屏 ── */}
       <section className="relative overflow-hidden bg-gradient-to-br from-emerald-50/70 via-white to-purple-50/50 py-16 px-4">

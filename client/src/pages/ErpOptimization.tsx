@@ -1,7 +1,9 @@
-import { useLocation } from "wouter";
+import { Link, useLocation } from "wouter";
 import { Helmet } from "react-helmet-async";
 import Navbar from "@/components/Navbar";
 import { FloatingBackButton } from "@/components/FloatingBackButton";
+import { useRemoveServerSeoHead } from "@/hooks/useRemoveServerSeoHead";
+import { PUBLIC_PAGE_SEO } from "@/lib/publicPageSeo";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -163,25 +165,37 @@ const FAQ_ITEMS: { q: string; a: string }[] = [
 ];
 
 export default function ErpOptimization() {
+  useRemoveServerSeoHead();
   const [, navigate] = useLocation();
   const openConsultPreview = () => navigate("/erp-optimization/apply");
 
   return (
     <div className="min-h-screen bg-background">
-      {/* 隱藏預覽頁：頁面 meta robots 是第一層防線，Express 端 X-Robots-Tag
-          （server/_core/security.ts setupNoIndexRoutes）是第二層，即使爬蟲
-          不執行 JS 也能看到。禁止移除或放寬這兩層任何一層。 */}
+      {/* 正式開放服務 Landing Page：Final Public Index Release 已移除
+          server/_core/security.ts NOINDEX_EXACT_PATHS 裡的隱藏 gate，
+          title/description/canonical 改引用 shared/seo/publicPages.ts，
+          與伺服器端初始 HTML head 注入共用同一份資料。
+          /erp-optimization/apply 是申請表單，非內容型 Landing Page，仍維持
+          noindex，不受本次開放影響。 */}
       <Helmet>
-        <title>製造業ERP導入與產線動線規劃｜OXM</title>
-        <meta
-          name="description"
-          content="OXM 協助工廠釐清 ERP、MES、管理流程與產線動線需求，媒合適合的顧問及系統整合資源。初步諮詢免費。"
-        />
-        <meta name="robots" content="noindex, nofollow, noarchive, nosnippet" />
+        <title>{PUBLIC_PAGE_SEO.erpOptimization.title}</title>
+        <meta name="description" content={PUBLIC_PAGE_SEO.erpOptimization.description} />
+        <link rel="canonical" href={PUBLIC_PAGE_SEO.erpOptimization.canonical} />
       </Helmet>
 
       <Navbar />
-      <FloatingBackButton fallbackHref="/" />
+      <FloatingBackButton fallbackHref="/resources" />
+
+      {/* breadcrumb：讓使用者與爬蟲理解上層是「找資源」，pt-16 避開
+          FloatingBackButton，說明同 ShortVideoMarketing.tsx／
+          CertificationCenter.tsx。 */}
+      <div className="max-w-4xl mx-auto px-4 pt-16">
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Link href="/" className="hover:text-indigo-700">首頁</Link><span>/</span>
+          <Link href="/resources" className="hover:text-indigo-700">找資源</Link><span>/</span>
+          <span>ERP、MES 與產線優化</span>
+        </div>
+      </div>
 
       {/* ── 1. 首屏：雙軌流程視覺（資訊流／實體生產流） ── */}
       <section className="relative overflow-hidden bg-gradient-to-br from-indigo-50/70 via-white to-orange-50/40 py-16 px-4">

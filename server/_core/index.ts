@@ -174,12 +174,27 @@ async function startServer() {
     // 是不同的訊號。移出 sitemap 純粹是降低這兩頁在網站資訊架構裡的相對
     // 權重，不影響 Google 依內部連結（Footer）自然發現並索引這兩頁。
     urls.push(entry(`${BASE}/upgrade-center`, "0.6", "monthly"));
-    // 找資源六大主入口代表頁：內容完整（五項服務分類介紹），非 thin page，
+    // 找資源六大主入口代表頁：內容完整（四項服務分類介紹），非 thin page，
     // 維持可索引，見 shared/seo/publicPages.ts 的 resources 設定。找人才
-    // （/talent）與找形象（/brand）目前是 noindex,follow 的 Coming Soon 頁
-    // （見 server/_core/security.ts NOINDEX_FOLLOW_EXACT_PATHS），故意不放進
+    // （/talent）維持 noindex,follow 的 Coming Soon 頁（見
+    // server/_core/security.ts NOINDEX_FOLLOW_EXACT_PATHS），故意不放進
     // sitemap，避免對同一頁面同時送出「請索引」跟「不要索引」的矛盾訊號。
     urls.push(entry(`${BASE}/resources`, "0.6", "monthly"));
+    // 找資源下四項正式開放的服務 Landing Page：Final Public Index Release
+    // 移出 NOINDEX_EXACT_PATHS，正式加入 sitemap。優先權設為子頁層級
+    // （低於 /resources 這個 Hub 本身），不是刻意灌高排名的 priority hack，
+    // 只是如實反映「Hub 頁 > 子服務頁」的真實內容層級。各自的申請表單
+    // （apply）維持 noindex，故意不加入 sitemap。
+    urls.push(entry(`${BASE}/finance-optimization`, "0.5", "monthly"));
+    urls.push(entry(`${BASE}/certification-center`, "0.5", "monthly"));
+    urls.push(entry(`${BASE}/erp-optimization`, "0.5", "monthly"));
+    // 找形象主入口：正式服務 Hub，見 shared/seo/publicPages.ts 的 brand
+    // 設定；已移出 NOINDEX_FOLLOW_EXACT_PATHS，正式開放索引。工廠形象攝影
+    // （/factory-photography）仍是 Coming Soon，維持 noindex，故意不放進
+    // sitemap。
+    urls.push(entry(`${BASE}/brand`, "0.6", "monthly"));
+    // 找形象下正式開放的服務 Landing Page，同上一律用子頁層級 priority。
+    urls.push(entry(`${BASE}/short-video-marketing`, "0.5", "monthly"));
 
     // Blog / 找代工指南
     urls.push(entry(`${BASE}/blog`, "0.7", "weekly", today));

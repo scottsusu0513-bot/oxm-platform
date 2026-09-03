@@ -54,10 +54,16 @@ describe("sitemap.xml 產生邏輯（server/_core/index.ts）", () => {
     expect(sitemapSource).not.toMatch(/\/search\?/);
   });
 
-  it("完全沒有三個隱藏服務（ISO／ERP／短影音）的任何路徑", () => {
-    expect(sitemapSource).not.toMatch(/certification-center/i);
-    expect(sitemapSource).not.toMatch(/erp-optimization/i);
-    expect(sitemapSource).not.toMatch(/short-video-marketing/i);
+  it("Final Public Index Release：找資源／找形象四項正式開放服務（ISO／ERP／短影音／財務優化）與 /brand 都已加入 sitemap，各自的 /apply 申請表單完全沒有進入", () => {
+    expect(sitemapSource).toMatch(/\$\{BASE\}\/certification-center/);
+    expect(sitemapSource).toMatch(/\$\{BASE\}\/erp-optimization/);
+    expect(sitemapSource).toMatch(/\$\{BASE\}\/short-video-marketing/);
+    expect(sitemapSource).toMatch(/\$\{BASE\}\/finance-optimization/);
+    expect(sitemapSource).toMatch(/\$\{BASE\}\/brand/);
+    expect(sitemapSource).not.toMatch(/certification-center\/apply/);
+    expect(sitemapSource).not.toMatch(/erp-optimization\/apply/);
+    expect(sitemapSource).not.toMatch(/short-video-marketing\/apply/);
+    expect(sitemapSource).not.toMatch(/finance-optimization\/apply/);
   });
 
   it("完全沒有登入／會員／收藏／後台／註冊工廠／申請表相關路徑", () => {
@@ -164,20 +170,23 @@ describe("/search 篩選網址 noindex — 伺服器端原始 HTML（server/_cor
   });
 });
 
-describe("四個隱藏服務仍然沒有進 sitemap、沒有公開導覽入口、維持 noindex（本次 SEO 修正不得順帶公開它們）", () => {
-  it("server/_core/security.ts 的 NOINDEX_EXACT_PATHS 仍包含四個隱藏服務首頁與 /apply 頁（正式開站前 Index/Noindex 稽核補上先前漏掉的 /finance-optimization）", () => {
+describe("Final Public Index Release：四個服務 Landing Page 正式開放索引，各自的 /apply 申請表單維持完全隱藏", () => {
+  it("server/_core/security.ts 的 NOINDEX_EXACT_PATHS 只剩四個 /apply 申請表單，四個 Landing Page 本身已移出清單", () => {
     const source = readSource("server", "_core", "security.ts");
     const match = source.match(/NOINDEX_EXACT_PATHS = new Set<string>\(\[([^\]]*)\]\)/);
     expect(match).toBeTruthy();
     const stringLiterals = match![1].match(/"[^"]*"/g) ?? [];
-    expect(stringLiterals).toContain('"/certification-center"');
-    expect(stringLiterals).toContain('"/erp-optimization"');
-    expect(stringLiterals).toContain('"/short-video-marketing"');
-    expect(stringLiterals).toContain('"/finance-optimization"');
+    expect(stringLiterals).toContain('"/certification-center/apply"');
+    expect(stringLiterals).toContain('"/erp-optimization/apply"');
+    expect(stringLiterals).toContain('"/short-video-marketing/apply"');
     expect(stringLiterals).toContain('"/finance-optimization/apply"');
+    expect(stringLiterals).not.toContain('"/certification-center"');
+    expect(stringLiterals).not.toContain('"/erp-optimization"');
+    expect(stringLiterals).not.toContain('"/short-video-marketing"');
+    expect(stringLiterals).not.toContain('"/finance-optimization"');
   });
 
-  it("client/src/components/Navbar.tsx 沒有任何隱藏服務連結或字樣", () => {
+  it("client/src/components/Navbar.tsx 仍然沒有這四個服務的直接連結（hub-and-spoke：只透過 /resources／/brand 服務卡進入，不在 Navbar 另立與 Hub 同權重的頂層入口）", () => {
     const source = readSource("client", "src", "components", "Navbar.tsx");
     expect(source).not.toMatch(/certification-center/i);
     expect(source).not.toMatch(/erp-optimization/i);
@@ -185,14 +194,40 @@ describe("四個隱藏服務仍然沒有進 sitemap、沒有公開導覽入口�
     expect(source).not.toMatch(/finance-optimization/i);
   });
 
-  it("FinanceOptimization.tsx／FinanceOptimizationApply.tsx 的 Helmet 都帶 noindex,nofollow,noarchive,nosnippet（雙層防線的第一層）", () => {
-    const page = readSource("client", "src", "pages", "FinanceOptimization.tsx");
-    expect(page).toMatch(/<meta name="robots" content="noindex, nofollow, noarchive, nosnippet" \/>/);
+  it("FinanceOptimization.tsx／CertificationCenter.tsx／ErpOptimization.tsx／ShortVideoMarketing.tsx 的 Helmet 都不再有 noindex,nofollow,noarchive,nosnippet（Landing Page 已正式開放索引）", () => {
+    for (const file of ["FinanceOptimization.tsx", "CertificationCenter.tsx", "ErpOptimization.tsx", "ShortVideoMarketing.tsx"]) {
+      const page = readSource("client", "src", "pages", file);
+      expect(page).not.toMatch(/noindex, nofollow, noarchive, nosnippet/);
+      expect(page).not.toMatch(/<meta name="robots"/);
+    }
+  });
+
+  it("四個 /apply 申請表單的 Helmet 仍完整保留 noindex,nofollow,noarchive,nosnippet（雙層防線的第一層），不受 Landing Page 開放索引影響", () => {
+    for (const file of ["CertificationCenterApply.tsx", "ErpOptimizationApply.tsx", "ShortVideoMarketingApply.tsx"]) {
+      const page = readSource("client", "src", "pages", file);
+      expect(page).toMatch(/noindex, nofollow, noarchive, nosnippet/);
+    }
 
     const applyPage = readSource("client", "src", "pages", "FinanceOptimizationApply.tsx");
     const robotsCount = (applyPage.match(/noindex, nofollow, noarchive, nosnippet/g) ?? []).length;
     // 每一個 render 分支（loading／error／各種表單狀態）各自的 Helmet 都要有，
     // 不能只有其中一支分支漏加。
     expect(robotsCount).toBeGreaterThanOrEqual(6);
+  });
+
+  it("四個 Landing Page 的 canonical／title/description 都改引用 shared/seo/publicPages.ts 對應 entry，與伺服器端初始 HTML head 注入共用同一份資料", () => {
+    const mapping: Record<string, string> = {
+      "FinanceOptimization.tsx": "financeOptimization",
+      "CertificationCenter.tsx": "certificationCenter",
+      "ErpOptimization.tsx": "erpOptimization",
+      "ShortVideoMarketing.tsx": "shortVideoMarketing",
+    };
+    for (const [file, key] of Object.entries(mapping)) {
+      const page = readSource("client", "src", "pages", file);
+      expect(page).toMatch(new RegExp(`PUBLIC_PAGE_SEO\\.${key}\\.title`));
+      expect(page).toMatch(new RegExp(`PUBLIC_PAGE_SEO\\.${key}\\.description`));
+      expect(page).toMatch(new RegExp(`<link rel="canonical" href=\\{PUBLIC_PAGE_SEO\\.${key}\\.canonical\\}`));
+      expect(page).toMatch(/useRemoveServerSeoHead\(\)/);
+    }
   });
 });

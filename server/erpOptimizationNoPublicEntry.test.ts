@@ -1,16 +1,18 @@
 /**
- * ERP 與產線優化專區（/erp-optimization）— 隱藏預覽頁靜態原始碼契約測試。
+ * ERP 與產線優化專區（/erp-optimization）— 靜態原始碼契約測試。
  *
  * 與 /certification-center（見 server/certificationCenterNoPublicEntry.test.ts）
- * 完全同一套慣例：本頁面目前只允許由 /resources 資源總覽進入，不在 Navbar
- * 直達項目／首頁／Footer／APP 底部導覽／sitemap／prerender 清單中出現。這裡
- * 一樣用純靜態原始碼字串比對（readFileSync + 字串比對），因為「某個檔案裡
- * 完全沒有某段文字」無法透過 import 常數後跑行為測試驗證。
+ * 完全同一套慣例：Final Public Index Release 已從「隱藏預覽頁」正式轉為
+ * 公開索引的服務 Landing Page，加入 sitemap，移除 X-Robots-Tag noindex。
+ * 唯一沒變的是導覽入口方式——仍只透過 /resources 資源總覽的服務卡進入，不
+ * 在 Navbar／首頁／Footer／APP 底部導覽另立與 Hub 同權重的頂層入口。這裡
+ * 一樣用純靜態原始碼字串比對（readFileSync + 字串比對）。
  *
  * 同時確認：路由本身確實存在（能被直接輸入網址開啟）、頁面內容把 ERP／MES／
  * 產線改善分開描述（不是同一套服務）、清楚區分免費與正式付費範圍、不含固定
  * 成效百分比或保證性承諾、不顯示競爭者名稱或產品名稱、CTA 只開啟預覽提示
- * （不建立案件、不呼叫任何寫入 API）。
+ * （不建立案件、不呼叫任何寫入 API）、noindex 只精準套用在
+ * /erp-optimization/apply 申請表單。
  */
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
@@ -57,13 +59,16 @@ describe("/erp-optimization 沒有資源總覽以外的主要導覽直達連結"
   });
 });
 
-describe("/erp-optimization 不在 sitemap 或 prerender 清單中", () => {
-  it("server/_core/index.ts 的 sitemap.xml 產生邏輯沒有任何 erp-optimization 項目", () => {
+describe("/erp-optimization 正式加入 sitemap（Final Public Index Release），但仍不在 prerender 清單中", () => {
+  it("server/_core/index.ts 的 sitemap.xml 產生邏輯含 /erp-optimization，但不含 /erp-optimization/apply", () => {
     const source = readSource("server", "_core", "index.ts");
-    expect(source).not.toMatch(/erp-optimization/i);
+    const sitemapMatch = source.match(/app\.get\("\/sitemap\.xml"[\s\S]*?\n {2}\}\);/);
+    const sitemapSource = sitemapMatch ? sitemapMatch[0] : "";
+    expect(sitemapSource).toMatch(/\$\{BASE\}\/erp-optimization/);
+    expect(sitemapSource).not.toMatch(/erp-optimization\/apply/);
   });
 
-  it("server/_core/prerenderedBody.ts 的 PRERENDERED_PAGES 清單沒有 /erp-optimization", () => {
+  it("server/_core/prerenderedBody.ts 的 PRERENDERED_PAGES 清單沒有 /erp-optimization（本輪未新增 build-time prerender）", () => {
     const source = readSource("server", "_core", "prerenderedBody.ts");
     expect(source).not.toMatch(/erp-optimization/i);
   });
@@ -78,16 +83,17 @@ describe("/erp-optimization 與 /erp-optimization/apply 路由本身確實存在
   });
 });
 
-describe("noindex／X-Robots-Tag 套用在 /erp-optimization，且不波及其他頁面", () => {
-  it("server/_core/security.ts 的 NOINDEX_EXACT_PATHS 包含 /erp-optimization、/erp-optimization/apply 與 /certification-center（後續新增的其他隱藏專區路徑不影響這些既有路徑仍在清單中）", () => {
+describe("noindex／X-Robots-Tag 只套用在 /erp-optimization/apply 申請表單，不影響 Landing Page 或其他頁面", () => {
+  it("server/_core/security.ts 的 NOINDEX_EXACT_PATHS 包含 /erp-optimization/apply 與 /certification-center/apply，但不含 Landing Page 本身", () => {
     const source = readSource("server", "_core", "security.ts");
     const match = source.match(/NOINDEX_EXACT_PATHS = new Set<string>\(\[([^\]]*)\]\)/);
     expect(match).toBeTruthy();
     const listed = match![1];
     const stringLiterals = listed.match(/"[^"]*"/g) ?? [];
-    expect(stringLiterals).toContain('"/certification-center"');
-    expect(stringLiterals).toContain('"/erp-optimization"');
+    expect(stringLiterals).toContain('"/certification-center/apply"');
     expect(stringLiterals).toContain('"/erp-optimization/apply"');
+    expect(stringLiterals).not.toContain('"/certification-center"');
+    expect(stringLiterals).not.toContain('"/erp-optimization"');
     // 需登入的顧問看板不算公開隱藏預覽頁，同 /finance-consultant/cases 慣例，不應列入。
     expect(stringLiterals).not.toContain('"/erp-consultant/cases"');
   });
@@ -97,9 +103,14 @@ describe("noindex／X-Robots-Tag 套用在 /erp-optimization，且不波及其�
     expect(source).not.toMatch(/NOINDEX_EXACT_PATHS[\s\S]{0,200}"\/"/);
   });
 
-  it("client/src/pages/ErpOptimization.tsx 有完整的 meta robots 限制", () => {
-    const source = readSource("client", "src", "pages", "ErpOptimization.tsx");
+  it("client/src/pages/ErpOptimizationApply.tsx 有完整的 meta robots 限制", () => {
+    const source = readSource("client", "src", "pages", "ErpOptimizationApply.tsx");
     expect(source).toMatch(/noindex, nofollow, noarchive, nosnippet/);
+  });
+
+  it("client/src/pages/ErpOptimization.tsx（Landing Page 本身）已不再有 meta robots noindex 限制", () => {
+    const source = readSource("client", "src", "pages", "ErpOptimization.tsx");
+    expect(source).not.toMatch(/<meta name="robots"/);
   });
 });
 

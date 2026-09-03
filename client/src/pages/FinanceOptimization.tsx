@@ -2,6 +2,8 @@ import { Link } from "wouter";
 import { Helmet } from "react-helmet-async";
 import { Button } from "@/components/ui/button";
 import Navbar from "@/components/Navbar";
+import { useRemoveServerSeoHead } from "@/hooks/useRemoveServerSeoHead";
+import { PUBLIC_PAGE_SEO } from "@/lib/publicPageSeo";
 import {
   ArrowRight,
   ArrowUpRight,
@@ -494,22 +496,33 @@ function ServicesCycle() {
 }
 
 export default function FinanceOptimization() {
+  useRemoveServerSeoHead();
+
   return (
     <div className="min-h-screen overflow-x-hidden bg-white dark:bg-background">
-      {/* 隱藏預覽頁：頁面 meta robots 是第一層防線，Express 端 X-Robots-Tag
-          （server/_core/security.ts setupNoIndexRoutes）是第二層，即使爬蟲
-          不執行 JS 也能看到。禁止移除或放寬這兩層任何一層——正式開站前
-          Index/Noindex 稽核發現這頁先前漏掉了兩層防線，這裡補齊，不是
-          新增規則。 */}
+      {/* 正式開放服務 Landing Page：Final Public Index Release 已移除
+          server/_core/security.ts NOINDEX_EXACT_PATHS 裡的隱藏 gate，
+          title/description/canonical 改引用 shared/seo/publicPages.ts，
+          與伺服器端初始 HTML head 注入共用同一份資料。
+          /finance-optimization/apply 是申請表單，非內容型 Landing Page，
+          仍維持 noindex，不受本次開放影響。 */}
       <Helmet>
-        <title>企業財務優化｜OXM</title>
-        <meta
-          name="description"
-          content="合法節稅、融資優化、資金更靈活。專業顧問從稅務、融資、負債與現金流全面檢視企業體質，初次諮詢與企業財務體檢免費。"
-        />
-        <meta name="robots" content="noindex, nofollow, noarchive, nosnippet" />
+        <title>{PUBLIC_PAGE_SEO.financeOptimization.title}</title>
+        <meta name="description" content={PUBLIC_PAGE_SEO.financeOptimization.description} />
+        <link rel="canonical" href={PUBLIC_PAGE_SEO.financeOptimization.canonical} />
       </Helmet>
       <Navbar />
+
+      {/* breadcrumb：讓使用者與爬蟲理解上層是「找資源」，沿用
+          ShortVideoMarketing.tsx／Brand.tsx 同一種輕量 breadcrumb 樣式。這頁
+          沒有 FloatingBackButton，不需要額外的 pt-16 間距處理。 */}
+      <div className="max-w-7xl mx-auto px-4 pt-6 sm:px-6 lg:px-8">
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Link href="/" className="hover:text-blue-700">首頁</Link><span>/</span>
+          <Link href="/resources" className="hover:text-blue-700">找資源</Link><span>/</span>
+          <span>企業財務優化</span>
+        </div>
+      </div>
 
       <main>
         <section className="relative overflow-hidden border-b border-blue-100 bg-[linear-gradient(135deg,#f8fbff_0%,#ffffff_48%,#f5f3ff_100%)] dark:border-blue-950 dark:bg-[linear-gradient(135deg,#071326_0%,#09090b_52%,#17102b_100%)]">

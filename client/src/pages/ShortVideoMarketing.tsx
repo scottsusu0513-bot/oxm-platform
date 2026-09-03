@@ -2,6 +2,8 @@ import { Helmet } from "react-helmet-async";
 import { Link } from "wouter";
 import Navbar from "@/components/Navbar";
 import { FloatingBackButton } from "@/components/FloatingBackButton";
+import { useRemoveServerSeoHead } from "@/hooks/useRemoveServerSeoHead";
+import { PUBLIC_PAGE_SEO } from "@/lib/publicPageSeo";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -134,24 +136,23 @@ const FAQ_ITEMS: { q: string; a: string }[] = [
 ];
 
 export default function ShortVideoMarketing() {
+  useRemoveServerSeoHead();
+
   return (
     <div className="min-h-screen bg-background">
-      {/* 隱藏預覽頁：頁面 meta robots 是第一層防線，Express 端 X-Robots-Tag
-          （server/_core/security.ts setupNoIndexRoutes）是第二層，即使爬蟲
-          不執行 JS 也能看到。禁止移除或放寬這兩層任何一層。
-          正式產品決策更新：本頁上層分類已從「找資源」改為「找形象」，現在由
-          /brand Hub 的服務卡提供真正 crawlable 的連結入口（見
-          client/src/pages/Brand.tsx）；除了 /brand 之外，網站內其他位置
-          （Navbar／手機選單／找資源／Footer／推薦區／搜尋捷徑／sitemap）仍不
-          得加入連結入口。noindex,nofollow 維持不變，即使被 /brand 連結也不會
-          被索引，只是不再是「只能直接輸入網址」的完全隱藏頁。 */}
+      {/* 正式開放服務 Landing Page：Final Public Index Release 已移除
+          server/_core/security.ts NOINDEX_EXACT_PATHS 裡的隱藏 gate，
+          title/description/canonical 改引用 shared/seo/publicPages.ts，
+          與伺服器端初始 HTML head 注入（server/_core/publicPageMeta.ts）
+          共用同一份資料。上層分類是「找形象」，由 /brand Hub 的服務卡提供
+          crawlable 連結入口（見 client/src/pages/Brand.tsx），本頁自己的
+          breadcrumb 也明確標示 首頁 → 找形象 → 短影音與品牌內容行銷。
+          /short-video-marketing/apply 是申請表單，非內容型 Landing Page，
+          仍維持 noindex，不受本次開放影響。 */}
       <Helmet>
-        <title>短影音與品牌內容行銷｜OXM</title>
-        <meta
-          name="description"
-          content="把工廠裡的專業，拍成市場看得懂的內容。短影音企劃與拍攝、KOL 合作、社群內容代操、新聞媒體露出、訪談製作，可單獨選擇也可依目標組合。初步諮詢免費。"
-        />
-        <meta name="robots" content="noindex, nofollow, noarchive, nosnippet" />
+        <title>{PUBLIC_PAGE_SEO.shortVideoMarketing.title}</title>
+        <meta name="description" content={PUBLIC_PAGE_SEO.shortVideoMarketing.description} />
+        <link rel="canonical" href={PUBLIC_PAGE_SEO.shortVideoMarketing.canonical} />
       </Helmet>
 
       <Navbar />

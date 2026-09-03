@@ -79,30 +79,32 @@ export function setupSecurityHeaders(app: Express) {
  * 比對 `/`），只能是明確列出的隱藏預覽頁 path。
  */
 const NOINDEX_EXACT_PATHS = new Set<string>([
-  "/certification-center", "/certification-center/apply",
-  "/erp-optimization", "/erp-optimization/apply",
-  "/short-video-marketing", "/short-video-marketing/apply",
-  // 正式開站前 Index/Noindex 稽核發現：/finance-optimization 與其 /apply
-  // 是跟上面三組完全同一種「顧問服務隱藏預覽頁」（同樣有 Helmet title、
-  // 同樣沒有 canonical、同樣是尚未正式公開的顧問媒合服務），但先前建立
-  // NOINDEX_EXACT_PATHS 清單時漏掉了，導致這兩頁一直是可被索引的狀態。
-  // 這裡補齊，不是新增規則，是修正既有規則的遺漏。
-  "/finance-optimization", "/finance-optimization/apply",
+  // Final Public Index Release：ISO／ERP／短影音／財務優化四個服務的
+  // Landing Page 本身已正式開放索引（見 NOINDEX_EXACT_PATHS 移除後的狀態，
+  // 以及 sitemap.xml、shared/seo/publicPages.ts 的對應 entry）。只有各自的
+  // /apply 申請表單維持 noindex——申請頁是 transactional 頁面，不是內容型
+  // Landing Page，不該被索引也不該進 sitemap，但功能本身完全不受影響。
+  "/certification-center/apply",
+  "/erp-optimization/apply",
+  "/short-video-marketing/apply",
+  "/finance-optimization/apply",
 ]);
 
 /**
- * 七大主入口與其正式子頁的「準備開放中」頁面（找人才 /talent、找形象 /brand，
- * 見 client/src/components/SectionComingSoon.tsx；找討論 /community）：跟
- * 上面完全隱藏的預覽頁不同，這些頁面本身是正式主要入口或其正式子頁、有真實
- * 品牌內容與清楚頁面目的，只是尚未經人工確認可以正式開放索引——只需要暫時
- * noindex，但仍允許爬蟲追蹤頁面上的連結（follow），不像上面的隱藏預覽頁需要
- * 完全 nofollow/noarchive/nosnippet。日後正式開放、內容補齊後，只要從這個
- * 清單移除即可恢復索引，不需要改動其他地方。
+ * 尚未正式開放、但已是真實主要入口或其正式子頁的頁面：找人才 /talent（見
+ * client/src/components/SectionComingSoon.tsx）、找討論 /community、工廠
+ * 形象攝影 /factory-photography（找形象 Hub 底下的 Coming Soon 子服務）。
+ * 跟上面完全隱藏的預覽頁不同，這些頁面本身有真實品牌內容與清楚頁面目的，
+ * 只是產品尚未正式開放（找人才尚未製作、討論區仍是 beta、工廠形象攝影
+ * Coming Soon）——只需要暫時 noindex，但仍允許爬蟲追蹤頁面上的連結
+ * （follow），不像上面的隱藏預覽頁需要完全 nofollow/noarchive/nosnippet。
+ * 日後正式開放、內容補齊後，只要從這個清單移除即可恢復索引，不需要改動
+ * 其他地方。
  *
- * /factory-photography（工廠形象攝影服務介紹頁）：找形象 Hub（/brand）正式
- * 上線後新建的公開子頁，本輪只做產品架構與頁面準備，尚未經人工確認 UI，
- * 先比照 /brand 同一批次 noindex,follow，不加入 sitemap（見
- * server/_core/index.ts 的 /sitemap.xml，本輪未改動）。
+ * /brand（找形象 Hub）已於 Final Public Index Release 正式移出這個清單、
+ * 開放索引——它是真正完成的 Hub 頁，內含正式可用的短影音服務入口；工廠
+ * 形象攝影仍是 Coming Soon，但那是 /brand 頁面內的單一卡片狀態，不影響
+ * /brand 本身的索引狀態。
  *
  * /community 只精準比對 bare path，不影響 /community/:spaceCode/... 等子
  * 路徑——那些子路徑目前只有 canAccessCommunity() 允許的使用者才能實際看到
@@ -110,7 +112,6 @@ const NOINDEX_EXACT_PATHS = new Set<string>([
  */
 const NOINDEX_FOLLOW_EXACT_PATHS = new Set<string>([
   "/talent",
-  "/brand",
   "/factory-photography",
   "/community",
 ]);

@@ -39,7 +39,11 @@ export const RESOURCES_CONTENT = {
       subtitle: "看懂資金、成本與營運體質",
       description: "從財務現況盤點、融資準備到管理資訊整理，協助企業辨識問題並建立可執行的改善方向。",
       href: "/finance-optimization",
-      available: false,
+      // Final Public Index Release：Landing Page 已正式開放（見
+      // server/_core/security.ts 移出 NOINDEX_EXACT_PATHS），此處同步改為
+      // available:true，讓 /resources 提供真正 crawlable 的 <Link>，不再是
+      // 「敬請期待」的不可互動狀態。
+      available: true,
       tags: ["財務健檢", "融資準備", "管理改善"],
     },
     {
@@ -47,7 +51,7 @@ export const RESOURCES_CONTENT = {
       subtitle: "從需求判斷到制度與查驗準備",
       description: "依企業需求協助判斷 ISO 管理系統、溫室氣體盤查、產品碳足跡與政府碳標籤等服務方向。",
       href: "/certification-center",
-      available: false,
+      available: true,
       tags: ["ISO", "碳盤查", "查驗協調"],
     },
     {
@@ -55,7 +59,7 @@ export const RESOURCES_CONTENT = {
       subtitle: "先理順流程，再選擇系統與改善方式",
       description: "盤點訂單、採購、庫存、生產資訊與現場動線，協助判斷 ERP、MES、產線改善或整合導入方向。",
       href: "/erp-optimization",
-      available: false,
+      available: true,
       tags: ["ERP／MES", "流程盤點", "產線動線"],
     },
     // 「短影音與品牌內容行銷」正式改分類至「找形象」（見 client/src/pages/

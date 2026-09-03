@@ -9,8 +9,9 @@
  *   關於OXM 改放在左上角 OXM 品牌下拉選單（首頁／關於OXM），不在 HUB_ITEMS 內
  * - 找人才／找形象／找討論的 Coming Soon 頁：route 註冊或既有 route 沿用、
  *   共用元件、noindex,follow
- * - sitemap／noindex 一致性：/resources 可索引且在 sitemap 內；/talent、
- *   /brand、/community（找討論）noindex 且不在 sitemap 內
+ * - sitemap／noindex 一致性：/resources、/brand 可索引且在 sitemap 內；
+ *   /talent、/community（找討論）、/factory-photography noindex 且不在
+ *   sitemap 內
  * - shared/seo/publicPages.ts 的 title／description／canonical 設定
  */
 import { describe, expect, it } from "vitest";
@@ -133,15 +134,15 @@ describe("找人才 Coming Soon 頁", () => {
     expect(talent).toMatch(/<meta name="robots" content="noindex,follow" \/>/);
   });
 
-  it("server/_core/security.ts 的 NOINDEX_FOLLOW_EXACT_PATHS 含 /talent、/brand、/factory-photography、/community，且 header 值是 noindex, follow（不是完全隱藏頁那組 nofollow/noarchive/nosnippet）", () => {
+  it("server/_core/security.ts 的 NOINDEX_FOLLOW_EXACT_PATHS 含 /talent、/factory-photography、/community（/brand 已於 Final Public Index Release 移出），且 header 值是 noindex, follow（不是完全隱藏頁那組 nofollow/noarchive/nosnippet）", () => {
     const source = readSource("server", "_core", "security.ts");
     const match = source.match(/NOINDEX_FOLLOW_EXACT_PATHS = new Set<string>\(\[([^\]]*)\]\)/);
     expect(match).toBeTruthy();
     const paths = match![1].match(/"[^"]*"/g) ?? [];
     expect(paths).toContain('"/talent"');
-    expect(paths).toContain('"/brand"');
     expect(paths).toContain('"/factory-photography"');
     expect(paths).toContain('"/community"');
+    expect(paths).not.toContain('"/brand"');
     expect(source).toMatch(/res\.setHeader\("X-Robots-Tag", "noindex, follow"\)/);
   });
 
@@ -192,10 +193,10 @@ describe("找形象正式 Hub（/brand）：從 Coming Soon 改為真正的服�
     expect(brand).not.toMatch(/<a[^>]+href="\/factory-photography"/);
   });
 
-  it("Brand.tsx／FactoryPhotography.tsx 的 Helmet 帶 noindex,follow，title／canonical 引用 shared/seo/publicPages.ts（本輪仍未正式開放索引）", () => {
+  it("Final Public Index Release：Brand.tsx 已正式開放索引（不再有 noindex meta），FactoryPhotography.tsx（Coming Soon 子服務）維持 noindex,follow；title／canonical 都引用 shared/seo/publicPages.ts", () => {
     const brand = readSource("client", "src", "pages", "Brand.tsx");
     const photography = readSource("client", "src", "pages", "FactoryPhotography.tsx");
-    expect(brand).toMatch(/<meta name="robots" content="noindex,follow" \/>/);
+    expect(brand).not.toMatch(/<meta name="robots"/);
     expect(photography).toMatch(/<meta name="robots" content="noindex,follow" \/>/);
     expect(brand).toMatch(/PUBLIC_PAGE_SEO\.brand\.(title|description|canonical)/);
     expect(photography).toMatch(/PUBLIC_PAGE_SEO\.factoryPhotography\.(title|description|canonical)/);
@@ -221,10 +222,10 @@ describe("找形象正式 Hub（/brand）：從 Coming Soon 改為真正的服�
     expect(photography).toMatch(/不保證詢價成長/);
   });
 
-  it("ShortVideoMarketing.tsx 上層分類已改為找形象：有 breadcrumb 連回 /brand，且不再宣稱網站內完全沒有連結入口", () => {
+  it("ShortVideoMarketing.tsx 上層分類已改為找形象：有 breadcrumb 連回 /brand，且 Final Public Index Release 後已不再是完全隱藏頁", () => {
     const shortVideo = readSource("client", "src", "pages", "ShortVideoMarketing.tsx");
     expect(shortVideo).toMatch(/<Link href="\/brand"/);
-    expect(shortVideo).toMatch(/noindex, nofollow, noarchive, nosnippet/);
+    expect(shortVideo).not.toMatch(/noindex, nofollow, noarchive, nosnippet/);
   });
 
   it("ResourceCenter.tsx／shared/content/resources.ts 已移除短影音服務卡（真正從清單移除，不是 CSS 隱藏）", () => {
@@ -311,11 +312,11 @@ describe("sitemap／noindex 一致性（server/_core/index.ts、server/_core/sec
     expect(sitemapSource).toMatch(/\$\{BASE\}\/resources/);
   });
 
-  it("sitemap 不包含 /talent、/brand、/factory-photography 或 /community（noindex 頁面不送入 sitemap，避免矛盾訊號）", () => {
+  it("sitemap 不包含 /talent、/factory-photography 或 /community（noindex 頁面不送入 sitemap，避免矛盾訊號）；/brand 已於 Final Public Index Release 正式加入 sitemap", () => {
     expect(sitemapSource).not.toMatch(/\$\{BASE\}\/talent/);
-    expect(sitemapSource).not.toMatch(/\$\{BASE\}\/brand/);
     expect(sitemapSource).not.toMatch(/\$\{BASE\}\/factory-photography/);
     expect(sitemapSource).not.toMatch(/\$\{BASE\}\/community/);
+    expect(sitemapSource).toMatch(/\$\{BASE\}\/brand/);
   });
 
   it("sitemap 仍包含既有六大入口相關頁面：/about、/news、/upgrade-center、/search", () => {
@@ -380,6 +381,29 @@ describe("shared/seo/publicPages.ts：找消息／找資源／找人才／找形
     const discussion = getPublicPageSeoByPath("/community");
     expect(discussion?.title).toBe("臺灣傳產論壇｜產業交流、技術討論與合作需求｜OXM");
     expect(discussion?.canonical).toBe("https://www.oxmmatch.com/community");
+
+    // Final Public Index Release：四個正式開放服務 Landing Page 的 self-referencing canonical。
+    const finance = getPublicPageSeoByPath("/finance-optimization");
+    expect(finance?.title).toBe("企業財務優化｜OXM");
+    expect(finance?.canonical).toBe("https://www.oxmmatch.com/finance-optimization");
+
+    const certification = getPublicPageSeoByPath("/certification-center");
+    expect(certification?.title).toBe("ISO 與低碳認證專區｜OXM");
+    expect(certification?.canonical).toBe("https://www.oxmmatch.com/certification-center");
+
+    const erp = getPublicPageSeoByPath("/erp-optimization");
+    expect(erp?.title).toBe("製造業ERP導入與產線動線規劃｜OXM");
+    expect(erp?.canonical).toBe("https://www.oxmmatch.com/erp-optimization");
+
+    const shortVideo = getPublicPageSeoByPath("/short-video-marketing");
+    expect(shortVideo?.title).toBe("短影音與品牌內容行銷｜OXM");
+    expect(shortVideo?.canonical).toBe("https://www.oxmmatch.com/short-video-marketing");
+  });
+
+  it("/brand description 不再暗示工廠形象攝影已正式開放（該服務目前仍是 Coming Soon）", () => {
+    const brand = getPublicPageSeoByPath("/brand");
+    expect(brand?.description).not.toMatch(/整合工廠形象攝影與短影音/);
+    expect(brand?.description).toMatch(/短影音/);
   });
 
   it("既有的首頁／關於OXM／企業升級中心設定本輪未被誤改", () => {
@@ -406,6 +430,39 @@ describe("shared/seo/publicPages.ts：找消息／找資源／找人才／找形
   it("ResourceCenter.tsx／News.tsx 都呼叫 useRemoveServerSeoHead，避免伺服器注入節點與 Helmet 節點重複", () => {
     const resourceCenter = readSource("client", "src", "pages", "ResourceCenter.tsx");
     expect(resourceCenter).toMatch(/useRemoveServerSeoHead\(\)/);
+  });
+});
+
+describe("Final Public Index Release：找資源／找形象四項正式服務的 breadcrumb 與 hub-and-spoke 階層", () => {
+  it("CertificationCenter.tsx／ErpOptimization.tsx／FinanceOptimization.tsx 都有 breadcrumb 明確指向上層 /resources，不是孤立頁面", () => {
+    for (const file of ["CertificationCenter.tsx", "ErpOptimization.tsx", "FinanceOptimization.tsx"]) {
+      const page = readSource("client", "src", "pages", file);
+      expect(page, `${file} 缺少 <Link href="/">首頁</Link>`).toMatch(/<Link href="\/"[^>]*>首頁<\/Link>/);
+      expect(page, `${file} 缺少連回 /resources 的 breadcrumb`).toMatch(/<Link href="\/resources"/);
+      expect(page, `${file} breadcrumb 沒有標示「找資源」`).toMatch(/找資源/);
+    }
+  });
+
+  it("ShortVideoMarketing.tsx 的 breadcrumb 指向上層 /brand（找形象），不是 /resources（找資源）——上層分類已改變", () => {
+    const shortVideo = readSource("client", "src", "pages", "ShortVideoMarketing.tsx");
+    expect(shortVideo).toMatch(/<Link href="\/brand"/);
+    expect(shortVideo).toMatch(/找形象/);
+  });
+
+  it("CertificationCenter.tsx／ErpOptimization.tsx 的 FloatingBackButton fallbackHref 已從 \"/\" 改為 \"/resources\"，與 breadcrumb 的父層一致", () => {
+    for (const file of ["CertificationCenter.tsx", "ErpOptimization.tsx"]) {
+      const page = readSource("client", "src", "pages", file);
+      expect(page, `${file} FloatingBackButton fallbackHref 應為 /resources`).toMatch(/<FloatingBackButton fallbackHref="\/resources"/);
+    }
+  });
+
+  it("Hub-and-spoke：四項正式服務都不在 Navbar 被列為與 Hub 同權重的頂層入口（只透過 /resources／/brand 服務卡進入）", () => {
+    const navbar = readSource("client", "src", "components", "Navbar.tsx");
+    const hubItemsMatch = navbar.match(/const HUB_ITEMS: HubItem\[\] = \[[\s\S]*?\n\];/);
+    const hubItemsSource = hubItemsMatch ? hubItemsMatch[0] : "";
+    for (const path of ["/finance-optimization", "/certification-center", "/erp-optimization", "/short-video-marketing"]) {
+      expect(hubItemsSource, `HUB_ITEMS 不應包含 ${path}`).not.toMatch(new RegExp(`href: "${path.replace(/\//g, "\\/")}"`));
+    }
   });
 });
 

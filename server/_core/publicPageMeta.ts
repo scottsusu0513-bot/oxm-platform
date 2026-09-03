@@ -38,6 +38,7 @@ import {
   getAboutBreadcrumbSchema,
   getFaqPageSchema,
   getFaqBreadcrumbSchema,
+  getBreadcrumbSchema,
   toSafeJsonLdString,
   type JsonLdObject,
 } from "@shared/seo/schema";
@@ -69,6 +70,40 @@ function getJsonLdForPath(pathname: string): JsonLdObject[] {
   }
   if (normalized === "/faq") {
     return [getFaqPageSchema(), getFaqBreadcrumbSchema()];
+  }
+  // Final Public Index Release：找資源／找形象 Hub 與正式開放的子服務
+  // Landing Page，補上 BreadcrumbList structured data，讓 Google 能從
+  // schema 理解真實的 hub-and-spoke 階層（不虛構 URL、不建立不存在的
+  // parent，皆為網站上實際可直接輸入網址開啟的頁面）。
+  if (normalized === "/resources") {
+    return [getBreadcrumbSchema([{ name: "找資源", path: "/resources" }])];
+  }
+  if (normalized === "/finance-optimization") {
+    return [getBreadcrumbSchema([
+      { name: "找資源", path: "/resources" },
+      { name: "企業財務優化", path: "/finance-optimization" },
+    ])];
+  }
+  if (normalized === "/certification-center") {
+    return [getBreadcrumbSchema([
+      { name: "找資源", path: "/resources" },
+      { name: "ISO 與低碳認證", path: "/certification-center" },
+    ])];
+  }
+  if (normalized === "/erp-optimization") {
+    return [getBreadcrumbSchema([
+      { name: "找資源", path: "/resources" },
+      { name: "ERP、MES 與產線優化", path: "/erp-optimization" },
+    ])];
+  }
+  if (normalized === "/brand") {
+    return [getBreadcrumbSchema([{ name: "找形象", path: "/brand" }])];
+  }
+  if (normalized === "/short-video-marketing") {
+    return [getBreadcrumbSchema([
+      { name: "找形象", path: "/brand" },
+      { name: "短影音與品牌內容行銷", path: "/short-video-marketing" },
+    ])];
   }
   return [];
 }
