@@ -186,12 +186,21 @@ describe("Final Public Index Release：四個服務 Landing Page 正式開放索
     expect(stringLiterals).not.toContain('"/finance-optimization"');
   });
 
-  it("client/src/components/Navbar.tsx 仍然沒有這四個服務的直接連結（hub-and-spoke：只透過 /resources／/brand 服務卡進入，不在 Navbar 另立與 Hub 同權重的頂層入口）", () => {
+  it("client/src/components/Navbar.tsx 現在有這四個服務的直接連結（OXM Navbar Dropdown — Public Service Entries Fix：反轉先前的 hub-and-spoke-only 決策，找資源／找形象下拉選單同步列出正式服務，見 server/navbarPublicServiceDropdown.test.ts 的完整覆蓋），但工廠形象攝影／apply 申請表單仍不可點", () => {
     const source = readSource("client", "src", "components", "Navbar.tsx");
-    expect(source).not.toMatch(/certification-center/i);
-    expect(source).not.toMatch(/erp-optimization/i);
-    expect(source).not.toMatch(/short-video-marketing/i);
-    expect(source).not.toMatch(/finance-optimization/i);
+    const resourceBlock = source.match(/key: "resource"[\s\S]*?\n  \},/)?.[0] ?? "";
+    const brandBlock = source.match(/key: "brand"[\s\S]*?\n  \},/)?.[0] ?? "";
+    expect(resourceBlock).toMatch(/href: "\/certification-center"/);
+    expect(resourceBlock).toMatch(/href: "\/erp-optimization"/);
+    expect(resourceBlock).toMatch(/href: "\/finance-optimization"/);
+    expect(brandBlock).toMatch(/href: "\/short-video-marketing"/);
+    // 四個 /apply 申請表單、以及仍是 noindex 的 /factory-photography，都不
+    // 得出現在 Navbar 的任何可點擊 href 裡。
+    expect(source).not.toMatch(/href: "\/certification-center\/apply"/);
+    expect(source).not.toMatch(/href: "\/erp-optimization\/apply"/);
+    expect(source).not.toMatch(/href: "\/finance-optimization\/apply"/);
+    expect(source).not.toMatch(/href: "\/short-video-marketing\/apply"/);
+    expect(source).not.toMatch(/href: "\/factory-photography"/);
   });
 
   it("FinanceOptimization.tsx／CertificationCenter.tsx／ErpOptimization.tsx／ShortVideoMarketing.tsx 的 Helmet 都不再有 noindex,nofollow,noarchive,nosnippet（Landing Page 已正式開放索引）", () => {

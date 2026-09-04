@@ -2,11 +2,13 @@
  * ISO 與低碳認證專區（/certification-center）— 靜態原始碼契約測試。
  *
  * Final Public Index Release：本頁面已從「隱藏預覽頁」正式轉為公開索引的
- * 服務 Landing Page，加入 sitemap，移除 X-Robots-Tag noindex。唯一沒變的
- * 是導覽入口方式——仍只透過 /resources 資源總覽的服務卡進入（hub-and-spoke
- * 架構），不在 Navbar／首頁／Footer／APP 底部導覽另立與 Hub 同權重的頂層
- * 入口。這裡沿用與 server/industryAndMfgModeConstants.test.ts 相同的手法
- * ——純靜態原始碼字串比對（readFileSync + 字串比對）。
+ * 服務 Landing Page，加入 sitemap，移除 X-Robots-Tag noindex。OXM Navbar
+ * Dropdown — Public Service Entries Fix（本輪）：Navbar 的「找資源」下拉
+ * 選單已同步補上這個服務的直達連結（見 server/navbarPublicServiceDropdown.test.ts
+ * 的完整覆蓋），不再是先前的 hub-and-spoke-only 決策；首頁／Footer／APP
+ * 底部導覽／搜尋頁的主要導覽仍維持不變，本輪只動 Navbar。這裡沿用與
+ * server/industryAndMfgModeConstants.test.ts 相同的手法——純靜態原始碼字串
+ * 比對（readFileSync + 字串比對）。
  *
  * 同時確認：路由本身確實存在（能被直接輸入網址開啟）、noindex 只精準套用
  * 在 /certification-center/apply 申請表單，不波及其他頁面。
@@ -19,10 +21,11 @@ function readSource(...segments: string[]): string {
   return fs.readFileSync(path.resolve(import.meta.dirname, "..", ...segments), "utf-8");
 }
 
-describe("/certification-center 沒有資源總覽以外的主要導覽直達連結", () => {
-  it("client/src/components/Navbar.tsx 完全沒有 certification-center 連結（含找資源下拉選單也暫時隱藏）", () => {
+describe("/certification-center：Navbar 找資源下拉已有直達連結，其餘主要導覽仍維持 hub-and-spoke", () => {
+  it("client/src/components/Navbar.tsx 找資源下拉選單有 certification-center 的直達連結（OXM Navbar Dropdown — Public Service Entries Fix，見 server/navbarPublicServiceDropdown.test.ts）", () => {
     const source = readSource("client", "src", "components", "Navbar.tsx");
-    expect(source).not.toMatch(/certification-center/i);
+    const resourceBlock = source.match(/key: "resource"[\s\S]*?\n  \},/)?.[0] ?? "";
+    expect(resourceBlock).toMatch(/href: "\/certification-center"/);
   });
 
   it("client/src/pages/Home.tsx（含首頁 Footer）沒有任何 certification-center 連結或字樣", () => {

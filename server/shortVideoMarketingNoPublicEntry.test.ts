@@ -5,8 +5,10 @@
  * server/certificationCenterNoPublicEntry.test.ts）完全同一套慣例：Final
  * Public Index Release 已從「隱藏預覽頁」正式轉為公開索引的服務 Landing
  * Page，加入 sitemap，移除 X-Robots-Tag noindex。上層分類是「找形象」，由
- * /brand Hub 的服務卡提供 crawlable 連結入口，仍不在 Navbar 直達項目／
- * 首頁／Footer／APP 底部導覽出現。
+ * /brand Hub 的服務卡提供 crawlable 連結入口；OXM Navbar Dropdown — Public
+ * Service Entries Fix（本輪）：Navbar 找形象下拉選單已同步補上這個服務的
+ * 直達連結（見 server/navbarPublicServiceDropdown.test.ts 的完整覆蓋），
+ * 首頁／Footer／APP 底部導覽的主要導覽仍維持不變。
  */
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
@@ -16,10 +18,11 @@ function readSource(...segments: string[]): string {
   return fs.readFileSync(path.resolve(import.meta.dirname, "..", ...segments), "utf-8");
 }
 
-describe("/short-video-marketing 沒有 /brand（找形象 Hub）以外的主要導覽直達連結", () => {
-  it("client/src/components/Navbar.tsx 完全沒有 short-video-marketing 連結（含找資源下拉選單也暫時隱藏）", () => {
+describe("/short-video-marketing：Navbar 找形象下拉已有直達連結，其餘主要導覽維持不變", () => {
+  it("client/src/components/Navbar.tsx 找形象下拉選單有 short-video-marketing 的直達連結（OXM Navbar Dropdown — Public Service Entries Fix）", () => {
     const source = readSource("client", "src", "components", "Navbar.tsx");
-    expect(source).not.toMatch(/short-video-marketing/i);
+    const brandBlock = source.match(/key: "brand"[\s\S]*?\n  \},/)?.[0] ?? "";
+    expect(brandBlock).toMatch(/href: "\/short-video-marketing"/);
   });
 
   it("client/src/pages/Home.tsx（含首頁 Footer）沒有任何 short-video-marketing 連結或字樣", () => {

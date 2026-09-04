@@ -33,17 +33,18 @@ describe("/resources 找資源總覽入口", () => {
     expect(aboutContent).toMatch(/href: "\/upgrade-center"/);
   });
 
-  it("Navbar 的找資源主入口重新導向 /resources 總覽頁，下拉額外提供政府補助專區快速連結", () => {
-    // 六大主入口架構調整：找資源重新成為真實可進入的主入口，主入口本身
-    // href="/resources"（點擊直接導頁），下拉選單額外提供目前唯一已開放子
-    // 服務「政府補助專區」的快速連結。其餘三項服務雖然 Final Public Index
-    // Release 已正式開放索引，但仍是 hub-and-spoke 架構：只透過 /resources
-    // 頁面內的服務卡進入，不在 Navbar 下拉另外列出與 Hub 同權重的頂層入口。
+  it("Navbar 的找資源主入口重新導向 /resources 總覽頁，下拉同步列出四項正式開放服務的快速連結（OXM Navbar Dropdown — Public Service Entries Fix：反轉先前的 hub-and-spoke-only 決策）", () => {
+    // 找資源主入口本身 href="/resources"（點擊直接導頁），下拉選單同步列出
+    // /resources 目前四項已正式開放（可索引、進 sitemap）服務的快速連結。
+    // 短影音與品牌內容行銷已正式改分類至找形象（/brand），不在找資源下拉。
     const navbar = readSource("client", "src", "components", "Navbar.tsx");
     const resourceHub = navbar.match(/key: "resource"[\s\S]*?\n  \},/)?.[0] ?? "";
     expect(resourceHub).toMatch(/href: "\/resources"/);
-    expect(resourceHub).toMatch(/href: "\/upgrade-center"/);
-    expect(resourceHub.match(/href: "\/(upgrade-center|finance-optimization|certification-center|erp-optimization|short-video-marketing)"/g)).toHaveLength(1);
+    for (const href of ["/upgrade-center", "/finance-optimization", "/certification-center", "/erp-optimization"]) {
+      expect(resourceHub, `找資源 dropdownItems 應包含 ${href}`).toMatch(new RegExp(`href: "${href.replace(/\//g, "\\/")}"`));
+    }
+    expect(resourceHub.match(/href: "\/(upgrade-center|finance-optimization|certification-center|erp-optimization|short-video-marketing)"/g)).toHaveLength(4);
+    expect(resourceHub).not.toMatch(/href: "\/short-video-marketing"/);
   });
 
   it("總覽完整提供四項企業經營／升級資源服務的精確路徑，Final Public Index Release 後全部標記為 available（GEO Phase 3A：可見文字/href/available 已抽到 shared/content/resources.ts，與 prerender 腳本共用同一份）", () => {

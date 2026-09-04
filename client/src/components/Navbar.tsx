@@ -6,6 +6,7 @@ import {
   UserPlus, Search, Settings, UserCircle, ChevronDown,
   FileText, ScrollText, Bell, Briefcase, Lock,
   Rocket, Users, Package, BookOpen, MessageSquare, Lightbulb,
+  BarChart3, ShieldCheck, Clapperboard, Camera,
 } from "lucide-react";
 import UnverifiedEmailHint from "@/components/UnverifiedEmailHint";
 import { useState, useEffect, useRef } from "react";
@@ -112,22 +113,39 @@ const HUB_ITEMS: HubItem[] = [
   {
     key: "resource",
     label: "資源服務中心", short: "找資源", href: "/resources", soon: false,
-    // 找資源主入口直接導向 /resources 資源總覽頁；下拉選單額外提供目前唯一
-    // 已開放子服務「政府補助專區」的快速連結（模式與找工廠 href="/" +
-    // 「搜尋工廠」→/search 完全相同）。/resources 頁面本身列出的另外四項
-    // 服務目前是不可互動的「敬請期待」卡片（見 ResourceCenter.tsx），對應
-    // route／component／API／資料庫與既有登入／工廠資格權限限制維持不變，
-    // 已知網址的人仍可直接輸入進入。
+    // 找資源主入口直接導向 /resources 資源總覽頁；下拉選單同步列出 /resources
+    // 目前四項已正式開放（可索引、進 sitemap）的服務快速連結，文案與 href
+    // 皆取自 shared/content/resources.ts 這份單一資料來源，避免與該頁面文案
+    // 各自維護兩份。「短影音與品牌內容行銷」已正式改分類至找形象（/brand），
+    // 不再放在找資源底下（見 shared/content/resources.ts 底部註解）。
     Icon: Rocket, iconCls: "text-blue-600", triggerIconCls: "text-blue-500", ring: "focus-visible:ring-blue-400",
     card: "bg-gradient-to-br from-blue-600/10 to-violet-600/10 border-blue-300/40 text-blue-700",
     cardHover: "hover:from-blue-600/20 hover:to-violet-600/20 hover:border-blue-400/60 hover:shadow-sm hover:shadow-blue-500/10 hover:-translate-y-px",
     mCard: "from-blue-500/15 to-violet-600/15 border-blue-300/50", mText: "text-blue-700",
     dropdownItems: [
       {
-        title: "政府補助專區",
+        title: "政府補助與企業升級",
         description: "SBIR、CITD、SIIR 等企業補助媒合",
         href: "/upgrade-center",
         Icon: Lightbulb,
+      },
+      {
+        title: "企業財務優化",
+        description: "財務健檢、融資準備與管理改善",
+        href: "/finance-optimization",
+        Icon: BarChart3,
+      },
+      {
+        title: "ISO 與低碳認證",
+        description: "ISO 管理系統、碳盤查與查驗協調",
+        href: "/certification-center",
+        Icon: ShieldCheck,
+      },
+      {
+        title: "ERP、MES 與產線優化",
+        description: "流程盤點、產線動線與系統導入",
+        href: "/erp-optimization",
+        Icon: Factory,
       },
     ],
   },
@@ -151,16 +169,31 @@ const HUB_ITEMS: HubItem[] = [
     label: "產業採購與資源中心", short: "找形象", href: "/brand", soon: false,
     // 找形象已從 Coming Soon 頁正式轉為服務 Hub（見 client/src/pages/Brand.tsx），
     // 整合短影音與品牌內容行銷（已正式提供）、工廠形象攝影（Coming Soon）兩項
-    // 服務。主入口補上 href="/brand"（沿用找工廠 href="/search" 的同一套「有
-    // href 就用 Link 包住、hover 仍可額外展開下拉」模式，見 renderDesktopHub），
-    // 修正先前點擊「找形象」只會切換下拉選單、無法直接進入 /brand 的問題。
-    // 下拉維持單一項目導向 /brand Hub 本身，不逐一列出子服務細節。
+    // 服務。主入口維持 href="/brand"（沿用找工廠 href="/search" 的同一套「有
+    // href 就用 Link 包住、hover 仍可額外展開下拉」模式，見 renderDesktopHub）。
+    // 下拉子項同步列出這兩項服務：短影音有 href 可直接點入；工廠形象攝影目前
+    // 仍是 /factory-photography 的 Coming Soon（noindex,follow，見
+    // server/_core/security.ts），這裡刻意不給 href、只用 disabled:true 顯示
+    // 「即將開放」——沿用既有 HubDropdownItem.disabled 模式（桌機／手機共用
+    // dropdownItems 這份唯一資料來源，見 renderDesktopHub 與手機 Accordion 各自
+    // 對 disabled 子項的既有渲染分支），不建立假的可點擊 <a>。
     Icon: Package, iconCls: "text-amber-600", triggerIconCls: "text-amber-600", ring: "focus-visible:ring-amber-400",
     card: "bg-gradient-to-br from-amber-500/10 to-orange-600/10 border-amber-300/40 text-amber-700",
     cardHover: "hover:from-amber-500/20 hover:to-orange-600/20 hover:border-amber-400/60 hover:shadow-sm hover:shadow-amber-500/10 hover:-translate-y-px",
     mCard: "from-amber-500/15 to-orange-600/15 border-amber-300/50", mText: "text-amber-700",
     dropdownItems: [
-      { title: "找形象", description: "用影像與內容呈現企業專業與品牌價值", href: "/brand", Icon: Package },
+      {
+        title: "短影音與品牌內容行銷",
+        description: "短影音企劃拍攝、內容行銷與社群曝光",
+        href: "/short-video-marketing",
+        Icon: Clapperboard,
+      },
+      {
+        title: "工廠形象攝影",
+        description: "即將開放",
+        disabled: true,
+        Icon: Camera,
+      },
     ],
   },
   {
@@ -624,8 +657,14 @@ export default function Navbar() {
             // 開放中入口共用同一套 hover dropdown 互動邏輯：找工廠／找資源／找消息
             // 目前都走這裡，未來人才／形象／討論解鎖後（soon 改 false、補上真正的
             // dropdownItems）也會自動走到這裡，不必再修改互動程式。
-            const items = hub.dropdownItems.filter((item) => item.href && !item.disabled);
-            const hasDropdown = items.length > 0;
+            //
+            // hasDropdown 只看「至少一個可導頁子項」（跟 hubHasDropdown 語意一致），
+            // 但選單面板本身要把 hub.dropdownItems 全部渲染出來（見下方
+            // items.map），而不是先過濾掉 disabled 子項——找形象的「工廠形象攝影」
+            // 需要以不可點的「即將開放」狀態出現在選單裡，不能整個消失（見找形象
+            // dropdownItems 的 disabled:true 註解）。
+            const items = hub.dropdownItems;
+            const hasDropdown = items.some((item) => item.href && !item.disabled);
             const isOpen = hasDropdown && openHubKey === hub.key;
             const contentId = `hub-dropdown-${hub.key}`;
             const triggerClassName = `${HUB_TRIGGER_BASE} ${hub.ring} ${hub.card} ${hub.cardHover}`;
@@ -688,17 +727,36 @@ export default function Navbar() {
                     onMouseEnter={() => openHub(hub.key)}
                     onMouseLeave={scheduleCloseHub}
                   >
-                    {items.map((item) => (
-                      <Link key={item.href} href={item.href!} onClick={closeHub}>
-                        <div role="menuitem" className={HUB_MENU_ITEM}>
+                    {items.map((item) =>
+                      item.href && !item.disabled ? (
+                        <Link key={item.title} href={item.href} onClick={closeHub}>
+                          <div role="menuitem" className={HUB_MENU_ITEM}>
+                            <item.Icon className={`w-4 h-4 mt-0.5 shrink-0 ${hub.triggerIconCls}`} />
+                            <div className="min-w-0">
+                              <p className="text-sm font-semibold text-foreground">{item.title}</p>
+                              <p className="text-xs text-muted-foreground mt-0.5 leading-snug">{item.description}</p>
+                            </div>
+                          </div>
+                        </Link>
+                      ) : (
+                        // 未開放子項（例如工廠形象攝影）：不是 <Link>、沒有 href，
+                        // 跟手機版 Accordion 的既有 disabled 分支同一套視覺語意
+                        // （opacity-60 + cursor-not-allowed，不套用 HUB_MENU_ITEM
+                        // 的 hover/cursor-pointer 樣式，避免看起來可點）。
+                        <div
+                          key={item.title}
+                          role="menuitem"
+                          aria-disabled="true"
+                          className="flex items-start gap-2.5 px-3.5 py-2.5 opacity-60 cursor-not-allowed select-none"
+                        >
                           <item.Icon className={`w-4 h-4 mt-0.5 shrink-0 ${hub.triggerIconCls}`} />
                           <div className="min-w-0">
                             <p className="text-sm font-semibold text-foreground">{item.title}</p>
                             <p className="text-xs text-muted-foreground mt-0.5 leading-snug">{item.description}</p>
                           </div>
                         </div>
-                      </Link>
-                    ))}
+                      )
+                    )}
                   </div>
                 )}
               </div>

@@ -4,9 +4,11 @@
  * 與 /certification-center（見 server/certificationCenterNoPublicEntry.test.ts）
  * 完全同一套慣例：Final Public Index Release 已從「隱藏預覽頁」正式轉為
  * 公開索引的服務 Landing Page，加入 sitemap，移除 X-Robots-Tag noindex。
- * 唯一沒變的是導覽入口方式——仍只透過 /resources 資源總覽的服務卡進入，不
- * 在 Navbar／首頁／Footer／APP 底部導覽另立與 Hub 同權重的頂層入口。這裡
- * 一樣用純靜態原始碼字串比對（readFileSync + 字串比對）。
+ * OXM Navbar Dropdown — Public Service Entries Fix（本輪）：Navbar 的
+ * 「找資源」下拉選單已同步補上這個服務的直達連結（見
+ * server/navbarPublicServiceDropdown.test.ts 的完整覆蓋），首頁／Footer／
+ * APP 底部導覽的主要導覽仍維持不變，本輪只動 Navbar。這裡一樣用純靜態原始
+ * 碼字串比對（readFileSync + 字串比對）。
  *
  * 同時確認：路由本身確實存在（能被直接輸入網址開啟）、頁面內容把 ERP／MES／
  * 產線改善分開描述（不是同一套服務）、清楚區分免費與正式付費範圍、不含固定
@@ -22,10 +24,11 @@ function readSource(...segments: string[]): string {
   return fs.readFileSync(path.resolve(import.meta.dirname, "..", ...segments), "utf-8");
 }
 
-describe("/erp-optimization 沒有資源總覽以外的主要導覽直達連結", () => {
-  it("client/src/components/Navbar.tsx 完全沒有 erp-optimization 連結（含找資源下拉選單也暫時隱藏）", () => {
+describe("/erp-optimization：Navbar 找資源下拉已有直達連結，其餘主要導覽仍維持 hub-and-spoke", () => {
+  it("client/src/components/Navbar.tsx 找資源下拉選單有 erp-optimization 的直達連結（OXM Navbar Dropdown — Public Service Entries Fix）", () => {
     const source = readSource("client", "src", "components", "Navbar.tsx");
-    expect(source).not.toMatch(/erp-optimization/i);
+    const resourceBlock = source.match(/key: "resource"[\s\S]*?\n  \},/)?.[0] ?? "";
+    expect(resourceBlock).toMatch(/href: "\/erp-optimization"/);
   });
 
   it("client/src/pages/Home.tsx（含首頁 Footer）沒有任何 erp-optimization 連結或字樣", () => {

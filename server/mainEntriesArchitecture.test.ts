@@ -56,11 +56,15 @@ describe("Navbar 主要入口順序與可進入性（client/src/components/Navba
     expect(block).not.toMatch(/disabled: true/);
   });
 
-  it("找形象：soon:false（不再鎖定），下拉有真實連結到 /brand", () => {
+  it("找形象：soon:false（不再鎖定，Hub 本身不 disabled），下拉有真實連結到 /brand；工廠形象攝影子項仍是 disabled:true（Coming Soon 子服務，見 Navbar Dropdown 正式內容規則）", () => {
     const block = hubItemsSource.match(/key: "brand"[\s\S]*?\n  \},/)?.[0] ?? "";
     expect(block).toMatch(/soon: false/);
     expect(block).toMatch(/href: "\/brand"/);
-    expect(block).not.toMatch(/disabled: true/);
+    // Hub 主入口物件本身（dropdownItems 之前的區塊）不能是 disabled——只有
+    // dropdownItems 陣列內的「工廠形象攝影」子項才允許 disabled:true。
+    const beforeDropdownItems = block.split("dropdownItems:")[0];
+    expect(beforeDropdownItems).not.toMatch(/disabled: true/);
+    expect(block).toMatch(/title: "工廠形象攝影"[\s\S]*?disabled: true/);
   });
 
   it("找形象主入口本身要有 href: \"/brand\"（不能只有下拉選單裡的子項目有連結）——回歸測試：先前只有 dropdownItems 內的子項連到 /brand，主入口物件本身沒有 href 欄位，導致桌面版點擊「找形象」只會切換下拉選單開關、不會導頁，見 renderDesktopHub 的 hub.href 分流邏輯", () => {
@@ -245,11 +249,14 @@ describe("找形象正式 Hub（/brand）：從 Coming Soon 改為真正的服�
     expect(resourceCenter).toMatch(/type ResourceCategory = "all" \| "funding" \| "operations";/);
   });
 
-  it("Navbar.tsx 找形象下拉說明已更新為正式服務文案，不再顯示 Coming Soon／敬請期待字樣", () => {
+  it("Navbar.tsx 找形象下拉已改列出兩項真正的子服務（短影音可點／工廠形象攝影 Coming Soon），不再是單一個自我指向 /brand 的項目", () => {
     const navbar = readSource("client", "src", "components", "Navbar.tsx");
     const block = navbar.match(/key: "brand"[\s\S]*?\n  \},/)?.[0] ?? "";
     expect(block).toMatch(/href: "\/brand"/);
-    expect(block).toMatch(/用影像與內容呈現企業專業與品牌價值/);
+    expect(block).toMatch(/title: "短影音與品牌內容行銷"/);
+    expect(block).toMatch(/href: "\/short-video-marketing"/);
+    expect(block).toMatch(/title: "工廠形象攝影"/);
+    expect(block).toMatch(/description: "即將開放"/);
   });
 });
 
@@ -456,13 +463,28 @@ describe("Final Public Index Release：找資源／找形象四項正式服務�
     }
   });
 
-  it("Hub-and-spoke：四項正式服務都不在 Navbar 被列為與 Hub 同權重的頂層入口（只透過 /resources／/brand 服務卡進入）", () => {
+  it("Navbar Dropdown 正式內容更新：找資源／找形象四項正式服務改為在各自 Hub 的下拉選單內同步列出（不再只靠 /resources／/brand 頁面內的服務卡進入）", () => {
+    // OXM Navbar Dropdown — Public Service Entries Fix：這四項服務已於
+    // Final Public Index Release 正式開放索引與 sitemap，但先前 Navbar
+    // 下拉選單沒有同步放出真實入口，使用者仍需先進 /resources 或 /brand
+    // 才看得到。本輪明確反轉先前的 hub-and-spoke-only 決策：找資源／找形象
+    // 的下拉選單現在必須直接列出這些服務的快速連結。
     const navbar = readSource("client", "src", "components", "Navbar.tsx");
     const hubItemsMatch = navbar.match(/const HUB_ITEMS: HubItem\[\] = \[[\s\S]*?\n\];/);
     const hubItemsSource = hubItemsMatch ? hubItemsMatch[0] : "";
-    for (const path of ["/finance-optimization", "/certification-center", "/erp-optimization", "/short-video-marketing"]) {
-      expect(hubItemsSource, `HUB_ITEMS 不應包含 ${path}`).not.toMatch(new RegExp(`href: "${path.replace(/\//g, "\\/")}"`));
+
+    const resourceBlock = hubItemsSource.match(/key: "resource"[\s\S]*?\n  \},/)?.[0] ?? "";
+    for (const path of ["/upgrade-center", "/finance-optimization", "/certification-center", "/erp-optimization"]) {
+      expect(resourceBlock, `找資源 dropdownItems 應包含 ${path}`).toMatch(new RegExp(`href: "${path.replace(/\//g, "\\/")}"`));
     }
+    // 短影音已正式改分類至找形象，不應該出現在找資源下拉。
+    expect(resourceBlock).not.toMatch(/href: "\/short-video-marketing"/);
+
+    const brandBlock = hubItemsSource.match(/key: "brand"[\s\S]*?\n  \},/)?.[0] ?? "";
+    expect(brandBlock).toMatch(/href: "\/short-video-marketing"/);
+    // 工廠形象攝影目前仍是 noindex 的 Coming Soon 子服務，不得出現可點擊的
+    // /factory-photography href（只能以 disabled:true、無 href 的方式提示）。
+    expect(brandBlock).not.toMatch(/href: "\/factory-photography"/);
   });
 });
 
