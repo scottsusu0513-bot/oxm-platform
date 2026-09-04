@@ -6345,13 +6345,15 @@ export async function getEnabledPushTokensByUserId(userId: number) {
 
 // ===== 工廠基本資料修改申請 =====
 
-// 21 個基本資料欄位白名單（不含 businessType，申請後無法更改）
+// 22 個基本資料欄位白名單（不含 businessType，申請後無法更改）。taxId：
+// approved 工廠的統一編號改回既有修改申請流程調整（見 factory.submitRevision
+// 的空字串防護），不再是「approved 就永久鎖定」的特例。
 export const BASIC_DATA_FIELDS = [
   "name", "industry", "subIndustry", "mfgModes", "region", "description",
   "capitalLevel", "foundedYear", "ownerName", "contactPersonName", "phone",
   "website", "contactEmail", "address", "operationStatus",
   "weekdayHours", "weekendHours", "businessNote", "avatarUrl", "avatarCrop",
-  "certificationBadges", "certificationEvidence",
+  "certificationBadges", "certificationEvidence", "taxId",
 ] as const;
 
 export type BasicDataField = typeof BASIC_DATA_FIELDS[number];
@@ -6380,6 +6382,7 @@ export function extractBasicData(factory: Factory): Record<BasicDataField, any> 
     avatarCrop: (factory as any).avatarCrop ?? null,
     certificationBadges: (factory as any).certificationBadges ?? [],
     certificationEvidence: (factory as any).certificationEvidence ?? [],
+    taxId: (factory as any).taxId ?? null,
   };
 }
 

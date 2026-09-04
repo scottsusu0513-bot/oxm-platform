@@ -235,4 +235,129 @@ describe("工廠統一編號必填 — server 端", () => {
       expect((after as any)?.description).toBe("只更新描述，不動 taxId");
     });
   });
+
+  // OXM Factory taxId — Registration + Editable Revision Flow Audit / Fix：
+  // rejected 狀態工廠跟 draft 一樣走直接更新（factory.update 的 status
+  // routing 只特別攔 pending／approved 兩種狀態，rejected 本來就沒被攔）。
+  describe("rejected 工廠可直接修改 taxId（不需要走修改申請）", () => {
+    let ownerId: number;
+    let factoryId: number;
+
+    beforeAll(async () => {
+      ownerId = await createVerifiedTestUser();
+      factoryId = await db.createFactoryAtomic(ownerId, { ...BASE_FACTORY_INPUT, name: `${runId} Rejected` } as any);
+      const conn = await getDb();
+      if (!conn) throw new Error("no db");
+      await conn.execute(sql`UPDATE factories SET status = 'rejected' WHERE id = ${factoryId}`);
+    });
+
+    it("rejected 工廠補填有效 taxId → 直接更新成功", async () => {
+      const caller = appRouter.createCaller(await ctxForUserId(ownerId));
+      await expect(
+        caller.factory.update({ id: factoryId, taxId: "00000016" }),
+      ).resolves.toBeTruthy();
+      const after = await db.getFactoryById(factoryId);
+      expect((after as any)?.taxId).toBe("00000016");
+    });
+  });
+
+  // approved 工廠：taxId 不再永久鎖定，改走既有「修改申請」流程（跟工廠名稱
+  // 等其他需要重新審核的欄位共用同一套 factoryRevisions／submitRevision／
+  // approveRevision 架構，不是另外發明第二套 taxId 專屬審核系統）。
+  describe("approved 工廠 taxId 走既有修改申請流程", () => {
+    let ownerId: number;
+    let factoryId: number;
+
+    beforeAll(async () => {
+      ownerId = await createVerifiedTestUser();
+      // 建立時直接帶一個已核准的合法 taxId（模擬「當初註冊時就填了統編」的
+      // 已上線工廠），繞過 zod 直接呼叫 db 層，approved 狀態靠 raw SQL 標記。
+      factoryId = await db.createFactoryAtomic(ownerId, {
+        ...BASE_FACTORY_INPUT, name: `${runId} ApprovedTaxId`, taxId: "00000016",
+      } as any);
+      const conn = await getDb();
+      if (!conn) throw new Error("no db");
+      await conn.execute(sql`UPDATE factories SET status = 'approved' WHERE id = ${factoryId}`);
+    });
+
+    it("approved 工廠不能透過 factory.update 直接修改 taxId（跟其他欄位一樣被 status routing 擋下，不允許繞過審核）", async () => {
+      const caller = appRouter.createCaller(await ctxForUserId(ownerId));
+      await expect(
+        caller.factory.update({ id: factoryId, taxId: "00000022" }),
+      ).rejects.toMatchObject({ message: expect.stringContaining("修改申請") });
+      const after = await db.getFactoryById(factoryId);
+      expect((after as any)?.taxId).toBe("00000016");
+    });
+
+    it("非 owner／非 co-manager 的第三人不能提交 taxId 修改申請", async () => {
+      const strangerId = await createVerifiedTestUser();
+      const caller = appRouter.createCaller(await ctxForUserId(strangerId));
+      await expect(
+        caller.factory.submitRevision({
+          factoryId,
+          proposedData: { taxId: "00000022" },
+          revisionReason: "unauthorized attempt",
+        }),
+      ).rejects.toMatchObject({ message: expect.stringContaining("無權限") });
+    });
+
+    it("提交的新 taxId 格式不對 → 拒絕，不建立 pending revision", async () => {
+      const caller = appRouter.createCaller(await ctxForUserId(ownerId));
+      await expect(
+        caller.factory.submitRevision({
+          factoryId,
+          proposedData: { taxId: "1234567" },
+          revisionReason: "格式錯誤測試",
+        }),
+      ).rejects.toBeTruthy();
+      const pending = await db.getPendingRevisionByFactory(factoryId);
+      expect(pending).toBeNull();
+    });
+
+    it("owner 提交合法新 taxId 修改申請 → 成功建立 pending revision，正式值（factories.taxId）維持不變", async () => {
+      const caller = appRouter.createCaller(await ctxForUserId(ownerId));
+      const result = await caller.factory.submitRevision({
+        factoryId,
+        proposedData: { taxId: "00000022" },
+        revisionReason: "更正統一編號",
+      });
+      expect(result.success).toBe(true);
+
+      // 正式值必須維持舊的合法值，不能被待審中的新值偷偷覆蓋。
+      const stillOfficial = await db.getFactoryById(factoryId);
+      expect((stillOfficial as any)?.taxId).toBe("00000016");
+
+      // Admin Review 需要同時看得到「原值」與「待審新值」。
+      const revision: any = await db.getAdminRevisionDetail(result.revisionId);
+      expect(revision).not.toBeNull();
+      expect(revision.originalData.taxId).toBe("00000016");
+      expect(revision.proposedData.taxId).toBe("00000022");
+
+      // Admin 核准後，新 taxId 才正式生效寫入 factories 資料表。
+      const adminId = await createVerifiedTestUser();
+      await db.approveRevisionAtomic(result.revisionId, adminId);
+      const afterApprove = await db.getFactoryById(factoryId);
+      expect((afterApprove as any)?.taxId).toBe("00000022");
+    });
+
+    it("taxId 帶空字串（只改別的欄位）→ 不會被誤判成要清空既有合法值：pending revision 的 proposedData 不含 taxId key，核准後 taxId 不變", async () => {
+      const caller = appRouter.createCaller(await ctxForUserId(ownerId));
+      const result = await caller.factory.submitRevision({
+        factoryId,
+        proposedData: { taxId: "", description: "只改簡介，不動統編" },
+        revisionReason: "只改簡介",
+      });
+      expect(result.success).toBe(true);
+
+      const revision: any = await db.getAdminRevisionDetail(result.revisionId);
+      expect("taxId" in revision.proposedData).toBe(false);
+
+      const adminId = await createVerifiedTestUser();
+      await db.approveRevisionAtomic(result.revisionId, adminId);
+      const after = await db.getFactoryById(factoryId);
+      // 上一筆測試核准後 taxId 已經是 00000022，這裡驗證空字串沒有把它洗掉。
+      expect((after as any)?.taxId).toBe("00000022");
+      expect((after as any)?.description).toBe("只改簡介，不動統編");
+    });
+  });
 });

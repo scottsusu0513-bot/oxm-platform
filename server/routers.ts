@@ -556,6 +556,14 @@ const FactoryBasicDataSchema = z.object({
   businessNote: z.string().nullable(),
   avatarUrl: z.string().nullable(),
   avatarCrop: z.object({ zoom: z.number(), posX: z.number(), posY: z.number() }).nullable(),
+  // 統一編號：approved 工廠改走既有修改申請流程（見 submitRevision 的
+  // taxId 空字串防護），proposedData 裡若帶了 taxId 這個 key，一定已經是
+  // 通過前端驗證的非空值——這裡沿用與 factory.create 相同的嚴格驗證（8 碼
+  // 數字＋檢查碼），不接受空字串或格式不對的值混進待審資料。
+  taxId: z.string()
+    .transform((v) => normalizeTaxId(v))
+    .refine((v) => /^\d{8}$/.test(v), "統一編號須為 8 碼數字")
+    .refine((v) => isValidTaiwanTaxId(v), "統一編號格式不正確，請確認輸入是否正確"),
   certificationBadges: z.array(z.string()).max(30),
   // imageKeys 刻意不在這裡開放：圖片 object key 全程只存在伺服器端（見
   // shared/badges.ts 的 appendCertificationEvidenceImage／
@@ -1543,6 +1551,18 @@ export const appRouter = router({
         if (allowedSet.has(key)) {
           proposedData[key] = input.proposedData[key];
         }
+      }
+
+      // 統一編號：FactoryDashboard.tsx 的 buildProposedData() 跟其他欄位一樣
+      // 每次都無條件帶上目前的 taxId 表單值（不是只送「真的有改」的欄位），
+      // 所以還沒有統編的工廠、這次只是修改其他欄位時，這裡一定會收到
+      // taxId: ""。跟 factory.update 同一個道理：空字串代表「這次沒有要動
+      // 這個欄位」，必須在送進下方 FactoryBasicDataSchema 嚴格驗證之前先
+      // 剔除，否則會把「沒有統編、只是想改別的欄位」的正常送審擋下來，也
+      // 避免空字串被存進 proposedData、核准時真的把既有合法統編洗掉（見
+      // db.approveRevisionAtomic 的 `field in proposed` 套用邏輯）。
+      if (proposedData.taxId === "") {
+        delete proposedData.taxId;
       }
 
       if (Object.keys(proposedData).length === 0) {

@@ -367,11 +367,11 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
   const [contactEmail, setContactEmail] = useState(factory.contactEmail ?? "");
   const [address, setAddress] = useState(factory.address ?? "");
   // 統一編號：既有工廠可能是 NULL（建立時尚未強制必填，見 shared/taxId.ts、
-  // migration 0092），這裡跟其餘選填欄位一樣用空字串代表「尚未填寫」。只有
-  // draft／rejected 狀態可編輯（見下方 disabled 條件與 factory.update
-  // procedure 本身對 status==='approved' 的拒絕邏輯）——已上線工廠仍需透過
-  // 「修改申請」流程，本輪刻意不把 taxId 串進 submitRevision／
-  // buildProposedData，避免重構整套 Factory workflow。
+  // migration 0092），這裡跟其餘選填欄位一樣用空字串代表「尚未填寫」。產品
+  // 決策更新（見對話「OXM Factory taxId — Registration + Editable Revision
+  // Flow Audit / Fix」）：approved 工廠的 taxId 不再永久鎖定，跟公司其他
+  // 需要重新審核的資料一樣走既有「修改申請」流程（見下方 disabled 條件改為
+  // 與其他欄位共用同一個 isLocked、buildProposedData 已納入 taxId）。
   const [taxId, setTaxId] = useState((factory as any).taxId ?? "");
   const [operationStatus, setOperationStatus] = useState<"normal" | "busy" | "full">(factory.operationStatus ?? "normal");
   const [weekdayHours, setWeekdayHours] = useState((factory as any).weekdayHours ?? "");
@@ -705,6 +705,13 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
     website: website || null,
     contactEmail: contactEmail || null,
     address,
+    // 統一編號：跟其餘欄位一樣無條件帶上目前表單值（不是只送「真的有改」的
+    // 欄位）——還沒有統編、這次只是改別的欄位時會是空字串，server 端
+    // submitRevision 會把空字串視為「這次沒有要動這個欄位」而剔除，不會
+    // 把「沒填統編」誤判成要清空既有合法值（見 server/routers.ts 的對應
+    // 註解）。有填的話已在 handleSave 驗證過格式，這裡用 normalizeTaxId
+    // 統一正規化，跟 create／update 走同一份 shared/taxId.ts。
+    taxId: normalizeTaxId(taxId),
     operationStatus,
     weekdayHours: weekdayHours || null,
     weekendHours: weekendHours || null,
@@ -1089,21 +1096,22 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
             </div>
             <div className="space-y-2">
               <Label>統一編號</Label>
-              {/* 修復：先前這個 input 一律 disabled（不像其他欄位用
-                  disabled={isLocked}），既有工廠若當初未填 taxId
-                  （欄位新增前建立、或建立時漏填），完全沒有管道補填——這是
-                  客戶回報「統編不能填寫」的實際 root cause 之一。已上線
-                  （approved）工廠仍維持唯讀，需比照其他欄位透過「修改申請」
-                  流程處理，本輪刻意不把 taxId 串進 submitRevision，避免重構
-                  整套 Factory workflow；draft／rejected／審核中
-                  （isLocked）以外的狀態即可直接編輯並儲存。 */}
+              {/* 修復歷史：這個 input 原本一律 disabled，既有工廠若當初未填
+                  taxId 完全沒有管道補填。後來一度改成「approved 工廠永久唯
+                  讀」，但產品決策更新：taxId 不該是唯一被特殊鎖定的欄位——
+                  跟工廠名稱等其他需要重新審核的資料一樣，可編輯能力只看
+                  isLocked（pending 審核中 or 有待審修改申請），approved 工廠
+                  一樣可以編輯，儲存時會跟其他欄位一起走下方 handleSave 的
+                  「approved → 開啟修改申請 Dialog」分流，不是直接覆蓋正式
+                  資料（見 buildProposedData 已納入 taxId、
+                  server/routers.ts 的 submitRevision）。 */}
               <Input
-                disabled={isLocked || factory.status === "approved"}
+                disabled={isLocked}
                 inputMode="numeric"
                 value={taxId}
                 onChange={e => setTaxId(e.target.value)}
                 maxLength={8}
-                placeholder={isLocked || factory.status === "approved" ? "未填寫" : "請輸入 8 碼統一編號"}
+                placeholder={isLocked ? "未填寫" : "請輸入 8 碼統一編號"}
               />
             </div>
             <div className="space-y-2">

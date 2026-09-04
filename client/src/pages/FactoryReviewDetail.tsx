@@ -32,7 +32,7 @@ const FIELD_LABELS: Record<string, string> = {
   ownerName: "負責人", contactPersonName: "聯絡窗口", phone: "電話", website: "網站",
   contactEmail: "電郵", address: "公廠地址", operationStatus: "接單狀態",
   weekdayHours: "平日營業時間", weekendHours: "假日營業時間", businessNote: "營業備註",
-  avatarUrl: "工廠大頭貼",
+  avatarUrl: "工廠大頭貼", taxId: "統一編號",
 };
 const OPERATION_STATUS_LABELS: Record<string, string> = { normal: "接單中", busy: "產線繁忙", full: "產線滿載" };
 
@@ -273,7 +273,7 @@ export default function FactoryReviewDetail() {
                     <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">
                       工廠完整基本資料（修改前為紅色、修改後為綠色，未修改欄位為一般顏色）
                     </p>
-                    {(["name", "industry", "subIndustry", "mfgModes", "region", "description", "capitalLevel", "foundedYear", "ownerName", "contactPersonName", "phone", "website", "contactEmail", "address", "operationStatus", "weekdayHours", "weekendHours", "businessNote", "avatarUrl"] as const).map(field => {
+                    {(["name", "taxId", "industry", "subIndustry", "mfgModes", "region", "description", "capitalLevel", "foundedYear", "ownerName", "contactPersonName", "phone", "website", "contactEmail", "address", "operationStatus", "weekdayHours", "weekendHours", "businessNote", "avatarUrl"] as const).map(field => {
                       const changed = field in proposedData && JSON.stringify(originalData[field]) !== JSON.stringify(proposedData[field]);
                       const label = FIELD_LABELS[field] ?? field;
                       if (!changed) {
