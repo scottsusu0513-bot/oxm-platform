@@ -5,10 +5,11 @@ import { nanoid } from "nanoid";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import viteConfig from "../../vite.config";
-import { buildFactoryMeta, buildNewsMeta, injectMetaIntoHtml, parseFactoryPath, parseNewsPath, stripQueryString, extractQueryString, DEFAULT_OG_IMAGE } from "./ogMeta";
+import { buildFactoryMeta, buildNewsMeta, buildRegionIndustryMeta, injectMetaIntoHtml, parseFactoryPath, parseNewsPath, stripQueryString, extractQueryString, DEFAULT_OG_IMAGE } from "./ogMeta";
 import { injectPublicPageSeo } from "./publicPageMeta";
-import { injectPrerenderedBody } from "./prerenderedBody";
+import { injectPrerenderedBody, injectDynamicSemanticBody } from "./prerenderedBody";
 import { parseIndustryPath, buildIndustryPageMeta } from "@shared/seo/industryPages";
+import { parseRegionIndustryPath, resolveRegionIndustry, buildRegionIndustryPageContent } from "@shared/seo/regionIndustryPages";
 import { buildSearchPageMeta } from "@shared/seo/searchPage";
 
 export async function setupVite(app: Express, server: Server) {
@@ -100,6 +101,28 @@ export async function setupVite(app: Express, server: Server) {
         const newsMeta = await buildNewsMeta(parseNewsPath(pathname)!.slug, pathname);
         statusCode = newsMeta.status;
         page = injectMetaIntoHtml(page, newsMeta);
+      } else if (parseRegionIndustryPath(pathname)) {
+        // /factories/:region/:industry：地區 × 主產業 SEO Landing Page。
+        // DB-backed（是否至少 1 家 approved 公開工廠），與工廠頁／消息頁共用
+        // 同一套 marker-based 注入函式；無效 region／industry slug 一律真
+        // 404，合法但目前 0 筆結果一律 200+noindex（不是 404，見任務定案
+        // 「三種頁面狀態」）。額外把固定 H1＋intro 語意殼動態注入
+        // <div id="root">——這條路由是 22×13＝286 種組合，不適合比照
+        // /search／/about 那樣為每個組合各自跑一支 build-time prerender
+        // script，改成 request-time 直接算字串注入（純字串處理，不執行
+        // renderToString）。
+        const { regionSlug, industrySlug } = parseRegionIndustryPath(pathname)!;
+        const regionIndustryMeta = await buildRegionIndustryMeta(regionSlug, industrySlug, pathname);
+        statusCode = regionIndustryMeta.status;
+        page = injectMetaIntoHtml(page, regionIndustryMeta);
+        if (regionIndustryMeta.status === 200) {
+          const resolved = resolveRegionIndustry(regionSlug, industrySlug);
+          if (resolved) {
+            const content = buildRegionIndustryPageContent(resolved);
+            const bodyPage = injectDynamicSemanticBody(page, content.h1, content.intro, "region-industry");
+            if (bodyPage !== null) page = bodyPage;
+          }
+        }
       } else {
         const industryPath = parseIndustryPath(pathname);
         const industryMeta = industryPath ? buildIndustryPageMeta(industryPath.slug, industryPath.subSlug) : null;
@@ -250,6 +273,38 @@ export function serveStatic(app: Express) {
       } catch (err) {
         console.error(
           "[ogMeta] serveStatic news meta injection failed:",
+          err instanceof Error ? err.message : String(err)
+        );
+        res.sendFile(indexPath);
+      }
+      return;
+    }
+
+    // /factories/:region/:industry：地區 × 主產業 SEO Landing Page，
+    // DB-backed（是否至少 1 家 approved 公開工廠），與工廠頁／消息頁共用
+    // 同一套 marker-based 注入函式。無效 slug 一律真 404；合法但目前 0 筆
+    // 結果一律 200+noindex（不是 404，見任務定案「三種頁面狀態」）。額外把
+    // 固定 H1＋intro 語意殼動態注入 <div id="root">（純字串處理，不執行
+    // renderToString；286 種組合不適合比照 /search／/about 用 build-time
+    // 靜態檔）。
+    const regionIndustryPath = parseRegionIndustryPath(pathname);
+    if (regionIndustryPath) {
+      try {
+        const template = await getCachedTemplate();
+        const meta = await buildRegionIndustryMeta(regionIndustryPath.regionSlug, regionIndustryPath.industrySlug, pathname);
+        let page = injectMetaIntoHtml(template, meta);
+        if (meta.status === 200) {
+          const resolved = resolveRegionIndustry(regionIndustryPath.regionSlug, regionIndustryPath.industrySlug);
+          if (resolved) {
+            const content = buildRegionIndustryPageContent(resolved);
+            const bodyPage = injectDynamicSemanticBody(page, content.h1, content.intro, "region-industry");
+            if (bodyPage !== null) page = bodyPage;
+          }
+        }
+        res.status(meta.status).set({ "Content-Type": "text/html" }).end(page);
+      } catch (err) {
+        console.error(
+          "[ogMeta] serveStatic region-industry meta injection failed:",
           err instanceof Error ? err.message : String(err)
         );
         res.sendFile(indexPath);

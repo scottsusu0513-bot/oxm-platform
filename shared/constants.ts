@@ -84,6 +84,47 @@ export const TAIWAN_REGIONS = [
 ] as const;
 export type TaiwanRegion = (typeof TAIWAN_REGIONS)[number];
 
+// ===== 縣市 SEO Slug 對照表（見「地區 × 主產業 SEO Landing Page」需求定案）=====
+// 與 INDUSTRY_SLUGS 同一種角色：固定、明確列出的 canonical mapping，唯一
+// source of truth，不得由其他地方各自推導或重新拼字。新增/修改前必須先確認
+// TAIWAN_REGIONS 沒有變動——REGION_SLUGS 的 key 必須與 TAIWAN_REGIONS 完全
+// 一一對應（見 server/regionIndustrySeo.test.ts 的 22/22 覆蓋率測試）。
+export const REGION_SLUGS: Record<string, string> = {
+  "台北市": "taipei",
+  "新北市": "new-taipei",
+  "基隆市": "keelung",
+  "桃園市": "taoyuan",
+  "新竹市": "hsinchu-city",
+  "新竹縣": "hsinchu-county",
+  "苗栗縣": "miaoli",
+  "台中市": "taichung",
+  "彰化縣": "changhua",
+  "南投縣": "nantou",
+  "雲林縣": "yunlin",
+  "嘉義市": "chiayi-city",
+  "嘉義縣": "chiayi-county",
+  "台南市": "tainan",
+  "高雄市": "kaohsiung",
+  "屏東縣": "pingtung",
+  "宜蘭縣": "yilan",
+  "花蓮縣": "hualien",
+  "台東縣": "taitung",
+  "澎湖縣": "penghu",
+  "金門縣": "kinmen",
+  "連江縣": "lienchiang",
+};
+
+export const REGION_SLUG_TO_NAME: Record<string, string> = Object.fromEntries(
+  Object.entries(REGION_SLUGS).map(([name, slug]) => [slug, name])
+);
+
+// SEO 文案顯示用地區名稱：拿掉「市／縣」尾綴（例如「台中市」→「台中」）。
+// 只能用在標題／H1／描述等顯示文字，絕不可用於 DB 篩選或 factory.search 的
+// region 參數——底層 filter 必須永遠使用 TAIWAN_REGIONS 的完整 canonical 值。
+export const REGION_DISPLAY_NAMES: Record<string, string> = Object.fromEntries(
+  TAIWAN_REGIONS.map(name => [name, name.replace(/(市|縣)$/, "")])
+);
+
 // 鄰近縣市對照表（預設廣告覆蓋範圍）
 export const ADJACENT_REGIONS: Record<string, string[]> = {
   "台北市": ["新北市", "基隆市"],

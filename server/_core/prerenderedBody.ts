@@ -12,6 +12,7 @@
 // 屬性單純作為標記／除錯用途保留。
 import fs from "fs";
 import path from "path";
+import { escapeHtml } from "./ogMeta";
 
 const ROOT_DIV_RE = /<div\s+id="root"\s*>\s*<\/div>/i;
 
@@ -96,4 +97,18 @@ export function injectPrerenderedBody(html: string, pathname: string): string | 
   if (!ROOT_DIV_RE.test(html)) return null;
 
   return html.replace(ROOT_DIV_RE, `<div id="root" data-oxm-prerendered="${result.marker}">${result.fragment}</div>`);
+}
+
+/**
+ * 跟 injectPrerenderedBody 同一種「注入 <div id="root">」機制，但用於
+ * request-time 動態算出的片段（例如 /factories/:region/:industry，22×13＝
+ * 286 種組合，不值得比照固定頁另外跑一支 build-time script 產生 286 個
+ * 靜態檔）。呼叫端負責算好純文字 h1／intro，這裡只做跳脫與 DOM 插入，
+ * 不查資料庫、不做任何 I/O。找不到 <div id="root"></div>（例如樣板已改）
+ * 一律安全回傳 null，不拋錯。
+ */
+export function injectDynamicSemanticBody(html: string, h1: string, intro: string, marker: string): string | null {
+  if (!ROOT_DIV_RE.test(html)) return null;
+  const fragment = `<h1>${escapeHtml(h1)}</h1><p>${escapeHtml(intro)}</p>`;
+  return html.replace(ROOT_DIV_RE, `<div id="root" data-oxm-prerendered="${marker}">${fragment}</div>`);
 }

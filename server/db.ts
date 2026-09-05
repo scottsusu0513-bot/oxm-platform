@@ -323,6 +323,60 @@ export async function getApprovedFactoriesForSitemap(): Promise<{ id: number; up
     .where(eq(factories.status, 'approved'));
 }
 
+/**
+ * 「地區 × 主產業 SEO Landing Page」existence 判斷：region+industry 是否
+ * 至少有 1 家 approved 公開工廠。刻意用 SELECT ... LIMIT 1，不是完整
+ * searchFactories（不需要分頁、排序、AI ranking 這些額外成本）。approved
+ * 條件與 searchFactories／getApprovedFactoriesForSitemap 完全一致
+ * （eq(factories.status, 'approved')），不重新定義 public／approved 規則——
+ * 軟刪除一律連帶把 status 改成 'delisted'（見 server/db.ts 下架邏輯），approved
+ * 工廠不可能同時 deletedAt 有值，不需要額外的 isNull(deletedAt) 條件。
+ * industry 比對用 JSON_OVERLAPS，語意與 searchFactories 的 industry 篩選
+ * 完全相同（factories.industry 是 JSON 陣列欄位，一家工廠可能有多個主產業）。
+ */
+export async function hasApprovedFactoryForRegionIndustry(region: string, industry: string): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const rows = await db.select({ id: factories.id })
+    .from(factories)
+    .where(and(
+      eq(factories.status, 'approved'),
+      eq(factories.region, region),
+      sql`JSON_OVERLAPS(${factories.industry}, ${JSON.stringify([industry])})`,
+    ))
+    .limit(1);
+  return rows.length > 0;
+}
+
+/**
+ * Sitemap 用：目前「有至少 1 家 approved 公開工廠」的 (region, industry)
+ * distinct 組合。factories.industry 是 JSON 陣列（一家工廠可能橫跨多個主
+ * 產業），MySQL 沒有簡單一行 SQL 對 JSON 陣列做 DISTINCT unnest，改成只
+ * SELECT region/industry 兩欄（單一查詢、不逐組合各打一次 DB，避免 286 次
+ * N+1），在應用層攤平陣列並用 Set 去重——OXM 目前工廠筆數規模下這是最低
+ * 成本、最不需要額外基礎設施（不需要 JSON_TABLE／衍生視圖）的作法。
+ */
+export async function getApprovedRegionIndustryCombosForSitemap(): Promise<{ region: string; industry: string }[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.select({ region: factories.region, industry: factories.industry })
+    .from(factories)
+    .where(eq(factories.status, 'approved'));
+
+  const seen = new Set<string>();
+  const combos: { region: string; industry: string }[] = [];
+  for (const row of rows) {
+    const industries = Array.isArray(row.industry) ? (row.industry as string[]) : [];
+    for (const industry of industries) {
+      const key = `${row.region}|${industry}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      combos.push({ region: row.region, industry });
+    }
+  }
+  return combos;
+}
+
 export async function getFactoryById(id: number) {
   const db = await getDb();
   if (!db) return undefined;

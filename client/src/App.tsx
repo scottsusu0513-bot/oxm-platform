@@ -28,6 +28,7 @@ const Home                  = lazy(() => import("./pages/Home"));
 const Search                = lazy(() => import("./pages/Search"));
 const FactoryDetail         = lazy(() => import("./pages/FactoryDetail"));
 const IndustryPage          = lazy(() => import("./pages/IndustryPage"));
+const RegionIndustryPage    = lazy(() => import("./pages/RegionIndustryPage"));
 const FactoryRegister       = lazy(() => import("./pages/FactoryRegister"));
 const FactoryDashboard      = lazy(() => import("./pages/FactoryDashboard"));
 const ChatPage              = lazy(() => import("./pages/ChatPage"));
@@ -376,6 +377,7 @@ function Router() {
         <Route path="/search" component={Search} />
         <Route path="/industry/:slug/:sub" component={IndustryPage} />
         <Route path="/industry/:slug" component={IndustryPage} />
+        <Route path="/factories/:region/:industry" component={RegionIndustryPage} />
         <Route path="/factory/:id" component={FactoryDetail} />
         <Route path="/register-factory" component={FactoryRegister} />
         <Route path="/dashboard" component={FactoryDashboard} />

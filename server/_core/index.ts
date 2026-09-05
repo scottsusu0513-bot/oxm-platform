@@ -10,9 +10,9 @@ import { serveStatic, setupVite } from "./vite";
 import { setupSecurityHeaders, setupOriginCheck, setupNoIndexRoutes } from "./security";
 import { apiLimiter, loginLimiter, uploadLimiter, messageLimiter, submitReviewLimiter, adminLimiter, searchLimiter, reportLimiter } from "./rateLimit";
 import { COOKIE_NAME } from "@shared/const";
-import { INDUSTRY_SLUGS, PHASE1_SUB_INDUSTRY_PAGES } from "../../shared/constants";
+import { INDUSTRY_SLUGS, REGION_SLUGS, PHASE1_SUB_INDUSTRY_PAGES } from "../../shared/constants";
 import { escapeXmlText } from "@shared/seo/xml";
-import { getDb, getApprovedFactoriesForSitemap, getPublishedNewsForSitemap, ensureConsultantsSeeded, ensureCertificationServiceCatalogSeeded } from "../db";
+import { getDb, getApprovedFactoriesForSitemap, getApprovedRegionIndustryCombosForSitemap, getPublishedNewsForSitemap, ensureConsultantsSeeded, ensureCertificationServiceCatalogSeeded } from "../db";
 import { ensureUpgradeProgramsSeeded } from "../upgradePrograms";
 import { runCollaborationOrderOverdueEmailCheck } from "../orderOverdueCheck";
 
@@ -212,6 +212,26 @@ async function startServer() {
     // 子產業頁（Phase 1）：理由同主產業頁，省略 lastmod。
     for (const { industrySlug, subSlug } of PHASE1_SUB_INDUSTRY_PAGES) {
       urls.push(entry(`${BASE}/industry/${industrySlug}/${subSlug}`, "0.7", "weekly"));
+    }
+
+    // 地區 × 主產業 SEO Landing Page：與主產業頁不同，這裡刻意只加入「目前
+    // 至少 1 家 approved 公開工廠」的 distinct 組合（22 縣市 × 13 主產業 = 286
+    // 種組合，禁止無條件全部塞入，見任務定案「Sitemap 只列出目前有效組合」）。
+    // getApprovedRegionIndustryCombosForSitemap 是單一查詢（不逐組合各打一次
+    // DB），DB 暫時不可用時安全跳過，其餘 sitemap 內容不受影響。這個清單完全
+    // 由 DB 當下狀態決定：新工廠一經核准，最多等到下一次 sitemap 請求（見
+    // Cache-Control max-age=3600）就會自動出現，不需要重新部署；反之最後一家
+    // 失去公開資格後也會自動從下一次 sitemap 消失。
+    try {
+      const regionIndustryCombos = await getApprovedRegionIndustryCombosForSitemap();
+      for (const { region, industry } of regionIndustryCombos) {
+        const regionSlug = REGION_SLUGS[region];
+        const industrySlug = INDUSTRY_SLUGS[industry];
+        if (!regionSlug || !industrySlug) continue;
+        urls.push(entry(`${BASE}/factories/${regionSlug}/${industrySlug}`, "0.6", "weekly"));
+      }
+    } catch {
+      // DB 暫時不可用時跳過地區×產業 URL，仍回傳其餘 sitemap 內容
     }
 
     // 已審核工廠頁

@@ -1,6 +1,7 @@
 import * as db from "../db";
 import { BRAND } from "@shared/seo/brand";
 import { toSafeJsonLdString, type JsonLdObject } from "@shared/seo/schema";
+import { resolveRegionIndustry, buildRegionIndustryPageContent } from "@shared/seo/regionIndustryPages";
 
 const SITE_BASE_URL = "https://www.oxmmatch.com";
 // exported so other dynamic (non-DB-backed) pages, e.g. /industry/:slug
@@ -314,6 +315,57 @@ export async function buildNewsMeta(slug: string, pathname: string): Promise<Fac
       err instanceof Error ? err.message : String(err)
     );
     return { ...NEWS_GENERIC_FALLBACK, url, status: 200, noindex: false };
+  }
+}
+
+const REGION_INDUSTRY_GENERIC_FALLBACK = {
+  title: `台灣工廠資源媒合｜${SITE_NAME}`,
+  description: "在 OXM 尋找適合您的台灣工廠與工作室資源。",
+  image: DEFAULT_OG_IMAGE,
+};
+
+/**
+ * Builds the meta for a /factories/:region/:industry request（見任務定案
+ * 「三種頁面狀態」）：
+ * - regionSlug／industrySlug 對不到任何已知值（resolveRegionIndustry 回
+ *   null）→ 真 404 + noindex，不洩漏是哪個 slug 不合法。
+ * - 合法組合但目前查無任何 approved 公開工廠 → 200 + noindex（合法搜尋頁，
+ *   只是暫時沒有結果，不是 404，見任務定案 B）。
+ * - 合法組合且至少 1 家 approved 公開工廠 → 200 + index。
+ *
+ * Existence 判斷（db.hasApprovedFactoryForRegionIndustry）失敗（DB 暫時
+ * 不可用）時 fail-safe 成 noindex（不確定是否有結果時，寧可不索引，也不要
+ * 誤把可能沒有結果的頁面索引出去），但仍然回 200、仍然顯示正確的
+ * title／description／H1——這是一頁合法、slug 有效的頁面，資料庫暫時查詢
+ * 失敗是 transient 問題，不該變成假 404（比照 buildFactoryMeta／
+ * buildNewsMeta「transient 失敗不可 de-index 真實頁面」的原則）。
+ */
+export async function buildRegionIndustryMeta(regionSlug: string, industrySlug: string, pathname: string): Promise<FactoryMeta> {
+  const url = `${SITE_BASE_URL}${pathname}`;
+
+  const resolved = resolveRegionIndustry(regionSlug, industrySlug);
+  if (!resolved) {
+    return { ...REGION_INDUSTRY_GENERIC_FALLBACK, url, status: 404, noindex: true };
+  }
+
+  const content = buildRegionIndustryPageContent(resolved);
+  const baseMeta = {
+    title: content.title,
+    description: content.description,
+    image: DEFAULT_OG_IMAGE,
+    url: content.canonical,
+    status: 200 as const,
+  };
+
+  try {
+    const hasApproved = await db.hasApprovedFactoryForRegionIndustry(resolved.regionName, resolved.industryName);
+    return { ...baseMeta, noindex: !hasApproved };
+  } catch (err) {
+    console.error(
+      `[ogMeta] buildRegionIndustryMeta existence check failed for ${regionSlug}/${industrySlug}:`,
+      err instanceof Error ? err.message : String(err)
+    );
+    return { ...baseMeta, noindex: true };
   }
 }
 
