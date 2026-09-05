@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
+import { HOME_NAV_INTENT_STATE } from "@/lib/scrollRestoration";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
 import { Home, Search, Mail, User, Factory } from "lucide-react";
@@ -69,7 +70,9 @@ export function AppBottomNav() {
       label: "首頁",
       isActive: location === "/",
       badge: false,
-      onClick: () => navigate("/"),
+      // 主動點首頁入口一律強制捲頂（見 client/src/lib/scrollRestoration.ts
+      // 的 HOME_NAV_INTENT_STATE 說明），不受目前捲動狀態或其他規則影響。
+      onClick: () => navigate("/", { state: HOME_NAV_INTENT_STATE }),
     },
     {
       path: "/search",

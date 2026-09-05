@@ -70,7 +70,7 @@ function AnnouncementsSection({ navigate }: { navigate: (path: string) => void }
               <div
                 key={item.id}
                 className={`flex items-start gap-4 p-4 rounded-xl border cursor-pointer hover:shadow-sm transition-shadow ${item.isPinned ? "border-orange-200 bg-orange-50/40" : "border-border bg-muted/20"}`}
-                onClick={() => navigate("/announcements")}
+                onClick={() => navigate(`/announcements?highlight=${item.id}`)}
               >
                 <div className={`shrink-0 w-8 h-8 rounded-lg flex items-center justify-center ${cfg.className}`}>
                   <Icon className="w-4 h-4" />

@@ -35,6 +35,18 @@ export const users = mysqlTable("users", {
   // 這欄是 NULL 也不會被導覽攔住。「完成」與「略過」共用同一欄位——兩者的
   // 持久化效果相同：以後都不再自動顯示導覽。
   onboardingCompletedAt: timestamp("onboardingCompletedAt"),
+  // 臺灣傳產論壇「自己主要產業預設追蹤」的一次性初始化標記（見
+  // server/db.ts 的 ensureOwnIndustryBoardFollowed 完整說明）。語意是
+  // "last initialized own-industry space code"，不是單純的 boolean 或
+  // timestamp——需要能分辨「這個 resolved own-industry 有沒有做過初始化」，
+  // 因為使用者的主要產業有可能之後改變（例如 metal-processing →
+  // electronics），每個 resolved own-industry 只在第一次成為使用者當下的
+  // own-industry 時初始化一次。NULL = 尚未對目前任何 own-industry 做過
+  // 初始化。等於某個 spaceCode = 系統已經替該 spaceCode 完成過初始化
+  // （不論 communityBoardFollows 裡那筆追蹤記錄現在是否還存在——使用者之後
+  // 手動取消，這裡不會、也不該被重置，取消必須被永久尊重直到 own-industry
+  // 真的改變）。長度沿用 communityBoardFollows.spaceCode 同一個 varchar(50)。
+  communityOwnIndustryAutoFollowedSpaceCode: varchar("communityOwnIndustryAutoFollowedSpaceCode", { length: 50 }),
   deletedAt: timestamp("deletedAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),

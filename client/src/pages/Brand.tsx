@@ -194,7 +194,15 @@ export default function Brand() {
               );
             })}
           </div>
-          <p className="mt-8 text-center text-xs leading-6 text-slate-500 sm:mt-10 sm:text-sm">工廠本來就有專業，我們只是讓它被看見。</p>
+          {/* 品牌收尾句：整個找形象頁服務定位的 closing statement，視覺層級
+              需要明顯高於一般說明文字，但刻意保持輕量——只用 border-t 分隔線
+              + 一條極細的品牌漸層小裝飾線 + 較大字級／字重，不做成第二個
+              Hero（不用 Hero 等級的 text-5xl/font-black），不加 CTA、不加
+              卡片背景。文字內容保持完全不變。 */}
+          <div className="mt-12 border-t border-orange-100 pt-8 text-center sm:mt-16 sm:pt-10">
+            <span className="mx-auto mb-4 block h-1 w-10 rounded-full bg-gradient-to-r from-orange-400 to-purple-500" aria-hidden="true" />
+            <p className="mx-auto max-w-2xl text-lg font-semibold leading-relaxed tracking-tight text-slate-900 sm:text-xl lg:text-2xl">工廠本來就有專業，我們只是讓它被看見。</p>
+          </div>
         </section>
       </main>
     </div>

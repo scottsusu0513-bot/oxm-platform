@@ -82,7 +82,12 @@ export default function Announcements() {
   useEffect(() => {
     if (!highlightId || items.length === 0) return;
     const el = document.getElementById(`announcement-${highlightId}`);
-    el?.scrollIntoView({ behavior: "smooth", block: "center" });
+    // 不用 behavior: "smooth"：這是「使用者從首頁／登入彈窗點了特定一則公告」
+    // 的明確目標定位，必須可靠地落在正確位置——smooth 動畫在部分瀏覽器情境
+    // （例如系統開啟減少動態效果、或動畫途中被其他事件中斷）可能整個不執行
+    // 或提前結束，造成使用者完全沒有捲到目標公告。直接跳過去雖然沒有滑動
+    // 動畫，但保證每次都精準落在正確位置。
+    el?.scrollIntoView({ block: "center" });
   }, [highlightId, items.length]);
 
   return (

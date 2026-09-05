@@ -1,6 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
 import { Link, useLocation } from "wouter";
+import { HOME_NAV_INTENT_STATE } from "@/lib/scrollRestoration";
 import {
   Factory, Mail, User, LogOut, LayoutDashboard, Menu, X,
   UserPlus, Search, Settings, UserCircle, ChevronDown,
@@ -419,10 +420,21 @@ export default function Navbar() {
   // 只用 overflow:hidden 在部分 iOS Safari／WebView 情況下背景仍可能滑動或跳動，
   // 這裡改用「body position:fixed + 負值 top」的做法，是目前公認在 iOS Safari／
   // Android Chrome／Capacitor WebView 都可靠的做法。
+  //
+  // 「主動回首頁必須置頂」根因之一：選單開著時如果使用者點了選單內的連結去
+  // 別的頁面（例如品牌下拉選單的「首頁」），pathname 會先變、
+  // ScrollRestorationManager 也已經正確把新頁面捲頂，但這裡的 cleanup 會在
+  // 稍後才因為 mobileOpen 變 false 而觸發，把 scrollY 無條件還原成「選單開啟
+  // 當下」在舊頁面的位置，蓋掉新頁面本來正確的捲動位置。用 window.location.
+  // pathname（即時值，不是 render 當下就固定住的 `location` closure）比對
+  // 「選單關閉當下」跟「選單開啟當下」是不是同一頁：是同一頁（單純點 X 關閉
+  // 或點選單外）才需要還原 scrollY；已經導去別的頁面，代表使用者離開了，
+  // 這裡就不該再插手新頁面的捲動位置。
   useEffect(() => {
     if (!mobileOpen || mobileMenuLockSuppressed) return;
 
     const scrollY = window.scrollY;
+    const openedAtPathname = window.location.pathname;
     const body = document.body;
 
     const previous = {
@@ -449,7 +461,9 @@ export default function Navbar() {
       body.style.width = previous.width;
       body.style.overflow = previous.overflow;
 
-      window.scrollTo(0, scrollY);
+      if (window.location.pathname === openedAtPathname) {
+        window.scrollTo(0, scrollY);
+      }
     };
   }, [mobileOpen, mobileMenuLockSuppressed]);
 
@@ -615,7 +629,7 @@ export default function Navbar() {
             className="fixed w-[160px] bg-white border border-border rounded-xl shadow-lg z-[70] py-1.5 overflow-hidden"
             style={{ top: brandMenuPos.top, left: brandMenuPos.left }}
           >
-            <Link href="/" onClick={() => setBrandMenuOpen(false)}>
+            <Link href="/" state={HOME_NAV_INTENT_STATE} onClick={() => setBrandMenuOpen(false)}>
               <div className="px-3.5 py-2 text-sm font-medium text-foreground hover:bg-orange-50 hover:text-orange-700 transition-colors cursor-pointer">
                 首頁
               </div>

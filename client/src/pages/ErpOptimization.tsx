@@ -334,7 +334,7 @@ export default function ErpOptimization() {
           <h2 className="text-lg font-semibold mb-2 flex items-center gap-2">
             <Workflow className="w-5 h-5 text-purple-500" />三條需求路徑
           </h2>
-          <p className="text-xs text-muted-foreground mb-5">先理解目前最卡在哪裡，三張卡片只協助判斷方向，實際申請統一使用下方同一個諮詢入口。</p>
+          <p className="text-xs text-muted-foreground mb-5">先理解目前最卡在哪裡，三張卡片只協助判斷方向，實際申請請透過頁面上的諮詢入口提出。</p>
           {/* 精緻 B2B 服務卡：白色表面＋hairline 邊框＋語意色僅集中在圖示底與
               頂部細色條，不再整圈飽和色底／色框。非互動卡片，不加 hover 浮起
               或 cursor pointer。 */}
@@ -354,23 +354,6 @@ export default function ErpOptimization() {
                 </Card>
               );
             })}
-          </div>
-
-          {/* 三條路共用同一個諮詢入口，不讓使用者從卡片各自申請。未來正式表單
-              會在同一個入口內把需求方向規劃成單選（ERP 導入／產線與動線優化／
-              整合改善／不確定，希望由顧問協助判斷），本輪只先呈現共用入口的
-              頁面結構，不實作正式表單。 */}
-          <div className="mt-8 text-center max-w-xl mx-auto">
-            <p className="text-sm text-muted-foreground mb-4 leading-relaxed">
-              不確定適合哪一種改善方向？也可以直接提出需求，由顧問協助判斷。
-            </p>
-            <Button
-              size="lg"
-              className="bg-gradient-to-r from-orange-500 to-purple-600 hover:opacity-90 text-white border-0 gap-2"
-              onClick={openConsultPreview}
-            >
-              申請免費初步諮詢 <ArrowRight className="w-4 h-4" />
-            </Button>
           </div>
         </div>
       </section>

@@ -6140,7 +6140,24 @@ export const appRouter = router({
     // Falls back to cross-industry if no qualifying factory or industry is found.
     getDefaultSpace: protectedProcedure.query(async ({ ctx }) => {
       checkCommunityRead(ctx.user);
-      const spaceCode = await db.getUserDefaultCommunitySpace(ctx.user.id);
+      // 自動追蹤自己主要產業看板（BUG 6，語意修正版）：spaceCode 的來源必須
+      // 跟「預設進入自己產業看板」完全同一個 resolved industry，因此直接
+      // 沿用 getUserOwnIndustrySpaceCode()（getUserDefaultCommunitySpace 內部
+      // 也是呼叫同一支函式再補上 cross-industry fallback），不另外發明一套
+      // 判斷。只有真的解析出「自己的產業」時才自動追蹤；解析不到、退回跨
+      // 產業瀏覽的情況不算「自己的主要產業」，不套用自動追蹤。
+      //
+      // ensureOwnIndustryBoardFollowed 每次進站都可以安全呼叫，但這裡強調
+      // 一個重點：它判斷的是「這個 resolved own-industry 有沒有初始化過」
+      // （users.communityOwnIndustryAutoFollowedSpaceCode），不是「現在有沒有
+      // follow 記錄」——後者曾經是舊版的錯誤語意，會把使用者手動取消自己
+      // 主產業追蹤的選擇每次重新蓋掉。只有使用者的 own-industry 真的變成另一
+      // 個 spaceCode 時，才會對新的 own-industry 重新初始化一次。
+      const ownIndustrySpaceCode = await db.getUserOwnIndustrySpaceCode(ctx.user.id);
+      if (ownIndustrySpaceCode) {
+        await db.ensureOwnIndustryBoardFollowed(ctx.user.id, ownIndustrySpaceCode);
+      }
+      const spaceCode = ownIndustrySpaceCode ?? COMMUNITY_CROSS_INDUSTRY_SLUG;
       return { spaceCode };
     }),
 

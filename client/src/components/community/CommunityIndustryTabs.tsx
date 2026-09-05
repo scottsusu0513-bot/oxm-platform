@@ -17,7 +17,22 @@ const TABS: Array<{ name: string; slug: string }> = [
 ];
 
 // 超過這個像素數才視為「拖曳」；未超過則視為一般點擊，正常切換產業。
-const DRAG_THRESHOLD_PX = 5;
+//
+// BUG 5 根因（見對話「臺灣傳產論壇看板點不進去」）：這裡原本設 5px。滑鼠
+// pointerdown → pointerup 之間，真實使用者的手幾乎不可能完全靜止在同一個
+// 像素——一般滑鼠／觸控板的正常點擊，手震或指標裝置取樣造成的誤差就經常
+// 超過 5px，等於「幾乎每一次點擊」都被 handlePointerMove 判定成
+// state.moved = true，pointerup 時設下 justDraggedRef，接著
+// handleClickCapture 在 capture 階段直接 preventDefault + stopPropagation
+// 把這次點擊整個吃掉，button 自己的 onClick（navigate）完全不會執行——但
+// button 本身仍然會因為滑鼠真的按上去而拿到瀏覽器原生 :hover / :focus-visible
+// 樣式，使用者因此看到「這個 tab 好像被選到了」的視覺效果，實際上看板內容
+// 完全沒有切換。這不是 CSS active 樣式寫錯，也不是路由或資料層的問題——
+// 用瀏覽器實測：7px 的位移就足以讓點擊完全失效，300px 的位移則是真正的拖曳
+// 卷動意圖。把門檻拉高到 15px，讓一般點擊的正常誤差不會被誤判為拖曳，同時
+// 保留滑鼠拖曳橫向捲動 tab 列的既有功能（真正想拖曳捲動的位移遠大於這個
+// 門檻，不受影響）。
+const DRAG_THRESHOLD_PX = 15;
 
 export default function CommunityIndustryTabs({ activeSpaceCode }: Props) {
   const [, navigate] = useLocation();

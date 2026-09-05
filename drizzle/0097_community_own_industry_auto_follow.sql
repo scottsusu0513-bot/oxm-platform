@@ -1,0 +1,31 @@
+-- 臺灣傳產論壇「自己主要產業預設追蹤」的一次性初始化標記（見
+-- server/db.ts 的 ensureOwnIndustryBoardFollowed 完整說明，取代上一輪
+-- 會被使用者手動取消後又自動復活的錯誤語意）。
+--
+-- 語意是 "last initialized own-industry space code"：
+--   NULL        = 尚未對目前任何 own-industry 做過 auto-follow 初始化。
+--   某個 spaceCode = 系統已經替該使用者完成過這個 spaceCode 的初始化，
+--                    不論 communityBoardFollows 裡那筆追蹤記錄現在是否
+--                    還存在（使用者之後手動取消追蹤，不會、也不該被這裡
+--                    重置——取消必須被永久尊重，直到使用者的 own-industry
+--                    真的改變成另一個 spaceCode 為止）。
+-- 刻意不用單純的 boolean 或 timestamp：需要能分辨「使用者的主要產業變更
+-- 後，新的 own-industry 尚未初始化過」這個情境，才能對新的 own-industry
+-- 重新做一次預設追蹤。
+--
+-- 欄位 nullable、無 default，套用後所有既有 users row 這欄都是 NULL——
+-- 這是刻意的：不得幫既有使用者捏造一個「已經初始化過」的假紀錄，也不會
+-- 幫既有使用者回填任何 communityBoardFollows 資料。既有使用者上線後第一次
+-- 進論壇，會對目前的 own-industry 做一次初始化（可接受的 transitional
+-- behavior，見對話說明）；之後再取消就會被永久尊重。
+--
+-- 長度沿用 communityBoardFollows.spaceCode 同一個 varchar(50)，不自行
+-- 猜測較小長度。
+--
+-- 只新增這一個欄位，不 UPDATE、不 backfill、不 DROP、不 RENAME 任何既有
+-- 欄位；不修改 communityBoardFollows 的 schema 或 unique index。
+--
+-- 只套用到 local oxm / oxm_test，不套 production。
+
+ALTER TABLE `users`
+  ADD COLUMN `communityOwnIndustryAutoFollowedSpaceCode` varchar(50) NULL;

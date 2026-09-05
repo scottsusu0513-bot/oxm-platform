@@ -6756,10 +6756,11 @@ export async function getCommunityAuthorIdentityOptions(userId: number): Promise
 }
 
 // Pure function: given an ordered factory list (owner-first, then co-managers, each sorted by id ASC),
-// returns the first valid Community spaceCode derived from factory industries, or cross-industry as fallback.
-export function resolveDefaultCommunitySpace(
+// returns the first valid Community spaceCode derived from factory industries, or null if none of the
+// factories has a recognisable industry (i.e. the user has no resolvable "own industry").
+export function resolveOwnIndustrySpaceCode(
   orderedFactories: Array<{ industry: string[] | null }>
-): string {
+): string | null {
   for (const factory of orderedFactories) {
     const industries: string[] = Array.isArray(factory.industry) ? factory.industry : [];
     for (const ind of industries) {
@@ -6767,15 +6768,26 @@ export function resolveDefaultCommunitySpace(
       if (slug) return slug;
     }
   }
-  return COMMUNITY_CROSS_INDUSTRY_SLUG;
+  return null;
 }
 
-// Returns the default Community spaceCode for a user based on their approved factories.
+// Pure function: same resolution as resolveOwnIndustrySpaceCode, but falls back to cross-industry
+// for callers that only care about "which board to land on" (not "does the user have an own industry").
+export function resolveDefaultCommunitySpace(
+  orderedFactories: Array<{ industry: string[] | null }>
+): string {
+  return resolveOwnIndustrySpaceCode(orderedFactories) ?? COMMUNITY_CROSS_INDUSTRY_SLUG;
+}
+
+// Returns the user's own-industry Community spaceCode based on their approved factories, or null if
+// none of their approved factories has a recognisable industry (e.g. no factory at all, or industry
+// not in INDUSTRY_SLUGS). This is the single source of truth for "own primary industry" — reused both
+// by getUserDefaultCommunitySpace (default landing board) and by the forum's auto-follow-own-industry
+// behavior, so the two never drift apart.
 // Stable ordering: owner factories first (sorted by id ASC), then active co-managed factories (sorted by id ASC).
-// Falls back to cross-industry if no approved factory has a recognisable industry.
-export async function getUserDefaultCommunitySpace(userId: number): Promise<string> {
+export async function getUserOwnIndustrySpaceCode(userId: number): Promise<string | null> {
   const db = await getDb();
-  if (!db) return COMMUNITY_CROSS_INDUSTRY_SLUG;
+  if (!db) return null;
 
   // Owner's approved factory (ownerId is unique so at most 1 row), stable by id ASC
   const ownedRows = await db
@@ -6795,7 +6807,65 @@ export async function getUserDefaultCommunitySpace(userId: number): Promise<stri
     .where(and(eq(factoryCoManagers.userId, userId), isNull(factoryCoManagers.removedAt)))
     .orderBy(asc(factories.id));
 
-  return resolveDefaultCommunitySpace([...ownedRows, ...coMgrRows]);
+  return resolveOwnIndustrySpaceCode([...ownedRows, ...coMgrRows]);
+}
+
+// Returns the default Community spaceCode for a user (their own industry board, or cross-industry
+// if they have none) — used purely to decide which board to land on by default.
+export async function getUserDefaultCommunitySpace(userId: number): Promise<string> {
+  const ownIndustrySpaceCode = await getUserOwnIndustrySpaceCode(userId);
+  return ownIndustrySpaceCode ?? COMMUNITY_CROSS_INDUSTRY_SLUG;
+}
+
+// Returns the own-industry spaceCode this user's auto-follow was last initialized for, or null if
+// it has never been initialized for any own-industry yet. See ensureOwnIndustryBoardFollowed below
+// for the full semantics — this is deliberately "last initialized spaceCode", not a boolean or a
+// timestamp, so a later change in the user's own industry can be detected and re-initialized once.
+export async function getUserCommunityOwnIndustryAutoFollowedSpaceCode(userId: number): Promise<string | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select({ code: users.communityOwnIndustryAutoFollowedSpaceCode })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+  return rows[0]?.code ?? null;
+}
+
+async function markCommunityOwnIndustryAutoFollowed(userId: number, spaceCode: string): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(users)
+    .set({ communityOwnIndustryAutoFollowedSpaceCode: spaceCode })
+    .where(eq(users.id, userId));
+}
+
+// Auto-follows the user's own-industry board exactly once per resolved own-industry, then leaves it
+// alone forever — including if the user later manually unfollows it. This is NOT "does a follow
+// record currently exist" (that would resurrect a deliberate unfollow on every subsequent visit —
+// the exact bug this replaces); it's "has this specific own-industry spaceCode ever been initialized
+// for this user", tracked via users.communityOwnIndustryAutoFollowedSpaceCode:
+//
+//   - initialized === ownIndustrySpaceCode → this own-industry was already handled before (whether
+//     the user is currently following it or not is irrelevant and must not be inspected here — a
+//     manual unfollow after initialization is a deliberate choice that must be respected forever,
+//     until the user's own industry actually changes to a different spaceCode).
+//   - initialized is null or a different spaceCode → this own-industry has never been initialized.
+//     Follow it only if not already followed (avoids clobbering notifyNewDiscussions on an existing
+//     manual follow), then mark it initialized. The mark-as-initialized write only happens after the
+//     follow already exists or was created successfully — never before — so a failed follow can never
+//     be mistaken for a completed initialization.
+//
+// spaceCode must be a real resolved own-industry slug (never the cross-industry fallback — that
+// isn't an "own industry", so it must never be auto-followed or initialized).
+export async function ensureOwnIndustryBoardFollowed(userId: number, ownIndustrySpaceCode: string): Promise<void> {
+  const initializedSpaceCode = await getUserCommunityOwnIndustryAutoFollowedSpaceCode(userId);
+  if (initializedSpaceCode === ownIndustrySpaceCode) return;
+
+  const existing = await getBoardFollowStatus(userId, ownIndustrySpaceCode);
+  if (!existing) {
+    await followBoard(userId, ownIndustrySpaceCode);
+  }
+  await markCommunityOwnIndustryAutoFollowed(userId, ownIndustrySpaceCode);
 }
 
 export interface CommunityPostWithMeta extends Omit<CommunityPost, "images"> {

@@ -100,6 +100,19 @@ describe("CommunityIndustryTabs — 桌機滑鼠拖曳捲動", () => {
     expect(list.scrollLeft).toBe(0);
   });
 
+  it("BUG 5 回歸：真實滑鼠點擊常見的 7px 手震位移，仍必須視為點擊、正常切換看板（舊 threshold=5 時這裡會失敗——這正是「看板點不進去」回報的根因，而非路由或資料層問題）", () => {
+    render(<CommunityIndustryTabs activeSpaceCode="cross-industry" />);
+    const list = getTablist();
+    Object.defineProperty(list, "scrollLeft", { value: 0, writable: true, configurable: true });
+    const tab = getTab("電子零件");
+
+    fireEvent.pointerDown(tab, { pointerType: "mouse", clientX: 200, pointerId: 1 });
+    fireEvent.pointerMove(list, { pointerType: "mouse", clientX: 193, pointerId: 1 }); // 7px 手震，真實滑鼠點擊常見範圍
+    fireEvent.pointerUp(tab, { pointerType: "mouse", clientX: 193, pointerId: 1 });
+    fireEvent.click(tab);
+    expect(mockNavigate).toHaveBeenCalledWith(expect.stringContaining("/discussions"));
+  });
+
   it("touch pointer 完全不觸發自訂拖曳邏輯，維持瀏覽器原生 touch-scroll", () => {
     render(<CommunityIndustryTabs activeSpaceCode="cross-industry" />);
     const list = getTablist();

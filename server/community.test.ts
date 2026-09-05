@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeEach, afterEach, beforeAll, afterAll, vi } from "vitest";
 import { appRouter } from "./routers";
 import type { TrpcContext } from "./_core/context";
-import { resolveDefaultCommunitySpace, approveCommunityBid, rejectCommunityBid, withdrawCommunityBid, softDeleteCommunityBid, getCommunityBidIndustries, listCommunityBidReviewHistory, updateCommunityBid, getCommunityBidById, getDb, createCommunityBidOffer, withdrawCommunityBidOffer, resubmitCommunityBidOffer, getCommunityBidOfferById, getCommunityBidOfferByFactory, getCommunityBidOfferByUser, getCommunityBidOfferCount, listCommunityBidOffersForOwner, getApprovedFactoriesForUser, setTestBidDeadlinePast, setTestBidStatus, updateCommunityBidOfferSafe } from "./db";
+import { resolveDefaultCommunitySpace, approveCommunityBid, rejectCommunityBid, withdrawCommunityBid, softDeleteCommunityBid, getCommunityBidIndustries, listCommunityBidReviewHistory, updateCommunityBid, getCommunityBidById, getDb, createCommunityBidOffer, withdrawCommunityBidOffer, resubmitCommunityBidOffer, getCommunityBidOfferById, getCommunityBidOfferByFactory, getCommunityBidOfferByUser, getCommunityBidOfferCount, listCommunityBidOffersForOwner, getApprovedFactoriesForUser, setTestBidDeadlinePast, setTestBidStatus, updateCommunityBidOfferSafe, getUserCommunityOwnIndustryAutoFollowedSpaceCode } from "./db";
 import { communityNotifications, communityMentions, communityPosts, communityComments } from "../drizzle/schema";
 import { COMMUNITY_CROSS_INDUSTRY_SLUG, COMMUNITY_IMAGE_MAX_BYTES, COMMUNITY_IMAGE_MAX_MB } from "../shared/const";
 import { factories as factoriesTable } from "../drizzle/schema";
@@ -1990,6 +1990,206 @@ describe("community.getDefaultSpace", () => {
     ]);
     expect(VALID.has(result.spaceCode)).toBe(true);
   }, 10000);
+});
+
+// ===== BUG 6 (語意修正版): auto-follow own-industry board, exactly once per resolved own-industry =====
+// spaceCode 的來源必須跟「預設進入自己產業看板」完全同一個 resolved industry
+// （db.getUserOwnIndustrySpaceCode），這裡驗證的是行為，不是實作細節：呼叫
+// 真正的 community.getDefaultSpace + community.boardFollowStatus tRPC 端點，
+// 跟前端實際會呼叫的路徑完全一樣。
+//
+// 核心修正：上一輪的實作只看「follow record 現在存不存在」，導致使用者手動
+// 取消自己主產業的追蹤後，下一次進站（或單純 refresh）又會被自動補回——這是
+// 「永久強制追蹤」，不是「第一次預設」。這一輪改用
+// users.communityOwnIndustryAutoFollowedSpaceCode 記錄「這個 resolved
+// own-industry 有沒有初始化過」，取消之後不再檢查 follow 是否存在、也不再
+// 重新建立，直到使用者的 own-industry 真的變成另一個 spaceCode 為止。
+describe("community.getDefaultSpace — auto-follow own industry exactly once per resolved own-industry", () => {
+  const OWN_INDUSTRY_USER_ID = 999_000_010; // scenarios 1, 2, 7: first-time init + repeat visit + other manual follow untouched
+  const NO_INDUSTRY_USER_ID = 999_000_011; // scenario 8: no resolvable own industry
+  const UNFOLLOW_USER_ID = 999_000_012; // scenarios 3, 4: manual unfollow must persist across repeated "refresh" calls
+  const PRE_FOLLOWED_USER_ID = 999_000_013; // scenario 5: already manually followed own industry before ever being initialized
+  const INDUSTRY_CHANGE_USER_ID = 999_000_014; // scenario 6: own industry changes → re-initializes for the new one only
+
+  const factoryIds: Record<number, number> = {};
+
+  async function createUserWithIndustryFactory(conn: NonNullable<Awaited<ReturnType<typeof getDb>>>, userId: number, industry: string[]): Promise<number> {
+    await conn.execute(drizzleSql`
+      INSERT INTO users (id, openId, email, name, role, lastSignedIn)
+      VALUES (${userId}, ${`community-test-bug6-user-${userId}`}, ${`community-test-bug6-user-${userId}@example.test`}, ${`Community Test BUG6 User ${userId}`}, 'admin', NOW())
+      ON DUPLICATE KEY UPDATE id = id
+    `);
+    const [result] = await conn.insert(factoriesTable).values({
+      ownerId: userId,
+      name: `Community Test BUG6 Factory ${userId}`,
+      industry,
+      mfgModes: ["ODM"],
+      region: "台北市",
+      capitalLevel: "未滿500萬",
+      status: "approved",
+    } as any);
+    return (result as any).insertId as number;
+  }
+
+  beforeAll(async () => {
+    const conn = await getDb();
+    if (!conn) throw new Error("no db");
+    factoryIds[OWN_INDUSTRY_USER_ID] = await createUserWithIndustryFactory(conn, OWN_INDUSTRY_USER_ID, ["紡織"]);
+    factoryIds[UNFOLLOW_USER_ID] = await createUserWithIndustryFactory(conn, UNFOLLOW_USER_ID, ["紡織"]);
+    factoryIds[PRE_FOLLOWED_USER_ID] = await createUserWithIndustryFactory(conn, PRE_FOLLOWED_USER_ID, ["紡織"]);
+    factoryIds[INDUSTRY_CHANGE_USER_ID] = await createUserWithIndustryFactory(conn, INDUSTRY_CHANGE_USER_ID, ["紡織"]);
+    // NO_INDUSTRY_USER_ID 刻意沒有任何 approved 工廠——resolveOwnIndustrySpaceCode 應該回傳 null。
+    await conn.execute(drizzleSql`
+      INSERT INTO users (id, openId, email, name, role, lastSignedIn)
+      VALUES (${NO_INDUSTRY_USER_ID}, ${`community-test-bug6-user-${NO_INDUSTRY_USER_ID}`}, ${`community-test-bug6-user-${NO_INDUSTRY_USER_ID}@example.test`}, ${`Community Test BUG6 User ${NO_INDUSTRY_USER_ID}`}, 'admin', NOW())
+      ON DUPLICATE KEY UPDATE id = id
+    `);
+  });
+
+  afterAll(async () => {
+    const conn = await getDb();
+    if (!conn) return;
+    for (const factoryId of Object.values(factoryIds)) {
+      await conn.execute(drizzleSql`DELETE FROM factories WHERE id = ${factoryId}`);
+    }
+    // users(id) FK on communityBoardFollows.userId is ON DELETE CASCADE — deleting
+    // the user also cleans up any follow rows created by these tests.
+    for (const id of [OWN_INDUSTRY_USER_ID, NO_INDUSTRY_USER_ID, UNFOLLOW_USER_ID, PRE_FOLLOWED_USER_ID, INDUSTRY_CHANGE_USER_ID]) {
+      await conn.execute(drizzleSql`DELETE FROM users WHERE id = ${id}`);
+    }
+  });
+
+  // 1. First-time: initialized=NULL, own industry=textile, not following → auto-follow + initialized=textile.
+  it("first visit: resolves own industry, auto-follows it, and records it as initialized", async () => {
+    expect(await getUserCommunityOwnIndustryAutoFollowedSpaceCode(OWN_INDUSTRY_USER_ID)).toBeNull();
+    const caller = appRouter.createCaller(createAuthContext({ role: "admin", id: OWN_INDUSTRY_USER_ID }));
+    const result = await caller.community.getDefaultSpace();
+    expect(result.spaceCode).toBe("textile");
+    const status = await caller.community.boardFollowStatus({ spaceCode: "textile" });
+    expect(status.following).toBe(true);
+    expect(await getUserCommunityOwnIndustryAutoFollowedSpaceCode(OWN_INDUSTRY_USER_ID)).toBe("textile");
+  });
+
+  // 2. Repeat visit: initialized=textile, following=true → no duplicate INSERT, no error.
+  it("repeat visit after initialization: does not duplicate the follow or error out", async () => {
+    const caller = appRouter.createCaller(createAuthContext({ role: "admin", id: OWN_INDUSTRY_USER_ID }));
+    await caller.community.getDefaultSpace();
+    await caller.community.getDefaultSpace();
+    const status = await caller.community.boardFollowStatus({ spaceCode: "textile" });
+    expect(status.following).toBe(true);
+    expect(status.notifyNewDiscussions).toBe(true);
+    expect(await getUserCommunityOwnIndustryAutoFollowedSpaceCode(OWN_INDUSTRY_USER_ID)).toBe("textile");
+  });
+
+  // 7. Other manual follow (plastic) is fully preserved by the own-industry auto-follow.
+  it("a manually-followed other board is fully preserved after the own-industry auto-follow runs", async () => {
+    const caller = appRouter.createCaller(createAuthContext({ role: "admin", id: OWN_INDUSTRY_USER_ID }));
+    await caller.community.followBoard({ spaceCode: "plastic" });
+    await caller.community.getDefaultSpace();
+    const plastic = await caller.community.boardFollowStatus({ spaceCode: "plastic" });
+    const textile = await caller.community.boardFollowStatus({ spaceCode: "textile" });
+    expect(plastic.following).toBe(true);
+    expect(textile.following).toBe(true);
+    await caller.community.unfollowBoard({ spaceCode: "plastic" });
+  });
+
+  // 3 & 4. THE most important regression: manual unfollow of one's own industry must survive
+  // repeated getDefaultSpace calls (the "refresh" case) forever — never resurrected.
+  it("manually unfollowing own industry: repeated getDefaultSpace calls (refresh) never recreate the follow", async () => {
+    const caller = appRouter.createCaller(createAuthContext({ role: "admin", id: UNFOLLOW_USER_ID }));
+
+    // First visit: auto-follow + initialize, same as scenario 1.
+    await caller.community.getDefaultSpace();
+    expect((await caller.community.boardFollowStatus({ spaceCode: "textile" })).following).toBe(true);
+    expect(await getUserCommunityOwnIndustryAutoFollowedSpaceCode(UNFOLLOW_USER_ID)).toBe("textile");
+
+    // User explicitly unfollows their own industry board.
+    await caller.community.unfollowBoard({ spaceCode: "textile" });
+    expect((await caller.community.boardFollowStatus({ spaceCode: "textile" })).following).toBe(false);
+
+    // "Refresh" #1: getDefaultSpace called again — must NOT recreate the follow.
+    const afterRefresh1 = await caller.community.getDefaultSpace();
+    expect(afterRefresh1.spaceCode).toBe("textile");
+    expect((await caller.community.boardFollowStatus({ spaceCode: "textile" })).following).toBe(false);
+
+    // "Refresh" #2: proves this is permanent, not just skipped once.
+    await caller.community.getDefaultSpace();
+    expect((await caller.community.boardFollowStatus({ spaceCode: "textile" })).following).toBe(false);
+
+    // The initialized marker itself must remain unchanged (still "textile") — it is not cleared
+    // by the unfollow, which is exactly what makes the skip permanent.
+    expect(await getUserCommunityOwnIndustryAutoFollowedSpaceCode(UNFOLLOW_USER_ID)).toBe("textile");
+  });
+
+  // 5. User already manually following their own industry BEFORE it was ever initialized:
+  // must not duplicate the follow (must not reset notifyNewDiscussions), only mark initialized.
+  it("already manually following own industry with initialized=NULL: does not duplicate the follow, only marks it initialized", async () => {
+    const caller = appRouter.createCaller(createAuthContext({ role: "admin", id: PRE_FOLLOWED_USER_ID }));
+    // Manually follow with a non-default notifyNewDiscussions so we can prove followBoard was NOT
+    // called again by ensureOwnIndustryBoardFollowed (which would reset it back to true).
+    await caller.community.followBoard({ spaceCode: "textile", notifyNewDiscussions: false });
+    expect(await getUserCommunityOwnIndustryAutoFollowedSpaceCode(PRE_FOLLOWED_USER_ID)).toBeNull();
+
+    await caller.community.getDefaultSpace();
+
+    const status = await caller.community.boardFollowStatus({ spaceCode: "textile" });
+    expect(status.following).toBe(true);
+    expect(status.notifyNewDiscussions).toBe(false); // unchanged — proves no re-follow happened
+    expect(await getUserCommunityOwnIndustryAutoFollowedSpaceCode(PRE_FOLLOWED_USER_ID)).toBe("textile");
+  });
+
+  // 6. Own industry changes (metal/textile → electronics): re-initializes for the NEW own-industry
+  // only, without touching the previous own-industry's existing follow state.
+  it("own industry changes: auto-follows and initializes the new own-industry, without touching the old one's follow state", async () => {
+    const conn = await getDb();
+    if (!conn) throw new Error("no db");
+    const caller = appRouter.createCaller(createAuthContext({ role: "admin", id: INDUSTRY_CHANGE_USER_ID }));
+
+    // First: own industry is textile, gets initialized normally.
+    let result = await caller.community.getDefaultSpace();
+    expect(result.spaceCode).toBe("textile");
+    expect((await caller.community.boardFollowStatus({ spaceCode: "textile" })).following).toBe(true);
+    expect(await getUserCommunityOwnIndustryAutoFollowedSpaceCode(INDUSTRY_CHANGE_USER_ID)).toBe("textile");
+
+    // Own industry changes to electronics (e.g. factory's industry classification updated).
+    await conn.execute(drizzleSql`UPDATE factories SET industry = '["電子零件"]' WHERE id = ${factoryIds[INDUSTRY_CHANGE_USER_ID]}`);
+
+    result = await caller.community.getDefaultSpace();
+    expect(result.spaceCode).toBe("electronics");
+    expect((await caller.community.boardFollowStatus({ spaceCode: "electronics" })).following).toBe(true);
+    expect(await getUserCommunityOwnIndustryAutoFollowedSpaceCode(INDUSTRY_CHANGE_USER_ID)).toBe("electronics");
+
+    // The old own-industry's follow state must be untouched (still following — never auto-unfollowed).
+    expect((await caller.community.boardFollowStatus({ spaceCode: "textile" })).following).toBe(true);
+  });
+
+  // 8. No resolvable own industry → falls back to cross-industry, never auto-followed there.
+  it("a user with no resolvable own industry falls back to cross-industry and is NOT auto-followed there", async () => {
+    const caller = appRouter.createCaller(createAuthContext({ role: "admin", id: NO_INDUSTRY_USER_ID }));
+    const result = await caller.community.getDefaultSpace();
+    expect(result.spaceCode).toBe("cross-industry");
+    const status = await caller.community.boardFollowStatus({ spaceCode: "cross-industry" });
+    expect(status.following).toBe(false);
+    expect(await getUserCommunityOwnIndustryAutoFollowedSpaceCode(NO_INDUSTRY_USER_ID)).toBeNull();
+  });
+
+  // 9. Unauthenticated: no side effect at all.
+  it("unauthenticated visitors get no auto-follow side effect (getDefaultSpace rejects before any write)", async () => {
+    const caller = appRouter.createCaller(createPublicContext());
+    await expect(caller.community.getDefaultSpace()).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+  });
+
+  // 10. No request/mutation loop: once initialized, repeated calls settle immediately (Case B
+  // short-circuits before touching communityBoardFollows at all) and never change the marker again.
+  it("does not cause a request/mutation loop: once initialized, the marker itself never changes across further calls", async () => {
+    const caller = appRouter.createCaller(createAuthContext({ role: "admin", id: OWN_INDUSTRY_USER_ID }));
+    const before = await getUserCommunityOwnIndustryAutoFollowedSpaceCode(OWN_INDUSTRY_USER_ID);
+    for (let i = 0; i < 5; i++) {
+      await caller.community.getDefaultSpace();
+    }
+    const after = await getUserCommunityOwnIndustryAutoFollowedSpaceCode(OWN_INDUSTRY_USER_ID);
+    expect(after).toBe(before);
+  });
 });
 
 // ===== community.getSpaces — ordering =====

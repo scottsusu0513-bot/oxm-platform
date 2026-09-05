@@ -185,7 +185,7 @@ describe("Navbar.tsx: 手機版六入口 Accordion 使用單一 state", () => {
 
   it("品牌選單「首頁」也是真的 <Link>，且點擊會先關閉品牌選單", () => {
     const brandMatch = source.match(
-      /<Link href="\/" onClick=\{\(\) => setBrandMenuOpen\(false\)\}>/
+      /<Link href="\/" state=\{HOME_NAV_INTENT_STATE\} onClick=\{\(\) => setBrandMenuOpen\(false\)\}>/
     );
     expect(brandMatch, "找不到品牌選單「首頁」連結").not.toBeNull();
   });

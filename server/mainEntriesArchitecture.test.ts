@@ -39,7 +39,7 @@ describe("Navbar 主要入口順序與可進入性（client/src/components/Navba
     const brandMenuMatch = source.match(/\{brandMenuOpen && brandMenuPos && createPortal\([\s\S]*?document\.body\s*\)\}/);
     expect(brandMenuMatch, "找不到 OXM 品牌下拉選單區塊").not.toBeNull();
     const brandMenu = brandMenuMatch![0];
-    expect(brandMenu).toMatch(/<Link href="\/" onClick=\{\(\) => setBrandMenuOpen\(false\)\}>/);
+    expect(brandMenu).toMatch(/<Link href="\/" state=\{HOME_NAV_INTENT_STATE\} onClick=\{\(\) => setBrandMenuOpen\(false\)\}>/);
     expect(brandMenu).toMatch(/首頁/);
     expect(brandMenu).toMatch(/<Link href="\/about" onClick=\{\(\) => setBrandMenuOpen\(false\)\}>/);
     expect(brandMenu).toMatch(/關於 OXM/);

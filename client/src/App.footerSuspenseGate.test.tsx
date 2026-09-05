@@ -36,9 +36,13 @@ function readAppSource(): string {
 describe("App.tsx（原始碼斷言）: FooterGate 在 Suspense 內、跟 Switch 同一層", () => {
   const source = readAppSource();
 
-  it("Router() 的 <Suspense> 內，<FooterGate/> 緊接在 </Switch> 之後、</Suspense> 之前", () => {
-    const match = source.match(/<Suspense fallback=\{<PageFallback \/>\}>\s*<Switch>[\s\S]*?<\/Switch>\s*<FooterGate \/>\s*<\/Suspense>/);
-    expect(match, "找不到「</Switch> 後緊接 <FooterGate/>，且兩者都在同一個 <Suspense> 內」的結構").not.toBeNull();
+  it("Router() 的 <Suspense> 內，<FooterGate/> 緊接在 </Switch>（外層是 BUG 2 loading-shell 的 min-h-screen 包裹 div）之後、</Suspense> 之前", () => {
+    // BUG 2（新頁面偶發先看到 Footer、最後卡在頁尾）修正：<Switch> 外面多包了
+    // 一層 min-h-screen 的 div，保證頁面內容區至少一個視窗高，但 <FooterGate/>
+    // 仍然必須在同一個 <Suspense> 內、緊接在這層 wrapper 之後，不能被搬到
+    // <Suspense> 外面（那就是 Phase 1/2 修過的原始 bug）。
+    const match = source.match(/<Suspense fallback=\{<PageFallback \/>\}>[\s\S]*?<div className="min-h-screen">\s*<Switch>[\s\S]*?<\/Switch>\s*<\/div>\s*<FooterGate \/>\s*<\/Suspense>/);
+    expect(match, "找不到「min-h-screen wrapper 內的 </Switch> 後緊接 <FooterGate/>，且兩者都在同一個 <Suspense> 內」的結構").not.toBeNull();
   });
 
   it("App() 本體不再直接掛 <FooterGate/>（不是 <Router/> 的兄弟節點——那是修正前的錯誤結構）", () => {

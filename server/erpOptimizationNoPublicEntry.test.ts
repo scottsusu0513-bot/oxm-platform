@@ -182,24 +182,36 @@ describe("/erp-optimization CTA 導向正式申請表單 /erp-optimization/apply
 
   it("CTA 一律呼叫 openConsultPreview，內部導向 /erp-optimization/apply", () => {
     expect(source).toMatch(/openConsultPreview\s*=\s*\(\)\s*=>\s*navigate\("\/erp-optimization\/apply"\)/);
-    // 首屏、三條路徑下方共同入口、最終 CTA，剛好 3 個（三張需求卡片本身
-    // 沒有各自的按鈕，不應再重新出現第 4、第 5 個 CTA）。
+    // 產品決策更新：「三條需求路徑」區塊下方的共用諮詢入口已移除（整頁 CTA
+    // 密度過高），現在只剩首屏與最終收尾兩個 CTA，剛好 2 個——不應該再出現
+    // 第 3 個。舊版這裡曾經是「首屏、三條路徑下方共同入口、最終 CTA，剛好
+    // 3 個」，該共用入口本身是更早一輪把三張卡片各自的按鈕合併而來，但這一輪
+    // 產品決策已確認連這個合併後的共用入口也要整個拿掉，不是回到三個獨立
+    // 按鈕，也不是重新出現任何第 3 個 CTA。
     const ctaCallCount = (source.match(/onClick=\{openConsultPreview\}/g) ?? []).length;
-    expect(ctaCallCount).toBe(3);
+    expect(ctaCallCount).toBe(2);
   });
 
   it("三張需求路徑卡片內不再各自出現諮詢按鈕（NEED_PATHS 卡片區塊沒有 Button）", () => {
     // Card／CardContent 是元件標籤（非原生 <div>），所以從 NEED_PATHS.map 開始
     // 找到第一個原生 </div>，就剛好是卡片外層 grid wrapper 的收尾，涵蓋整個
-    // 卡片渲染區塊但不會不小心吃到後面共同 CTA 區塊的內容。
+    // 卡片渲染區塊但不會不小心吃到後面內容。
     const cardsBlockMatch = source.match(/\{NEED_PATHS\.map[\s\S]*?<\/div>/);
     expect(cardsBlockMatch).toBeTruthy();
     expect(cardsBlockMatch![0]).not.toMatch(/<Button/);
     expect(cardsBlockMatch![0]).not.toMatch(/免費初步諮詢/);
   });
 
-  it("三張卡片下方只有一個共同諮詢入口，說明文字與按鈕都存在", () => {
-    expect(source).toMatch(/不確定適合哪一種改善方向？也可以直接提出需求，由顧問協助判斷。/);
+  it("「三條需求路徑」區塊（卡片 grid 到 section 結尾）完全沒有共用諮詢 CTA，也沒有搭配該 CTA 的說明文字", () => {
+    // 錨定 section 開頭的獨有註解（而不是「三條需求路徑」這個字串本身——它在
+    // 檔案更上面的註解與 FAQ 文案裡也出現過，用字串本身當錨點會不小心把
+    // Hero 區塊也框進來）。
+    const sectionMatch = source.match(/\{\/\* ── 3\. 三條需求路徑[\s\S]*?NEED_PATHS\.map[\s\S]*?<\/div>\s*<\/div>\s*<\/section>/);
+    expect(sectionMatch, "找不到「三條需求路徑」section 的結尾範圍").not.toBeNull();
+    expect(sectionMatch![0]).not.toMatch(/申請免費初步諮詢/);
+    expect(sectionMatch![0]).not.toMatch(/<Button/);
+    // 舊版共用入口專屬的說明文字，隨 CTA 一起移除，不得殘留成沒有按鈕的孤立文案。
+    expect(sectionMatch![0]).not.toMatch(/不確定適合哪一種改善方向？也可以直接提出需求，由顧問協助判斷。/);
   });
 
   it("內容頁本身不要求登入（登入與工廠資格檢查在 /erp-optimization/apply 頁進行）", () => {

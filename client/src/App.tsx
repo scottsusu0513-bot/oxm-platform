@@ -2,7 +2,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Route, Switch, useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
-import { lazy, Suspense, useEffect, useState, useMemo } from "react";
+import { lazy, Suspense, useEffect, useState, useMemo, useRef } from "react";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { HelmetProvider } from "react-helmet-async";
@@ -18,6 +18,7 @@ import { GlobalAiShell } from "@/components/ai/GlobalAiShell";
 import { FloatingActionStack } from "@/components/FloatingActionStack";
 import { isAiShellExcludedPath } from "@/lib/aiShellRoutes";
 import { isFooterExcludedPath } from "@/lib/footerRoutes";
+import { decideScrollNavigationAction, hasExplicitScrollTarget, isHomeNavigationIntentState } from "@/lib/scrollRestoration";
 import { ConsentGate } from "@/components/ConsentGate";
 import { OnboardingTour } from "@/components/OnboardingTour";
 import { Footer } from "@/components/Footer";
@@ -363,6 +364,13 @@ function FooterGate() {
 function Router() {
   return (
     <Suspense fallback={<PageFallback />}>
+      {/* BUG 2 loading-shell 修正：不論個別頁面自己內部的資料還在載入、還是
+          內容本來就短，這層 min-h-screen 保證「頁面內容區」至少佔滿一個
+          視窗高度，Footer（下面同一層的 <FooterGate/>）永遠不會在頁面主要
+          內容還沒 ready 前被瀏覽器往上推進可視範圍。真正撐滿高度後（頁面
+          內容 > 一個視窗）這層 min-height 不會有任何視覺影響，只在內容還
+          矮的短暫期間生效。 */}
+      <div className="min-h-screen">
       <Switch>
         <Route path="/" component={Home} />
         <Route path="/search" component={Search} />
@@ -454,6 +462,7 @@ function Router() {
         <Route path="/404" component={NotFound} />
         <Route component={NotFound} />
       </Switch>
+      </div>
       <FooterGate />
     </Suspense>
   );
@@ -497,6 +506,59 @@ function RouteTracker() {
   return null;
 }
 
+// BUG 2 — 「新頁面偶發先看到 Footer、最後卡在頁尾」的全域修正（見對話「BUG
+// 2」Audit、client/src/lib/scrollRestoration.ts 的完整說明）。決策邏輯本身
+// 抽成純函式 decideScrollNavigationAction，這裡只負責：
+// 1. 用一個不觸發 re-render 的 ref 記錄「這次 pathname 變化是不是由瀏覽器
+//    原生 popstate（上一頁／下一頁）觸發」——popstate 監聽器與 pathname 變化
+//    的 effect 都是同一輪 event loop 內同步／依序處理，ref 寫入不需要等
+//    re-render，能可靠地在 effect 讀取到當下這次導航的真實來源。
+// 2. 只有「新導航」才 window.scrollTo(0, 0)；popstate（返回／前進）與
+//    reload 後的第一次判斷一律不動 scroll，交給瀏覽器原生行為與各頁面
+//    既有的還原邏輯（例如 FactoryDetail.tsx 自己對 factoryId 變化的處理），
+//    避免蓋掉「搜尋結果→工廠頁→返回搜尋結果」這類既有保留位置的體驗。
+// 3. explicit-target navigation（URL 帶 hash 或 `?highlight=<id>`，例如首頁
+//    公告卡片導到 /announcements 指定那一則）：不強制捲頂，交給目標頁自己的
+//    scrollIntoView 定位（見 scrollRestoration.ts 的 hasExplicitScrollTarget）。
+// 4. home-navigation intent（使用者主動點擊 App 內建首頁入口，見
+//    scrollRestoration.ts 的 HOME_NAV_INTENT_STATE／isHomeNavigationIntentState）：
+//    無論其餘規則怎麼判斷，一律強制捲頂；但永遠排在 popstate 判斷之後，不會
+//    誤判瀏覽器返回鍵回首頁這筆 history entry。
+let _scrollManagerMounted = false; // resets on page refresh，用來判斷「這次掛載後的第一次」
+
+function ScrollRestorationManager() {
+  const [pathname] = useLocation();
+  const isPopStateRef = useRef(false);
+  const previousPathnameRef = useRef<string | null>(null);
+  const isFirstRunRef = useRef(!_scrollManagerMounted);
+
+  useEffect(() => {
+    const handlePopState = () => { isPopStateRef.current = true; };
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
+
+  useEffect(() => {
+    const action = decideScrollNavigationAction({
+      previousPathname: previousPathnameRef.current,
+      nextPathname: pathname,
+      isPopStateNavigation: isPopStateRef.current,
+      isInitialMount: isFirstRunRef.current,
+      hasExplicitTarget: hasExplicitScrollTarget(window.location.search, window.location.hash),
+      isHomeNavigationIntent: isHomeNavigationIntentState(window.history.state),
+    });
+    if (action === "reset-to-top") {
+      window.scrollTo(0, 0);
+    }
+    isPopStateRef.current = false;
+    isFirstRunRef.current = false;
+    _scrollManagerMounted = true;
+    previousPathnameRef.current = pathname;
+  }, [pathname]);
+
+  return null;
+}
+
 function PageViewTracker() {
   const record = trpc.analytics.record.useMutation();
   useEffect(() => {
@@ -527,6 +589,7 @@ function App() {
               <PushAutoInitializer />
               <PushNavigationHandler />
               <RouteTracker />
+              <ScrollRestorationManager />
               <NetworkStatusOverlay />
               <Router />
               <AppBottomNav />

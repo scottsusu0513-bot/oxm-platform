@@ -370,13 +370,6 @@ export default function ShortVideoMarketing() {
               );
             })}
           </div>
-          <div className="mt-8 text-center max-w-xl mx-auto">
-            <Link href="/short-video-marketing/apply">
-              <Button size="lg" className="bg-gradient-to-r from-orange-500 to-purple-600 hover:opacity-90 text-white border-0 gap-2">
-                申請免費初步諮詢 <ArrowRight className="w-4 h-4" />
-              </Button>
-            </Link>
-          </div>
         </div>
       </section>
 
