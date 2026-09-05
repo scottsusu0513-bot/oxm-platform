@@ -3,11 +3,27 @@ import { useLocation } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
 import { Home, Search, Mail, User, Factory } from "lucide-react";
+import LoginDialog from "@/components/LoginDialog";
 
 export function AppBottomNav() {
   const [isNative, setIsNative] = useState(false);
   const [location, navigate] = useLocation();
   const { isAuthenticated, user } = useAuth();
+  // 未登入時點「會員中心」要直接帶出登入／註冊流程，而不是先導到 /member
+  // 再靠該頁自己的 `if (!user) setLocation("/")` 導回首頁（那個 "/" fallback
+  // 是給直接輸入網址／舊連結的通用保護，不是給這顆按鈕用的引導）。OXM 目前
+  // 沒有獨立的「會員註冊」頁面／route——一般會員的註冊與登入是同一套
+  // Google／LINE／Apple OAuth 流程，全站（見 Navbar.tsx 的「註冊」「登入」
+  // 按鈕）都是打開同一個 LoginDialog，這裡沿用同一個既有元件，不新建第二套
+  // 註冊頁面或第二套登入判斷。
+  const [loginDialogOpen, setLoginDialogOpen] = useState(false);
+  const handleMemberTap = () => {
+    if (!isAuthenticated) {
+      setLoginDialogOpen(true);
+      return;
+    }
+    navigate("/member");
+  };
 
   // Chat unread badge
   const chatUnreadQuery = trpc.chat.unreadCount.useQuery(undefined, {
@@ -121,12 +137,12 @@ export function AppBottomNav() {
             <span className="text-[9px] font-medium leading-none whitespace-nowrap">工廠管理</span>
           </button>
 
-          {/* 會員中心 */}
+          {/* 會員中心（未登入時改為開啟登入／註冊 Dialog，見上方 handleMemberTap） */}
           <button
             className={`flex flex-col items-center gap-0.5 px-2 py-1 min-w-[48px] flex-1 transition-colors ${
               location.startsWith("/member") ? "text-orange-500" : "text-muted-foreground hover:text-foreground"
             }`}
-            onClick={() => navigate("/member")}
+            onClick={handleMemberTap}
             aria-label="會員中心"
             aria-current={location.startsWith("/member") ? "page" : undefined}
           >
@@ -135,6 +151,8 @@ export function AppBottomNav() {
           </button>
         </div>
       </nav>
+
+      <LoginDialog open={loginDialogOpen} onOpenChange={setLoginDialogOpen} />
     </>
   );
 }
