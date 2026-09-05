@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState, useCallback } from "react";
+import { useRef, useEffect } from "react";
 import { useLocation } from "wouter";
 import { Factory, Network } from "lucide-react";
 import { INDUSTRY_OPTIONS, INDUSTRY_SLUGS } from "@shared/constants";
@@ -16,103 +16,51 @@ const TABS: Array<{ name: string; slug: string }> = [
     .filter(t => t.slug !== ""),
 ];
 
-// 超過這個像素數才視為「拖曳」；未超過則視為一般點擊，正常切換產業。
+// 產業看板點不進去的正式站回歸（見對話「臺灣傳產論壇看板點不進去」第二輪
+// Audit）：這裡本來有一整套自製滑鼠 pointer-capture drag-to-scroll 邏輯，
+// 靠一個 justDraggedRef 旗標在 click 的 capture 階段判斷「這次點擊是不是
+// 剛拖曳完連帶觸發的」，是的話就 preventDefault + stopPropagation 吃掉。
+// 上一輪只把觸發拖曳的位移門檻從 5px 調到 15px，但正式站人工複測後證實
+// bug 依然存在，且症狀明確：tab 有拿到 focus／hover 樣式（代表 pointer 真的
+// 有作用在按鈕上），但 onClick 沒有執行——鎖定到真正 root cause 是
+// justDraggedRef 這個旗標本身的生命週期不可靠：pointer capture
+// （setPointerCapture）只會把後續的 pointermove／pointerup 導到目前這個
+// container，但完全不影響瀏覽器原生的 click 事件——click 仍然是照滑鼠實際
+// 放開時「底下真正是什麼元素」來決定要不要觸發、觸發在哪裡。只要一次拖曳
+// 放開滑鼠的位置剛好在這個 tablist 容器範圍之外（例如拖曳到卡片邊界外一點
+// 點，這在窄視窗、tab 列貼近卡片邊緣時很容易發生），對應的 click 事件根本
+// 不會落在這個容器上，本來要負責重置旗標的 onClickCapture 完全不會被觸發，
+// justDraggedRef 就會永遠卡在 true。接下來使用者不管再點幾次任何一個 tab，
+// 只要 click 真的有進到這個 capture handler，第一次一定會被這個「上一輪
+// 拖曳留下的殘留旗標」誤判成「這次也是拖曳」而整個吃掉——這正是「狂點也點
+// 不進去」的成因，而且跟門檻設多少完全無關，調高到任何數字都無法根治。
 //
-// BUG 5 根因（見對話「臺灣傳產論壇看板點不進去」）：這裡原本設 5px。滑鼠
-// pointerdown → pointerup 之間，真實使用者的手幾乎不可能完全靜止在同一個
-// 像素——一般滑鼠／觸控板的正常點擊，手震或指標裝置取樣造成的誤差就經常
-// 超過 5px，等於「幾乎每一次點擊」都被 handlePointerMove 判定成
-// state.moved = true，pointerup 時設下 justDraggedRef，接著
-// handleClickCapture 在 capture 階段直接 preventDefault + stopPropagation
-// 把這次點擊整個吃掉，button 自己的 onClick（navigate）完全不會執行——但
-// button 本身仍然會因為滑鼠真的按上去而拿到瀏覽器原生 :hover / :focus-visible
-// 樣式，使用者因此看到「這個 tab 好像被選到了」的視覺效果，實際上看板內容
-// 完全沒有切換。這不是 CSS active 樣式寫錯，也不是路由或資料層的問題——
-// 用瀏覽器實測：7px 的位移就足以讓點擊完全失效，300px 的位移則是真正的拖曳
-// 卷動意圖。把門檻拉高到 15px，讓一般點擊的正常誤差不會被誤判為拖曳，同時
-// 保留滑鼠拖曳橫向捲動 tab 列的既有功能（真正想拖曳捲動的位移遠大於這個
-// 門檻，不受影響）。
-const DRAG_THRESHOLD_PX = 15;
-
+// 修法採用使用者明確核准的簡化方向：整個移除這套自製 pointer-capture
+// drag-to-scroll 機制，改成完全依賴瀏覽器原生的 overflow-x-auto 捲動
+// （滑鼠 shift+滾輪、trackpad 雙指左右滑、觸控拖曳、或直接拖曳下方原生
+// scrollbar 都能正常橫向捲動這個 tab 列）。button 的 onClick 不再被任何
+// 自製邏輯攔截或延遲，一定會在瀏覽器判定為真正的 click 時原生觸發——
+// 「產業 tab 一定點得進去」的優先權高於「桌機可以直接按住 tab 本身拖曳
+// 捲動」，且原生捲動機制不存在任何殘留旗標，這整個 bug 類別直接被根除，
+// 不是靠更複雜的水平／垂直位移比較去縫補同一種容易出錯的攔截式設計。
+//
+// 拿掉 scrollbar 隱藏樣式，讓純滑鼠（沒有 trackpad／滾輪 shift 習慣）的
+// 使用者也能直接拖曳下方原生 scrollbar 捲動，不會因為拿掉自製拖曳就沒有
+// 其他方式可以看到超出畫面的 tab。
 export default function CommunityIndustryTabs({ activeSpaceCode }: Props) {
   const [, navigate] = useLocation();
   const activeRef = useRef<HTMLButtonElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [isDragging, setIsDragging] = useState(false);
-
-  // 拖曳中的暫存狀態放在 ref（不觸發 re-render，pointermove 頻率很高）；
-  // justDraggedRef 則是拖曳「結束後」到「click 事件觸發前」之間唯一活著的
-  // 旗標，用來在 click 的 capture 階段擋下這次因拖曳而連帶觸發的 click，
-  // 避免放開滑鼠時誤觸該按鈕的 tab navigation。
-  const dragStateRef = useRef<{ startX: number; startScrollLeft: number; moved: boolean } | null>(null);
-  const justDraggedRef = useRef(false);
 
   useEffect(() => {
     activeRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
   }, [activeSpaceCode]);
 
-  // 只接手滑鼠（pointerType === "mouse"）；觸控維持瀏覽器原生 touch-scroll
-  // 行為完全不介入，滾輪／trackpad 水平捲動也不受影響（本來就是靠
-  // overflow-x-auto 原生處理，這裡沒有加任何 wheel handler）。
-  const handlePointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    if (e.pointerType !== "mouse") return;
-    const container = containerRef.current;
-    if (!container) return;
-    dragStateRef.current = { startX: e.clientX, startScrollLeft: container.scrollLeft, moved: false };
-    container.setPointerCapture(e.pointerId);
-  }, []);
-
-  const handlePointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    if (e.pointerType !== "mouse") return;
-    const state = dragStateRef.current;
-    const container = containerRef.current;
-    if (!state || !container) return;
-    const delta = e.clientX - state.startX;
-    if (!state.moved && Math.abs(delta) > DRAG_THRESHOLD_PX) {
-      state.moved = true;
-      setIsDragging(true);
-    }
-    if (state.moved) {
-      container.scrollLeft = state.startScrollLeft - delta;
-    }
-  }, []);
-
-  const handlePointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    if (e.pointerType !== "mouse") return;
-    const state = dragStateRef.current;
-    if (state?.moved) justDraggedRef.current = true;
-    const container = containerRef.current;
-    if (container?.hasPointerCapture(e.pointerId)) container.releasePointerCapture(e.pointerId);
-    dragStateRef.current = null;
-    setIsDragging(false);
-  }, []);
-
-  // Capture 階段（比按鈕自己的 onClick 更早觸發）：這次點擊如果是拖曳放開
-  // 滑鼠連帶觸發的，直接擋下，不讓事件繼續傳到按鈕的 onClick。
-  const handleClickCapture = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    if (justDraggedRef.current) {
-      e.preventDefault();
-      e.stopPropagation();
-      justDraggedRef.current = false;
-    }
-  }, []);
-
   return (
     <div
-      ref={containerRef}
-      className={cn(
-        "flex gap-1 overflow-x-auto overflow-y-hidden rounded-xl border border-purple-100/80 bg-white/90 p-1.5 shadow-sm dark:border-purple-900/40 dark:bg-card [&::-webkit-scrollbar]:hidden",
-        "cursor-grab",
-        isDragging && "cursor-grabbing select-none",
-      )}
-      style={{ scrollbarWidth: "none" }}
+      className="flex gap-1 overflow-x-auto overflow-y-hidden rounded-xl border border-purple-100/80 bg-white/90 p-1.5 shadow-sm dark:border-purple-900/40 dark:bg-card"
+      style={{ scrollbarWidth: "thin" }}
       role="tablist"
       aria-label="選擇產業看板"
-      onPointerDown={handlePointerDown}
-      onPointerMove={handlePointerMove}
-      onPointerUp={handlePointerUp}
-      onPointerCancel={handlePointerUp}
-      onClickCapture={handleClickCapture}
     >
       {TABS.map(tab => {
         const isActive = tab.slug === activeSpaceCode;
