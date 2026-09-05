@@ -1,4 +1,4 @@
-import { useRef, useEffect } from "react";
+import { useRef, useEffect, useState, useCallback } from "react";
 import { useLocation } from "wouter";
 import { Factory, Network } from "lucide-react";
 import { INDUSTRY_OPTIONS, INDUSTRY_SLUGS } from "@shared/constants";
@@ -16,49 +16,151 @@ const TABS: Array<{ name: string; slug: string }> = [
     .filter(t => t.slug !== ""),
 ];
 
-// 產業看板點不進去的正式站回歸（見對話「臺灣傳產論壇看板點不進去」第二輪
-// Audit）：這裡本來有一整套自製滑鼠 pointer-capture drag-to-scroll 邏輯，
-// 靠一個 justDraggedRef 旗標在 click 的 capture 階段判斷「這次點擊是不是
-// 剛拖曳完連帶觸發的」，是的話就 preventDefault + stopPropagation 吃掉。
-// 上一輪只把觸發拖曳的位移門檻從 5px 調到 15px，但正式站人工複測後證實
-// bug 依然存在，且症狀明確：tab 有拿到 focus／hover 樣式（代表 pointer 真的
-// 有作用在按鈕上），但 onClick 沒有執行——鎖定到真正 root cause 是
-// justDraggedRef 這個旗標本身的生命週期不可靠：pointer capture
-// （setPointerCapture）只會把後續的 pointermove／pointerup 導到目前這個
-// container，但完全不影響瀏覽器原生的 click 事件——click 仍然是照滑鼠實際
-// 放開時「底下真正是什麼元素」來決定要不要觸發、觸發在哪裡。只要一次拖曳
-// 放開滑鼠的位置剛好在這個 tablist 容器範圍之外（例如拖曳到卡片邊界外一點
-// 點，這在窄視窗、tab 列貼近卡片邊緣時很容易發生），對應的 click 事件根本
-// 不會落在這個容器上，本來要負責重置旗標的 onClickCapture 完全不會被觸發，
-// justDraggedRef 就會永遠卡在 true。接下來使用者不管再點幾次任何一個 tab，
-// 只要 click 真的有進到這個 capture handler，第一次一定會被這個「上一輪
-// 拖曳留下的殘留旗標」誤判成「這次也是拖曳」而整個吃掉——這正是「狂點也點
-// 不進去」的成因，而且跟門檻設多少完全無關，調高到任何數字都無法根治。
+// 桌機滑鼠按住拖曳橫向捲動 — 第三輪重新加入（見對話「重新加入桌機拖曳」）。
 //
-// 修法採用使用者明確核准的簡化方向：整個移除這套自製 pointer-capture
-// drag-to-scroll 機制，改成完全依賴瀏覽器原生的 overflow-x-auto 捲動
-// （滑鼠 shift+滾輪、trackpad 雙指左右滑、觸控拖曳、或直接拖曳下方原生
-// scrollbar 都能正常橫向捲動這個 tab 列）。button 的 onClick 不再被任何
-// 自製邏輯攔截或延遲，一定會在瀏覽器判定為真正的 click 時原生觸發——
-// 「產業 tab 一定點得進去」的優先權高於「桌機可以直接按住 tab 本身拖曳
-// 捲動」，且原生捲動機制不存在任何殘留旗標，這整個 bug 類別直接被根除，
-// 不是靠更複雜的水平／垂直位移比較去縫補同一種容易出錯的攔截式設計。
+// 上一版（已移除）的 bug：justDraggedRef 這個旗標只在「下一次 click 事件
+// 真的進到容器自己的 onClickCapture」時才會被重置，但 setPointerCapture
+// 只影響後續的 pointermove／pointerup 要導去哪裡，完全不影響瀏覽器原生
+// click 事件的目標判定——click 永遠是照放開滑鼠當下「底下真正是什麼元素」
+// 決定要不要觸發、觸發在哪裡。只要放開滑鼠的位置剛好在容器範圍之外，
+// 對應的 click 根本不會進到容器的 capture handler，旗標就會永遠卡在
+// true，導致之後所有點擊的第一次都被誤判成拖曳而整個吃掉。
 //
-// 拿掉 scrollbar 隱藏樣式，讓純滑鼠（沒有 trackpad／滾輪 shift 習慣）的
-// 使用者也能直接拖曳下方原生 scrollbar 捲動，不會因為拿掉自製拖曳就沒有
-// 其他方式可以看到超出畫面的 tab。
+// 這一版刻意避開同一種「掛在容器上、靠旗標被動等下一次 click 消費」的
+// 攔截式設計，改成兩個關鍵差異：
+//   1. 判斷拖曳／清除拖曳狀態的 pointermove／pointerup／pointercancel
+//      監聽器全部掛在 document／window 上（不用 setPointerCapture），
+//      不論放開滑鼠的實際位置在哪裡都一定收得到，不存在「容器範圍外收不
+//      到」這件事。
+//   2. 只有真的判定為拖曳時，才會在 pointerup 當下「臨時」掛一個
+//      document 層級、capture 階段、一次性（fire 一次就立刻自己移除，
+//      並且有逾時保底自動移除）的 click 抑制器，只吃掉這次拖曳自己緊接
+//      在後的那一次 click；沒有殘留旗標可以卡住，下一次真正無關的點擊
+//      在它自己的 click 事件上完全不受影響，一定正常觸發。
+//
+// 判斷「這是不是真的橫向拖曳」也不是單一 deltaX 門檻：除了水平位移要超過
+// DRAG_DISTANCE_PX，還要求水平位移明顯主導於垂直位移（DRAG_DIRECTION_RATIO
+// 倍），避免點擊時常見的小幅對角手震被誤判成拖曳。
+const DRAG_DISTANCE_PX = 10;
+const DRAG_DIRECTION_RATIO = 1.5;
+// 拖曳放開滑鼠後，理論上瀏覽器會在同一輪事件序列裡幾乎同步觸發對應的
+// click；這個逾時只是保底，避免任何極端情況下真的沒有 click 跟上來時，
+// 一次性抑制器還留在 document 上等不到目標。
+const SUPPRESS_CLICK_TIMEOUT_MS = 400;
+
 export default function CommunityIndustryTabs({ activeSpaceCode }: Props) {
   const [, navigate] = useLocation();
   const activeRef = useRef<HTMLButtonElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [isDragging, setIsDragging] = useState(false);
 
   useEffect(() => {
     activeRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
   }, [activeSpaceCode]);
 
+  const suppressNextClick = useCallback(() => {
+    const handler = (e: MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      cleanup();
+    };
+    const timeoutId = window.setTimeout(cleanup, SUPPRESS_CLICK_TIMEOUT_MS);
+    function cleanup() {
+      document.removeEventListener("click", handler, true);
+      window.clearTimeout(timeoutId);
+    }
+    document.addEventListener("click", handler, true);
+  }, []);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    // 只有滑鼠左鍵、只有滑鼠（觸控維持瀏覽器原生 touch-scroll，完全不
+    // 介入；滾輪／trackpad 水平捲動本來就是靠 overflow-x-auto 原生處理）。
+    const dragRef: {
+      current: null | { pointerId: number; startX: number; startY: number; startScrollLeft: number; dragging: boolean };
+    } = { current: null };
+
+    function handlePointerMove(e: PointerEvent) {
+      const state = dragRef.current;
+      if (!state || e.pointerId !== state.pointerId) return;
+      const deltaX = e.clientX - state.startX;
+      const deltaY = e.clientY - state.startY;
+      if (!state.dragging) {
+        const isHorizontalDrag =
+          Math.abs(deltaX) > DRAG_DISTANCE_PX &&
+          Math.abs(deltaX) > Math.abs(deltaY) * DRAG_DIRECTION_RATIO;
+        if (!isHorizontalDrag) return;
+        state.dragging = true;
+        setIsDragging(true);
+      }
+      container!.scrollLeft = state.startScrollLeft - deltaX;
+    }
+
+    function endDrag(wasDragging: boolean) {
+      document.removeEventListener("pointermove", handlePointerMove);
+      document.removeEventListener("pointerup", handlePointerUp);
+      document.removeEventListener("pointercancel", handlePointerCancelDoc);
+      window.removeEventListener("blur", handleBlur);
+      dragRef.current = null;
+      setIsDragging(false);
+      // 只抑制這次拖曳自己產生的那一次 click；pointercancel／視窗失焦
+      // 這兩種情況本來就不會有對應的 click 跟上來，不需要（也不應該）
+      // 掛抑制器，避免留下一個永遠等不到目標的 listener。
+      if (wasDragging) suppressNextClick();
+    }
+
+    function handlePointerUp(e: PointerEvent) {
+      const state = dragRef.current;
+      if (!state || e.pointerId !== state.pointerId) return;
+      endDrag(state.dragging);
+    }
+
+    function handlePointerCancelDoc(e: PointerEvent) {
+      const state = dragRef.current;
+      if (!state || e.pointerId !== state.pointerId) return;
+      endDrag(false);
+    }
+
+    function handleBlur() {
+      if (dragRef.current) endDrag(false);
+    }
+
+    function handlePointerDown(e: PointerEvent) {
+      if (e.pointerType !== "mouse" || e.button !== 0) return;
+      dragRef.current = {
+        pointerId: e.pointerId,
+        startX: e.clientX,
+        startY: e.clientY,
+        startScrollLeft: container!.scrollLeft,
+        dragging: false,
+      };
+      document.addEventListener("pointermove", handlePointerMove);
+      document.addEventListener("pointerup", handlePointerUp);
+      document.addEventListener("pointercancel", handlePointerCancelDoc);
+      window.addEventListener("blur", handleBlur);
+    }
+
+    container.addEventListener("pointerdown", handlePointerDown);
+    return () => {
+      container.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("pointermove", handlePointerMove);
+      document.removeEventListener("pointerup", handlePointerUp);
+      document.removeEventListener("pointercancel", handlePointerCancelDoc);
+      window.removeEventListener("blur", handleBlur);
+    };
+  }, [suppressNextClick]);
+
   return (
     <div
-      className="flex gap-1 overflow-x-auto overflow-y-hidden rounded-xl border border-purple-100/80 bg-white/90 p-1.5 shadow-sm dark:border-purple-900/40 dark:bg-card"
-      style={{ scrollbarWidth: "thin" }}
+      ref={containerRef}
+      className={cn(
+        "flex gap-1 overflow-x-auto overflow-y-hidden rounded-xl border border-purple-100/80 bg-white/90 p-1.5 shadow-sm dark:border-purple-900/40 dark:bg-card [&::-webkit-scrollbar]:hidden",
+        "cursor-grab",
+        isDragging && "cursor-grabbing select-none",
+      )}
+      style={{ scrollbarWidth: "none" }}
       role="tablist"
       aria-label="選擇產業看板"
     >
