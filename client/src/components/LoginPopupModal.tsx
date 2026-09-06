@@ -15,7 +15,7 @@ const MAX_ITEMS = 5;
 // 刻意不用 client/src/components/ui/dialog.tsx 共用的 <DialogContent>——那個
 // 元件預設可以點遮罩或按 Esc 關閉，且沒有暴露 overlay 透明度／卡片樣式的客製
 // 介面。這裡直接組 Radix 原始元件，才能同時滿足「不可點遮罩關閉、不可按 Esc
-// 關閉、只有按鈕才能觸發已讀」的需求，也不需要動到其他頁面共用的 dialog.tsx。
+// 關閉」的需求，也不需要動到其他頁面共用的 dialog.tsx。
 export default function LoginPopupModal() {
   const [, navigate] = useLocation();
   const { isAuthenticated, loading: authLoading } = useAuth();
@@ -32,11 +32,35 @@ export default function LoginPopupModal() {
   const items = data?.items ?? [];
 
   const [open, setOpen] = useState(false);
+  const markViewedMut = trpc.loginPopup.markViewed.useMutation();
+
+  // 已登入會員今天第一次判定要自動彈出時，立刻標記「今天完成顯示」，不用
+  // 等使用者按按鈕。後端用 (userId, date) 唯一索引做 idempotent 處理，重複
+  // 呼叫不會出錯或造成重複紀錄；標記的是「今天完成顯示」這件事本身，不是
+  // 逐則消息分別已讀，所以哪一則被點擊／自動彈出都只需要呼叫一次。
+  //
+  // 未登入訪客沒有 session 可以寫入，且訪客版本本來就允許「每次進首頁都
+  // 可能再看到」，所以訪客一律不呼叫 markViewed，也不會用 cookie／
+  // localStorage 等替代方式記錄「訪客看過」。
+  const markTodayDoneIfAuthenticated = (representativeId: number) => {
+    if (isAuthenticated) {
+      markViewedMut.mutate({ id: representativeId });
+    }
+  };
 
   useEffect(() => {
-    if (items.length > 0) setOpen(true);
-    // 只在「這批消息的組成」改變時重新評估要不要開啟，避免同一批資料重新
-    // render 時被誤判成新的一批而重新彈出。
+    if (items.length > 0) {
+      setOpen(true);
+      // 規格是「今天最多自動顯示一次」，不是「今天最多按一次我知道了」——
+      // 一旦這個 effect 判定要自動打開面板，就在同一次流程立刻標記今天已
+      // 完成顯示。原本只在按鈕 onClick 裡標記，會導致面板開著時直接切頁、
+      // 按瀏覽器返回鍵、或因換頁造成元件 unmount／remount，都會因為「使用者
+      // 從未點過按鈕」而被 toShow 判定成「今天還沒顯示過」，回首頁又跳出
+      // 一次——這裡把寫入時機提前到「實際自動顯示」當下，才符合規格。
+      markTodayDoneIfAuthenticated(items[0].id);
+    }
+    // 只在「這批消息的組成」改變時重新評估要不要開啟／標記，避免同一批
+    // 資料重新 render 時被誤判成新的一批而重新彈出或重複寫入。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items.map(i => i.id).join(",")]);
 
@@ -53,23 +77,7 @@ export default function LoginPopupModal() {
     previousAuthStateRef.current = isAuthenticated;
   }, [authLoading, isAuthenticated, utils]);
 
-  const markViewedMut = trpc.loginPopup.markViewed.useMutation();
-
   if (items.length === 0) return null;
-
-  // 面板剛出現不會標記已讀；只有使用者實際點擊「我知道了」或任一「進入完整
-  // 公告」才寫入，且後端用 (userId, date) 唯一索引做 idempotent 處理，重複
-  // 點擊或同時點多個按鈕都不會出錯或造成重複紀錄。標記的是「今天完成顯示」
-  // 這件事本身，不是逐則消息分別已讀，所以哪一則被點擊都只需要呼叫一次。
-  //
-  // 未登入訪客沒有 session 可以寫入，且訪客版本本來就允許「每次進首頁都
-  // 可能再看到」，所以訪客點任何按鈕都只關閉／導向，不呼叫 markViewed，也
-  // 不會用 cookie／localStorage 等替代方式記錄「訪客看過」。
-  const markTodayDoneIfAuthenticated = (representativeId: number) => {
-    if (isAuthenticated) {
-      markViewedMut.mutate({ id: representativeId });
-    }
-  };
 
   const handleAcknowledge = () => {
     markTodayDoneIfAuthenticated(items[0].id);
