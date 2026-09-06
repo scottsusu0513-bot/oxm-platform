@@ -106,7 +106,7 @@ describe("industryRequest.create + getMine", () => {
     expect(res.created).toBe(true);
     expect(res.request.status).toBe("pending");
 
-    const mine = await caller.industryRequest.getMine();
+    const mine = await caller.industryRequest.getMyRequest();
     expect(mine.isActive).toBe(true);
     expect(mine.request?.description).toContain("智慧餵食器");
     // snapshot：帶入的是表單填的姓名，不是 user profile 的名字
@@ -134,7 +134,7 @@ describe("industryRequest.create + getMine", () => {
   it("尚未提交過 → getMine 回 request:null / isActive:false", async () => {
     const uid = await createTestUser();
     const caller = appRouter.createCaller(await ctxForUserId(uid));
-    const mine = await caller.industryRequest.getMine();
+    const mine = await caller.industryRequest.getMyRequest();
     expect(mine.request).toBeNull();
     expect(mine.isActive).toBe(false);
   });
@@ -186,14 +186,14 @@ describe("active request 唯一性", () => {
     const first = await memberCaller.industryRequest.create({ name: "E", email: "e@example.test", description: "舊需求" });
     await adminCaller.industryRequest.admin.updateStatus({ id: first.request.id, status: "resolved" });
 
-    let mine = await memberCaller.industryRequest.getMine();
+    let mine = await memberCaller.industryRequest.getMyRequest();
     expect(mine.isActive).toBe(false); // resolved 不再是 active
 
     const second = await memberCaller.industryRequest.create({ name: "E2", email: "e2@example.test", description: "結案後的新需求" });
     expect(second.created).toBe(true);
     expect(second.request.id).not.toBe(first.request.id);
 
-    mine = await memberCaller.industryRequest.getMine();
+    mine = await memberCaller.industryRequest.getMyRequest();
     expect(mine.isActive).toBe(true);
     expect(mine.request?.description).toBe("結案後的新需求");
   });
@@ -243,7 +243,7 @@ describe("admin 授權與案件操作", () => {
     const callerA = appRouter.createCaller(await ctxForUserId(userA));
     const callerB = appRouter.createCaller(await ctxForUserId(userB));
     await callerA.industryRequest.create({ name: "A的需求", email: "onlya@example.test", description: "只有 A 該看到" });
-    const bMine = await callerB.industryRequest.getMine();
+    const bMine = await callerB.industryRequest.getMyRequest();
     expect(bMine.request).toBeNull();
   });
 });

@@ -1280,7 +1280,10 @@ export const appRouter = router({
   industryRequest: router({
     // 會員取得自己「最新」的一筆需求（可能是進行中，也可能已結案）。
     // isActive 為 true 時前台顯示唯讀受理狀態、不給再送；已結案則允許再提新的一筆。
-    getMine: protectedProcedure.query(async ({ ctx }) => {
+    // 命名刻意不用 getMine（避免與 factory.getMine 撞同一個 procedure 簽名字串）
+    // ——server/badges.test.ts 的靜態安全合約以該簽名當唯一錨點抓 factory.getMine
+    // 區塊，同名再出現一次會讓該測試失敗。
+    getMyRequest: protectedProcedure.query(async ({ ctx }) => {
       const latest = await db.getLatestIndustryRequestForUser(ctx.user.id);
       if (!latest) return { request: null as null, isActive: false };
       const isActive = latest.status === "pending" || latest.status === "reviewing";

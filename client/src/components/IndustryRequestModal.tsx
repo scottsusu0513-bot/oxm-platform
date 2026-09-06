@@ -44,7 +44,7 @@ export function IndustryRequestModal({ open, onOpenChange }: { open: boolean; on
   const { user, isAuthenticated } = useAuth();
   const utils = trpc.useUtils();
 
-  const mineQuery = trpc.industryRequest.getMine.useQuery(undefined, {
+  const mineQuery = trpc.industryRequest.getMyRequest.useQuery(undefined, {
     enabled: open && isAuthenticated,
     refetchOnWindowFocus: false,
   });
@@ -74,7 +74,7 @@ export function IndustryRequestModal({ open, onOpenChange }: { open: boolean; on
     onSuccess: (res) => {
       toast.success("產業新增需求已送出");
       setJustSubmitted(res.request);
-      utils.industryRequest.getMine.invalidate();
+      utils.industryRequest.getMyRequest.invalidate();
     },
     onError: (err) => toast.error(err.message),
   });

@@ -159,7 +159,7 @@ describe("產業需求：建案成功時的管理員通知 Email", () => {
     expect(Number(rows[0].n)).toBe(1);
 
     // getMine 也能正常讀回
-    const mine = await caller.industryRequest.getMine();
+    const mine = await caller.industryRequest.getMyRequest();
     expect(mine.isActive).toBe(true);
   });
 
