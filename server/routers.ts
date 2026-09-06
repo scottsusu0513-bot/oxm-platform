@@ -6,7 +6,8 @@ import { userNeedsOnboarding } from "@shared/onboarding";
 import { normalizeTaxId, isValidTaiwanTaxId } from "@shared/taxId";
 import { sdk } from "./_core/sdk";
 import { enhanceSearchKeyword, getSearchIntent } from './semantic-search';
-import { sendNewInquiryEmail, sendFactoryApprovedEmail, sendFactoryRejectedEmail, sendFactorySubmittedEmail, sendReportEmail, sendSupportTicketEmail, sendReviewReplyEmail, sendNewMessageNotificationEmail, sendReportStatusUpdateEmail, sendTicketStatusUpdateEmail, sendMessageReplyNotificationEmail, sendEmailVerificationEmail, sendAdminBroadcastEmail, sendRevisionSubmittedEmail, sendRevisionApprovedEmail, sendRevisionRejectedEmail, sendUpgradeApplicationEmail, sendUpgradeNewCaseConsultantEmail, sendPlatformAnnouncementEmail, sendFirstContactEmail, sendNewsEmail } from './email';
+import { sendNewInquiryEmail, sendFactoryApprovedEmail, sendFactoryRejectedEmail, sendFactorySubmittedEmail, sendReportEmail, sendSupportTicketEmail, sendReviewReplyEmail, sendNewMessageNotificationEmail, sendReportStatusUpdateEmail, sendTicketStatusUpdateEmail, sendMessageReplyNotificationEmail, sendEmailVerificationEmail, sendAdminBroadcastEmail, sendRevisionSubmittedEmail, sendRevisionApprovedEmail, sendRevisionRejectedEmail, sendUpgradeApplicationEmail, sendUpgradeNewCaseConsultantEmail, sendPlatformAnnouncementEmail, sendFirstContactEmail, sendNewsEmail, sendIndustryRequestReceivedEmail, sendIndustryRequestAdminEmail } from './email';
+import { resolveAdminSenderIdentity } from './_core/officialIdentity';
 import { sha256Hex, generateRawToken } from './_core/oauthHelpers';
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
@@ -1275,6 +1276,131 @@ export const appRouter = router({
     }),
   }),
 
+  // ===== 產業新增需求（會員向 OXM 提出新增產業分類） =====
+  industryRequest: router({
+    // 會員取得自己「最新」的一筆需求（可能是進行中，也可能已結案）。
+    // isActive 為 true 時前台顯示唯讀受理狀態、不給再送；已結案則允許再提新的一筆。
+    getMine: protectedProcedure.query(async ({ ctx }) => {
+      const latest = await db.getLatestIndustryRequestForUser(ctx.user.id);
+      if (!latest) return { request: null as null, isActive: false };
+      const isActive = latest.status === "pending" || latest.status === "reviewing";
+      return {
+        request: {
+          id: latest.id,
+          name: latest.name,
+          email: latest.email,
+          phone: latest.phone,
+          description: latest.description,
+          status: latest.status,
+          createdAt: latest.createdAt,
+        },
+        isActive,
+      };
+    }),
+
+    create: protectedProcedure.input(z.object({
+      name: z.string().trim().min(1, "請輸入姓名").max(200),
+      email: z.string().trim().min(1, "請輸入 Email").max(320).email("Email 格式不正確"),
+      phone: z.string().trim().max(30).optional(),
+      description: z.string().trim().min(1, "請描述您希望新增的產業").max(2000, "需求說明請控制在 2000 字以內"),
+    })).mutation(async ({ ctx, input }) => {
+      const result = await db.createIndustryRequest({
+        userId: ctx.user.id,
+        name: input.name,
+        email: input.email,
+        phone: input.phone ? input.phone : null,
+        description: input.description,
+      });
+
+      if (result.created) {
+        // A. 站內：全體符合管理員資格者（含 OWNER，保證）——維持不變。
+        notifyAdmins({
+          eventType: "industry_request_new",
+          eventGroup: "platform",
+          message: `會員「${input.name}」提出產業新增需求，請至客服中心「產業要求」查看`,
+          actionUrl: "/admin/support",
+          titleSnapshot: input.name,
+          dedupeKey: `industry_request_new:${result.request.id}`,
+        });
+        // B. Email：OXM 管理端既有收件信箱（ADMIN_EMAIL，同 sendReportEmail /
+        //    sendSupportTicketEmail）。只在 created===true 時寄，created:false
+        //    （已有 active、重送）不會進到這個分支，避免 retry 洗信。
+        sendIndustryRequestAdminEmail({
+          requestId: result.request.id,
+          userName: input.name,
+          userEmail: input.email,
+          userPhone: input.phone ? input.phone : null,
+          description: input.description,
+          createdAt: result.request.createdAt,
+        }).catch((err) => console.error("[Email] industry request admin notify failed:", err));
+        // C. Email：提出需求的會員本人（確認信）——維持不變。
+        sendIndustryRequestReceivedEmail({
+          userName: input.name,
+          userEmail: input.email,
+          description: input.description,
+        }).catch((err) => console.error("[Email] industry request received failed:", err));
+      }
+
+      return {
+        created: result.created,
+        request: {
+          id: result.request.id,
+          name: result.request.name,
+          email: result.request.email,
+          phone: result.request.phone,
+          description: result.request.description,
+          status: result.request.status,
+          createdAt: result.request.createdAt,
+        },
+      };
+    }),
+
+    admin: router({
+      list: adminProcedure.input(z.object({
+        page: z.number().int().min(1).default(1),
+        pageSize: z.number().int().min(1).max(50).default(15),
+        status: z.enum(["pending", "reviewing", "resolved", "rejected"]).optional(),
+      })).query(async ({ input }) => {
+        return db.getAdminIndustryRequests(input.page, input.pageSize, input.status);
+      }),
+
+      get: adminProcedure.input(z.object({ id: z.number() })).query(async ({ input }) => {
+        const row = await db.getIndustryRequestById(input.id);
+        if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "找不到此產業需求" });
+        return row;
+      }),
+
+      getHistory: adminProcedure.input(z.object({ id: z.number() })).query(async ({ input }) => {
+        return db.getIndustryRequestHistory(input.id);
+      }),
+
+      updateStatus: adminProcedure.input(z.object({
+        id: z.number(),
+        status: z.enum(["pending", "reviewing", "resolved", "rejected"]),
+        adminNote: z.string().max(2000).optional(),
+      })).mutation(async ({ input }) => {
+        const existing = await db.getIndustryRequestById(input.id);
+        if (!existing) throw new TRPCError({ code: "NOT_FOUND", message: "找不到此產業需求" });
+        await db.updateIndustryRequestStatus(input.id, input.status, input.adminNote);
+        return { success: true };
+      }),
+
+      // 「私訊會員」：取得或建立這筆需求綁定的站內信 thread（messageCampaigns
+      // targetType="single"）。不改動案件 status——狀態只透過 updateStatus 明確變更。
+      messageUser: adminProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+        const req = await db.getIndustryRequestById(input.id);
+        if (!req) throw new TRPCError({ code: "NOT_FOUND", message: "找不到此產業需求" });
+        const { campaignId } = await db.getOrCreateIndustryRequestCampaign({
+          requestId: input.id,
+          adminUserId: ctx.user!.id,
+          title: "關於您提出的產業新增需求",
+          content: "我們正在處理您提出的產業新增需求，想進一步與您確認相關資訊。",
+        });
+        return { campaignId };
+      }),
+    }),
+  }),
+
   // ===== 工廠 =====
   factory: router({
     getById: publicProcedure.input(z.object({
@@ -2416,19 +2542,26 @@ export const appRouter = router({
       let adminMsgs: any[] = [];
       try {
         const campaigns = await db.getAdminMessagesForUser(ctx.user.id);
-        adminMsgs = campaigns.map(c => ({
-          id: -c.campaignId,
-          isAdminMessage: true as const,
-          adminCampaignId: c.campaignId,
-          factoryName: "★ 平台管理員",
-          productName: null,
-          lastMessage: c.content.substring(0, 60),
-          lastSenderRole: "admin",
-          lastMessageAt: c.createdAt,
-          unreadCount: c.isRead ? 0 : 1,
-          senderIsAdmin: true,
-          title: c.title,
-        }));
+        const senders = await db.getUsersByIds(campaigns.map(c => c.senderId));
+        const senderById = new Map(senders.map(u => [u.id, u]));
+        adminMsgs = campaigns.map(c => {
+          const identity = resolveAdminSenderIdentity(senderById.get(c.senderId) ?? null);
+          return {
+            id: -c.campaignId,
+            isAdminMessage: true as const,
+            adminCampaignId: c.campaignId,
+            factoryName: identity.displayName,
+            productName: null,
+            lastMessage: c.content.substring(0, 60),
+            lastSenderRole: "admin",
+            lastMessageAt: c.createdAt,
+            unreadCount: c.isRead ? 0 : 1,
+            senderIsAdmin: true,
+            senderDisplayName: identity.displayName,
+            senderIsOfficialOxm: identity.isOfficialOxmAccount,
+            title: c.title,
+          };
+        });
       } catch {
         // 站內信資料表尚未建立時不影響一般訊息
       }
@@ -2441,7 +2574,9 @@ export const appRouter = router({
     getAdminMessage: protectedProcedure.input(z.object({ campaignId: z.number() })).query(async ({ ctx, input }) => {
       const campaign = await db.getMessageCampaignById(input.campaignId, ctx.user.id);
       if (!campaign) throw new TRPCError({ code: 'NOT_FOUND', message: '找不到此訊息' });
-      return campaign;
+      const sender = await db.getUserById(campaign.senderId);
+      const senderIdentity = resolveAdminSenderIdentity(sender ?? null);
+      return { ...campaign, senderIdentity };
     }),
 
     getAdminMessageThread: protectedProcedure.input(z.object({ campaignId: z.number() })).query(async ({ ctx, input }) => {

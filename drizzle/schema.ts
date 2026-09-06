@@ -808,6 +808,50 @@ export const messageReplies = mysqlTable("messageReplies", {
 }));
 export type MessageReply = typeof messageReplies.$inferSelect;
 
+// ===== 產業新增需求（會員向 OXM 提出新增產業分類） =====
+// 沿用專案既有「案件 + statusHistory + adminNote」模式（見 supportTickets /
+// reports）。status 用 spec 明列的四值：pending / reviewing 視為 active，
+// resolved / rejected 為終態、允許會員之後再提新的一筆。
+export const industryRequests = mysqlTable("industryRequests", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull().references(() => users.id, { onDelete: "cascade" }),
+  // 送出當下的填寫快照——之後會員改 profile 不影響舊案件內容（spec 三 / 十六）
+  name: varchar("name", { length: 200 }).notNull(),
+  email: varchar("email", { length: 320 }).notNull(),
+  phone: varchar("phone", { length: 30 }),
+  description: text("description").notNull(),
+  status: mysqlEnum("status", ["pending", "reviewing", "resolved", "rejected"]).default("pending").notNull(),
+  adminNote: text("adminNote"),
+  // 「私訊會員」建立/綁定的站內信 campaign（messageCampaigns.targetType="single"）。
+  // NULL = 尚未建立；已綁定後管理員再次點「私訊會員」直接開同一 thread，不重建。
+  adminMessageCampaignId: int("adminMessageCampaignId").references(() => messageCampaigns.id, { onDelete: "set null" }),
+  // DB 層保證「同一 user 同時最多一筆 active(pending/reviewing) 需求」：
+  // activeFlag 是 generated stored column，active 時 = 1、否則 NULL——只依 status
+  // 推導（不以 userId 為 base column，才能與 userId 的 ON DELETE CASCADE 外鍵並存），
+  // 搭配 UNIQUE(userId, activeFlag)。MySQL unique index 視 NULL 互不相等，故
+  // 已結案(resolved/rejected)的舊案件 activeFlag=NULL、不佔名額，會員可再提新需求。
+  activeFlag: int("activeFlag").generatedAlwaysAs(
+    sql`(CASE WHEN \`status\` IN ('pending','reviewing') THEN 1 ELSE NULL END)`,
+    { mode: "stored" },
+  ),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (table) => ({
+  uqActiveUser: uniqueIndex("uq_industry_request_active_user").on(table.userId, table.activeFlag),
+}));
+
+export type IndustryRequest = typeof industryRequests.$inferSelect;
+
+export const industryRequestStatusHistory = mysqlTable("industryRequestStatusHistory", {
+  id: int("id").autoincrement().primaryKey(),
+  requestId: int("requestId").notNull(),
+  status: mysqlEnum("status", ["pending", "reviewing", "resolved", "rejected"]).notNull(),
+  adminNote: text("adminNote"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => ({
+  requestIdx: index("idx_industry_request_history_request").on(table.requestId),
+}));
+
 // ===== OAuth State 表（DB-based CSRF 防護，取代 cookie 方案）=====
 export const oauthStates = mysqlTable("oauthStates", {
   id: int("id").autoincrement().primaryKey(),

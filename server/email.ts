@@ -1020,3 +1020,100 @@ export async function sendFirstContactEmail(params: {
     console.error('[Email] sendFirstContactEmail 失敗:', error);
   }
 }
+// 產業新增需求：送出後給會員的確認信（回信給使用者，不含任何管理員內部備註）。
+export async function sendIndustryRequestReceivedEmail(params: {
+  userName: string;
+  userEmail?: string | null;
+  description: string;
+}) {
+  if (!isEmailEnabled()) {
+    console.log(`[Email] ${getEmailDisabledReason()}，跳過寄信`);
+    return;
+  }
+  if (!params.userEmail) return;
+  const appUrl = process.env.VITE_APP_URL ?? 'http://localhost:3000';
+  try {
+    const resend = getResend();
+    if (!resend) return;
+    await resend.emails.send({
+      from: FROM_EMAIL,
+      to: params.userEmail,
+      subject: '【OXM】已收到您的產業新增需求',
+      html: `
+        <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #f97316;">已收到您的產業新增需求</h2>
+          <p>您好${params.userName ? `，<strong>${escapeHtml(params.userName)}</strong>` : ''}，</p>
+          <p>我們已收到您提出的產業新增需求，OXM 會進一步評估平台分類需求，後續有結果會再通知您。</p>
+          <div style="background: #f5f5f5; padding: 16px; border-radius: 8px; margin: 16px 0;">
+            <p style="margin: 0; font-weight: bold;">您填寫的需求說明：</p>
+            <p style="margin: 8px 0 0; white-space: pre-wrap;">${escapeHtml(params.description)}</p>
+          </div>
+          <a href="${appUrl}/"
+            style="background: #f97316; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none; display: inline-block; margin-top: 8px;">
+            回到 OXM
+          </a>
+          <p style="color: #999; font-size: 12px; margin-top: 24px;">此信件由 OXM 平台自動發送，請勿直接回覆。</p>
+        </div>
+      `,
+    });
+    console.log(`[Email] 產業新增需求確認信已寄送至 ${params.userEmail}`);
+  } catch (error) {
+    console.error('[Email] sendIndustryRequestReceivedEmail 失敗:', error);
+  }
+}
+
+// 產業新增需求：建案成功時寄給 OXM 平台管理端的案件通知（沿用工廠檢舉
+// sendReportEmail / 客服投訴 sendSupportTicketEmail 同一套收件設定 ADMIN_EMAIL，
+// 以及同一套 error 處理：內部 try/catch 吞掉錯誤、絕不 throw，寄信失敗不影響
+// 案件建立）。信件為管理端案件通知，內容含需求 snapshot，但不含 adminNote /
+// openId / OWNER_OPEN_ID 等內部識別資料。
+export async function sendIndustryRequestAdminEmail(params: {
+  requestId: number;
+  userName: string;
+  userEmail: string;
+  userPhone?: string | null;
+  description: string;
+  createdAt: Date | string;
+}) {
+  if (!isEmailEnabled()) {
+    console.log(`[Email] ${getEmailDisabledReason()}，跳過寄信`);
+    return;
+  }
+  if (!ADMIN_EMAIL) {
+    console.warn('[Email] ADMIN_EMAIL is not set, skipping admin notification');
+    return;
+  }
+  const appUrl = process.env.VITE_APP_URL ?? 'http://localhost:3000';
+  const submittedAt = new Date(params.createdAt).toLocaleString('zh-TW');
+  try {
+    const resend = getResend();
+    if (!resend) return;
+    await resend.emails.send({
+      from: FROM_EMAIL,
+      to: ADMIN_EMAIL,
+      subject: '【OXM】收到新的產業新增需求',
+      html: `
+        <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #f97316;">收到新的產業新增需求</h2>
+          <p>案件 ID：<strong>#${params.requestId}</strong></p>
+          <p>提出會員：<strong>${escapeHtml(params.userName)}</strong></p>
+          <p>Email：<strong>${escapeHtml(params.userEmail)}</strong></p>
+          ${params.userPhone ? `<p>電話：<strong>${escapeHtml(params.userPhone)}</strong></p>` : ''}
+          <p>提出時間：${escapeHtml(submittedAt)}</p>
+          <div style="background: #f5f5f5; padding: 16px; border-radius: 8px; margin: 16px 0;">
+            <p style="margin: 0; font-weight: bold;">需求說明：</p>
+            <p style="margin: 8px 0 0; white-space: pre-wrap;">${escapeHtml(params.description)}</p>
+          </div>
+          <a href="${appUrl}/admin/support"
+            style="background: #f97316; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none; display: inline-block;">
+            前往客服中心「產業要求」
+          </a>
+          <p style="color: #999; font-size: 12px; margin-top: 24px;">此信件由 OXM 平台自動發送。</p>
+        </div>
+      `,
+    });
+    console.log(`[Email] 已寄送產業新增需求通知給管理員（#${params.requestId}）`);
+  } catch (error) {
+    console.error('[Email] sendIndustryRequestAdminEmail 失敗:', error);
+  }
+}

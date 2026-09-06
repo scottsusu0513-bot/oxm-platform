@@ -10,6 +10,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { ArrowLeft, Loader2, Send } from "lucide-react";
 import { toast } from "sonner";
 import { performLogin } from "@/const";
+import { OFFICIAL_OXM_NAME_CLASSNAME } from "@shared/officialIdentity";
 
 export default function AdminMessageDetail() {
   const { id } = useParams<{ id: string }>();
@@ -71,6 +72,15 @@ export default function AdminMessageDetail() {
 
   const campaign = campaignQuery.data;
   const thread = threadQuery.data ?? [];
+  // sender 顯示名稱一律由 API（server 端 officialIdentity resolver）決定，
+  // client 不判斷 openId / email / role。官方負責人 → 橘色半粗；一般管理員
+  // → 維持既有「★ 平台管理員」樣式。
+  const senderIdentity = campaign?.senderIdentity;
+  const senderIsOfficial = !!senderIdentity?.isOfficialOxmAccount;
+  const senderLabel = senderIdentity
+    ? (senderIsOfficial ? senderIdentity.displayName : `★ ${senderIdentity.displayName}`)
+    : "★ 平台管理員";
+  const senderClass = senderIsOfficial ? OFFICIAL_OXM_NAME_CLASSNAME : "font-bold text-orange-500";
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
@@ -98,7 +108,7 @@ export default function AdminMessageDetail() {
             <Card className="mb-4 border-orange-200">
               <CardContent className="p-5">
                 <div className="flex items-center gap-2 mb-3">
-                  <span className="font-bold text-orange-500 text-sm">★ 平台管理員</span>
+                  <span className={`${senderClass} text-sm`}>{senderLabel}</span>
                   <span className="text-xs text-muted-foreground">
                     {new Date(campaign.createdAt).toLocaleString("zh-TW")}
                   </span>
@@ -121,7 +131,7 @@ export default function AdminMessageDetail() {
                           : "bg-primary text-primary-foreground"
                       }`}>
                         {isAdmin && (
-                          <p className="text-xs font-bold text-orange-500 mb-1">★ 平台管理員</p>
+                          <p className={`text-xs mb-1 ${senderClass}`}>{senderLabel}</p>
                         )}
                         <p className="whitespace-pre-wrap">{msg.content}</p>
                         <p className={`text-xs mt-1 ${isAdmin ? "text-muted-foreground" : "text-primary-foreground/70"}`}>

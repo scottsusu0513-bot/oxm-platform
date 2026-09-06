@@ -15,6 +15,7 @@ import {
   factoryCoManagerInvitations, factoryCoManagers,
   inquiryBatches, inquiryBatchItems,
   messageCampaigns, messageRecipients, messageReplies,
+  industryRequests, industryRequestStatusHistory,
   oauthStates, appLoginTickets, collaborationOrders, collaborationOrderChangeRequests, collaborationOrderOverdueNotifications, collaborationOrderRepeatRequests, collaborationOrderStageHistory,
   userAuthAccounts, emailVerificationTokens,
   pushNotificationTokens,
@@ -158,6 +159,13 @@ export async function getUserById(id: number) {
   if (!db) return undefined;
   const result = await db.select().from(users).where(eq(users.id, id)).limit(1);
   return result.length > 0 ? result[0] : undefined;
+}
+
+export async function getUsersByIds(ids: number[]): Promise<(typeof users.$inferSelect)[]> {
+  const db = await getDb();
+  if (!db || ids.length === 0) return [];
+  const unique = Array.from(new Set(ids));
+  return db.select().from(users).where(inArray(users.id, unique));
 }
 
 export async function setFactoryOwner(userId: number, isOwner: boolean) {
@@ -2465,6 +2473,186 @@ export async function getTicketHistory(ticketId: number) {
     .where(eq(ticketStatusHistory.ticketId, ticketId))
     .orderBy(asc(ticketStatusHistory.createdAt));
 }
+
+// ===== 產業新增需求 =====
+export type IndustryRequestStatus = "pending" | "reviewing" | "resolved" | "rejected";
+export const INDUSTRY_REQUEST_ACTIVE_STATUSES: IndustryRequestStatus[] = ["pending", "reviewing"];
+
+function isDuplicateKeyError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const e = err as { code?: string; errno?: number };
+  return e.code === "ER_DUP_ENTRY" || e.errno === 1062;
+}
+
+/**
+ * 建立一筆產業新增需求。
+ *
+ * 「同一 user 同時最多一筆 active(pending/reviewing)」由兩層保證：
+ *   1. 事務內先對該 user 目前的 active 列做 SELECT ... FOR UPDATE，讓並發的
+ *      第二個請求排隊、看到第一筆已存在後直接回既有那筆（created: false）。
+ *   2. 若仍撞上 DB 的 UNIQUE(activeUserId)（generated column），捕捉重複鍵錯誤
+ *      後同樣回既有 active 列，不對外丟錯 —— double-click / 多開視窗 / API 重送
+ *      都只會得到同一筆。
+ */
+export async function createIndustryRequest(data: {
+  userId: number;
+  name: string;
+  email: string;
+  phone: string | null;
+  description: string;
+}): Promise<{ created: boolean; request: typeof industryRequests.$inferSelect }> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  try {
+    return await db.transaction(async (tx) => {
+      const existingActive = await tx.select().from(industryRequests)
+        .where(and(
+          eq(industryRequests.userId, data.userId),
+          inArray(industryRequests.status, INDUSTRY_REQUEST_ACTIVE_STATUSES),
+        ))
+        .orderBy(desc(industryRequests.createdAt))
+        .limit(1)
+        .for("update");
+      if (existingActive.length > 0) {
+        return { created: false, request: existingActive[0] };
+      }
+      const inserted = await tx.insert(industryRequests).values({
+        userId: data.userId,
+        name: data.name,
+        email: data.email,
+        phone: data.phone,
+        description: data.description,
+      });
+      const newId = inserted[0].insertId as number;
+      await tx.insert(industryRequestStatusHistory).values({ requestId: newId, status: "pending", adminNote: null });
+      const [row] = await tx.select().from(industryRequests).where(eq(industryRequests.id, newId)).limit(1);
+      return { created: true, request: row };
+    });
+  } catch (err) {
+    if (isDuplicateKeyError(err)) {
+      const active = await getActiveIndustryRequestForUser(data.userId);
+      if (active) return { created: false, request: active };
+    }
+    throw err;
+  }
+}
+
+export async function getLatestIndustryRequestForUser(userId: number) {
+  const db = await getDb();
+  if (!db) return null;
+  // createdAt 只有秒精度：同一秒建立多筆時再以 id（單調遞增）分高下。
+  const rows = await db.select().from(industryRequests)
+    .where(eq(industryRequests.userId, userId))
+    .orderBy(desc(industryRequests.createdAt), desc(industryRequests.id))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+export async function getActiveIndustryRequestForUser(userId: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select().from(industryRequests)
+    .where(and(
+      eq(industryRequests.userId, userId),
+      inArray(industryRequests.status, INDUSTRY_REQUEST_ACTIVE_STATUSES),
+    ))
+    .orderBy(desc(industryRequests.createdAt), desc(industryRequests.id))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+export async function getAdminIndustryRequests(page = 1, pageSize = 20, status?: string) {
+  const db = await getDb();
+  if (!db) return { items: [], total: 0 };
+  const cond = status ? eq(industryRequests.status, status as IndustryRequestStatus) : undefined;
+  const [countRow] = await db.select({ count: sql<number>`COUNT(*)` }).from(industryRequests).where(cond);
+  const total = Number(countRow?.count ?? 0);
+  const items = await db.select({
+    id: industryRequests.id,
+    userId: industryRequests.userId,
+    name: industryRequests.name,
+    email: industryRequests.email,
+    phone: industryRequests.phone,
+    description: industryRequests.description,
+    status: industryRequests.status,
+    adminNote: industryRequests.adminNote,
+    adminMessageCampaignId: industryRequests.adminMessageCampaignId,
+    createdAt: industryRequests.createdAt,
+    updatedAt: industryRequests.updatedAt,
+    // 目前帳號名稱/信箱（管理員辨識用；案件內容仍以 snapshot 為準）
+    currentUserName: users.name,
+    currentUserEmail: users.email,
+  }).from(industryRequests)
+    .leftJoin(users, eq(industryRequests.userId, users.id))
+    .where(cond)
+    .orderBy(desc(industryRequests.createdAt), desc(industryRequests.id))
+    .limit(pageSize).offset((page - 1) * pageSize);
+  return { items, total };
+}
+
+export async function getIndustryRequestById(id: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select().from(industryRequests).where(eq(industryRequests.id, id)).limit(1);
+  return rows[0] ?? null;
+}
+
+export async function updateIndustryRequestStatus(id: number, status: IndustryRequestStatus, adminNote?: string) {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  const updateData: Record<string, unknown> = { status };
+  if (adminNote !== undefined) updateData.adminNote = adminNote;
+  await db.update(industryRequests).set(updateData).where(eq(industryRequests.id, id));
+  await db.insert(industryRequestStatusHistory).values({ requestId: id, status, adminNote: adminNote ?? null });
+}
+
+export async function getIndustryRequestHistory(requestId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(industryRequestStatusHistory)
+    .where(eq(industryRequestStatusHistory.requestId, requestId))
+    .orderBy(asc(industryRequestStatusHistory.createdAt));
+}
+
+/**
+ * 「私訊會員」：取得或建立這筆產業需求綁定的站內信 campaign
+ * （messageCampaigns.targetType='single'）。
+ *
+ * 事務內對 industryRequests 該列 SELECT ... FOR UPDATE 序列化並發呼叫：
+ * 第二次呼叫會等第一次 commit、看到 adminMessageCampaignId 已寫入後直接回傳，
+ * 不會重建 campaign（避免管理員 double-click 產生大量重複對話）。
+ */
+export async function getOrCreateIndustryRequestCampaign(params: {
+  requestId: number;
+  adminUserId: number;
+  title: string;
+  content: string;
+}): Promise<{ campaignId: number; created: boolean }> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  return db.transaction(async (tx) => {
+    const rows = await tx.select().from(industryRequests)
+      .where(eq(industryRequests.id, params.requestId)).limit(1).for("update");
+    const req = rows[0];
+    if (!req) throw new Error("找不到此產業需求");
+    if (req.adminMessageCampaignId) {
+      return { campaignId: req.adminMessageCampaignId, created: false };
+    }
+    const insertedCampaign = await tx.insert(messageCampaigns).values({
+      title: params.title,
+      content: params.content,
+      senderId: params.adminUserId,
+      targetType: "single",
+    });
+    const campaignId = insertedCampaign[0].insertId as number;
+    await tx.insert(messageRecipients).values({ campaignId, receiverId: req.userId });
+    await tx.update(industryRequests)
+      .set({ adminMessageCampaignId: campaignId })
+      .where(eq(industryRequests.id, params.requestId));
+    return { campaignId, created: true };
+  });
+}
+
 // ===== 平台公告 =====
 export async function getAnnouncements(limit = 20) {
   const db = await getDb();
@@ -4976,6 +5164,7 @@ export async function getAdminMessagesForUser(userId: number) {
       content: messageCampaigns.content,
       createdAt: messageCampaigns.createdAt,
       isRead: messageRecipients.isRead,
+      senderId: messageCampaigns.senderId,
     })
     .from(messageRecipients)
     .innerJoin(messageCampaigns, eq(messageRecipients.campaignId, messageCampaigns.id))

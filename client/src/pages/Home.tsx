@@ -4,6 +4,8 @@ import { PUBLIC_PAGE_SEO } from "@/lib/publicPageSeo";
 import { HOME_CONTENT, type TextSegment } from "@shared/content/home";
 import Navbar from "@/components/Navbar";
 import LoginPopupModal from "@/components/LoginPopupModal";
+import { IndustryRequestModal } from "@/components/IndustryRequestModal";
+import { performLogin } from "@/const";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -406,6 +408,7 @@ export default function Home() {
   const [region, setRegion] = useState<string[]>([]);
   const [keyword, setKeyword] = useState("");
   const [businessType, setBusinessType] = useState("");
+  const [industryRequestOpen, setIndustryRequestOpen] = useState(false);
 
   const handleSearch = () => {
     const params = new URLSearchParams();
@@ -831,8 +834,25 @@ export default function Home() {
               {HOME_CONTENT.ctaSection.buttons[1].label}
             </Button>
           </div>
+
+          {/* 次要入口：沒有你的產業？（會員需求，未登入先走既有登入流程） */}
+          <div className="mt-4 md:mt-5">
+            <button
+              type="button"
+              className="inline-flex items-center gap-1.5 text-sm text-orange-600 hover:text-orange-700 hover:underline underline-offset-4 transition-colors"
+              onClick={() => {
+                if (!isAuthenticated) { performLogin(); return; }
+                setIndustryRequestOpen(true);
+              }}
+            >
+              <Sparkles className="w-4 h-4 shrink-0" />
+              沒有你的產業？
+            </button>
+          </div>
         </div>
       </section>
+
+      <IndustryRequestModal open={industryRequestOpen} onOpenChange={setIndustryRequestOpen} />
 
       {/* 平台公告 */}
       <AnnouncementsSection navigate={navigate} />

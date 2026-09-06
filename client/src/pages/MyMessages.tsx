@@ -17,6 +17,7 @@ import {
 import { toast } from "sonner";
 import { usePullToRefresh } from "@/hooks/usePullToRefresh";
 import { NativePullToRefreshLayout } from "@/components/NativePullToRefreshLayout";
+import { OFFICIAL_OXM_NAME_CLASSNAME } from "@shared/officialIdentity";
 
 // ── 時間格式（收件匣風格）─────────────────────────────────────────────────
 function formatMsgTime(t: Date | string | null | undefined): string {
@@ -97,7 +98,7 @@ function AdminAvatar({ isUnread }: { isUnread?: boolean }) {
 interface InboxCardContentProps {
   avatar: React.ReactNode;
   isUnread?: boolean;
-  title: string;
+  title: React.ReactNode;
   titleSuffix?: React.ReactNode;
   summary?: string | null;
   emptySummary?: string;
@@ -181,7 +182,11 @@ function UserConversationList({ conversations }: { conversations: any[] }) {
               <InboxCardContent
                 avatar={<AdminAvatar isUnread={conv.unreadCount > 0} />}
                 isUnread={conv.unreadCount > 0}
-                title="平台管理員"
+                title={
+                  (conv as any).senderIsOfficialOxm
+                    ? <span className={OFFICIAL_OXM_NAME_CLASSNAME}>{(conv as any).senderDisplayName}</span>
+                    : ((conv as any).senderDisplayName ?? "平台管理員")
+                }
                 titleSuffix={
                   <span className="text-[10px] px-1.5 py-0.5 rounded border border-orange-200 bg-orange-50 text-orange-600 shrink-0">
                     官方公告
