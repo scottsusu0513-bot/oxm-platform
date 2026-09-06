@@ -36,8 +36,6 @@ const MyMessages            = lazy(() => import("./pages/MyMessages"));
 const MyFavorites           = lazy(() => import("./pages/MyFavorites"));
 const MemberCenter          = lazy(() => import("./pages/MemberCenter"));
 const Announcements         = lazy(() => import("./pages/Announcements"));
-const BlogList              = lazy(() => import("./pages/BlogList"));
-const BlogPost              = lazy(() => import("./pages/BlogPost"));
 const AboutOXM              = lazy(() => import("./pages/AboutOXM"));
 const FAQ                   = lazy(() => import("./pages/FAQ"));
 const ResourceCenter        = lazy(() => import("./pages/ResourceCenter"));
@@ -404,8 +402,6 @@ function Router() {
         <Route path="/admin/messages/:campaignId" component={AdminMessages} />
         <Route path="/admin/messages" component={AdminMessages} />
         <Route path="/admin-message/:id" component={AdminMessageDetail} />
-        <Route path="/blog/:slug" component={BlogPost} />
-        <Route path="/blog" component={BlogList} />
         {/* /news、/news/:slug：目前不對外開放入口（Navbar「找消息」維持鎖定），
             但路由本身必須完整存在，讓管理員／測試者可以直接輸入網址瀏覽。 */}
         <Route path="/news/:slug" component={NewsDetail} />

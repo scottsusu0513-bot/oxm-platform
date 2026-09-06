@@ -3,7 +3,7 @@
 // server/_core/publicPageMeta.ts）共用同一份資料，避免兩邊描述互相矛盾。
 //
 // og:image 使用 og-image.png——這是目前全站唯一已確認、實際在多個頁面
-// （IndustryPage／BlogPost／BlogList／FactoryDetail 的預設值）及
+// （IndustryPage／FactoryDetail 的預設值）及
 // server/_core/ogMeta.ts 的 DEFAULT_OG_IMAGE 中使用中的社群預覽圖；首頁與
 // About 目前都沒有各自專屬的 OG 圖，因此兩者皆採用這張已確認存在的預設圖。
 import { BRAND } from "./brand";

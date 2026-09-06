@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import { Capacitor } from "@capacitor/core";
 import { trpc } from "@/lib/trpc";
-import { Megaphone, BookOpen, HelpCircle, CalendarCheck, X } from "lucide-react";
+import { Megaphone, HelpCircle, CalendarCheck, X } from "lucide-react";
 import { MANUAL_ENTRY_ENABLED } from "@/lib/manual";
 
 const isNativePlatform = Capacitor.isNativePlatform();
@@ -168,16 +168,6 @@ export default function FloatingAnnouncementButton() {
           <span className="hidden sm:inline text-sm">使用手冊</span>
         </button>
       )}
-
-      {/* 找代工指南 — 暫時隱藏，未來改造成「平台 QA 區」入口 */}
-      {/* <button
-        onClick={() => document.getElementById("guides")?.scrollIntoView({ behavior: "smooth" })}
-        aria-label="找代工指南"
-        className={`${btnBase} bg-gradient-to-r from-purple-500 to-violet-500`}
-      >
-        <BookOpen className="w-4 h-4 shrink-0" />
-        <span className="hidden sm:inline text-sm">找代工指南</span>
-      </button> */}
 
       {/* 平台公告（有公告才顯示） */}
       {items.length > 0 && (

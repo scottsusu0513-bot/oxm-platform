@@ -68,8 +68,6 @@ describe("isFooterExcludedPath", () => {
     expect(isFooterExcludedPath("/privacy")).toBe(false);
     expect(isFooterExcludedPath("/terms")).toBe(false);
     expect(isFooterExcludedPath("/community")).toBe(false);
-    expect(isFooterExcludedPath("/blog")).toBe(false);
-    expect(isFooterExcludedPath("/blog/some-post")).toBe(false);
     expect(isFooterExcludedPath("/announcements")).toBe(false);
     expect(isFooterExcludedPath("/404")).toBe(false);
   });

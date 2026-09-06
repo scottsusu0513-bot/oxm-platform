@@ -8,6 +8,7 @@ import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import { setupSecurityHeaders, setupOriginCheck, setupNoIndexRoutes } from "./security";
+import { setupGoneRoutes } from "./goneRoutes";
 import { apiLimiter, loginLimiter, uploadLimiter, messageLimiter, submitReviewLimiter, adminLimiter, searchLimiter, reportLimiter } from "./rateLimit";
 import { COOKIE_NAME } from "@shared/const";
 import { INDUSTRY_SLUGS, REGION_SLUGS, PHASE1_SUB_INDUSTRY_PAGES } from "../../shared/constants";
@@ -28,6 +29,9 @@ async function startServer() {
   console.log("[boot] applying security headers");
   setupSecurityHeaders(app);
   setupNoIndexRoutes(app);
+  // 原「找代工指南」Blog（/blog 與所有 /blog/* 舊文章）已永久移除：在所有
+  // SPA fallback 之前攔截，回 HTTP 410 Gone + noindex，不 redirect、不回 200。
+  setupGoneRoutes(app);
   console.log("[boot] applying origin check");
   setupOriginCheck(app);
 
@@ -195,12 +199,6 @@ async function startServer() {
     urls.push(entry(`${BASE}/brand`, "0.6", "monthly"));
     // 找形象下正式開放的服務 Landing Page，同上一律用子頁層級 priority。
     urls.push(entry(`${BASE}/short-video-marketing`, "0.5", "monthly"));
-
-    // Blog / 找代工指南
-    urls.push(entry(`${BASE}/blog`, "0.7", "weekly", today));
-    urls.push(entry(`${BASE}/blog/oem-vs-odm`, "0.6", "weekly", today));
-    urls.push(entry(`${BASE}/blog/what-is-moq`, "0.6", "weekly", today));
-    urls.push(entry(`${BASE}/blog/first-time-factory-guide`, "0.6", "weekly", today));
 
     // 主產業頁：內容來自 shared/constants.ts 的靜態文案，沒有逐頁真實更新
     // 時間可查，比照 /about 的既有慣例省略 lastmod，不得每次產生 sitemap

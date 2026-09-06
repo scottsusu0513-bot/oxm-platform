@@ -22,7 +22,6 @@ import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useState, useEffect, useCallback, useRef, Fragment } from "react";
 import { useLocation, Link } from "wouter";
-import { allPosts } from "@/lib/blog";
 import { usePullToRefresh } from "@/hooks/usePullToRefresh";
 import { NativePullToRefreshLayout } from "@/components/NativePullToRefreshLayout";
 import { toMarkdownPreviewText } from "@/components/MarkdownContent";
@@ -792,47 +791,6 @@ export default function Home() {
           </div>
         </div>
       </section>
-
-      {/* 找代工指南 — 暫時隱藏（未來重新設計後再啟用），保留頁面/路由/元件不動，僅從首頁渲染移除
-      <section id="guides" className="py-5 md:py-16 bg-gray-50">
-        <div className="container">
-          <div className="flex items-end justify-between mb-4 md:mb-8">
-            <div>
-              <h2 className="text-xl md:text-3xl font-bold mb-1">找代工指南</h2>
-              <p className="text-xs md:text-base text-muted-foreground">第一次找 OEM / ODM 工廠？從這裡開始</p>
-            </div>
-            <Link href="/blog">
-              <Button variant="ghost" className="text-orange-500 hover:text-orange-600 gap-1 hidden sm:flex">
-                查看更多指南 <ArrowRight className="w-4 h-4" />
-              </Button>
-            </Link>
-          </div>
-          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-4 mb-4 md:mb-6">
-            {allPosts.slice(0, 3).map((post) => (
-              <Link key={post.slug} href={`/blog/${post.slug}`}>
-                <Card className="hover:shadow-md transition-shadow cursor-pointer h-full border-0 shadow-sm">
-                  <CardContent className="p-3 md:p-6">
-                    <p className="text-xs text-muted-foreground mb-1">{post.date}</p>
-                    <h3 className="font-bold text-sm md:text-base mb-1 leading-snug hover:text-orange-500 transition-colors">{post.title}</h3>
-                    <p className="text-xs md:text-sm text-muted-foreground line-clamp-2 leading-normal md:leading-relaxed">{post.description}</p>
-                    <div className="flex items-center gap-1 mt-2 md:mt-4 text-xs md:text-sm text-orange-500 font-medium">
-                      閱讀全文 <ArrowRight className="w-3 h-3 md:w-3.5 md:h-3.5" />
-                    </div>
-                  </CardContent>
-                </Card>
-              </Link>
-            ))}
-          </div>
-          <div className="text-center sm:hidden">
-            <Link href="/blog">
-              <Button variant="outline" size="sm" className="border-orange-300 text-orange-600 hover:bg-orange-50 gap-1">
-                查看更多指南 <ArrowRight className="w-3.5 h-3.5" />
-              </Button>
-            </Link>
-          </div>
-        </div>
-      </section>
-      */}
 
       {/* CTA */}
       <section className="py-5 md:py-16 bg-white">
