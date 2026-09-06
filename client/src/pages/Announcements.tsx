@@ -5,10 +5,20 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
 import { Link, useLocation } from "wouter";
-import { useEffect } from "react";
-import { ChevronLeft, Megaphone, Wrench, Newspaper, Zap, Pin, ArrowRight, ExternalLink } from "lucide-react";
+import { useEffect, useState } from "react";
+import { ChevronLeft, ChevronRight, ChevronDown, Megaphone, Wrench, Newspaper, Zap, Pin, ArrowRight, ExternalLink } from "lucide-react";
 import MarkdownContent from "@/components/MarkdownContent";
 import { isNativeApp, openExternalUrl } from "@/lib/platform";
+
+interface AnnouncementListItem {
+  id: number;
+  title: string;
+  content: string;
+  type: "update" | "maintenance" | "news";
+  isPinned: boolean;
+  createdAt: string | Date;
+  actionUrl?: string | null;
+}
 
 const TYPE_CONFIG = {
   update:      { label: "版本更新", icon: Zap,       className: "bg-blue-100 text-blue-700 border-blue-200" },
@@ -70,24 +80,117 @@ function AnnouncementActionButton({ actionUrl }: { actionUrl: string }) {
   );
 }
 
+// Accordion 單則公告：收合時只顯示標題＋日期，點擊 header 才展開全文。
+// isHighlighted（首頁／登入彈窗導來的目標公告橘框）與 isExpanded（Accordion
+// 展開狀態）是兩個獨立的 prop——目標公告會同時是這兩者，但橘框本身不代表
+// 展開，展開也不代表有橘框，兩者的判斷來源本來就不同，不能合併成同一個
+// state。
+function AnnouncementAccordionItem({
+  item,
+  isExpanded,
+  isHighlighted,
+  onToggle,
+}: {
+  item: AnnouncementListItem;
+  isExpanded: boolean;
+  isHighlighted: boolean;
+  onToggle: () => void;
+}) {
+  const contentId = `announcement-content-${item.id}`;
+  return (
+    <Card
+      id={`announcement-${item.id}`}
+      // scroll-mt-24：Navbar 是 sticky top-0（見 Navbar.tsx:596），沒有這個
+      // offset，deep-link 捲動會讓公告標題整個貼到 viewport 最上方、甚至被
+      // sticky navbar 蓋住。沿用本站其他錨點區塊既有的 scroll-mt-24 慣例
+      // （見 AboutOXM.tsx／FAQ.tsx／FactoryDetailView.tsx 的 section 錨點）。
+      className={`scroll-mt-24 overflow-hidden ${
+        isHighlighted
+          ? "border-orange-400 ring-2 ring-orange-300 bg-orange-50/60"
+          : item.isPinned ? "border-orange-200 bg-orange-50/50" : ""
+      }`}
+    >
+      <button
+        type="button"
+        aria-expanded={isExpanded}
+        aria-controls={contentId}
+        onClick={onToggle}
+        className="w-full flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-3 p-5 text-left"
+      >
+        <div className="flex items-start sm:items-center gap-2 min-w-0 flex-1">
+          {isExpanded
+            ? <ChevronDown className="w-4 h-4 shrink-0 mt-0.5 sm:mt-0 text-muted-foreground" />
+            : <ChevronRight className="w-4 h-4 shrink-0 mt-0.5 sm:mt-0 text-muted-foreground" />}
+          <span className="font-semibold text-base break-words min-w-0">{item.title}</span>
+        </div>
+        <span className="text-xs text-muted-foreground shrink-0 pl-6 sm:pl-0">
+          {new Date(item.createdAt).toLocaleDateString("zh-TW", { year: "numeric", month: "2-digit", day: "2-digit" })}
+        </span>
+      </button>
+      {/* grid-rows 0fr→1fr 是不需要量測實際高度就能做精準展開/收合動畫的
+          標準做法；外層 overflow-hidden 的 inner wrapper 負責裁切轉場過程中
+          還沒完全展開的內容，opacity 一起淡入淡出，200-300ms、無 bounce。 */}
+      <div
+        id={contentId}
+        className={`grid transition-[grid-template-rows,opacity] duration-300 ease-in-out ${
+          isExpanded ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
+        }`}
+      >
+        <div className="overflow-hidden">
+          <CardContent className="px-5 pb-5 pt-0">
+            <div className="flex items-center gap-2 flex-wrap mb-2">
+              {item.isPinned && (
+                <span className="inline-flex items-center gap-1 text-xs text-orange-600 font-medium">
+                  <Pin className="w-3 h-3" />置頂
+                </span>
+              )}
+              <TypeBadge type={item.type} />
+            </div>
+            <MarkdownContent content={item.content} className="text-muted-foreground" />
+            {item.type === "news" && item.actionUrl && (
+              <div className="mt-4 pt-4 border-t border-border/60">
+                <AnnouncementActionButton actionUrl={item.actionUrl} />
+              </div>
+            )}
+          </CardContent>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 export default function Announcements() {
   const [, navigate] = useLocation();
   const { data: items = [], isLoading } = trpc.announcement.list.useQuery({ limit: 50 });
 
-  // 登入彈窗「點擊進入完整公告」會導向 /announcements?highlight=<id>——這裡沒有
-  // 獨立的公告詳情頁路由，所以用錨點捲動＋短暫醒目提示的方式導向同一則公告，
-  // 而不是另外做一套第二份公告內容。
+  // 登入彈窗／首頁公告卡片「點擊進入完整公告」會導向
+  // /announcements?highlight=<id>——這裡沒有獨立的公告詳情頁路由，所以用
+  // 錨點捲動＋展開＋橘框醒目提示的方式導向同一則公告，而不是另外做一套第二
+  // 份公告內容。
   const highlightId = new URLSearchParams(window.location.search).get("highlight");
+
+  // Accordion 展開狀態：null 代表全部收合，同一時間只展開一則，避免頁面
+  // 重新變得過長。
+  const [expandedId, setExpandedId] = useState<number | null>(null);
 
   useEffect(() => {
     if (!highlightId || items.length === 0) return;
-    const el = document.getElementById(`announcement-${highlightId}`);
-    // 不用 behavior: "smooth"：這是「使用者從首頁／登入彈窗點了特定一則公告」
-    // 的明確目標定位，必須可靠地落在正確位置——smooth 動畫在部分瀏覽器情境
-    // （例如系統開啟減少動態效果、或動畫途中被其他事件中斷）可能整個不執行
-    // 或提前結束，造成使用者完全沒有捲到目標公告。直接跳過去雖然沒有滑動
-    // 動畫，但保證每次都精準落在正確位置。
-    el?.scrollIntoView({ block: "center" });
+    const targetId = Number(highlightId);
+    if (!Number.isNaN(targetId)) setExpandedId(targetId);
+    // 用 requestAnimationFrame 而不是同步捲動：上面的 setExpandedId 要等下一次
+    // render 提交、瀏覽器完成該公告展開後的 layout，才能量到正確位置；同步
+    // 呼叫 scrollIntoView 會用到還沒展開（收合狀態）的舊高度來計算，捲動位置
+    // 會不準確。不用 behavior: "smooth"：這是「使用者從首頁／登入彈窗點了
+    // 特定一則公告」的明確目標定位，必須可靠地落在正確位置——smooth 動畫在
+    // 部分瀏覽器情境（例如系統開啟減少動態效果、或動畫途中被其他事件中斷）
+    // 可能整個不執行或提前結束。沿用既有的 block: "center"（見 Card 上的
+    // scroll-mt-24：Navbar 是 sticky top-0，兩者一起確保標題不會貼齊或被
+    // sticky navbar 蓋住 viewport 最上方）。
+    const raf = requestAnimationFrame(() => {
+      const el = document.getElementById(`announcement-${highlightId}`);
+      el?.scrollIntoView({ block: "center" });
+    });
+    return () => cancelAnimationFrame(raf);
   }, [highlightId, items.length]);
 
   return (
@@ -122,38 +225,13 @@ export default function Announcements() {
         ) : (
           <div className="space-y-4">
             {items.map(item => (
-              <Card
+              <AnnouncementAccordionItem
                 key={item.id}
-                id={`announcement-${item.id}`}
-                className={
-                  String(item.id) === highlightId
-                    ? "border-orange-400 ring-2 ring-orange-300 bg-orange-50/60"
-                    : item.isPinned ? "border-orange-200 bg-orange-50/50" : ""
-                }
-              >
-                <CardContent className="p-5">
-                  <div className="flex items-start justify-between gap-3 mb-2">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      {item.isPinned && (
-                        <span className="inline-flex items-center gap-1 text-xs text-orange-600 font-medium">
-                          <Pin className="w-3 h-3" />置頂
-                        </span>
-                      )}
-                      <TypeBadge type={item.type} />
-                    </div>
-                    <span className="text-xs text-muted-foreground shrink-0">
-                      {new Date(item.createdAt).toLocaleDateString("zh-TW", { year: "numeric", month: "2-digit", day: "2-digit" })}
-                    </span>
-                  </div>
-                  <h2 className="font-semibold text-base mb-2">{item.title}</h2>
-                  <MarkdownContent content={item.content} className="text-muted-foreground" />
-                  {item.type === "news" && item.actionUrl && (
-                    <div className="mt-4 pt-4 border-t border-border/60">
-                      <AnnouncementActionButton actionUrl={item.actionUrl} />
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
+                item={item}
+                isExpanded={expandedId === item.id}
+                isHighlighted={String(item.id) === highlightId}
+                onToggle={() => setExpandedId(prev => (prev === item.id ? null : item.id))}
+              />
             ))}
           </div>
         )}
