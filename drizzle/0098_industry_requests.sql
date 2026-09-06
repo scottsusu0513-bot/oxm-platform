@@ -19,6 +19,9 @@
 --   建立/綁定的站內信 campaign（messageCampaigns.targetType='single'）。
 --   NULL = 尚未建立；綁定後管理員再點「私訊會員」直接開同一 thread，不重建。
 --
+-- industryRequestStatusHistory.requestId → industryRequests.id ON DELETE CASCADE：
+--   案件刪除時歷程一併清掉，不留孤兒列。
+--
 -- 只新增這兩張表，不 UPDATE / backfill / DROP / RENAME 任何既有表或欄位。
 -- 只套用到 local oxm / oxm_test，不套 production。
 
@@ -49,7 +52,9 @@ CREATE TABLE `industryRequestStatusHistory` (
   `requestId` int NOT NULL,
   `status` enum('pending','reviewing','resolved','rejected') NOT NULL,
   `adminNote` text,
-  `createdAt` timestamp NOT NULL DEFAULT (now())
+  `createdAt` timestamp NOT NULL DEFAULT (now()),
+  CONSTRAINT `fk_industry_request_history_request` FOREIGN KEY (`requestId`)
+    REFERENCES `industryRequests`(`id`) ON DELETE CASCADE
 );
 
 CREATE INDEX `idx_industry_request_history_request`

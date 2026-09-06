@@ -87,7 +87,8 @@ beforeAll(async () => {
       requestId int NOT NULL,
       status enum('pending','reviewing','resolved','rejected') NOT NULL,
       adminNote text,
-      createdAt timestamp NOT NULL DEFAULT (now())
+      createdAt timestamp NOT NULL DEFAULT (now()),
+      CONSTRAINT fk_industry_request_history_request FOREIGN KEY (requestId) REFERENCES industryRequests(id) ON DELETE CASCADE
     )
   `));
 });

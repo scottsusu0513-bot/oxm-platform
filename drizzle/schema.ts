@@ -844,7 +844,7 @@ export type IndustryRequest = typeof industryRequests.$inferSelect;
 
 export const industryRequestStatusHistory = mysqlTable("industryRequestStatusHistory", {
   id: int("id").autoincrement().primaryKey(),
-  requestId: int("requestId").notNull(),
+  requestId: int("requestId").notNull().references(() => industryRequests.id, { onDelete: "cascade" }),
   status: mysqlEnum("status", ["pending", "reviewing", "resolved", "rejected"]).notNull(),
   adminNote: text("adminNote"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
