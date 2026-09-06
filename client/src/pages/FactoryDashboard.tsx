@@ -302,6 +302,16 @@ export default function FactoryDashboard() {
               <ClipboardList className="w-3.5 h-3.5 shrink-0" />
               訂單管理
             </TabsTrigger>
+            {/* 共同管理：獨立主分頁。權限與伺服器端一致（見 routers.ts
+                inviteCoManager／removeCoManager／getCoManagers 皆為
+                getFactoryByOwnerId 閘門），僅工廠主可見與操作，因此連
+                TabsTrigger 也一併 isOwner 判斷，次管理者行為與修改前完全相同。 */}
+            {isOwner && (
+              <TabsTrigger value="managers" className="gap-1.5 text-xs sm:text-sm">
+                <Users className="w-3.5 h-3.5 shrink-0" />
+                共同管理
+              </TabsTrigger>
+            )}
           </TabsList>
 
           <TabsContent value="info">
@@ -331,9 +341,12 @@ export default function FactoryDashboard() {
           <TabsContent value="orders">
             <CollaborationOrdersTab factoryId={factory.id} />
           </TabsContent>
+          {isOwner && (
+            <TabsContent value="managers">
+              <CoManagerPanel factoryId={factory.id} />
+            </TabsContent>
+          )}
         </Tabs>
-
-        {isOwner && <CoManagerPanel factoryId={factory.id} />}
       </div>
     </NativePullToRefreshLayout>
   );
@@ -2267,13 +2280,13 @@ function CoManagerPanel({ factoryId }: { factoryId: number }) {
   const activeCount = data?.coManagers.length ?? 0;
 
   return (
-    <Card className="mt-6 overflow-hidden">
+    <Card className="overflow-hidden">
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
-          <Users className="w-4 h-4 shrink-0" />共同管理者
+          <Users className="w-4 h-4 shrink-0" />共同管理
         </CardTitle>
         <CardDescription className="text-xs">
-          可邀請最多 6 位次管理者共同編輯工廠後台。次管理者無法刪除工廠或管理其他管理者。
+          管理可共同維護此工廠資料的成員與權限。可邀請最多 6 位次管理者共同編輯工廠後台；次管理者無法刪除工廠或管理其他管理者。
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
