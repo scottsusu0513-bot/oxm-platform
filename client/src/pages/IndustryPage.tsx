@@ -109,7 +109,11 @@ export default function IndustryPage() {
       <Navbar />
 
       <div className="container py-6">
-        <FloatingBackButton fallbackHref="/search" label="返回搜尋" />
+        {/* 產業結果頁上方可直接切換 13 個產業分類，切換會逐次 push 進歷史。
+            返回鍵若走 history back，會退回上一個分類而不是離開產業瀏覽。
+            因此這顆固定走 deterministic：唯一行為就是導向首頁 /，不看
+            history／sessionStorage／referrer。只改本頁 prop，不動共用元件預設。 */}
+        <FloatingBackButton fallbackHref="/" label="返回首頁" deterministic />
 
         {/* 頁首 */}
         <div className="mb-8">
