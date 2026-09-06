@@ -293,10 +293,14 @@ export function HeroImageCarousel() {
   );
 }
 
-const BUSINESS_TYPE_TABS = [
+// 搜尋類型三選一（segmented control）。value 沿用既有 businessType 參數契約：
+// "" = 不限（同時搜尋工廠與工作室，送出時不帶 businessType param）、
+// "factory" = 只搜工廠、"studio" = 只搜工作室。/search 端 params.get("businessType")
+// 取不到值時視為 "all"，因此「不限」不需帶參數。
+const SEARCH_TYPE_OPTIONS = [
+  { label: "不限", value: "" },
   { label: "工廠", value: "factory" },
   { label: "工作室", value: "studio" },
-  { label: "我都要", value: "" },
 ];
 
 const INDUSTRY_ICONS: Record<string, any> = {
@@ -517,56 +521,47 @@ export default function Home() {
             </p>
           </div>
 
-          {/* Mode Tabs + Search */}
+          {/* Search Panel（「工廠 / 工作室 / 不限」類型選擇已整合進卡片第一列，
+              不再單獨放在卡片上方） */}
           <div data-onboarding="search-panel" className="max-w-4xl mx-auto">
-            <div className="grid grid-cols-3 gap-1.5 mb-2 md:mb-6 w-full">
-              {[
-                { label: "工廠", value: "factory", icon: <Factory className="w-4 h-4 shrink-0" /> },
-                { label: "工作室", value: "studio", icon: <Wrench className="w-4 h-4 shrink-0" /> },
-                { label: "我都要", value: "", icon: null },
-              ].map((tab) => (
-                <button
-                  key={tab.value}
-                  className={`flex items-center justify-center gap-1.5 px-2 py-2 sm:px-6 sm:py-3 rounded-lg sm:rounded-xl text-sm sm:text-base font-semibold transition-all whitespace-nowrap w-full ${
-                    businessType === tab.value
-                      ? tab.value === "factory"
-                        ? "bg-gradient-to-r from-orange-500 to-amber-500 text-white shadow-lg shadow-orange-200"
-                        : tab.value === "studio"
-                        ? "bg-gradient-to-r from-purple-500 to-violet-500 text-white shadow-lg shadow-purple-200"
-                        : "bg-gradient-to-r from-amber-400 to-purple-500 text-white shadow-lg"
-                      : "bg-white text-foreground border border-border hover:border-orange-300 hover:shadow-sm"
-                  }`}
-                  onClick={() => setBusinessType(tab.value)}
-                >
-                  {tab.icon}{tab.label}
-                </button>
-              ))}
-            </div>
-
             <Card className="shadow-xl border-0 bg-white/80 backdrop-blur">
               <CardContent className="p-3 md:p-6">
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 md:gap-4 mb-2 md:mb-4">
-                  {/* 代工模式 */}
-                  <Popover>
-                    <PopoverTrigger asChild>
-                      <Button variant="outline" className="h-10 md:h-12 w-full justify-between text-sm md:text-base font-normal truncate">
-                        <span className="truncate">
-                          {activeMode === "" ? "代工模式" : activeMode === "ODM" ? "ODM 設計代工" : activeMode === "OEM" ? "OEM 製造代工" : "OBM（自有品牌）"}
-                        </span>
-                        <ChevronDown className="w-4 h-4 shrink-0 opacity-50 ml-1" />
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent className="w-48 p-2" align="start">
-                      {[{ label: "不限模式", value: "" }, { label: "ODM 設計代工", value: "ODM" }, { label: "OEM 製造代工", value: "OEM" }, { label: "OBM（自有品牌）", value: "OBM" }].map(opt => (
-                        <label key={opt.value} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted cursor-pointer text-sm">
-                          <Checkbox checked={activeMode === opt.value} onCheckedChange={() => setActiveMode(opt.value)} />
-                          {opt.label}
-                        </label>
-                      ))}
-                    </PopoverContent>
-                  </Popover>
+                {/* 第一列：類型三選一 segmented control（不限 / 工廠 / 工作室）。
+                    沿用既有 businessType state，非 dropdown、同時只能選一個。 */}
+                <div className="grid grid-cols-3 gap-1.5 md:gap-2 mb-2 md:mb-4">
+                  {SEARCH_TYPE_OPTIONS.map((opt) => {
+                    const selected = businessType === opt.value;
+                    return (
+                      <button
+                        key={opt.value || "any"}
+                        type="button"
+                        aria-pressed={selected}
+                        onClick={() => setBusinessType(opt.value)}
+                        className={`h-10 md:h-12 w-full rounded-lg md:rounded-xl text-sm md:text-base transition-all ${
+                          selected
+                            ? "bg-orange-500 text-white font-semibold shadow-sm shadow-orange-200"
+                            : "bg-white text-foreground font-normal border border-border hover:border-orange-300"
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    );
+                  })}
+                </div>
 
-                  {/* 選擇產業 */}
+                {/* 第二列：地區 → 主產業 → 子產業 → 代工模式（桌機 4 欄、手機 2×2） */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-4 mb-2 md:mb-4">
+                  {/* 1. 選擇地區 */}
+                  <MultiSelect
+                    options={TAIWAN_REGIONS}
+                    value={region}
+                    onChange={setRegion}
+                    placeholder="選擇地區"
+                    withClear
+                    groups={REGION_GROUPS}
+                  />
+
+                  {/* 2. 選擇主產業 */}
                   <Popover>
                     <PopoverTrigger asChild>
                       <Button variant="outline" className="h-10 md:h-12 w-full justify-between text-sm md:text-base font-normal truncate">
@@ -600,26 +595,37 @@ export default function Home() {
                     </PopoverContent>
                   </Popover>
 
-                  {/* 選擇子產業 */}
+                  {/* 3. 選擇子產業（與主產業連動：未選主產業時 disabled） */}
                   <MultiSelect
                     options={industry ? (INDUSTRIES.find(i => i.name === industry)?.sub as unknown as string[] ?? []) : []}
                     value={subIndustry}
                     onChange={setSubIndustry}
-                    placeholder={industry ? "選擇子產業" : "請先選擇產業"}
+                    placeholder={industry ? "選擇子產業" : "請先選擇主產業"}
                     disabled={!industry}
                   />
 
-                  {/* 選擇地區 */}
-                  <MultiSelect
-                    options={TAIWAN_REGIONS}
-                    value={region}
-                    onChange={setRegion}
-                    placeholder="選擇地區"
-                    withClear
-                    groups={REGION_GROUPS}
-                  />
+                  {/* 4. 代工模式 */}
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button variant="outline" className="h-10 md:h-12 w-full justify-between text-sm md:text-base font-normal truncate">
+                        <span className="truncate">
+                          {activeMode === "" ? "代工模式" : activeMode === "ODM" ? "ODM 設計代工" : activeMode === "OEM" ? "OEM 製造代工" : "OBM（自有品牌）"}
+                        </span>
+                        <ChevronDown className="w-4 h-4 shrink-0 opacity-50 ml-1" />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-48 p-2" align="start">
+                      {[{ label: "不限模式", value: "" }, { label: "ODM 設計代工", value: "ODM" }, { label: "OEM 製造代工", value: "OEM" }, { label: "OBM（自有品牌）", value: "OBM" }].map(opt => (
+                        <label key={opt.value} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted cursor-pointer text-sm">
+                          <Checkbox checked={activeMode === opt.value} onCheckedChange={() => setActiveMode(opt.value)} />
+                          {opt.label}
+                        </label>
+                      ))}
+                    </PopoverContent>
+                  </Popover>
                 </div>
 
+                {/* 第三列：關鍵字 */}
                 <div className="mb-2 md:mb-4">
                   <Input
                     className="w-full h-10 md:h-12 text-sm md:text-base"
@@ -630,12 +636,13 @@ export default function Home() {
                   />
                 </div>
 
+                {/* 第四列：搜尋按鈕（文案依類型動態） */}
                 <Button
                   className="w-full h-10 md:h-12 text-sm md:text-base font-semibold bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white border-0 shadow-lg shadow-orange-200/50"
                   onClick={handleSearch}
                 >
                   <Search className="w-4 h-4 md:w-5 md:h-5 mr-2" />
-                  搜尋工廠 & 工作室
+                  {businessType === "factory" ? "搜尋工廠" : businessType === "studio" ? "搜尋工作室" : "搜尋工廠與工作室"}
                 </Button>
               </CardContent>
             </Card>
