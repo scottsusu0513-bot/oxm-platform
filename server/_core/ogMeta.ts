@@ -1,7 +1,8 @@
 import * as db from "../db";
 import { BRAND } from "@shared/seo/brand";
-import { toSafeJsonLdString, type JsonLdObject } from "@shared/seo/schema";
+import { toSafeJsonLdString, getBreadcrumbSchema, type JsonLdObject } from "@shared/seo/schema";
 import { resolveRegionIndustry, buildRegionIndustryPageContent } from "@shared/seo/regionIndustryPages";
+import { INDUSTRY_SLUGS } from "@shared/constants";
 
 const SITE_BASE_URL = "https://www.oxmmatch.com";
 // exported so other dynamic (non-DB-backed) pages, e.g. /industry/:slug
@@ -84,8 +85,13 @@ export interface FactoryMeta {
   noindex: boolean;
   /** 省略時 renderMetaHtml 預設 "website"；/news/:slug 這類真正的文章頁會傳 "article"。 */
   ogType?: string;
-  /** 省略時不注入任何 JSON-LD；有值時原樣序列化成一個 <script type="application/ld+json"> 附加在同一個 marker 區塊內。 */
-  jsonLd?: JsonLdObject;
+  /**
+   * 省略時不注入任何 JSON-LD；有值時原樣序列化成一個
+   * <script type="application/ld+json"> 附加在同一個 marker 區塊內。
+   * 傳入陣列時序列化成單一 <script> 內的 JSON 陣列（schema.org 允許）——
+   * 例如 /factory/:id 同時帶 Organization ＋ BreadcrumbList。
+   */
+  jsonLd?: JsonLdObject | JsonLdObject[];
 }
 
 function buildTitle(name: string): string {
@@ -155,6 +161,63 @@ const GENERIC_FALLBACK = {
   image: DEFAULT_OG_IMAGE,
 };
 
+/**
+ * approved／公開工廠的結構化資料：Organization ＋ BreadcrumbList，只用公開頁
+ * 本來就會顯示的欄位（名稱／網址／簡介／地區／產業）。刻意不用 LocalBusiness
+ * ——現有資料只有縣市層級的 region、沒有街道地址／座標／營業時間，語意上不
+ * 足以宣稱 LocalBusiness。一律不加入 aggregateRating／review／offers／
+ * priceRange／虛構社群連結／任何不存在的欄位。
+ */
+function buildFactoryJsonLd(
+  factory: {
+    name: string;
+    description: string | null;
+    industry: unknown;
+    subIndustry: unknown;
+    region: string | null;
+    coverImageUrl: string | null;
+    avatarUrl: string | null;
+  },
+  pathname: string,
+): JsonLdObject[] {
+  const canonicalUrl = `${SITE_BASE_URL}${pathname}`;
+  const industryArr = Array.isArray(factory.industry) ? (factory.industry as string[]) : [];
+  const subIndustryArr = Array.isArray(factory.subIndustry) ? (factory.subIndustry as string[]) : [];
+  const description =
+    normalizeText(factory.description, 300) ||
+    normalizeText(
+      [industryArr.join("、"), factory.region ? `位於${factory.region}` : ""].filter(Boolean).join("・"),
+      300,
+    ) ||
+    `${SITE_NAME} 收錄的台灣工廠`;
+
+  const organization: JsonLdObject = {
+    "@context": "https://schema.org",
+    "@type": "Organization",
+    "@id": `${canonicalUrl}#organization`,
+    name: factory.name,
+    url: canonicalUrl,
+    description,
+  };
+  const image = toSafeAbsoluteImageUrl(factory.coverImageUrl) ?? toSafeAbsoluteImageUrl(factory.avatarUrl);
+  if (image) organization.image = image;
+  if (factory.region) organization.areaServed = factory.region;
+  const knowsAbout = [...industryArr, ...subIndustryArr].filter(Boolean);
+  if (knowsAbout.length > 0) organization.knowsAbout = knowsAbout;
+
+  // 麵包屑：首頁 → 找工廠 →（主產業，若 slug 可對映）→ 工廠名。只填入網站上
+  // 實際存在、可直接輸入網址開啟的頁面。
+  const crumbs: { name: string; path: string }[] = [{ name: "找工廠", path: "/search" }];
+  const firstIndustry = industryArr[0];
+  const industrySlug = firstIndustry ? INDUSTRY_SLUGS[firstIndustry] : undefined;
+  if (firstIndustry && industrySlug) {
+    crumbs.push({ name: firstIndustry, path: `/industry/${industrySlug}` });
+  }
+  crumbs.push({ name: factory.name, path: pathname });
+
+  return [organization, getBreadcrumbSchema(crumbs)];
+}
+
 /** Strips the query string off a raw URL, e.g. from req.originalUrl. */
 export function stripQueryString(url: string): string {
   const i = url.indexOf("?");
@@ -210,8 +273,9 @@ export async function buildFactoryMeta(rawId: string, pathname: string): Promise
     const title = buildTitle(factory.name);
     const description = buildDescription(factory);
     const image = await resolveFactoryImage(id, factory);
+    const jsonLd = buildFactoryJsonLd(factory, pathname);
 
-    return { title, description, image, url, status: 200, noindex: false };
+    return { title, description, image, url, status: 200, noindex: false, jsonLd };
   } catch (err) {
     console.error(
       `[ogMeta] buildFactoryMeta failed for factoryId=${rawId}:`,

@@ -28,7 +28,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { HOME_CONTENT, segmentsToPlainText } from "../shared/content/home";
-import { INDUSTRY_OPTIONS } from "../shared/constants";
+import { INDUSTRY_OPTIONS, INDUSTRY_SLUGS } from "../shared/constants";
 import { escapeHtml } from "../server/_core/ogMeta";
 
 const OUTPUT_DIR = path.resolve(import.meta.dirname, "..", "dist", "prerendered");
@@ -57,8 +57,17 @@ ${card.bullets.map(b => `<li>${e(b)}</li>`).join("\n")}
     )
     .join("\n");
 
+  // 產業連結必須與現行 client Home.tsx 的產業卡片 href 完全一致：有對應
+  // slug 就連到已驗證存在、回傳 200、可索引的 /industry/{slug} landing page；
+  // 沒有 slug 才 fallback 到 /search?industry=（見 Home.tsx「Industry Grid」
+  // 的 `href={slug ? /industry/${slug} : /search?industry=...}`）。這裡只讓
+  // 預渲染 raw HTML 追上 React UI 早已採用的導航行為，不改任何畫面。
   const industryItems = INDUSTRY_OPTIONS
-    .map(name => `<li><a href="/search?industry=${encodeURIComponent(name)}">${e(name)}</a></li>`)
+    .map(name => {
+      const slug = INDUSTRY_SLUGS[name];
+      const href = slug ? `/industry/${slug}` : `/search?industry=${encodeURIComponent(name)}`;
+      return `<li><a href="${href}">${e(name)}</a></li>`;
+    })
     .join("\n");
 
   const statItems = c.statsSection.items.map(s => `<li>${e(s.num)} ${e(s.label)}</li>`).join("\n");

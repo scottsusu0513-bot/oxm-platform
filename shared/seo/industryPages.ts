@@ -9,6 +9,7 @@ import {
   SUB_INDUSTRY_SLUG_TO_NAME, SUB_INDUSTRY_SEO_CONTENT,
 } from "../constants";
 import { BRAND } from "./brand";
+import { getBreadcrumbSchema, type JsonLdObject } from "./schema";
 
 export interface IndustryPageMeta {
   title: string;
@@ -49,4 +50,25 @@ export function buildIndustryPageMeta(slug: string, subSlug?: string): IndustryP
     ?? `在 OXM 尋找台灣${industryName}相關廠商與供應鏈資源，包含工廠、OEM/ODM 代工、材料、設備、加工與產業服務，協助品牌、企業與採購者快速比較並送出詢價。`;
 
   return { title, description, canonical };
+}
+
+/**
+ * /industry/:slug(/:sub) 的 BreadcrumbList 結構化資料（只注入 <head>，畫面上
+ * 不可見）：首頁 → 找工廠（/search）→ 主產業（/industry/:slug）→ 子產業
+ * （若存在）。name 一律來自現有的產業名稱 mapping；每一層 item 都指向
+ * canonical URL。slug／subSlug 對不到已知產業時回 null（呼叫端不注入）。
+ */
+export function buildIndustryBreadcrumbJsonLd(slug: string, subSlug?: string): JsonLdObject | null {
+  const industryName = INDUSTRY_SLUG_TO_NAME[slug];
+  if (!industryName) return null;
+  const crumbs: { name: string; path: string }[] = [
+    { name: "找工廠", path: "/search" },
+    { name: industryName, path: `/industry/${slug}` },
+  ];
+  if (subSlug) {
+    const subIndustryName = SUB_INDUSTRY_SLUG_TO_NAME[`${slug}/${subSlug}`];
+    if (!subIndustryName) return null;
+    crumbs.push({ name: subIndustryName, path: `/industry/${slug}/${subSlug}` });
+  }
+  return getBreadcrumbSchema(crumbs);
 }

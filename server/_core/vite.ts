@@ -8,7 +8,7 @@ import viteConfig from "../../vite.config";
 import { buildFactoryMeta, buildNewsMeta, buildRegionIndustryMeta, injectMetaIntoHtml, parseFactoryPath, parseNewsPath, stripQueryString, extractQueryString, DEFAULT_OG_IMAGE } from "./ogMeta";
 import { injectPublicPageSeo } from "./publicPageMeta";
 import { injectPrerenderedBody, injectDynamicSemanticBody } from "./prerenderedBody";
-import { parseIndustryPath, buildIndustryPageMeta } from "@shared/seo/industryPages";
+import { parseIndustryPath, buildIndustryPageMeta, buildIndustryBreadcrumbJsonLd } from "@shared/seo/industryPages";
 import { parseRegionIndustryPath, resolveRegionIndustry, buildRegionIndustryPageContent } from "@shared/seo/regionIndustryPages";
 import { buildSearchPageMeta } from "@shared/seo/searchPage";
 
@@ -126,11 +126,12 @@ export async function setupVite(app: Express, server: Server) {
       } else {
         const industryPath = parseIndustryPath(pathname);
         const industryMeta = industryPath ? buildIndustryPageMeta(industryPath.slug, industryPath.subSlug) : null;
-        if (industryMeta) {
+        if (industryMeta && industryPath) {
           // /industry/:slug(/:sub)：純資料查表（無 DB），與工廠頁共用同一套
           // marker-based 注入函式，title／description／canonical 公式與
           // client 端 IndustryPage.tsx 的 Helmet 保持一致。slug 對不到任何
           // 已知產業時 industryMeta 為 null，落到下面的預設 index.html 不變。
+          // 額外補上 BreadcrumbList 結構化資料（只進 <head>，畫面不可見）。
           page = injectMetaIntoHtml(page, {
             title: industryMeta.title,
             description: industryMeta.description,
@@ -138,6 +139,7 @@ export async function setupVite(app: Express, server: Server) {
             url: industryMeta.canonical,
             status: 200,
             noindex: false,
+            jsonLd: buildIndustryBreadcrumbJsonLd(industryPath.slug, industryPath.subSlug) ?? undefined,
           });
         } else {
           // 固定公開頁（目前為 "/"、"/about"、"/upgrade-center"）：不查資料庫，
@@ -317,7 +319,7 @@ export function serveStatic(app: Express) {
     // null，落到下面的固定公開頁／SPA fallback 分支，行為不變。
     const industryPath = parseIndustryPath(pathname);
     const industryMeta = industryPath ? buildIndustryPageMeta(industryPath.slug, industryPath.subSlug) : null;
-    if (industryMeta) {
+    if (industryMeta && industryPath) {
       try {
         const template = await getCachedTemplate();
         const page = injectMetaIntoHtml(template, {
@@ -327,6 +329,7 @@ export function serveStatic(app: Express) {
           url: industryMeta.canonical,
           status: 200,
           noindex: false,
+          jsonLd: buildIndustryBreadcrumbJsonLd(industryPath.slug, industryPath.subSlug) ?? undefined,
         });
         res.status(200).set({ "Content-Type": "text/html" }).end(page);
       } catch (err) {

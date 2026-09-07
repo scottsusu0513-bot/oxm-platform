@@ -7,7 +7,7 @@ import { injectPrerenderedBody } from "./_core/prerenderedBody";
 import { injectPublicPageSeo } from "./_core/publicPageMeta";
 import { HOME_CONTENT, segmentsToPlainText } from "@shared/content/home";
 import { ABOUT_CONTENT } from "@shared/content/about";
-import { INDUSTRY_OPTIONS } from "@shared/constants";
+import { INDUSTRY_OPTIONS, INDUSTRY_SLUGS } from "@shared/constants";
 import { escapeHtml } from "./_core/ogMeta";
 import { BRAND } from "@shared/seo/brand";
 
@@ -101,6 +101,36 @@ describe("renderHomeContentHtml (build-time prerender)", () => {
     expect(html).not.toMatch(/class(Name)?="[^"]*sr-only/);
     expect(html).not.toContain("data-oxm-seo-source");
     expect(html).not.toContain("data-oxm-seo-transient");
+  });
+});
+
+describe("prerender home industry links match the live React Home.tsx UI navigation", () => {
+  // client/src/pages/Home.tsx「Industry Grid」的產業卡片 href：
+  //   href={slug ? `/industry/${slug}` : `/search?industry=${encodeURIComponent(ind)}`}
+  // 預渲染的 raw HTML 產業連結必須輸出同一個結果——這裡只是讓 raw HTML 追上
+  // React UI 早就採用的導航行為，不改任何畫面。
+  it("每個有對應 slug 的主產業都連到可索引的 /industry/<slug>，且與 Home.tsx 的 href 公式一致", () => {
+    const html = renderHomeContentHtml();
+    for (const name of INDUSTRY_OPTIONS) {
+      const slug = INDUSTRY_SLUGS[name];
+      const expectedHref = slug ? `/industry/${slug}` : `/search?industry=${encodeURIComponent(name)}`;
+      expect(html).toContain(`<li><a href="${expectedHref}">${escapeHtml(name)}</a></li>`);
+    }
+  });
+
+  it("不再把 noindex 的 /search?industry= 當成主要產業 SEO 連結（現行 13 個主產業都有 slug）", () => {
+    const html = renderHomeContentHtml();
+    // 現行 INDUSTRY_SLUGS 覆蓋全部 13 個主產業，因此產業清單裡不應出現任何
+    // /search?industry= 連結（若日後新增沒有 slug 的產業，這條需一併調整）。
+    const industrySection = html.slice(html.indexOf("<ul>"), html.indexOf("</ul>") + 5);
+    expect(industrySection).not.toContain("/search?industry=");
+  });
+
+  it("產業連結全部是可被爬蟲追蹤的真實 <a href>（不是 onClick 導頁）", () => {
+    const html = renderHomeContentHtml();
+    for (const name of INDUSTRY_OPTIONS) {
+      expect(html).toMatch(new RegExp(`<a href="[^"]+">${escapeHtml(name).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}</a>`));
+    }
   });
 });
 
