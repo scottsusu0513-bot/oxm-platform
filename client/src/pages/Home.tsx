@@ -647,6 +647,24 @@ export default function Home() {
                   <Search className="w-4 h-4 md:w-5 md:h-5 mr-2" />
                   {businessType === "factory" ? "搜尋工廠" : businessType === "studio" ? "搜尋工作室" : "搜尋工廠與工作室"}
                 </Button>
+
+                {/* 次要入口：沒有你的產業？——與頁面下方 CTA 區塊的同名入口
+                    共用同一組樣式與 handler（未登入先走既有登入流程，已登入
+                    開啟 IndustryRequestModal），這裡只是多放一個在主搜尋按鈕
+                    正下方的小型文字入口，視覺層級刻意低於主 CTA。 */}
+                <div className="mt-3 md:mt-4 text-center">
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1.5 text-sm text-orange-600 hover:text-orange-700 hover:underline underline-offset-4 transition-colors"
+                    onClick={() => {
+                      if (!isAuthenticated) { performLogin(); return; }
+                      setIndustryRequestOpen(true);
+                    }}
+                  >
+                    <Sparkles className="w-4 h-4 shrink-0" />
+                    沒有你的產業？
+                  </button>
+                </div>
               </CardContent>
             </Card>
           </div>
