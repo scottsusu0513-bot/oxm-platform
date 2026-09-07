@@ -44,7 +44,6 @@ describe("renderAboutContentHtml (build-time prerender)", () => {
       expect(html).toContain(name); // 六大服務名稱
     }
     expect(html).toContain(ABOUT_CONTENT.audienceTitle); // 誰適合使用 OXM
-    expect(html).toContain(ABOUT_CONTENT.ctaTitle); // 最終 CTA 主要文字
     expect(html).toContain(ABOUT_CONTENT.lastUpdated); // 最後更新日期
   });
 

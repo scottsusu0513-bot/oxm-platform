@@ -108,8 +108,8 @@ const SERVICES: AboutService[] = [
     eyebrow: "數位形象",
     title: ABOUT_CONTENT.serviceNames[3],
     description: "媒合商業攝影、產品攝影、影音製作\n串聯 LOGO、品牌識別、視覺設計團隊\n協助傳統產業建立完整數位形象",
-    statusLabel: "規劃中",
-    disabledLabel: "即將推出",
+    statusLabel: "已開放",
+    action: { label: "前往找形象總覽", href: "/brand" },
     theme: {
       section: "bg-gradient-to-br from-amber-50/80 via-white to-rose-50",
       icon: "bg-rose-100 text-rose-700",
@@ -419,26 +419,7 @@ export default function AboutOXM() {
         </div>
       </section>
 
-      {/* 最終 CTA：以品牌舞台收束整頁。 */}
-      <section className="relative overflow-hidden px-4 py-16 sm:py-24">
-        <div className="container max-w-5xl">
-          <div className="relative overflow-hidden rounded-[2.5rem] border border-orange-100 bg-gradient-to-br from-orange-50 via-white to-purple-100 px-6 py-12 text-center shadow-[0_30px_90px_-50px_rgba(88,28,135,0.5)] sm:px-12 sm:py-16">
-            <div className="absolute -left-16 top-1/2 h-48 w-48 -translate-y-1/2 rounded-full border-[28px] border-orange-200/40" aria-hidden="true" />
-            <div className="absolute -right-14 top-1/2 h-44 w-44 -translate-y-1/2 rounded-full border-[26px] border-purple-200/40" aria-hidden="true" />
-            <div className="relative mx-auto max-w-2xl">
-              <span className="mx-auto mb-6 flex h-16 w-16 items-center justify-center rounded-[1.4rem] bg-gradient-to-br from-orange-500 to-purple-600 text-white shadow-xl shadow-purple-500/25"><Network className="h-8 w-8" /></span>
-              <h2 className="mb-4 text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">{ABOUT_CONTENT.ctaTitle}</h2>
-              <p className="mb-8 text-sm leading-relaxed text-slate-600 sm:text-base">{ABOUT_CONTENT.ctaDescription}</p>
-              <div className="flex flex-col justify-center gap-3 sm:flex-row">
-                <Link href={ABOUT_CONTENT.ctaButtons[0].href}><Button size="lg" className="w-full border-0 bg-gradient-to-r from-orange-500 to-amber-500 text-white shadow-lg shadow-orange-500/20 hover:from-orange-600 hover:to-amber-600 sm:w-auto"><Search className="mr-2 h-4 w-4" />{ABOUT_CONTENT.ctaButtons[0].label}</Button></Link>
-                <Link href={ABOUT_CONTENT.ctaButtons[1].href}><Button size="lg" variant="outline" className="w-full border-purple-200 bg-white/80 text-purple-700 hover:bg-purple-50 sm:w-auto">{ABOUT_CONTENT.ctaButtons[1].label}<ArrowRight className="ml-2 h-4 w-4" /></Button></Link>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <p className="pb-5 text-center text-xs text-slate-400">關於 OXM 內容最後更新：{ABOUT_CONTENT.lastUpdated}</p>
+      <p className="pb-10 pt-14 text-center text-xs text-slate-400 sm:pt-20">關於 OXM 內容最後更新：{ABOUT_CONTENT.lastUpdated}</p>
     </div>
   );
 }

@@ -1,6 +1,6 @@
 // About 頁（/about）正文的單一資料來源：只抽出「需要被 build-time 預渲染腳本
-// 共用」的固定文字（標題、OXM 正式定義、段落、服務名稱、對象名單、CTA、最後
-// 更新日期），避免 client/src/pages/AboutOXM.tsx 與
+// 共用」的固定文字（標題、OXM 正式定義、段落、服務名稱、對象名單、最後更新
+// 日期），避免 client/src/pages/AboutOXM.tsx 與
 // scripts/prerender-about.ts 各自維護一份文案、日後兩邊不一致。
 //
 // 不在這裡放版型／樣式／icon／圖片路徑等只有 AboutOXM.tsx 自己會用到的東西，
@@ -45,13 +45,6 @@ export const ABOUT_CONTENT = {
     { title: "創業者與設計師", content: "尋找少量製造、打樣、OEM、ODM 與設計協作夥伴。" },
     { title: "專業顧問與服務團隊", content: "接觸有補助、品牌及企業升級需求的工廠。" },
     { title: "尋求補助與升級資源的工廠", content: "透過找資源了解政府補助方案與專業服務，加速企業升級與轉型。" },
-  ],
-
-  ctaTitle: "從 OXM，開始找到適合你的台灣產業資源",
-  ctaDescription: "從找工廠開始，逐步連結補助、人才、品牌、資訊與合作機會。",
-  ctaButtons: [
-    { label: "搜尋台灣工廠", href: "/search" },
-    { label: "了解企業升級中心", href: "/upgrade-center" },
   ],
 
   // 與 AboutOXM.tsx 頁面底部顯示的最後更新日期一致，維持固定日期字串

@@ -11,7 +11,7 @@
  *   還需要另外 mock 一套 tRPC/QueryClient（可行，但對「不是必要抓取內容」的
  *   Navbar 徽章／通知這種東西來說，維護成本與風險不成比例）。
  * - Navbar 本身不是「正文」，本階段要求的可抓取文字（H1、OXM 是什麼、正式
- *   定義、為什麼會有 OXM、六大服務名稱、誰適合使用 OXM、CTA、最後更新日期）
+ *   定義、為什麼會有 OXM、六大服務名稱、誰適合使用 OXM、最後更新日期）
  *   全部來自 shared/content/about.ts，因此直接從這份共用資料組出語意化的
  *   純文字 HTML 片段即可，不需要真的 render 元件樹。
  * - 資料來源與 client/src/pages/AboutOXM.tsx 完全相同（同一個
@@ -42,9 +42,6 @@ export function renderAboutContentHtml(): string {
   const audienceItems = c.audienceRoles
     .map(role => `<li><h3>${escapeAndBreak(role.title)}</h3><p>${escapeAndBreak(role.content)}</p></li>`)
     .join("\n");
-  const ctaButtons = c.ctaButtons
-    .map(btn => `<a href="${escapeAndBreak(btn.href)}">${escapeAndBreak(btn.label)}</a>`)
-    .join("\n");
 
   // 純語意化 HTML（h1/h2/h3/p/ul/li/a），皆為畫面上真實存在、React 掛載後
   // 也會顯示的文字，不是隱藏的 SEO 關鍵字堆疊，也沒有 display:none。
@@ -64,9 +61,6 @@ ${serviceItems}
 <ul>
 ${audienceItems}
 </ul>
-<h2>${escapeAndBreak(c.ctaTitle)}</h2>
-<p>${escapeAndBreak(c.ctaDescription)}</p>
-${ctaButtons}
 <p>關於 OXM 內容最後更新：${escapeAndBreak(c.lastUpdated)}</p>`;
 }
 
