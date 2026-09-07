@@ -28,9 +28,19 @@ describe("/resources 找資源總覽入口", () => {
     expect(about).toMatch(/action: \{ label: "前往找資源總覽", href: "\/resources" \}/);
   });
 
-  it("About 頁尾 CTA 仍可指向特定子服務（政府補助／企業升級中心），與六大服務主入口語意層級不同", () => {
+  it("About 頁尾 CTA 已於 Task 8 收尾清理移除，不得加回；/upgrade-center 仍是找資源下的有效子服務入口（語意層級與六大服務主入口不同）", () => {
+    // Task 8 的 /about 收尾清理（commit 8b2db78）刪除了整個頁尾 CTA 區塊，
+    // 包含 shared/content/about.ts 的 ctaTitle／ctaDescription／ctaButtons
+    // （其中一顆按鈕原本 href: "/upgrade-center"）。這裡鎖定「不得把該 CTA
+    // 加回 About」，同時確認 /upgrade-center 作為「特定子服務入口」仍真實
+    // 存在——現行掛在找資源總覽（shared/content/resources.ts）與 Navbar
+    // 找資源下拉（見下一個 it），與六大服務主入口的語意層級不同。
     const aboutContent = readSource("shared", "content", "about.ts");
-    expect(aboutContent).toMatch(/href: "\/upgrade-center"/);
+    expect(aboutContent).not.toMatch(/ctaButtons/);
+    expect(aboutContent).not.toMatch(/href: "\/upgrade-center"/);
+
+    const resourcesContent = readSource("shared", "content", "resources.ts");
+    expect(resourcesContent).toContain('href: "/upgrade-center"');
   });
 
   it("Navbar 的找資源主入口重新導向 /resources 總覽頁，下拉同步列出四項正式開放服務的快速連結（OXM Navbar Dropdown — Public Service Entries Fix：反轉先前的 hub-and-spoke-only 決策）", () => {
