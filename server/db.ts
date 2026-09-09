@@ -5154,6 +5154,39 @@ export async function getFactoryManagerIds(): Promise<number[]> {
   return Array.from(ids);
 }
 
+/**
+ * 「目前至少管理 1 間 status=approved 且未軟刪除工廠」的會員 userId 去重集合。
+ * 專供找消息 Email 分眾的「僅寄給工廠用戶」(factory_users) 使用——只當作
+ * Email channel 的第二層過濾，不進入 gatherNewsRecipients、站內通知或 Push。
+ * 兩種身分合併去重：
+ *   1. owner：factories.ownerId，且該工廠 status='approved' AND deletedAt IS NULL
+ *   2. 有效共同管理者：factoryCoManagers.removedAt IS NULL，且其關聯工廠同樣
+ *      status='approved' AND deletedAt IS NULL
+ * 刻意不重用 getFactoryManagerIds()——那支沒有 status／deletedAt 過濾，會把
+ * draft／pending／rejected／delisted／已軟刪除工廠的管理者也算進來。
+ * news.estimateRecipients（後台預估）與 dispatchNewsNotifications（實際寄送）
+ * 必須呼叫這同一支，兩邊 factory_users 資格判斷才不會出現「顯示 120、實寄 117」。
+ */
+export async function getApprovedFactoryManagerIds(): Promise<Set<number>> {
+  const db = await getDb();
+  if (!db) return new Set();
+
+  const owners = await db.selectDistinct({ id: factories.ownerId })
+    .from(factories)
+    .where(and(eq(factories.status, "approved"), isNull(factories.deletedAt)));
+
+  const coMgrs = await db.selectDistinct({ id: factoryCoManagers.userId })
+    .from(factoryCoManagers)
+    .innerJoin(factories, eq(factoryCoManagers.factoryId, factories.id))
+    .where(and(
+      isNull(factoryCoManagers.removedAt),
+      eq(factories.status, "approved"),
+      isNull(factories.deletedAt),
+    ));
+
+  return new Set<number>([...owners.map(r => r.id), ...coMgrs.map(r => r.id)]);
+}
+
 export async function getAdminMessagesForUser(userId: number) {
   const db = await getDb();
   if (!db) return [];

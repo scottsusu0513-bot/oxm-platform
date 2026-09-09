@@ -126,11 +126,13 @@ function AdminNewsContent() {
   const [rowExpirationType, setRowExpirationType] = useState<AttachmentExpirationType>("after_publish_30d");
   const [rowCustomDate, setRowCustomDate] = useState("");
   const [rowCustomTime, setRowCustomTime] = useState("23:59");
-  // 「同時發送 Email 通知」checkbox：只在新增消息（尚未有 editingId）時顯示與
-  // 生效，預設一律未勾選，每次開啟新增表單（resetForm）或切去編輯既有消息
-  // （handleEdit）都會被重置，不沿用上一次的勾選狀態。只有 createMut 的呼叫
-  // 會帶上這個值，updateMut 完全不會用到。
-  const [sendEmailNotification, setSendEmailNotification] = useState(false);
+  // 「Email 通知」收件範圍（三選一）：只在「從未發布過」的消息（新增，或編輯
+  // firstPublishedAt 仍是 NULL 的草稿）時顯示與生效，預設一律 "none"（不寄），
+  // 每次開啟新增表單（resetForm）或切去編輯既有消息（handleEdit）都會被重置。
+  // 只影響 Email channel 的收件人，不影響站內通知／Push／看板／產業／important
+  // recipient。create／update 都會帶上這個值，後端只在「第一次發布」時真的寄。
+  const [emailRecipientScope, setEmailRecipientScope] =
+    useState<"none" | "factory_users" | "all_users">("none");
 
   // 尚未儲存草稿（沒有 newsId）時，選擇的封面/PDF 只暫存在前端記憶體，不會
   // 提前上傳；第一次「儲存草稿」成功拿到 newsId 後才依序自動上傳，見
@@ -207,7 +209,7 @@ function AdminNewsContent() {
     setStagedCoverPreviewUrl(null);
     setStagedPdfFiles([]);
     setFailedPdfFiles([]);
-    setSendEmailNotification(false);
+    setEmailRecipientScope("none");
   };
 
   const setContent = (next: string) => setForm(p => ({ ...p, content: next }));
@@ -234,9 +236,9 @@ function AdminNewsContent() {
     setStagedCoverPreviewUrl(null);
     setStagedPdfFiles([]);
     setFailedPdfFiles([]);
-    // 編輯既有消息一律不沿用上次的「同時發送 Email 通知」勾選狀態——這個
-    // checkbox 本來就只在新增表單生效，editingId 一旦有值就不會再顯示它。
-    setSendEmailNotification(false);
+    // 編輯既有消息一律不沿用上次的 Email 收件範圍——這個選項只在「從未發布
+    // 過」的消息生效，已發布過的消息編輯畫面不會再顯示它。
+    setEmailRecipientScope("none");
     setShowForm(true);
   };
 
@@ -254,18 +256,26 @@ function AdminNewsContent() {
   // 剛建立完、items 列表還沒 refetch 回來前可能暫時是 undefined，這裡視同
   // 「還沒有已發布紀錄」，維持可勾選，不會誤判成已發布。
   const neverPublished = !editingId || !editingItem?.firstPublishedAt;
-  // 只有「這則消息從未發布過」且「使用者這次確實勾選」，才可能在這次送出
-  // 後觸發 Email——文案必須跟後端實際會不會寄一致，不能讓管理員誤以為編輯
-  // 已發布消息按下「發布」還可能寄出 Email。
-  const willSendEmailOnPublish = neverPublished && sendEmailNotification;
+  // 只有「這則消息從未發布過」且「使用者這次選了會寄 Email 的範圍」，才可能
+  // 在這次送出後觸發 Email——文案必須跟後端實際會不會寄一致，不能讓管理員
+  // 誤以為編輯已發布消息按下「發布」還可能寄出 Email。
+  const willSendEmailOnPublish = neverPublished && emailRecipientScope !== "none";
+  // 依收件範圍取對應的預估 Email 人數（none → 0）。factory_users 與 all_users
+  // 的數字來源必須跟後端 estimate 一致（factoryEmailCount / emailCount）。
+  const scopedEmailEstimate =
+    emailRecipientScope === "factory_users" ? (estimate?.factoryEmailCount ?? 0)
+    : emailRecipientScope === "all_users" ? (estimate?.emailCount ?? 0)
+    : 0;
   const confirmPublishMessage = () => {
     if (!estimate) return "確定要發布這則消息嗎？";
     if (estimate.inAppCount === 0) return "確定要發布這則消息嗎？目前沒有會員訂閱這則消息適用的看板，不會建立站內通知或寄送 Email／App 推播，只會顯示在網站上。";
     const emailPart = !neverPublished
       ? "不寄送 Email（這則消息已經發布過，不會補寄）"
-      : sendEmailNotification
-        ? `Email ${estimate.emailCount}`
-        : "不寄送 Email（未勾選「同時發送 Email 通知」）";
+      : emailRecipientScope === "factory_users"
+        ? `Email ${estimate.factoryEmailCount}（僅工廠會員）`
+        : emailRecipientScope === "all_users"
+          ? `Email ${estimate.emailCount}`
+          : "不寄送 Email（Email 通知設為「不寄送」）";
     return `確定要發布這則消息嗎？預計通知 ${estimate.inAppCount} 位會員：站內通知 ${estimate.inAppCount}、${emailPart}、App 推播 ${estimate.pushCount}（僅在第一次發布時建立一次，之後編輯不會再次通知）。`;
   };
 
@@ -549,7 +559,7 @@ function AdminNewsContent() {
     if (!validateRequired()) return;
     if (editingId) {
       setSavingProgress("儲存草稿中…");
-      updateMut.mutate({ id: editingId, ...buildPayload(), status: "draft", sendEmailNotification }, {
+      updateMut.mutate({ id: editingId, ...buildPayload(), status: "draft", emailRecipientScope }, {
         onSuccess: async () => {
           setSavedSlugPreview(form.slug.trim() || editingItem?.slug || savedSlugPreview);
           const { coverFailed, pdfFailedCount, pdfTotal } = await uploadStagedFilesAfterCreate(editingId);
@@ -559,7 +569,7 @@ function AdminNewsContent() {
       });
     } else {
       setSavingProgress("建立草稿中…");
-      createMut.mutate({ ...buildPayload(), status: "draft", sendEmailNotification }, {
+      createMut.mutate({ ...buildPayload(), status: "draft", emailRecipientScope }, {
         onSuccess: async (result) => {
           setEditingId(result.id);
           setSavedSlugPreview(result.slug || null);
@@ -576,7 +586,7 @@ function AdminNewsContent() {
     if (!confirm(confirmPublishMessage())) return;
     if (editingId) {
       setSavingProgress("發布中…");
-      updateMut.mutate({ id: editingId, ...buildPayload(), status: "published", sendEmailNotification }, {
+      updateMut.mutate({ id: editingId, ...buildPayload(), status: "published", emailRecipientScope }, {
         onSuccess: async () => {
           const { coverFailed, pdfFailedCount, pdfTotal } = await uploadStagedFilesAfterCreate(editingId);
           if (pdfFailedCount > 0 || coverFailed) {
@@ -590,7 +600,7 @@ function AdminNewsContent() {
       });
     } else {
       setSavingProgress("發布中…");
-      createMut.mutate({ ...buildPayload(), status: "published", sendEmailNotification }, {
+      createMut.mutate({ ...buildPayload(), status: "published", emailRecipientScope }, {
         onSuccess: async (result) => {
           setEditingId(result.id);
           setSavedSlugPreview(result.slug || null);
@@ -822,7 +832,7 @@ function AdminNewsContent() {
 
               <div className="text-xs rounded-md px-3 py-2 bg-muted/50 border">
                 {estimate && estimate.inAppCount > 0
-                  ? `此設定發布時（僅第一次發布）預計通知 ${estimate.inAppCount} 位會員：站內通知 ${estimate.inAppCount}、Email ${willSendEmailOnPublish ? estimate.emailCount : 0}、App 推播 ${estimate.pushCount}。看板訂閱者才會收到，不是所有會員。${neverPublished && !sendEmailNotification ? "（未勾選「同時發送 Email 通知」，本次不會寄送 Email）" : ""}`
+                  ? `此設定發布時（僅第一次發布）預計通知 ${estimate.inAppCount} 位會員：站內通知 ${estimate.inAppCount}、Email ${willSendEmailOnPublish ? scopedEmailEstimate : 0}、App 推播 ${estimate.pushCount}。看板訂閱者才會收到，不是所有會員。${neverPublished && emailRecipientScope === "none" ? "（Email 通知設為「不寄送」，本次不會寄送 Email）" : ""}`
                   : "此設定目前沒有會員訂閱對應看板，發布後不會建立站內通知，也不會寄送 Email 或 App 推播（只會顯示在網站上）。"}
               </div>
 
@@ -1125,16 +1135,47 @@ function AdminNewsContent() {
                 </div>
               </div>
 
-              {/* 9. 同時發送 Email 通知（新增消息／編輯從未發布過的草稿都顯示）／
+              {/* 9. Email 通知收件範圍（新增消息／編輯從未發布過的草稿都顯示）／
                   已發布過消息的唯讀 Email 狀態。判斷依據是 neverPublished
-                  （看 firstPublishedAt，不是 editingId 或目前 status）。 */}
+                  （看 firstPublishedAt，不是 editingId 或目前 status）。此選項
+                  只影響 Email 收件人，不影響站內通知／Push。 */}
               {neverPublished ? (
                 <div>
-                  <label className="flex items-center gap-2 text-sm">
-                    <Checkbox checked={sendEmailNotification} onCheckedChange={v => setSendEmailNotification(v === true)} />
-                    同時發送 Email 通知
-                  </label>
-                  <p className="text-xs text-muted-foreground mt-1">未勾選時仍會正常發布站內消息。</p>
+                  <Label className="text-sm">Email 通知</Label>
+                  <RadioGroup
+                    value={emailRecipientScope}
+                    onValueChange={v => setEmailRecipientScope(v as typeof emailRecipientScope)}
+                    className="mt-2 space-y-1.5"
+                  >
+                    <label className="flex items-center gap-2 text-sm cursor-pointer">
+                      <RadioGroupItem value="none" />
+                      不寄送 Email
+                    </label>
+                    <label className="flex items-center gap-2 text-sm cursor-pointer">
+                      <RadioGroupItem value="factory_users" />
+                      僅寄給工廠用戶
+                      {estimate && estimate.inAppCount > 0 && (
+                        <span className="text-xs text-muted-foreground">（預計 {estimate.factoryEmailCount} 位）</span>
+                      )}
+                    </label>
+                    <label className="flex items-center gap-2 text-sm cursor-pointer">
+                      <RadioGroupItem value="all_users" />
+                      寄給全部符合通知資格的用戶
+                      {estimate && estimate.inAppCount > 0 && (
+                        <span className="text-xs text-muted-foreground">（預計 {estimate.emailCount} 位）</span>
+                      )}
+                    </label>
+                  </RadioGroup>
+                  <p className="text-xs text-muted-foreground mt-1.5">
+                    「僅寄給工廠用戶」只會限制 Email 收件人，不影響原本的站內通知。只有目前管理已上架工廠的會員會收到 Email。
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {emailRecipientScope === "none"
+                      ? "不寄送 Email（仍會正常發布站內消息與站內通知）"
+                      : emailRecipientScope === "factory_users"
+                        ? `預計寄送：${scopedEmailEstimate} 位工廠會員`
+                        : `預計寄送：${scopedEmailEstimate} 位會員`}
+                  </p>
                 </div>
               ) : (
                 <p className="text-xs text-muted-foreground">

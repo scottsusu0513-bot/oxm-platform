@@ -483,7 +483,7 @@ describe("news.update：草稿首次發布可寄送、已發布過永不補寄",
   });
 });
 
-describe("dispatchNewsNotifications：sendEmail 參數直接單元驗證", () => {
+describe("dispatchNewsNotifications：emailScope 參數直接單元驗證", () => {
   let adminUserForNews: number;
   let userA: { id: number; email: string };
   let newsId: number | undefined;
@@ -510,7 +510,7 @@ describe("dispatchNewsNotifications：sendEmail 參數直接單元驗證", () =>
     await deleteTestUser(userA.id);
   });
 
-  it("sendEmail=false 時完全不呼叫 createPendingNewsNotifications／sendNewsEmail，站內通知仍正常建立", async () => {
+  it("emailScope='none' 時完全不呼叫 createPendingNewsNotifications／sendNewsEmail，站內通知仍正常建立", async () => {
     const item = await db.getNewsById(newsId!);
     await dispatchNewsNotifications({
       newsId: newsId!,
@@ -522,7 +522,7 @@ describe("dispatchNewsNotifications：sendEmail 參數直接單元驗證", () =>
       isExhibition: false,
       isCrossIndustry: false,
       industryNames: [],
-      sendEmail: false,
+      emailScope: "none",
     });
     await new Promise(res => setTimeout(res, 300));
     expect(mockSendNewsEmail).not.toHaveBeenCalled();
@@ -533,7 +533,7 @@ describe("dispatchNewsNotifications：sendEmail 參數直接單元驗證", () =>
     expect(rows.length).toBe(1);
   });
 
-  it("sendEmail=true 時寄送給有資格的收件人，並在成功排入寄送機制後寫入 emailNotificationSentAt", async () => {
+  it("emailScope='all_users' 時寄送給有資格的收件人，並在成功排入寄送機制後寫入 emailNotificationSentAt", async () => {
     const item = await db.getNewsById(newsId!);
     await dispatchNewsNotifications({
       newsId: newsId!,
@@ -545,7 +545,7 @@ describe("dispatchNewsNotifications：sendEmail 參數直接單元驗證", () =>
       isExhibition: false,
       isCrossIndustry: false,
       industryNames: [],
-      sendEmail: true,
+      emailScope: "all_users",
     });
     await waitFor(() => mockSendNewsEmail.mock.calls.length >= 1);
     expect(mockSendNewsEmail).toHaveBeenCalledTimes(1);

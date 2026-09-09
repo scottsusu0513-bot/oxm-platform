@@ -283,10 +283,36 @@ function notifyFactoryOfNewUserMessage(params: {
 }
 
 /**
+ * 找消息 Email 分眾的收件範圍（管理員在「發布消息」表單三選一）。只作用在
+ * dispatchNewsNotifications 的 Email 分支，不影響 gatherNewsRecipients／站內
+ * 通知／Push：
+ *   - none         ：完全不寄 Email（站內通知／Push 照舊）
+ *   - all_users    ：沿用既有規則＝eligible recipients 中有 email 的人
+ *   - factory_users：在 all_users 的基礎上，再交集「目前管理 ≥1 間 approved
+ *                    且未軟刪除工廠」的會員（db.getApprovedFactoryManagerIds）
+ */
+export const NEWS_EMAIL_RECIPIENT_SCOPES = ["none", "factory_users", "all_users"] as const;
+export type NewsEmailRecipientScope = (typeof NEWS_EMAIL_RECIPIENT_SCOPES)[number];
+
+/**
+ * 解析管理員這次送出的 Email 收件範圍：優先用新的 emailRecipientScope 欄位；
+ * 沒帶時 fallback 到舊 client 的 sendEmailNotification boolean
+ * （true → all_users，其餘 → none），維持向後相容。create／update 共用。
+ */
+export function resolveNewsEmailScope(input: {
+  emailRecipientScope?: NewsEmailRecipientScope;
+  sendEmailNotification?: boolean;
+}): NewsEmailRecipientScope {
+  return input.emailRecipientScope ?? (input.sendEmailNotification === true ? "all_users" : "none");
+}
+
+/**
  * 找消息分眾通知的實際寄送入口：蒐集去重後的收件人 → 三層分別處理：
  *   1) 站內通知（communityNotifications）：只要看板訂閱資格符合就一律建立，
- *      不受 news／pushNews 開關影響，同步 await 完成（單純批次 insert，很快）。
- *   2) Email：news!==false 的人才建立 pending 紀錄並寄送。
+ *      不受 news／pushNews 開關與 emailScope 影響，同步 await 完成（單純批次
+ *      insert，很快）。
+ *   2) Email：emailScope 決定要不要寄、以及第二層收件人過濾（見 emailScope
+ *      型別註解）。emailScope==='none' 時整段跳過。
  *   3) Push：pushNews!==false 的人才建立 pending 紀錄並發送。
  * Email／Push 各自 fire-and-forget、互不阻塞，單一使用者寄送失敗不會中斷
  * 整批（loop 內 try/catch，見下方）。呼叫端只在「這次更新真的是第一次
@@ -303,12 +329,11 @@ export async function dispatchNewsNotifications(params: {
   isExhibition: boolean;
   isCrossIndustry: boolean;
   industryNames: string[];
-  // 只有 news.create 在「首次建立即發布」時，依管理員勾選的「同時發送
-  // Email 通知」checkbox 決定這個值；news.update 觸發的分眾通知（例如草稿
-  // 之後才被編輯發布）一律固定傳 false，不會寄送 Email，也不會補寫
-  // emailNotificationSentAt——只控制下方 Email 這一段分支，站內通知／Push
-  // 完全不受影響，一律照舊執行。
-  sendEmail: boolean;
+  // 管理員在「發布消息」表單三選一的 Email 收件範圍。只有「這次是第一次
+  // 發布」（呼叫端已用 shouldNotify 判斷）才會走到這裡；news.update 觸發的
+  // 分眾通知若不是首次發布根本不會呼叫本函式。只控制下方 Email 這一段分支
+  // 與 emailNotificationSentAt 是否補寫，站內通知／Push 完全不受影響。
+  emailScope: NewsEmailRecipientScope;
 }): Promise<void> {
   const recipients = await db.gatherNewsRecipients({
     isImportant: params.isImportant,
@@ -350,13 +375,23 @@ export async function dispatchNewsNotifications(params: {
   const emailRecipients = recipients.filter(r => r.email);
   const pushRecipients = recipients.filter(r => r.pushEnabled);
 
-  // Email：只有管理員在「新增產業消息」勾選「同時發送 Email 通知」時
-  // （params.sendEmail）才會執行這整段——沒勾選就直接跳過，連
+  // Email：emailScope==='none' 直接跳過整段——連
   // createPendingNewsNotifications／sendNewsEmail 都不會被呼叫到，不會建立
-  // 任何 pending 紀錄。沿用 announcement 廣播既有的節流／重試模式。
-  if (params.sendEmail) (async () => {
-    if (emailRecipients.length === 0) return;
-    const created = await db.createPendingNewsNotifications(params.newsId, emailRecipients.map(r => r.id), "email");
+  // 任何 pending 紀錄，也不會補寫 emailNotificationSentAt。'all_users' 沿用
+  // 既有規則（recipients 中有 email 的人）；'factory_users' 在此之上再交集
+  // db.getApprovedFactoryManagerIds()——這是 Email channel 專屬的第二層過濾，
+  // 絕不回頭影響 recipients（站內通知）／pushRecipients。同一 user 即使
+  // owner + co-manager 多個 relation 命中，getApprovedFactoryManagerIds 回傳
+  // 的是 Set、recipients 本身也已一 user 一列，最終仍只寄一封。沿用
+  // announcement 廣播既有的節流／重試模式。
+  if (params.emailScope !== "none") (async () => {
+    let scopedEmailRecipients = emailRecipients;
+    if (params.emailScope === "factory_users") {
+      const approvedFactoryManagerIds = await db.getApprovedFactoryManagerIds();
+      scopedEmailRecipients = emailRecipients.filter(r => approvedFactoryManagerIds.has(r.id));
+    }
+    if (scopedEmailRecipients.length === 0) return;
+    const created = await db.createPendingNewsNotifications(params.newsId, scopedEmailRecipients.map(r => r.id), "email");
     if (created.length === 0) return;
     // 已經成功排入既有寄送機制（建立出至少一筆 pending 紀錄）——這裡就標記
     // emailNotificationSentAt，不等下面逐一寄送迴圈全部跑完；個別收件人日後
@@ -374,7 +409,7 @@ export async function dispatchNewsNotifications(params: {
     };
 
     let successCount = 0, failCount = 0;
-    for (const r of emailRecipients) {
+    for (const r of scopedEmailRecipients) {
       const notifId = createdMap.get(r.id);
       if (notifId == null || !r.email) continue;
       let sent = false, lastErr: unknown;
@@ -5542,10 +5577,17 @@ export const appRouter = router({
       industryNames: z.array(z.string().max(50)).max(20).default([]),
     })).query(async ({ input }) => {
       const recipients = await db.gatherNewsRecipients(input);
+      // 純讀取、不建立任何通知紀錄。factoryEmailCount 與實際寄送的
+      // factory_users 分支共用同一支 db.getApprovedFactoryManagerIds() 與
+      // 同一個 `r.email && ids.has(r.id)` 判斷，確保「後台預估」與「實際寄送
+      // 人數」一致，不會出現「顯示 120、實寄 117」。
+      const approvedFactoryManagerIds = await db.getApprovedFactoryManagerIds();
+      const emailEligible = recipients.filter(r => r.email);
       return {
         count: recipients.length,
         inAppCount: recipients.length,
-        emailCount: recipients.filter(r => r.email).length,
+        emailCount: emailEligible.length,
+        factoryEmailCount: emailEligible.filter(r => approvedFactoryManagerIds.has(r.id)).length,
         pushCount: recipients.filter(r => r.pushEnabled).length,
       };
     }),
@@ -5564,12 +5606,13 @@ export const appRouter = router({
       industryNames: z.array(z.string().max(50)).max(20).default([]),
       sourceName: z.string().max(200).nullable().optional(),
       sourceUrl: z.string().max(1000).nullable().optional(),
-      // 「同時發送 Email 通知」checkbox，只有新增消息表單會帶這個欄位（見
-      // client/src/pages/AdminNews.tsx）。optional 且伺服器端一律用
-      // `=== true` 明確判斷，不依賴前端一定會帶入 false——沒收到這個欄位
-      // （undefined）一律視同未勾選。news.update 完全不接受這個欄位，見下方
-      // update 的 input schema 沒有這一項。
+      // Email 收件範圍（三選一，預設 none）。新前端傳這個欄位；
+      // sendEmailNotification 是舊 client 的相容欄位（true → all_users、
+      // 其餘 → none），解析見 resolveNewsEmailScope。兩者都是 optional，
+      // 伺服器端不依賴前端一定會帶入。這次是否真的寄送仍只由「首次發布」
+      // （result.shouldNotify）決定，這個欄位只決定「要寄的話寄給誰」。
       sendEmailNotification: z.boolean().optional(),
+      emailRecipientScope: z.enum(NEWS_EMAIL_RECIPIENT_SCOPES).optional(),
     })).mutation(async ({ input, ctx }) => {
       let result: { id: number; shouldNotify: boolean };
       try {
@@ -5592,7 +5635,7 @@ export const appRouter = router({
           isExhibition: input.isExhibition,
           isCrossIndustry: input.isCrossIndustry,
           industryNames: input.industryNames,
-          sendEmail: input.sendEmailNotification === true,
+          emailScope: resolveNewsEmailScope(input),
         });
       }
       return { success: true, id: result.id, slug: created?.slug ?? input.slug ?? "" };
@@ -5611,15 +5654,17 @@ export const appRouter = router({
       industryNames: z.array(z.string().max(50)).max(20).optional(),
       sourceName: z.string().max(200).nullable().optional(),
       sourceUrl: z.string().max(1000).nullable().optional(),
-      // 「同時發送 Email 通知」checkbox。從未發布過的草稿（firstPublishedAt
-      // 仍是 NULL）在編輯畫面也會顯示這個 checkbox，本次更新若剛好是「第一次
-      // 發布」（db.updateNews 回傳 shouldNotify === true）才會生效；已經發布
-      // 過的消息即使前端沒攔下、被人手動塞 true 進來，下面也只看
-      // result.shouldNotify，不會因為這個欄位而補寄。這裡刻意先從 input
-      // 明確拆出，絕不讓它流進 db.updateNews() 當成資料庫欄位。
+      // Email 收件範圍。從未發布過的草稿（firstPublishedAt 仍是 NULL）在編輯
+      // 畫面也會顯示這個選項，本次更新若剛好是「第一次發布」（db.updateNews
+      // 回傳 shouldNotify === true）才會生效；已經發布過的消息即使前端沒攔下、
+      // 被人手動塞值進來，下面也只看 result.shouldNotify，不會因為這個欄位而
+      // 補寄。sendEmailNotification 是舊 client 相容欄位（解析見
+      // resolveNewsEmailScope）。這裡刻意先從 input 明確拆出這兩個欄位，絕不
+      // 讓它們流進 db.updateNews() 當成資料庫欄位。
       sendEmailNotification: z.boolean().optional(),
+      emailRecipientScope: z.enum(NEWS_EMAIL_RECIPIENT_SCOPES).optional(),
     })).mutation(async ({ input }) => {
-      const { id, sendEmailNotification, ...data } = input;
+      const { id, sendEmailNotification, emailRecipientScope, ...data } = input;
       let result: { shouldNotify: boolean };
       try {
         result = await db.updateNews(id, data);
@@ -5640,10 +5685,9 @@ export const appRouter = router({
             isCrossIndustry: item.isCrossIndustry,
             industryNames,
             // 進到這裡代表 db.updateNews() 已經確認這是「第一次發布」
-            // （shouldNotify），三個條件（shouldNotify、確實首次發布、
-            // sendEmailNotification===true）同時成立才會是 true——已發布過
-            // 的消息這個 if 區塊本身就不會進來，天生擋掉補寄。
-            sendEmail: sendEmailNotification === true,
+            // （shouldNotify）——已發布過的消息這個 if 區塊本身就不會進來，
+            // 天生擋掉補寄。emailScope 只決定「要寄的話寄給誰」。
+            emailScope: resolveNewsEmailScope({ sendEmailNotification, emailRecipientScope }),
           });
         }
       }
