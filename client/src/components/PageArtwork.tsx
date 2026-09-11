@@ -177,10 +177,13 @@ export function NodePath({
   count,
   orientation = "horizontal",
   className = "",
+  preserveAspectRatio = "none",
 }: {
   count: number;
   orientation?: "horizontal" | "vertical";
   className?: string;
+  // Opt in per illustration; existing service-page layouts keep their sizing.
+  preserveAspectRatio?: "none" | "xMidYMid meet" | "xMidYMid slice";
 }) {
   const positions = Array.from({ length: count }, (_, i) => (count === 1 ? 50 : (i / (count - 1)) * 92 + 4));
   if (orientation === "vertical") {
@@ -188,7 +191,7 @@ export function NodePath({
       <svg
         aria-hidden="true"
         viewBox="0 0 40 100"
-        preserveAspectRatio="none"
+        preserveAspectRatio={preserveAspectRatio}
         className={`pointer-events-none ${className}`}
         fill="none"
         stroke="currentColor"
@@ -204,7 +207,7 @@ export function NodePath({
     <svg
       aria-hidden="true"
       viewBox="0 0 100 40"
-      preserveAspectRatio="none"
+      preserveAspectRatio={preserveAspectRatio}
       className={`pointer-events-none ${className}`}
       fill="none"
       stroke="currentColor"

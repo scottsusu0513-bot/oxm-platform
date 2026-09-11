@@ -368,7 +368,7 @@ export default function CertificationCenter() {
       </section>
 
       {/* ── 6. 服務流程 ── */}
-      <section className="relative overflow-hidden py-14 px-4 border-b border-emerald-200 bg-emerald-950 text-white">
+      <section className="relative scroll-mt-28 overflow-hidden py-14 px-4 border-b border-emerald-200 bg-emerald-950 text-white">
         <div className="absolute inset-0 text-emerald-300" aria-hidden="true">
           <GridTexture className="absolute inset-0" opacity={0.1} size={64} />
           <FactorySilhouette className="absolute -bottom-10 right-0 w-[32rem] h-52 opacity-[0.13]" />
@@ -377,13 +377,16 @@ export default function CertificationCenter() {
           <h2 className="text-lg font-semibold mb-6 flex items-center gap-2">
             <FileText className="w-5 h-5 text-orange-400" />服務流程
           </h2>
-          <div className="relative grid gap-4 md:grid-cols-6 md:gap-3">
-            <NodePath count={SERVICE_FLOW_STEPS.length} className="absolute left-[5%] right-[5%] top-6 h-10 w-[90%] text-emerald-300 hidden md:block" />
-            <NodePath count={SERVICE_FLOW_STEPS.length} orientation="vertical" className="absolute left-1 top-4 bottom-4 h-[calc(100%-2rem)] w-8 text-emerald-300 md:hidden" />
+          <div className="relative grid gap-4 lg:grid-cols-6 lg:gap-3">
+            <NodePath count={SERVICE_FLOW_STEPS.length} className="absolute left-[5%] right-[5%] top-6 h-10 w-[90%] text-emerald-300 hidden lg:block" />
             {SERVICE_FLOW_STEPS.map((step, i) => (
-              <div key={step} className="relative z-10 ml-10 md:ml-0 rounded-2xl border border-emerald-400/30 bg-white/10 p-4 text-center backdrop-blur-sm">
-                <span className="mx-auto mb-3 flex h-8 w-8 items-center justify-center rounded-full bg-orange-400 text-xs font-bold text-emerald-950 shadow-lg shadow-emerald-950/30">{i + 1}</span>
-                <span className="text-xs md:text-sm font-medium leading-snug">{step}</span>
+              <div key={step} className="relative z-10 min-w-0 scroll-mt-32 grid grid-cols-[2rem_minmax(0,1fr)] items-center gap-3 lg:block lg:rounded-2xl lg:border lg:border-emerald-400/30 lg:bg-white/10 lg:p-4 lg:text-center lg:backdrop-blur-sm">
+                {/* 每段連線跟隨卡片高度，避免整張 SVG 拉伸後節點與卡片錯位。 */}
+                <span aria-hidden="true" className={`pointer-events-none absolute left-4 -translate-x-1/2 border-l-2 border-dashed border-emerald-300/70 lg:hidden ${i === 0 ? "top-1/2" : "top-0"} ${i === SERVICE_FLOW_STEPS.length - 1 ? "bottom-1/2" : "-bottom-4"}`} />
+                <span className="relative mx-auto flex h-8 w-8 items-center justify-center rounded-full bg-orange-400 text-xs font-bold text-emerald-950 shadow-lg shadow-emerald-950/30 lg:mb-3">{i + 1}</span>
+                <div className="min-w-0 rounded-2xl border border-emerald-400/30 bg-white/10 p-4 text-left backdrop-blur-sm lg:contents">
+                  <span className="text-xs md:text-sm font-medium leading-snug">{step}</span>
+                </div>
               </div>
             ))}
           </div>
@@ -493,7 +496,7 @@ export default function CertificationCenter() {
           <FactorySilhouette className="absolute -bottom-5 -left-16 w-[32rem] h-44 opacity-[0.14] hidden sm:block" />
           <LeafDataMotif className="absolute -top-14 right-1/4 w-56 h-56 opacity-[0.14]" />
           <ShieldDocMotif className="absolute -bottom-16 -right-8 w-72 h-72 text-purple-800 opacity-[0.16]" />
-          <NodePath count={5} className="absolute bottom-16 left-[18%] right-[18%] h-12 w-[64%] text-emerald-700 opacity-70 hidden md:block" />
+          <NodePath count={5} preserveAspectRatio="xMidYMid slice" className="absolute bottom-16 left-1/2 -translate-x-1/2 h-12 w-[64%] max-w-5xl overflow-visible [&_*]:[vector-effect:non-scaling-stroke] text-emerald-700 opacity-70 hidden md:block" />
         </div>
         <div className="relative max-w-2xl mx-auto rounded-[2rem] border border-white/80 bg-white/70 px-6 py-10 text-center shadow-xl shadow-emerald-900/10 backdrop-blur-sm">
           <Badge className="bg-orange-100 text-orange-700 border-orange-200 border mb-4">初步諮詢免費</Badge>
