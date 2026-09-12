@@ -57,6 +57,10 @@ import { normalizeImageEntry } from "../shared/imageCrop";
 import type { CommunityPostImage } from "../drizzle/schema";
 import { ADJACENT_REGIONS, INDUSTRY_SLUGS, INDUSTRY_OPTIONS } from "../shared/constants";
 import { COMMUNITY_FEATURE_STATUS, COMMUNITY_CROSS_INDUSTRY_SLUG, NEWS_NEW_WINDOW_MS, ADVISOR_DISPLAY_NAME } from "../shared/const";
+import {
+  HUMAN_CHAT_MESSAGE_TYPES, isOrderTipMessageThresholdMet, hasLifetimeChatEducationQuota,
+  type ChatHumanMessageCounts,
+} from "../shared/chatEducation";
 import { sortBadgeIds, sanitizeBadgeAssignment, appendCertificationEvidenceImage } from "../shared/badges";
 import { CERTIFICATION_SERVICE_CATEGORY_SEEDS, CERTIFICATION_SERVICE_ITEM_SEEDS } from "../shared/certificationServices";
 import type { AISearchIntent } from './semantic-search';
@@ -1050,6 +1054,110 @@ export async function getMessagesByConversation(conversationId: number, page = 1
     .orderBy(asc(messages.createdAt))
     .limit(pageSize)
     .offset((page - 1) * pageSize);
+}
+
+// ===== 聊天室「建立訂單」功能教育提示（見 shared/chatEducation.ts）=====
+
+/** 一個 conversation 裡，雙方各自的「有效人工聊天訊息」數——只計算
+ * HUMAN_CHAT_MESSAGE_TYPES（text／product／pdf），排除 co_manager_invite
+ * 與 collaboration_order（系統邀請／訂單狀態事件）。用 GROUP BY senderRole
+ * 一次查完，不需要把整個對話的訊息都撈到應用層再算（避免長對話效能問題，
+ * 也不受 getMessagesByConversation 分頁窗口限制——20 則判斷必須看整個
+ * conversation 的真實總數，不能只看某一頁）。 */
+export async function getHumanMessageCounts(conversationId: number): Promise<ChatHumanMessageCounts> {
+  const db = await getDb();
+  if (!db) return { requesterCount: 0, factoryCount: 0 };
+  const rows = await db.select({
+    senderRole: messages.senderRole,
+    count: sql<number>`COUNT(*)`,
+  })
+    .from(messages)
+    .where(and(
+      eq(messages.conversationId, conversationId),
+      inArray(messages.type, HUMAN_CHAT_MESSAGE_TYPES),
+    ))
+    .groupBy(messages.senderRole);
+
+  let requesterCount = 0;
+  let factoryCount = 0;
+  for (const row of rows) {
+    const n = Number(row.count ?? 0);
+    if (row.senderRole === "user") requesterCount = n;
+    else if (row.senderRole === "factory") factoryCount = n;
+  }
+  return { requesterCount, factoryCount };
+}
+
+export type ChatEducationTipKind = "factorySpotlight" | "buyerTip" | "orderTipBubble";
+
+/**
+ * 原子化「認領」一次教育提示的顯示資格。呼叫端（server/routers.ts）先做
+ * 好角色驗證（factorySpotlight／orderTipBubble 限工廠端，buyerTip 限買方）
+ * 才呼叫這支函式；這裡只負責業務規則本身：
+ *   - 同一 conversation 每種提示最多認領一次（conversations 對應欄位非
+ *     NULL 就代表已經顯示過，直接回絕，不重複計數）。
+ *   - conversation 已有任何 collaborationOrders 紀錄（不論狀態）視為
+ *     「已經不需要再提示建立訂單」，三種提示一律回絕。
+ *   - factorySpotlight／buyerTip 各自有帳號 lifetime 上限（見
+ *     shared/chatEducation.ts 的 MAX_LIFETIME_CHAT_EDUCATION_TIPS），用
+ *     SELECT ... FOR UPDATE 鎖定使用者列，避免多分頁／多裝置併發送出時
+ *     超額認領。
+ *   - orderTipBubble 沒有帳號上限，但需要重新驗證訊息量門檻（defense in
+ *     depth，不能只信任呼叫端傳入的判斷）。
+ * 回傳 { allowed: false } 時，呼叫端不應該再重試同一個 conversation／kind
+ * （已經是最終結果，不是暫時性錯誤）。
+ */
+export async function claimChatEducationTip(
+  conversationId: number,
+  userId: number,
+  kind: ChatEducationTipKind,
+): Promise<{ allowed: boolean }> {
+  const db = await getDb();
+  if (!db) return { allowed: false };
+
+  return db.transaction(async (tx) => {
+    const [conv] = await tx.select().from(conversations)
+      .where(eq(conversations.id, conversationId))
+      .limit(1)
+      .for("update");
+    if (!conv) return { allowed: false };
+
+    const alreadyShown = kind === "factorySpotlight" ? conv.factorySpotlightShownAt != null
+      : kind === "buyerTip" ? conv.buyerTipShownAt != null
+      : conv.orderTipBubbleShownAt != null;
+    if (alreadyShown) return { allowed: false };
+
+    const existingOrders = await tx.select({ id: collaborationOrders.id }).from(collaborationOrders)
+      .where(eq(collaborationOrders.conversationId, conversationId))
+      .limit(1);
+    if (existingOrders.length > 0) return { allowed: false };
+
+    if (kind === "orderTipBubble") {
+      const counts = await getHumanMessageCounts(conversationId);
+      if (!isOrderTipMessageThresholdMet(counts)) return { allowed: false };
+      await tx.update(conversations).set({ orderTipBubbleShownAt: new Date() })
+        .where(eq(conversations.id, conversationId));
+      return { allowed: true };
+    }
+
+    const [u] = await tx.select().from(users).where(eq(users.id, userId)).limit(1).for("update");
+    if (!u) return { allowed: false };
+    const lifetimeCount = kind === "factorySpotlight" ? u.chatFactorySpotlightTipCount : u.chatBuyerOrderTipCount;
+    if (!hasLifetimeChatEducationQuota(lifetimeCount)) return { allowed: false };
+
+    if (kind === "factorySpotlight") {
+      await tx.update(conversations).set({ factorySpotlightShownAt: new Date() })
+        .where(eq(conversations.id, conversationId));
+      await tx.update(users).set({ chatFactorySpotlightTipCount: sql`${users.chatFactorySpotlightTipCount} + 1` })
+        .where(eq(users.id, userId));
+    } else {
+      await tx.update(conversations).set({ buyerTipShownAt: new Date() })
+        .where(eq(conversations.id, conversationId));
+      await tx.update(users).set({ chatBuyerOrderTipCount: sql`${users.chatBuyerOrderTipCount} + 1` })
+        .where(eq(users.id, userId));
+    }
+    return { allowed: true };
+  });
 }
 
 export async function getMessageById(id: number) {

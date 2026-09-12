@@ -14,7 +14,7 @@ import { performLogin } from "@/const";
 import { trpc } from "@/lib/trpc";
 import { isSafeChatReturnSource } from "@/lib/chatReturnSource";
 import { useRoute, useLocation, useSearch, Link } from "wouter";
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useLayoutEffect, useCallback } from "react";
 import { toast } from "sonner";
 import { Send, ArrowLeft, Factory, User, CheckCircle, XCircle, Plus, Package, FileText, ExternalLink, Download, ClipboardList, Star } from "lucide-react";
 import {
@@ -23,6 +23,9 @@ import {
   type OrderDateChainValues, type OrderDateChainField,
 } from "@/lib/orderDateChain";
 import { OrderDatePicker } from "@/components/OrderDatePicker";
+import { useChatEducationTips } from "@/hooks/useChatEducationTips";
+import { ChatCreateOrderSpotlight } from "@/components/ChatCreateOrderSpotlight";
+import { ChatCreateOrderTipBubble } from "@/components/ChatCreateOrderTipBubble";
 
 const EMPTY_ORDER_DATES: OrderDateChainValues = {
   depositDueDate: "", productionStartDate: "", expectedCompletionDate: "", expectedShipmentDate: "", finalPaymentDueDate: "",
@@ -1046,6 +1049,7 @@ export default function ChatPage() {
   const [productPickerOpen, setProductPickerOpen] = useState(false);
   const [orderDialogOpen, setOrderDialogOpen] = useState(false);
   const attachMenuRef = useRef<HTMLDivElement>(null);
+  const createOrderMenuItemRef = useRef<HTMLButtonElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const isInitialScrollDone = useRef(false);
   const scrollAfterSend = useRef(false);
@@ -1071,6 +1075,37 @@ export default function ChatPage() {
   const isFactoryOwner = !!user && meta?.factoryOwnerId === user.id;
   const isCoMgr = !!meta?.isCoMgr;
   const isFactorySide = isFactoryOwner || isCoMgr;
+  const isBuyer = !!user && !!meta && meta.userId === user.id;
+
+  // 聊天室「建立訂單」功能教育提示（見 shared/chatEducation.ts 與
+  // hooks/useChatEducationTips.ts 的完整規則說明）。pageReady／
+  // blockedByOtherUi 是「值得嘗試認領」的前置篩選：避免在資料還沒載入完成、
+  // 或使用者正在操作其他 modal／選單時就送出認領請求，白白消耗帳號的
+  // lifetime 名額。
+  const chatEducation = useChatEducationTips({
+    conversationId,
+    isFactorySide,
+    isBuyer,
+    pageReady: !isNewChat && !!meta && !msgsLoading,
+    blockedByOtherUi: attachMenuOpen || orderDialogOpen || productPickerOpen,
+  });
+
+  // Spotlight 現在直接凸顯「建立合作確認單」選單項目本身，不是「+」觸發按鈕
+  // ——那個選單項目平常收合在附件選單裡，必須先自動展開附件選單，Spotlight
+  // 的 target 才量得到 rect。用 useLayoutEffect（不是 useEffect）搶在瀏覽器
+  // 真正 paint 之前就把 attachMenuOpen 設成 true，避免出現「選單先彈出一
+  // frame、黑色遮罩才跟上」的閃爍。
+  useLayoutEffect(() => {
+    if (chatEducation.factorySpotlightOpen) setAttachMenuOpen(true);
+  }, [chatEducation.factorySpotlightOpen]);
+
+  // 「知道了」關閉 Spotlight 時，一併收合這次為了導覽才自動打開的附件選單，
+  // 回到一般聊天室畫面；不影響使用者手動點「+」開關選單的既有行為。
+  const { dismiss: dismissChatEducationTip } = chatEducation;
+  const dismissFactorySpotlight = useCallback(() => {
+    dismissChatEducationTip();
+    setAttachMenuOpen(false);
+  }, [dismissChatEducationTip]);
 
   // Refs to avoid stale closures inside mutation callbacks
   const isFactorySideRef = useRef(isFactorySide);
@@ -1192,6 +1227,7 @@ export default function ChatPage() {
       utils.chat.getMessages.invalidate({ conversationId: conversationId! });
       utils.chat.myConversations.invalidate();
       utils.chat.unreadCount.invalidate();
+      chatEducation.refreshEducationState();
     },
     onError: (err) => toast.error(err.message),
   });
@@ -1200,6 +1236,7 @@ export default function ChatPage() {
       toast.success("PDF 型錄已傳送");
       utils.chat.getMessages.invalidate({ conversationId: conversationId! });
       utils.chat.myConversations.invalidate();
+      chatEducation.refreshEducationState();
     },
     onError: (err) => toast.error(err.message),
   });
@@ -1244,6 +1281,7 @@ export default function ChatPage() {
         setMessage("");
         utils.chat.myConversations.invalidate();
         utils.chat.unreadCount.invalidate();
+        chatEducation.signalBuyerFirstMessageSent();
         navigate(`/chat/${result.conversationId}`, { replace: true, state: { from: source } });
       } else if (conversationId) {
         sendMut.mutate({ conversationId, content: message.trim() });
@@ -1283,10 +1321,12 @@ export default function ChatPage() {
     reader.readAsDataURL(file);
   }, [conversationId, sendPdfMut]);
 
+  const { refreshEducationState } = chatEducation;
   const invalidateMessages = useCallback(() => {
     utils.chat.getMessages.invalidate({ conversationId: conversationId! });
     utils.chat.myConversations.invalidate();
-  }, [utils, conversationId]);
+    refreshEducationState();
+  }, [utils, conversationId, refreshEducationState]);
 
   const displayFactoryName = isNewChat ? (factoryData?.name ?? "工廠") : (meta?.factoryName ?? "對話");
   const displayProductName = isNewChat
@@ -1471,12 +1511,24 @@ export default function ChatPage() {
                       variant="outline"
                       size="icon"
                       className="h-10 w-10"
-                      onClick={() => setAttachMenuOpen(v => !v)}
+                      onClick={() => {
+                        setAttachMenuOpen(v => !v);
+                        // 規格允許：點擊被凸顯的入口直接關閉導覽並進入功能。
+                        if (chatEducation.factorySpotlightOpen) chatEducation.dismiss();
+                        if (chatEducation.orderTipBubbleOpen) chatEducation.dismiss();
+                      }}
                       disabled={sendPdfMut.isPending}
                       title="附件"
                     >
                       <Plus className="w-4 h-4" />
                     </Button>
+
+                    {chatEducation.orderTipBubbleOpen && (
+                      <ChatCreateOrderTipBubble
+                        message={"談得差不多了嗎？\n可以使用「建立合作確認單」功能唷！"}
+                        onClose={chatEducation.dismiss}
+                      />
+                    )}
 
                     <div
                       className={`absolute bottom-12 left-0 z-50 w-48 rounded-lg border bg-popover shadow-md py-1 transition-all duration-[180ms] ease-out origin-bottom-left ${
@@ -1486,8 +1538,13 @@ export default function ChatPage() {
                       }`}
                     >
                         <button
+                          ref={createOrderMenuItemRef}
                           className="flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-muted transition-colors"
                           onClick={() => {
+                            // 直接點被 Spotlight 凸顯的這個選項：關閉導覽、收合選單、
+                            // 正常打開建立合作確認單 Dialog，三件事在同一個 click handler
+                            // 內一次完成，不會有「先被別的邏輯關掉選單、click 被吃掉」的問題。
+                            if (chatEducation.factorySpotlightOpen) chatEducation.dismiss();
                             setAttachMenuOpen(false);
                             setOrderDialogOpen(true);
                           }}
@@ -1565,6 +1622,33 @@ export default function ChatPage() {
           onSent={invalidateMessages}
         />
       )}
+
+      {/* 建立訂單功能教育提示：工廠端 Spotlight（見 hooks/useChatEducationTips.ts） */}
+      {chatEducation.factorySpotlightOpen && (
+        <ChatCreateOrderSpotlight
+          targetRef={createOrderMenuItemRef}
+          title="聊得差不多了嗎？"
+          description="可以從這裡建立合作確認單，方便雙方追蹤後續合作進度。"
+          ctaLabel="知道了"
+          onDismiss={dismissFactorySpotlight}
+        />
+      )}
+
+      {/* 建立訂單功能教育提示：買方端首次提醒——買方端沒有「建立訂單」按鈕，
+          不挖洞凸顯任何元素，改用一般 modal。 */}
+      <Dialog open={chatEducation.buyerTipOpen} onOpenChange={v => { if (!v) chatEducation.dismiss(); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader className="text-center sm:text-center">
+            <DialogTitle>談得差不多時</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground leading-relaxed text-center">
+            可以請工廠端建立「合作確認單」，方便後續追蹤合作進度唷！
+          </p>
+          <DialogFooter className="sm:justify-center">
+            <Button size="sm" onClick={chatEducation.dismiss}>知道了</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -2735,6 +2735,69 @@ export const appRouter = router({
       };
     }),
 
+    // 聊天室「建立訂單」功能教育提示（見 shared/chatEducation.ts）：讀取目前
+    // conversation 的角色、是否已建立過訂單、雙方有效聊天訊息數、三個提示
+    // 各自是否已顯示過、以及呼叫者帳號的 lifetime 次數。純讀取、無副作用，
+    // client 端 hook 用這些欄位算出「現在該不該嘗試顯示哪個提示」，實際認領
+    // 顯示資格再另外呼叫 claimChatEducationTip mutation。
+    getChatEducationState: protectedProcedure.input(z.object({
+      conversationId: z.number(),
+    })).query(async ({ ctx, input }) => {
+      const conv = await db.getConversationById(input.conversationId);
+      if (!conv) return null;
+      const factory = await db.getFactoryById(conv.factoryId);
+      const isBuyer = conv.userId === ctx.user.id;
+      const isFactoryOwner = factory?.ownerId === ctx.user.id;
+      const isCoMgr = !isBuyer && !isFactoryOwner && !!factory && await db.isActiveCoManager(factory.id, ctx.user.id);
+      const isFactorySide = isFactoryOwner || isCoMgr;
+      if (!isBuyer && !isFactorySide && ctx.user.role !== 'admin') return null;
+
+      const [orders, counts, caller] = await Promise.all([
+        db.getCollaborationOrdersForConversation(input.conversationId),
+        db.getHumanMessageCounts(input.conversationId),
+        db.getUserById(ctx.user.id),
+      ]);
+
+      return {
+        isBuyer,
+        isFactorySide,
+        hasOrder: orders.length > 0,
+        requesterMessageCount: counts.requesterCount,
+        factoryMessageCount: counts.factoryCount,
+        factorySpotlightShown: conv.factorySpotlightShownAt != null,
+        buyerTipShown: conv.buyerTipShownAt != null,
+        orderTipBubbleShown: conv.orderTipBubbleShownAt != null,
+        factorySpotlightLifetimeCount: caller?.chatFactorySpotlightTipCount ?? 0,
+        buyerTipLifetimeCount: caller?.chatBuyerOrderTipCount ?? 0,
+      };
+    }),
+
+    // 實際「認領」一次教育提示的顯示資格——見 server/db.ts 的
+    // claimChatEducationTip 完整規則（同一 conversation 每種提示最多一次、
+    // factorySpotlight／buyerTip 各自的帳號 lifetime 上限、已建立訂單一律
+    // 回絕）。這裡只做角色驗證：factorySpotlight／orderTipBubble 限工廠端
+    // （只有工廠端看得到「建立合作確認單」入口），buyerTip 限買方本人。
+    claimChatEducationTip: protectedProcedure.input(z.object({
+      conversationId: z.number(),
+      kind: z.enum(["factorySpotlight", "buyerTip", "orderTipBubble"]),
+    })).mutation(async ({ ctx, input }) => {
+      const conv = await db.getConversationById(input.conversationId);
+      if (!conv) return { allowed: false };
+      const factory = await db.getFactoryById(conv.factoryId);
+      const isBuyer = conv.userId === ctx.user.id;
+      const isFactoryOwner = factory?.ownerId === ctx.user.id;
+      const isCoMgr = !isBuyer && !isFactoryOwner && !!factory && await db.isActiveCoManager(factory.id, ctx.user.id);
+      const isFactorySide = isFactoryOwner || isCoMgr;
+
+      if (input.kind === "buyerTip") {
+        if (!isBuyer) return { allowed: false };
+      } else {
+        if (!isFactorySide) return { allowed: false };
+      }
+
+      return db.claimChatEducationTip(input.conversationId, ctx.user.id, input.kind);
+    }),
+
     send: protectedProcedure.input(z.object({
       conversationId: z.number(),
       content: z.string().min(1).max(2000),

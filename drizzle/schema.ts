@@ -47,6 +47,14 @@ export const users = mysqlTable("users", {
   // 手動取消，這裡不會、也不該被重置，取消必須被永久尊重直到 own-industry
   // 真的改變）。長度沿用 communityBoardFollows.spaceCode 同一個 varchar(50)。
   communityOwnIndustryAutoFollowedSpaceCode: varchar("communityOwnIndustryAutoFollowedSpaceCode", { length: 50 }),
+  // 聊天室「建立訂單」功能教育提示——帳號 lifetime 計數器（見
+  // shared/chatEducation.ts）。工廠端 Spotlight 與買方端首次提醒各自獨立
+  // 計算，皆上限 5 個不同 conversation；只在 server/db.ts 的
+  // claimChatEducationTip 交易內遞增，且遞增前一定先確認該 conversation
+  // 尚未顯示過（見 conversations.factorySpotlightShownAt／
+  // buyerTipShownAt），避免同一 conversation 重複計數。
+  chatFactorySpotlightTipCount: int("chatFactorySpotlightTipCount").default(0).notNull(),
+  chatBuyerOrderTipCount: int("chatBuyerOrderTipCount").default(0).notNull(),
   deletedAt: timestamp("deletedAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
@@ -176,6 +184,19 @@ export const conversations = mysqlTable("conversations", {
   factoryId: int("factoryId").notNull().references(() => factories.id, { onDelete: "cascade" }), // 被詢問的工廠
   productId: int("productId").references(() => products.id, { onDelete: "set null" }),           // 可選，針對特定產品的詢問
   lastMessageAt: timestamp("lastMessageAt").defaultNow().notNull(),
+  // 聊天室「建立訂單」功能教育提示：per-conversation 已顯示狀態（見
+  // shared/chatEducation.ts 與 server/db.ts 的 claimChatEducationTip）。三欄
+  // 各自獨立、各自只在同一個 conversation 顯示一次：
+  //   - factorySpotlightShownAt：工廠端第一次進入 conversation 的 Spotlight 強提醒。
+  //   - buyerTipShownAt：買方在新 conversation 成功送出第一則訊息後的一般提醒
+  //     （買方端沒有「建立訂單」按鈕可挖洞凸顯，改用一般 modal）。
+  //   - orderTipBubbleShownAt：雙方有效聊天訊息達 20 則（且雙方都至少各 1
+  //     則）後，給工廠端看的小提醒 Bubble。
+  // 皆 nullable、無 default——NULL 代表這個 conversation 這項提示還沒顯示
+  // 過，是新建 conversation 的自然狀態，不需要 backfill。
+  factorySpotlightShownAt: timestamp("factorySpotlightShownAt"),
+  buyerTipShownAt: timestamp("buyerTipShownAt"),
+  orderTipBubbleShownAt: timestamp("orderTipBubbleShownAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 }, (table) => ({
   // 同一 userId 對同一 factoryId 永遠只有一筆 conversation（忽略 productId，
