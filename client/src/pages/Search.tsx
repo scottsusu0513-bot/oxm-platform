@@ -542,6 +542,7 @@ export default function Search() {
                         onChange={onSubIndustryChange}
                         placeholder="不限"
                         className="h-9 w-full"
+                        withClear
                       />
                     </div>
                   );
@@ -710,6 +711,7 @@ export default function Search() {
                         onChange={onSubIndustryChange}
                         placeholder="子產業"
                         className="w-[120px] h-8 text-xs"
+                        withClear
                       />
                     );
                   })()}
