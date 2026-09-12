@@ -14,7 +14,7 @@ import { performLogin } from "@/const";
 import { trpc } from "@/lib/trpc";
 import { isSafeChatReturnSource } from "@/lib/chatReturnSource";
 import { useRoute, useLocation, useSearch, Link } from "wouter";
-import { useState, useRef, useEffect, useLayoutEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, memo } from "react";
 import { toast } from "sonner";
 import { Send, ArrowLeft, Factory, User, CheckCircle, XCircle, Plus, Package, FileText, ExternalLink, Download, ClipboardList, Star } from "lucide-react";
 import {
@@ -1006,6 +1006,133 @@ function VerifiedReviewButton({ orderId, factoryId, onDone }: { orderId: number;
   );
 }
 
+// ── 單則訊息 bubble（效能優化：抽成獨立 memo component）────────────────────
+// 原本這整塊 JSX 是直接寫在 ChatPage 的 msgs.map() 裡：ChatPage 本身還持有
+// 輸入框的 message state，每打一個字都會讓 ChatPage 整個 re-render，連帶把
+// 每一則歷史訊息的 JSX 都重新求值一次——訊息數量越多，打字越卡。用
+// React.memo 包成獨立元件後，只要傳入的 props 沒變（打字只會改變 ChatPage
+// 自己的 message state，不會動到任何一個 msg 物件本身），React 會直接跳過
+// 這個元件的 re-render，不用重新執行整棵訊息 JSX。
+// 5 秒輪詢的 getMessages 也受惠：tRPC／React Query 預設開啟
+// structuralSharing，若這次 poll 回來的內容跟上次完全相同，會回傳「同一個」
+// 陣列與物件參考，配合這裡的 memo，沒有新訊息時輪詢不會讓任何一則訊息
+// 重新渲染。
+// onActed 直接重用 ChatPage 既有的 invalidateMessages（涵蓋原本
+// InviteResponseButtons 個別 onResponded 呼叫的 getMessages.invalidate，
+// 屬於同一件事的超集，不影響原本行為）。
+interface ChatMessageBubbleProps {
+  msg: any;
+  isFactorySide: boolean;
+  currentUserId: number | undefined;
+  conversationId: number;
+  buyerId: number | undefined;
+  onActed: () => void;
+}
+
+const ChatMessageBubble = memo(function ChatMessageBubble({
+  msg, isFactorySide, currentUserId, conversationId, buyerId, onActed,
+}: ChatMessageBubbleProps) {
+  const isMine = isFactorySide
+    ? msg.senderRole === "factory"
+    : msg.senderId === currentUserId;
+  const messageType: string = msg.type || "text";
+  const isInvite = messageType === "co_manager_invite";
+  const isProduct = messageType === "product";
+  const isPdf = messageType === "pdf";
+  const isOrder = messageType === "collaboration_order";
+  const invStatus = msg.invitationStatus;
+  const invId = msg.invitationId;
+  const attachmentData = msg.attachmentData as Record<string, any> | null;
+  const canRespond = isInvite && !isMine && invStatus === "pending" && invId;
+
+  return (
+    <div className={`flex ${isMine ? "justify-end" : "justify-start"}`}>
+      {/* 合作確認單 / 取消申請：不套用氣泡樣式，直接渲染卡片 */}
+      {isOrder ? (
+        <div className="max-w-[85%]">
+          {attachmentData?.subType === "cancel_request" ? (
+            <CancelRequestCard
+              data={attachmentData}
+              conversationId={conversationId}
+              currentUserId={currentUserId}
+              onActed={onActed}
+            />
+          ) : attachmentData?.subType === "repeat_order_request" || attachmentData?.subType === "repeat_order_accepted" ? (
+            <RepeatOrderRequestCard
+              data={attachmentData}
+              conversationId={conversationId}
+              isFactorySide={isFactorySide}
+              onActed={onActed}
+            />
+          ) : attachmentData ? (
+            <CollaborationOrderCard
+              data={attachmentData}
+              conversationId={conversationId}
+              isFactorySide={isFactorySide}
+              buyerId={buyerId}
+              currentUserId={currentUserId}
+              onActed={onActed}
+            />
+          ) : (
+            <p className="text-sm text-muted-foreground italic">（合作確認單資料異常）</p>
+          )}
+          <p className="text-xs text-muted-foreground mt-1 px-1">
+            {new Date(msg.createdAt).toLocaleString("zh-TW")}
+          </p>
+        </div>
+      ) : (
+      <div className={`max-w-[75%] rounded-2xl px-4 py-2.5 ${
+        isMine
+          ? "bg-primary text-primary-foreground rounded-br-md"
+          : isInvite
+            ? "bg-orange-50 border border-orange-200 rounded-bl-md"
+            : "bg-muted rounded-bl-md"
+      }`}>
+        <div className="flex items-center gap-1.5 mb-0.5">
+          {msg.senderRole === "factory" ? <Factory className="w-3 h-3 opacity-70" /> : <User className="w-3 h-3 opacity-70" />}
+          <span className="text-xs opacity-70">
+            {msg.senderRole === "factory" ? "工廠" : "使用者"}
+          </span>
+          {isInvite && <span className="text-xs text-orange-600 font-medium">次管理者邀請</span>}
+          {isProduct && <span className="text-xs opacity-70">商品分享</span>}
+          {isPdf && <span className="text-xs opacity-70">PDF 型錄</span>}
+        </div>
+
+        {/* 文字訊息或附件，type 預設 text，attachmentData 異常時顯示提示不崩潰 */}
+        {isProduct ? (
+          attachmentData
+            ? <ProductMessageCard data={attachmentData} isMine={isMine} />
+            : <p className="text-sm text-muted-foreground italic">（附件資料異常）</p>
+        ) : isPdf ? (
+          attachmentData
+            ? <PdfMessageCard pdf={attachmentData as unknown as PdfAttachment} messageId={msg.id} isMine={isMine} />
+            : <p className="text-sm text-muted-foreground italic">（附件資料異常）</p>
+        ) : (messageType === "text" || messageType === "co_manager_invite") ? (
+          <p className="text-sm whitespace-pre-wrap break-all [overflow-wrap:anywhere]">{msg.content}</p>
+        ) : (
+          <p className="text-sm text-muted-foreground italic">（此訊息類型暫不支援）</p>
+        )}
+
+        {canRespond && (
+          <InviteResponseButtons
+            invitationId={invId}
+            onResponded={onActed}
+          />
+        )}
+        {isInvite && !canRespond && invStatus && invStatus !== "pending" && (
+          <p className="text-xs mt-2 font-medium text-muted-foreground">
+            {invStatus === "accepted" ? "✓ 已接受邀請" : "✗ 已拒絕邀請"}
+          </p>
+        )}
+        <p className={`text-xs mt-1 ${isMine ? "text-primary-foreground/60" : "text-muted-foreground"}`}>
+          {new Date(msg.createdAt).toLocaleString("zh-TW")}
+        </p>
+      </div>
+      )}
+    </div>
+  );
+});
+
 // ── 主元件 ────────────────────────────────────────────────────────────────
 export default function ChatPage() {
   const [matchExisting, params] = useRoute("/chat/:conversationId");
@@ -1396,107 +1523,17 @@ export default function ChatPage() {
                   <p className="text-sm mt-1">輸入訊息與對方溝通</p>
                 </div>
               ) : (
-                msgs?.map((msg) => {
-                  const isMine = isFactorySide
-                    ? msg.senderRole === "factory"
-                    : msg.senderId === user?.id;
-                  const messageType: string = (msg as any).type || "text";
-                  const isInvite = messageType === "co_manager_invite";
-                  const isProduct = messageType === "product";
-                  const isPdf = messageType === "pdf";
-                  const isOrder = messageType === "collaboration_order";
-                  const invStatus = (msg as any).invitationStatus;
-                  const invId = (msg as any).invitationId;
-                  const attachmentData = (msg as any).attachmentData as Record<string, any> | null;
-                  const canRespond = isInvite && !isMine && invStatus === "pending" && invId;
-
-                  return (
-                    <div key={msg.id} className={`flex ${isMine ? "justify-end" : "justify-start"}`}>
-                      {/* 合作確認單 / 取消申請：不套用氣泡樣式，直接渲染卡片 */}
-                      {isOrder ? (
-                        <div className="max-w-[85%]">
-                          {attachmentData?.subType === "cancel_request" ? (
-                            <CancelRequestCard
-                              data={attachmentData}
-                              conversationId={conversationId!}
-                              currentUserId={user?.id}
-                              onActed={invalidateMessages}
-                            />
-                          ) : attachmentData?.subType === "repeat_order_request" || attachmentData?.subType === "repeat_order_accepted" ? (
-                            <RepeatOrderRequestCard
-                              data={attachmentData}
-                              conversationId={conversationId!}
-                              isFactorySide={isFactorySide}
-                              onActed={invalidateMessages}
-                            />
-                          ) : attachmentData ? (
-                            <CollaborationOrderCard
-                              data={attachmentData}
-                              conversationId={conversationId!}
-                              isFactorySide={isFactorySide}
-                              buyerId={meta?.userId}
-                              currentUserId={user?.id}
-                              onActed={invalidateMessages}
-                            />
-                          ) : (
-                            <p className="text-sm text-muted-foreground italic">（合作確認單資料異常）</p>
-                          )}
-                          <p className="text-xs text-muted-foreground mt-1 px-1">
-                            {new Date(msg.createdAt).toLocaleString("zh-TW")}
-                          </p>
-                        </div>
-                      ) : (
-                      <div className={`max-w-[75%] rounded-2xl px-4 py-2.5 ${
-                        isMine
-                          ? "bg-primary text-primary-foreground rounded-br-md"
-                          : isInvite
-                            ? "bg-orange-50 border border-orange-200 rounded-bl-md"
-                            : "bg-muted rounded-bl-md"
-                      }`}>
-                        <div className="flex items-center gap-1.5 mb-0.5">
-                          {msg.senderRole === "factory" ? <Factory className="w-3 h-3 opacity-70" /> : <User className="w-3 h-3 opacity-70" />}
-                          <span className="text-xs opacity-70">
-                            {msg.senderRole === "factory" ? "工廠" : "使用者"}
-                          </span>
-                          {isInvite && <span className="text-xs text-orange-600 font-medium">次管理者邀請</span>}
-                          {isProduct && <span className="text-xs opacity-70">商品分享</span>}
-                          {isPdf && <span className="text-xs opacity-70">PDF 型錄</span>}
-                        </div>
-
-                        {/* 文字訊息或附件，type 預設 text，attachmentData 異常時顯示提示不崩潰 */}
-                        {isProduct ? (
-                          attachmentData
-                            ? <ProductMessageCard data={attachmentData} isMine={isMine} />
-                            : <p className="text-sm text-muted-foreground italic">（附件資料異常）</p>
-                        ) : isPdf ? (
-                          attachmentData
-                            ? <PdfMessageCard pdf={attachmentData as unknown as PdfAttachment} messageId={msg.id} isMine={isMine} />
-                            : <p className="text-sm text-muted-foreground italic">（附件資料異常）</p>
-                        ) : (messageType === "text" || messageType === "co_manager_invite") ? (
-                          <p className="text-sm whitespace-pre-wrap break-all [overflow-wrap:anywhere]">{msg.content}</p>
-                        ) : (
-                          <p className="text-sm text-muted-foreground italic">（此訊息類型暫不支援）</p>
-                        )}
-
-                        {canRespond && (
-                          <InviteResponseButtons
-                            invitationId={invId}
-                            onResponded={() => utils.chat.getMessages.invalidate({ conversationId: conversationId! })}
-                          />
-                        )}
-                        {isInvite && !canRespond && invStatus && invStatus !== "pending" && (
-                          <p className="text-xs mt-2 font-medium text-muted-foreground">
-                            {invStatus === "accepted" ? "✓ 已接受邀請" : "✗ 已拒絕邀請"}
-                          </p>
-                        )}
-                        <p className={`text-xs mt-1 ${isMine ? "text-primary-foreground/60" : "text-muted-foreground"}`}>
-                          {new Date(msg.createdAt).toLocaleString("zh-TW")}
-                        </p>
-                      </div>
-                      )}
-                    </div>
-                  );
-                })
+                msgs?.map((msg) => (
+                  <ChatMessageBubble
+                    key={msg.id}
+                    msg={msg}
+                    isFactorySide={isFactorySide}
+                    currentUserId={user?.id}
+                    conversationId={conversationId!}
+                    buyerId={meta?.userId}
+                    onActed={invalidateMessages}
+                  />
+                ))
               )}
             </div>
 

@@ -101,7 +101,14 @@ export function AppBottomNav() {
       />
 
       <nav
-        className="fixed bottom-0 left-0 right-0 z-50 bg-white/95 backdrop-blur border-t border-border"
+        // 這個元件只在 isNative（Capacitor App）才會 render（見上方
+        // `if (!isNative) return null`），純 Web 完全不受影響。原本
+        // bg-white/95 已經接近完全不透明，backdrop-blur 在視覺上只影響背景
+        // 透出的那 5%，效果幾乎看不出來，但這裡是 fixed + 永遠可見 + 底下內容
+        // 持續捲動的 bottom nav，backdrop-blur 需要每個捲動 frame 重新對背後
+        // 內容做模糊運算，是行動裝置 WebView 上持續性的合成成本。視覺變化在
+        // 可接受範圍內換掉一個持續發生的效能開銷。
+        className="fixed bottom-0 left-0 right-0 z-50 bg-white/95 border-t border-border"
         style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
         aria-label="主要導航"
       >

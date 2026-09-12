@@ -34,9 +34,19 @@ describe("Navbar.tsx: 手機版六入口 Accordion 使用單一 state", () => {
   });
 
   it("切換邏輯符合「點擊同一入口收合、點擊其他入口自動互斥」規則", () => {
-    expect(source).toMatch(
-      /setMobileOpenHub\(current => \(current === hub\.key \? null : hub\.key\)\)/
+    // 效能優化（見對話中「Navbar 手機版 Accordion 動畫改用 transform/opacity」）：
+    // 原本單一 expression 的 setMobileOpenHub(current => (current === hub.key
+    // ? null : hub.key)) 改成多行版本，多帶了「收合前一個展開項時先播放淡出
+    // 動畫」的邏輯，但核心切換規則完全沒變——mobileOpenHub 仍然只有單一
+    // state，回傳新 key 一定會蓋掉原本展開的那個，所以「點同一入口收合、點
+    // 其他入口自動互斥」這個語意保證不受影響，只是承載的程式碼從單行運算式
+    // 變成帶副作用的區塊，這裡改成比對區塊內真正決定下一個狀態的 return。
+    const setterMatch = source.match(
+      /setMobileOpenHub\(current => \{[\s\S]*?\n\s*\}\);/
     );
+    expect(setterMatch, "找不到 setMobileOpenHub(current => {...}) 切換邏輯").not.toBeNull();
+    const setter = setterMatch![0];
+    expect(setter).toMatch(/return current === hub\.key \? null : hub\.key;/);
   });
 
   it("六個功能入口都定義了穩定 key，且與 MobileHubKey 一致（關於OXM 已移到品牌下拉選單，不再是 HUB_ITEMS 的一員）", () => {

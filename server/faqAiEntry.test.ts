@@ -112,7 +112,12 @@ describe("client/src/App.tsx — Global AI Shell 掛在 Router 的手足層級�
 
   it("AiShellProvider／GlobalAiShell 都在 App() 裡跟 <Router /> 平行掛載，Provider 包住 Router 讓路由切換不會讓它卸載", () => {
     expect(source).toMatch(/import \{ AiShellProvider \} from "@\/contexts\/AiShellContext"/);
-    expect(source).toMatch(/import \{ GlobalAiShell \} from "@\/components\/ai\/GlobalAiShell"/);
+    // 效能優化（見對話中「App 效能優化」）：GlobalAiShell 改成 lazy()，讓
+    // Streamdown 與一堆 AI 附件卡片元件獨立成一個 chunk，不會不管使用者有沒
+    // 有打開過 AI 助理都一起塞進首屏必載的主要 bundle。仍然是同一顆
+    // GlobalAiShell（只是透過 AiShellGate + Suspense 掛載），不影響下面
+    // 「跟 <Router /> 平行掛載在 AiShellProvider 裡」這個語意保證。
+    expect(source).toMatch(/const GlobalAiShell = lazy\(\(\) =>\s*\n\s*import\("@\/components\/ai\/GlobalAiShell"\)/);
     expect(source).toMatch(/<AiShellProvider>[\s\S]*<Router \/>[\s\S]*<\/AiShellProvider>/);
   });
 });

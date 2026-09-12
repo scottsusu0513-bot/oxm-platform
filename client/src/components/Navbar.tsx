@@ -339,9 +339,50 @@ export default function Navbar() {
   const hubCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hubTriggerRefs = useRef<Partial<Record<MobileHubKey, HTMLButtonElement | null>>>({});
   const hubContainerRefs = useRef<Partial<Record<MobileHubKey, HTMLDivElement | null>>>({});
+  // 手機版六大入口 Accordion 展開/收合動畫效能修正（第二輪）：第一輪把
+  // `grid-template-rows` 換成 `max-height` 動畫，但 max-height 一樣是會觸發
+  // layout 的屬性，瀏覽器在動畫的每一幀還是得重新跑一次 layout，只是 block
+  // sizing 比 Grid track sizing 便宜一點，不是真正的 compositor-friendly
+  // 動畫。這裡改成「版面高度只在開合當下瞬間改變一次（0 → auto 或
+  // auto → 0，沒有 transition，一次 layout，不是逐 frame 內插），動畫本身
+  // 只做 opacity／transform（一定走 compositor）」：
+  //   - 展開：高度立刻變成 auto（一次 layout），內容同時淡入＋輕微上滑到位。
+  //   - 收合：內容先淡出＋輕微上滑（高度暫時維持 auto，讓淡出動畫看得到），
+  //     等這段 180ms 動畫播完才把高度收回 0（也是瞬間、非動畫）。
+  // closingMobileHubKey 記錄「正在播放收合淡出動畫、但版面高度還沒收回」的
+  // 那一個入口 key（同一時間最多一個，因為手風琴本來就只允許展開一個）。
+  const [closingMobileHubKey, setClosingMobileHubKey] = useState<MobileHubKey | null>(null);
+  const mobileHubCloseAnimTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 評估過改用 transitionend 取代這顆 timer，結論是維持 timer：
+  // (1) transitionend 在 prefers-reduced-motion 情境下不保證觸發——如果使用者
+  //     的系統設定讓 transition duration 變成 0s，瀏覽器規範上不會派發
+  //     transitionend，closingMobileHubKey 會永遠卡住、面板高度永遠收不回
+  //     0，反而製造這裡明確要避免的「卡在 closing state」問題；改用
+  //     transitionend 需要額外偵測 reduced-motion 並在該情境下另外同步清除
+  //     state，等於為了拿掉一顆 timer 又長出一條平行路徑。
+  // (2) 同一個內層 div 同時對 opacity／transform 兩個屬性做 transition，
+  //     transitionend 會為每個屬性各觸發一次，需要用 e.propertyName 過濾避免
+  //     重複觸發，這是多出來、且容易被忽略的邊界情況。
+  // (3) 這顆 timer 的時長已經跟 CSS transition 用同一個常數
+  //     MOBILE_HUB_PANEL_ANIM_MS，本來就不是兩個各自寫死、可能各自被改動而
+  //     悄悄不同步的數字。
+  // (4) 快速切換不同入口的 race condition，目前已經靠 setClosingMobileHubKey
+  //     的 functional update（比對 key 是否還是當初那一個）處理，換成
+  //     transitionend 一樣需要同一套 key 比對，並不會因此變簡單。
+  // 綜合以上，換成 transitionend 是「用更複雜、更多邊界情況的機制去解決一個
+  // 目前沒有實際 bug 的問題」，不符合最小風險原則，所以保留 timer。
+  const MOBILE_HUB_PANEL_ANIM_MS = 180;
   // 手機版六大入口 Accordion：單一 state 記錄目前展開的入口 key，一次最多展開一個；
   // 點其他入口時原本展開的自動收合，再次點擊目前展開的入口則收合。
   const [mobileOpenHub, setMobileOpenHub] = useState<MobileHubKey | null>(null);
+
+  // 卸載時清掉手機版 accordion 收合動畫的 timer，避免 unmount 後還觸發
+  // setState（React 警告）或殘留一個永遠不會被清掉的 timeout。
+  useEffect(() => {
+    return () => {
+      if (mobileHubCloseAnimTimer.current) clearTimeout(mobileHubCloseAnimTimer.current);
+    };
+  }, []);
 
   const clearHubCloseTimer = () => {
     if (hubCloseTimer.current) { clearTimeout(hubCloseTimer.current); hubCloseTimer.current = null; }
@@ -1005,7 +1046,21 @@ export default function Navbar() {
                     type="button"
                     onClick={() => {
                       setBrandMenuOpen(false);
-                      setMobileOpenHub(current => (current === hub.key ? null : hub.key));
+                      setMobileOpenHub(current => {
+                        // 不管這次是「收合目前這個」還是「切去展開另一個」，只要原本
+                        // 有一個入口是開著的，它都要播完淡出動畫才收回版面高度——
+                        // 手風琴同一時間最多一個展開，所以最多也只有一個需要播放
+                        // 收合動畫，不需要用陣列/多個 key 記錄。
+                        if (current) {
+                          const closingKey = current;
+                          if (mobileHubCloseAnimTimer.current) clearTimeout(mobileHubCloseAnimTimer.current);
+                          setClosingMobileHubKey(closingKey);
+                          mobileHubCloseAnimTimer.current = setTimeout(() => {
+                            setClosingMobileHubKey(k => (k === closingKey ? null : k));
+                          }, MOBILE_HUB_PANEL_ANIM_MS);
+                        }
+                        return current === hub.key ? null : hub.key;
+                      });
                     }}
                     aria-expanded={isOpen}
                     aria-controls={`mobile-hub-panel-${hub.key}`}
@@ -1025,13 +1080,23 @@ export default function Navbar() {
                     aria-hidden={!isOpen}
                     inert={!isOpen}
                     style={{
-                      display: "grid",
-                      gridTemplateRows: isOpen ? "1fr" : "0fr",
-                      transition: "grid-template-rows 200ms ease-out",
+                      // 高度沒有 transition：isExpanded 一變就是單一、立即的 layout
+                      // （0 → auto 或 auto → 0），不是逐 frame 內插的動畫屬性。
+                      // 展開時「立刻」給滿版面高度，讓下面的內容用 opacity／
+                      // transform 淡入；收合時版面高度维持到淡出動畫播完
+                      // （見 closingMobileHubKey）才收回，兩個方向的動畫時間感一致。
+                      height: (isOpen || closingMobileHubKey === hub.key) ? "auto" : 0,
+                      overflow: "hidden",
                     }}
                   >
-                    <div className="overflow-hidden">
-                      <div className="mt-1.5 mb-0.5 mx-1 space-y-1">
+                    <div
+                      className="mt-1.5 mb-0.5 mx-1 space-y-1"
+                      style={{
+                        opacity: isOpen ? 1 : 0,
+                        transform: isOpen ? "translateY(0)" : "translateY(-6px)",
+                        transition: `opacity ${MOBILE_HUB_PANEL_ANIM_MS}ms ease-out, transform ${MOBILE_HUB_PANEL_ANIM_MS}ms ease-out`,
+                      }}
+                    >
                         {hub.dropdownItems.map((item) =>
                           item.href && !item.disabled ? (
                             <Link
@@ -1061,7 +1126,6 @@ export default function Navbar() {
                             </div>
                           )
                         )}
-                      </div>
                     </div>
                   </div>
                 </div>
