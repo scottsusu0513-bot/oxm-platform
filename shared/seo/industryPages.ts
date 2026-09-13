@@ -10,6 +10,7 @@ import {
 } from "../constants";
 import { BRAND } from "./brand";
 import { getBreadcrumbSchema, type JsonLdObject } from "./schema";
+import { pageToQueryValue } from "../industryPagination";
 
 export interface IndustryPageMeta {
   title: string;
@@ -26,11 +27,22 @@ export function parseIndustryPath(pathname: string): { slug: string; subSlug?: s
 }
 
 /**
- * 回傳 slug（與可選 subSlug）對應的 meta；slug／subSlug 對不到任何已知產業
- * （與 client/src/pages/IndustryPage.tsx 顯示「找不到此產業頁面」的條件
+ * 回傳 slug（與可選 subSlug、page）對應的 meta；slug／subSlug 對不到任何已知
+ * 產業（與 client/src/pages/IndustryPage.tsx 顯示「找不到此產業頁面」的條件
  * 完全一致）時回傳 null，呼叫端應保留原本的預設 index.html 不變。
+ *
+ * page（Pagination，見對話中「Pagination + 產業 slug mapping 稽核」）：
+ * 第 1 頁（或未帶 page）canonical／title／description 完全維持修正前的既有
+ * 公式；第 2 頁以後 canonical 自我指向帶 `?page=N` 的網址（不會導回第 1
+ * 頁），title 在既有公式尾端固定的 "｜OXM" 前插入 "｜第 N 頁"（title 陣列裡
+ * 每一筆既有寫死的字串都是這個結尾，見 shared/constants.ts 的
+ * SUB_INDUSTRY_SEO_CONTENT），description 則在既有內容後面加註
+ * "（第 N 頁）"。這個函式本身純資料查表、不查 DB，不知道、也不需要知道
+ * 實際 totalPages 是多少——page 超出真實總頁數時的 normalize／redirect 是
+ * client 端才做得到的事（需要先拿到 DB 查詢結果的 total），這裡只負責
+ * 「如果呼叫端說是第 N 頁，就老老實實產生第 N 頁該有的 meta」。
  */
-export function buildIndustryPageMeta(slug: string, subSlug?: string): IndustryPageMeta | null {
+export function buildIndustryPageMeta(slug: string, subSlug?: string, page?: number): IndustryPageMeta | null {
   const industryNames = INDUSTRY_SLUG_TO_NAMES[slug] ?? [];
   if (industryNames.length === 0) return null;
 
@@ -41,13 +53,25 @@ export function buildIndustryPageMeta(slug: string, subSlug?: string): IndustryP
 
   const subSeoContent = fullKey ? (SUB_INDUSTRY_SEO_CONTENT[fullKey] ?? null) : null;
 
-  const canonical = subSlug
-    ? `${BRAND.url}/industry/${slug}/${subSlug}`
-    : `${BRAND.url}/industry/${slug}`;
-  const title = subSeoContent?.title
+  const basePath = subSlug ? `/industry/${slug}/${subSlug}` : `/industry/${slug}`;
+  const pageQueryValue = pageToQueryValue(page && page > 1 ? page : 1);
+  const canonical = pageQueryValue
+    ? `${BRAND.url}${basePath}?page=${pageQueryValue}`
+    : `${BRAND.url}${basePath}`;
+
+  const baseTitle = subSeoContent?.title
     ?? `${industryName}｜台灣傳產供應商與工廠資源｜OXM`;
-  const description = subSeoContent?.description
+  const baseDescription = subSeoContent?.description
     ?? `在 OXM 尋找台灣${industryName}相關廠商與供應鏈資源，包含工廠、OEM/ODM 代工、材料、設備、加工與產業服務，協助品牌、企業與採購者快速比較並送出詢價。`;
+
+  const title = pageQueryValue
+    ? (baseTitle.endsWith("｜OXM")
+        ? `${baseTitle.slice(0, -"｜OXM".length)}｜第 ${pageQueryValue} 頁｜OXM`
+        : `${baseTitle}｜第 ${pageQueryValue} 頁`)
+    : baseTitle;
+  const description = pageQueryValue
+    ? `${baseDescription}（第 ${pageQueryValue} 頁）`
+    : baseDescription;
 
   return { title, description, canonical };
 }

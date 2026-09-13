@@ -11,6 +11,7 @@ import { injectPrerenderedBody, injectDynamicSemanticBody } from "./prerenderedB
 import { parseIndustryPath, buildIndustryPageMeta, buildIndustryBreadcrumbJsonLd } from "@shared/seo/industryPages";
 import { parseRegionIndustryPath, resolveRegionIndustry, buildRegionIndustryPageContent } from "@shared/seo/regionIndustryPages";
 import { buildSearchPageMeta } from "@shared/seo/searchPage";
+import { parsePageParam } from "@shared/industryPagination";
 
 export async function setupVite(app: Express, server: Server) {
   const serverOptions = {
@@ -125,7 +126,16 @@ export async function setupVite(app: Express, server: Server) {
         }
       } else {
         const industryPath = parseIndustryPath(pathname);
-        const industryMeta = industryPath ? buildIndustryPageMeta(industryPath.slug, industryPath.subSlug) : null;
+        // Pagination（見對話中「Pagination + 產業 slug mapping 稽核」）：
+        // page 從 request 的 query string 解析，跟 client 端
+        // IndustryPage.tsx 用同一個 shared/industryPagination.ts 的
+        // parsePageParam()，確保「非法／超出範圍」字串的正規化規則完全一致
+        // ——這裡沒有查 DB，所以無法判斷「數字合法但超出 totalPages」這種
+        // 情況（那需要先知道 total），這種情況下 server 端會照字面產生第 N
+        // 頁的 meta，實際超出範圍的 redirect／normalize 交給 client 端
+        // hydrate 後處理（client 端拿得到 tRPC 回傳的 total）。
+        const industryPage = parsePageParam(new URLSearchParams(extractQueryString(req.originalUrl)).get("page"));
+        const industryMeta = industryPath ? buildIndustryPageMeta(industryPath.slug, industryPath.subSlug, industryPage) : null;
         if (industryMeta && industryPath) {
           // /industry/:slug(/:sub)：純資料查表（無 DB），與工廠頁共用同一套
           // marker-based 注入函式，title／description／canonical 公式與
@@ -318,7 +328,10 @@ export function serveStatic(app: Express) {
     // marker-based 注入函式；slug 對不到任何已知產業時 industryMeta 為
     // null，落到下面的固定公開頁／SPA fallback 分支，行為不變。
     const industryPath = parseIndustryPath(pathname);
-    const industryMeta = industryPath ? buildIndustryPageMeta(industryPath.slug, industryPath.subSlug) : null;
+    // Pagination：見上方 setupVite() 內同一段邏輯的說明，這裡是 production
+    // 靜態伺服的對應分支，必須套用同一套 parsePageParam() 正規化規則。
+    const industryPage = parsePageParam(new URLSearchParams(extractQueryString(req.originalUrl)).get("page"));
+    const industryMeta = industryPath ? buildIndustryPageMeta(industryPath.slug, industryPath.subSlug, industryPage) : null;
     if (industryMeta && industryPath) {
       try {
         const template = await getCachedTemplate();

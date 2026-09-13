@@ -70,6 +70,55 @@ describe("buildIndustryPageMeta：子產業頁（Phase 1）", () => {
   });
 });
 
+describe("buildIndustryPageMeta：Pagination（page 參數，見對話中「Pagination + 產業 slug mapping 稽核」）", () => {
+  it("Page 1（未帶 page）canonical 不帶 ?page=1", () => {
+    const meta = buildIndustryPageMeta("industrial-machinery", undefined, 1);
+    expect(meta!.canonical).toBe("https://www.oxmmatch.com/industry/industrial-machinery");
+  });
+
+  it("不傳 page 參數，行為與 page=1 完全相同", () => {
+    const withUndefined = buildIndustryPageMeta("industrial-machinery");
+    const withPage1 = buildIndustryPageMeta("industrial-machinery", undefined, 1);
+    expect(withUndefined).toEqual(withPage1);
+  });
+
+  it("Page 2 canonical 帶 ?page=2，self-canonical（不會導回 Page 1）", () => {
+    const meta = buildIndustryPageMeta("industrial-machinery", undefined, 2);
+    expect(meta!.canonical).toBe("https://www.oxmmatch.com/industry/industrial-machinery?page=2");
+  });
+
+  it("Page 2 title 有「第 2 頁」，且維持在既有 ｜OXM 結尾之前", () => {
+    const meta = buildIndustryPageMeta("industrial-machinery", undefined, 2);
+    expect(meta!.title).toContain("第 2 頁");
+    expect(meta!.title.endsWith("｜第 2 頁｜OXM")).toBe(true);
+  });
+
+  it("Page 1 title 不應多出「第 1 頁」字樣", () => {
+    const meta = buildIndustryPageMeta("industrial-machinery", undefined, 1);
+    expect(meta!.title).not.toContain("第 1 頁");
+  });
+
+  it("Page 2 description 附註「（第 2 頁）」", () => {
+    const meta = buildIndustryPageMeta("industrial-machinery", undefined, 2);
+    expect(meta!.description).toContain("（第 2 頁）");
+  });
+
+  it("子產業頁 Page 2 canonical 正確（slug/subSlug/page 三者都要對）", () => {
+    const [{ industrySlug, subSlug }] = PHASE1_SUB_INDUSTRY_PAGES;
+    const meta = buildIndustryPageMeta(industrySlug, subSlug, 2);
+    expect(meta!.canonical).toBe(`https://www.oxmmatch.com/industry/${industrySlug}/${subSlug}?page=2`);
+    expect(meta!.title).toContain("第 2 頁");
+  });
+
+  it("非法／非正整數 page（例如 0、負數）視為第 1 頁，不產生 ?page=0 這類網址", () => {
+    const metaZero = buildIndustryPageMeta("industrial-machinery", undefined, 0);
+    const metaNegative = buildIndustryPageMeta("industrial-machinery", undefined, -5);
+    const metaPage1 = buildIndustryPageMeta("industrial-machinery", undefined, 1);
+    expect(metaZero).toEqual(metaPage1);
+    expect(metaNegative).toEqual(metaPage1);
+  });
+});
+
 describe("buildIndustryPageMeta：無效 slug", () => {
   it("完全不存在的 slug 回傳 null（呼叫端應保留預設 index.html，不硬塞內容）", () => {
     expect(buildIndustryPageMeta("not-a-real-industry")).toBeNull();
