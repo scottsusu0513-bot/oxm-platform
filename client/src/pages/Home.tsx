@@ -632,7 +632,7 @@ export default function Home() {
                 <div className="mb-2 md:mb-4">
                   <Input
                     className="w-full h-10 md:h-12 text-sm md:text-base"
-                    placeholder="輸入關鍵字搜尋工廠或工作室..."
+                    placeholder="搜尋工廠、工作室名稱或產品關鍵字..."
                     value={keyword}
                     onChange={(e) => setKeyword(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && handleSearch()}
