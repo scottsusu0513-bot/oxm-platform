@@ -10,14 +10,14 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious } from "@/components/ui/carousel";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { INDUSTRIES, INDUSTRY_OPTIONS, TAIWAN_REGIONS } from "@shared/constants";
 import { buildSearchPageMeta } from "@shared/seo/searchPage";
 import { SEARCH_CONTENT } from "@shared/content/search";
 import { trpc } from "@/lib/trpc";
 import { useLocation, Link } from "wouter";
 import { useState, useMemo, useEffect, useRef } from "react";
-import { Search as SearchIcon, Star, MapPin, Factory, ChevronLeft, ChevronRight, Megaphone, X, Wrench, ChevronDown, ShoppingCart, Send, Loader2, Share2 } from "lucide-react";
+import { Search as SearchIcon, Star, MapPin, Factory, ChevronLeft, ChevronRight, Megaphone, X, Wrench, ChevronDown, ShoppingCart, Send, Loader2, Share2, HelpCircle } from "lucide-react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { performLogin } from "@/const";
 import { toast } from "sonner";
@@ -215,7 +215,12 @@ export default function Search() {
   const [inquiryTitle, setInquiryTitle] = useState("");
   const [inquiryMessage, setInquiryMessage] = useState("");
   const [cartOpen, setCartOpen] = useState(false);
+  const [cartHelpOpen, setCartHelpOpen] = useState(false);
   const [mobileCartOpen, setMobileCartOpen] = useState(false);
+  // 手機版一鍵詢價教學 Dialog：獨立於 mobileCartOpen（正式送出詢價的
+  // Dialog），避免教學內容跟送出流程混在同一個 Dialog／同一個 state
+  // 裡（見對話中「不要把教學與正式送出詢價流程混在一起」）。
+  const [mobileCartHelpOpen, setMobileCartHelpOpen] = useState(false);
 
   const createAndSendMut = trpc.inquiryBatch.createAndSend.useMutation({
     onSuccess: (data) => {
@@ -593,26 +598,64 @@ export default function Search() {
                   <Button variant="ghost" size="sm" onClick={clearFilters} className="flex-1">清除</Button>
                 </div>
 
-                {/* 一鍵詢價區塊 */}
-                <div className="mt-4 border-t pt-4">
-                  <button
-                    className="flex items-center justify-between w-full text-sm font-semibold mb-2"
-                    onClick={() => setCartOpen(v => !v)}
-                  >
-                    <span className="flex items-center gap-1.5">
-                      <ShoppingCart className="w-4 h-4 text-orange-500" />
-                      一鍵詢價
-                      {cart.length > 0 && (
-                        <span className="bg-orange-500 text-white text-xs rounded-full px-1.5 py-0.5 leading-none">{cart.length}</span>
-                      )}
-                    </span>
-                    <ChevronDown className={`w-3 h-3 transition-transform ${cartOpen ? "rotate-180" : ""}`} />
-                  </button>
+                {/* 一鍵詢價區塊：強化視覺重要性，並將長期常駐說明改由「？」教學承擔
+                    （見對話中「一鍵詢價 UI/UX 優化」）。維持淡橘色 tint + 細框，
+                    刻意不做成實心橘色大 CTA，避免跟上方橘色「搜尋」主按鈕互相
+                    搶視線——顏色沿用既有「手機版一鍵詢價送出入口」的
+                    border-orange-200 / bg-orange-50/70 組合，維持全站一致的橘色
+                    品牌調性，不新增額外配色。 */}
+                <div className="mt-4 rounded-xl border border-orange-200 bg-orange-50/70 hover:bg-orange-50 active:bg-orange-100/70 transition-colors p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1 min-w-0">
+                      <button
+                        type="button"
+                        className="flex items-center gap-1.5 min-w-0 text-sm font-bold text-orange-900"
+                        onClick={() => setCartOpen(v => !v)}
+                      >
+                        <ShoppingCart className="w-5 h-5 text-orange-600 shrink-0" />
+                        <span className="truncate">一鍵詢價</span>
+                      </button>
+                      {/* 「？」教學提示：獨立元件、獨立 click handler，刻意不巢狀在
+                          上面的展開/收合 <button> 裡面（HTML 不允許 button 巢狀
+                          button，巢狀也會讓點擊「？」時事件一路冒泡觸發外層的
+                          展開/收合）。這裡改成同一列的相鄰兄弟元素，點「？」只會
+                          觸發 Radix Popover 自己的開關，不會、也不需要額外呼叫
+                          stopPropagation 去擋外層事件——因為外層根本沒有包住它。 */}
+                      <Popover open={cartHelpOpen} onOpenChange={setCartHelpOpen}>
+                        <PopoverTrigger asChild>
+                          <button
+                            type="button"
+                            aria-label="查看一鍵詢價使用說明"
+                            className="shrink-0 w-6 h-6 flex items-center justify-center rounded-full text-orange-500 hover:bg-orange-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-400"
+                          >
+                            <HelpCircle className="w-4 h-4" />
+                          </button>
+                        </PopoverTrigger>
+                        <PopoverContent
+                          className="w-[min(20rem,calc(100vw-2rem))] text-sm"
+                          side="bottom"
+                          align="start"
+                        >
+                          <p className="font-semibold mb-1.5">什麼是一鍵詢價？</p>
+                          <p className="text-muted-foreground leading-relaxed">
+                            逛了好多間工廠，怕忘記哪些適合這次詢價？
+                            <br /><br />
+                            把有興趣的工廠通通加入「一鍵詢價」，挑選完成後即可一次發送詢價訊息給多間工廠，不用再一間一間重複詢問。
+                          </p>
+                        </PopoverContent>
+                      </Popover>
+                    </div>
+                    <button
+                      type="button"
+                      className="flex items-center gap-1 shrink-0 text-xs font-medium text-orange-700"
+                      onClick={() => setCartOpen(v => !v)}
+                    >
+                      <span className="whitespace-nowrap">已選 {cart.length} 間</span>
+                      <ChevronDown className={`w-3.5 h-3.5 transition-transform ${cartOpen ? "rotate-180" : ""}`} />
+                    </button>
+                  </div>
                   {!cartOpen && (
-                    <>
-                      <p className="text-xs text-muted-foreground">將多間工廠加入清單，一次送出同一則詢價訊息。</p>
-                      <p className="text-xs text-muted-foreground/70 leading-relaxed">實際報價、規格、付款、交期與售後服務，請與工廠確認；若發現資料不實或交易異常，可向 OXM 通報。</p>
-                    </>
+                    <p className="text-xs text-orange-800/70 mt-1.5">一次詢問多間工廠，更快完成比價</p>
                   )}
                   {cartOpen && (
                     <div className="space-y-3">
@@ -741,6 +784,32 @@ export default function Search() {
                   <div className="flex items-center gap-1.5 text-sm font-semibold text-orange-900">
                     <ShoppingCart className="w-4 h-4 text-orange-500 shrink-0" />
                     一鍵詢價
+                    {/* 手機版「？」教學入口：跟旁邊的「送出詢價」Button 是同一層的
+                        兄弟元素，不巢狀在任何 button 裡面，也不共用
+                        mobileCartOpen（正式送出詢價 Dialog 的 state）——點「？」
+                        只會開下面獨立的 mobileCartHelpOpen 小型說明 Dialog，
+                        天生不會觸發送出詢價 Dialog 或任何加入/移除工廠邏輯。 */}
+                    <Dialog open={mobileCartHelpOpen} onOpenChange={setMobileCartHelpOpen}>
+                      <DialogTrigger asChild>
+                        <button
+                          type="button"
+                          aria-label="查看一鍵詢價使用說明"
+                          className="shrink-0 w-6 h-6 flex items-center justify-center rounded-full text-orange-500 hover:bg-orange-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-400"
+                        >
+                          <HelpCircle className="w-4 h-4" />
+                        </button>
+                      </DialogTrigger>
+                      <DialogContent className="max-w-[calc(100%-2rem)] sm:max-w-sm">
+                        <DialogHeader>
+                          <DialogTitle>什麼是一鍵詢價？</DialogTitle>
+                        </DialogHeader>
+                        <p className="text-sm text-muted-foreground leading-relaxed">
+                          逛了好多間工廠，怕忘記哪些適合這次詢價？
+                          <br /><br />
+                          把有興趣的工廠通通加入「一鍵詢價」，挑選完成後即可一次發送詢價訊息給多間工廠，不用再一間一間重複詢問。
+                        </p>
+                      </DialogContent>
+                    </Dialog>
                     {cart.length > 0 && (
                       <span className="bg-orange-500 text-white text-xs rounded-full px-1.5 py-0.5 leading-none">{cart.length}</span>
                     )}
