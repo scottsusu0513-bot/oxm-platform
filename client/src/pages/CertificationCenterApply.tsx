@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/select";
 import Navbar from "@/components/Navbar";
 import LoginDialog from "@/components/LoginDialog";
-import { ArrowLeft, CheckCircle2, Loader2, Building2, LogIn, Clock, XCircle, AlertCircle } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Loader2, Building2, LogIn, Clock, XCircle, AlertCircle, Info } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
 import { getFriendlyFormError } from "@/lib/formErrors";
@@ -37,21 +37,25 @@ type FormValues = {
 
 type EligibleFactory = { id: number; name: string; address: string };
 
-function GateView({ icon, title, description, actions }: {
+function GateView({ icon, title, description, actions, extra, iconBgClassName = "bg-emerald-50", maxWidthClassName = "max-w-sm" }: {
   icon: React.ReactNode;
   title: string;
   description: string;
   actions: React.ReactNode;
+  extra?: React.ReactNode;
+  iconBgClassName?: string;
+  maxWidthClassName?: string;
 }) {
   return (
-    <div className="container py-24 flex flex-col items-center text-center space-y-6 max-w-sm mx-auto">
-      <div className="w-16 h-16 rounded-full bg-emerald-50 flex items-center justify-center">
+    <div className={`container py-24 flex flex-col items-center text-center space-y-6 ${maxWidthClassName} mx-auto`}>
+      <div className={`w-16 h-16 rounded-full ${iconBgClassName} flex items-center justify-center`}>
         {icon}
       </div>
       <div className="space-y-2">
         <h2 className="text-xl font-bold">{title}</h2>
         <p className="text-muted-foreground text-sm leading-relaxed">{description}</p>
       </div>
+      {extra}
       <div className="flex flex-col sm:flex-row gap-3 w-full max-w-xs">
         {actions}
       </div>
@@ -67,7 +71,7 @@ function SuccessView() {
         <div className="w-16 h-16 rounded-full bg-green-100 dark:bg-green-900/30 flex items-center justify-center">
           <CheckCircle2 className="w-8 h-8 text-green-600 dark:text-green-400" />
         </div>
-        <h1 className="text-2xl font-bold">已送出 ISO 與低碳認證免費初步諮詢申請</h1>
+        <h1 className="text-2xl font-bold">申請已成功送出</h1>
         <p className="text-muted-foreground leading-relaxed">
           顧問將儘速查收案件並主動與您聯繫，進行初次諮詢。
         </p>
@@ -147,14 +151,21 @@ export default function CertificationCenterApply() {
   }, [ownedFactory, coManaged]);
 
   const openCaseByFactory = useMemo(() => {
-    const map = new Map<number, { status: string }>();
+    const map = new Map<number, { status: string; createdAt: Date; servicesWanted: string[]; isUnsure: boolean }>();
     for (const app of progressData?.applications ?? []) {
       if (OPEN_STATUSES.has(app.status) && !map.has(app.factoryId)) {
-        map.set(app.factoryId, { status: app.status });
+        map.set(app.factoryId, {
+          status: app.status,
+          createdAt: app.createdAt,
+          servicesWanted: app.servicesWanted ?? [],
+          isUnsure: app.isUnsure,
+        });
       }
     }
     return map;
   }, [progressData]);
+
+  const serviceNameByCode = useMemo(() => new Map(services.map(s => [s.code, s.name])), [services]);
 
   useEffect(() => {
     if (eligibleFactories.length === 1 && selectedFactoryId == null) {
@@ -311,14 +322,40 @@ export default function CertificationCenterApply() {
 
   if (selectedFactory && selectedOpenCase) {
     const statusLabel = CERTIFICATION_STATUS_LABELS[selectedOpenCase.status as keyof typeof CERTIFICATION_STATUS_LABELS] ?? selectedOpenCase.status;
+    const serviceNames = selectedOpenCase.isUnsure
+      ? ["不確定，希望由顧問協助判斷"]
+      : selectedOpenCase.servicesWanted.map(code => serviceNameByCode.get(code) ?? code);
     return (
       <div className="min-h-screen bg-background">
         <Helmet><title>ISO 與低碳認證免費初步諮詢｜OXM</title><meta name="robots" content="noindex, nofollow, noarchive, nosnippet" /></Helmet>
         <Navbar />
         <GateView
-          icon={<CheckCircle2 className="w-8 h-8 text-green-500" />}
-          title="您已送出 ISO 與低碳認證申請"
-          description={`「${selectedFactory.name}」的申請已送出，目前狀態：${statusLabel}。顧問將主動與您聯繫。`}
+          icon={<Info className="w-8 h-8 text-blue-600" />}
+          iconBgClassName="bg-blue-50"
+          maxWidthClassName="max-w-md"
+          title="此公司已有進行中的認證諮詢"
+          description="這間公司目前已有一筆 ISO／低碳認證諮詢案件進行中，因此暫時無法重複送出新的申請。"
+          extra={
+            <div className="w-full space-y-3">
+              <p className="text-xs text-muted-foreground">以下顯示的是既有案件進度，並非新的申請。</p>
+              <div className="w-full text-left rounded-xl border border-border bg-muted/30 p-4 space-y-2 text-sm">
+                <div className="flex items-baseline justify-between gap-3">
+                  <span className="text-muted-foreground shrink-0">目前狀態</span>
+                  <span className="font-medium text-right break-words">{statusLabel}</span>
+                </div>
+                <div className="flex items-baseline justify-between gap-3">
+                  <span className="text-muted-foreground shrink-0">申請日期</span>
+                  <span className="font-medium text-right break-words">
+                    {new Date(selectedOpenCase.createdAt).toLocaleDateString("zh-TW")}
+                  </span>
+                </div>
+                <div className="space-y-1">
+                  <span className="text-muted-foreground">申請服務</span>
+                  <p className="font-medium leading-relaxed whitespace-pre-wrap break-words">{serviceNames.join("、")}</p>
+                </div>
+              </div>
+            </div>
+          }
           actions={
             <>
               {eligibleFactories.length > 1 && (
