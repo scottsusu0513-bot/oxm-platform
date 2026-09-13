@@ -77,6 +77,43 @@ export function buildIndustryPageMeta(slug: string, subSlug?: string, page?: num
 }
 
 /**
+ * 舊產業 slug → 正式 slug 的永久轉址表（見對話中「plastic-rubber duplicate
+ * content 修正」）。plastic-rubber 曾經是 INDUSTRY_SLUG_TO_NAMES 裡對應
+ * ["塑膠", "橡膠 / 矽膠"] 兩個名稱的舊 slug，但實際查詢／render 只會用
+ * 第一個名稱（塑膠），導致跟正式的 /industry/plastic 渲染出完全相同的
+ * 內容、卻各自 self-canonical，形成 duplicate content。塑膠與橡膠/矽膠
+ * 現在都各自有獨立、正式的 slug（plastic、rubber-silicone），plastic-rubber
+ * 這個舊 slug 已無存在必要，改成 301 永久轉址到它原本代表的那個正式
+ * slug，不再讓舊 slug 自己 render 任何內容。
+ *
+ * 只收錄「確認過去確實對應到某個正式 slug」的舊別名——不要為了方便把任何
+ * 查不到的 slug 都硬導到某個猜測的目的地。
+ */
+const LEGACY_INDUSTRY_SLUG_REDIRECTS: Record<string, string> = {
+  "plastic-rubber": "plastic",
+};
+
+/**
+ * pathname 若精確命中一個舊產業 slug（不含任何子路徑），回傳應該 301 導向
+ * 的新 pathname；否則回傳 null（呼叫端不應該轉址，照原本邏輯處理）。
+ *
+ * 刻意只比對「精確 /industry/:slug，沒有 /:sub」——plastic-rubber 從未有過
+ * 任何合法的子產業頁（shared/constants.ts 的 SUB_INDUSTRY_SLUG_TO_NAME 裡
+ * 沒有任何 "plastic-rubber/xxx" 開頭的 key），所以 /industry/plastic-rubber
+ * /something 不應該被自動導去 /industry/plastic/something——那個 something
+ * 從來就不是塑膠底下經過確認的合法子產業 slug，硬導過去等於把一個原本無效
+ * 的網址改導到另一個語意錯誤的網址。這種情況直接回傳 null，交給既有邏輯
+ * （parseIndustryPath + buildIndustryPageMeta 對不到子產業會回傳 null）走
+ * 原本「找不到此產業頁面」的既有行為，不在這裡臆測。
+ */
+export function resolveLegacyIndustrySlugRedirect(pathname: string): string | null {
+  const parsed = parseIndustryPath(pathname);
+  if (!parsed || parsed.subSlug) return null;
+  const newSlug = LEGACY_INDUSTRY_SLUG_REDIRECTS[parsed.slug];
+  return newSlug ? `/industry/${newSlug}` : null;
+}
+
+/**
  * /industry/:slug(/:sub) 的 BreadcrumbList 結構化資料（只注入 <head>，畫面上
  * 不可見）：首頁 → 找工廠（/search）→ 主產業（/industry/:slug）→ 子產業
  * （若存在）。name 一律來自現有的產業名稱 mapping；每一層 item 都指向

@@ -12,7 +12,7 @@ import { trpc } from "@/lib/trpc";
 import { useRoute, useLocation, useSearch, Link } from "wouter";
 import { useRef, useEffect } from "react";
 import { INDUSTRY_SLUG_TO_NAMES, INDUSTRY_SLUG_TO_NAME, INDUSTRY_SEO_CONTENT, INDUSTRY_SLUGS, SUB_INDUSTRY_SLUG_TO_NAME, SUB_INDUSTRY_SEO_CONTENT } from "@shared/constants";
-import { buildIndustryPageMeta } from "@shared/seo/industryPages";
+import { buildIndustryPageMeta, resolveLegacyIndustrySlugRedirect } from "@shared/seo/industryPages";
 import { parsePageParam, pageToQueryValue, computeTotalPages, clampPage, getPaginationRange } from "@shared/industryPagination";
 import { ChevronLeft, ChevronRight, Factory, Wrench, Star, MapPin } from "lucide-react";
 
@@ -71,6 +71,25 @@ export default function IndustryPage() {
   // 頁碼重新查詢、顯示正常內容。
   const totalPages       = data ? computeTotalPages(data.total, PAGE_SIZE) : null;
   const isPageOutOfRange = totalPages !== null && requestedPage > totalPages;
+
+  // 0) 舊產業 slug client 端防呆（非主要機制——見對話中「Server 301 是
+  //    主機制，client 端 fallback 只在極端情境使用」）：真正的防線是
+  //    server/_core/vite.ts 的 HTTP 301（Googlebot／一般瀏覽器整頁請求都會
+  //    在拿到任何 HTML 之前就被攔截），這裡處理的是 server 301 完全攔截
+  //    不到的唯一情境——SPA 已經載入、透過瀏覽器 Back/Forward
+  //    （History API popstate）切回這個舊網址：這種導航不會對 server
+  //    發出新的 HTTP request，server 端完全沒有機會回應 301。用
+  //    replace（不是 push）避免在瀏覽器歷史紀錄裡疊出「按 Back 又跳回舊
+  //    網址」的循環；查詢字串原樣保留，跟 server 端 301 的規則完全一致
+  //    （直接沿用同一個 resolveLegacyIndustrySlugRedirect，不重複維護一份
+  //    對照表）。
+  useEffect(() => {
+    const legacyTarget = resolveLegacyIndustrySlugRedirect(basePath);
+    if (legacyTarget) {
+      navigate(searchString ? `${legacyTarget}?${searchString}` : legacyTarget, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [basePath, searchString]);
 
   // 1) 語法正規化：?page=abc / ?page=0 / ?page=-1 / ?page=01 這類不是「乾淨
   //    正整數字串」的網址，一律馬上 replace 成正規化後的網址（第 1 頁不留

@@ -182,10 +182,13 @@ export const INDUSTRY_SLUGS: Record<string, string> = {
   "永續材料": "sustainable-materials",
 };
 
-// 每個 slug 對應一或多個主產業名稱（backward compat：plastic-rubber 同時對應塑膠與橡膠/矽膠）
+// 每個 slug 對應一或多個主產業名稱。
+// plastic-rubber（曾經同時對應塑膠與橡膠/矽膠的舊 slug）已改成 301 永久轉址
+// 到 /industry/plastic（見 shared/seo/industryPages.ts 的
+// resolveLegacyIndustrySlugRedirect），塑膠與橡膠/矽膠都已各自有獨立、正式
+// 的 slug（plastic、rubber-silicone），這裡不再需要保留這個 legacy 別名。
 export const INDUSTRY_SLUG_TO_NAMES: Record<string, string[]> = {
   ...Object.fromEntries(Object.entries(INDUSTRY_SLUGS).map(([name, slug]) => [slug, [name]])),
-  "plastic-rubber": ["塑膠", "橡膠 / 矽膠"],
 };
 // 保留單值版本供其他地方使用（取第一個名稱）
 export const INDUSTRY_SLUG_TO_NAME: Record<string, string> = Object.fromEntries(

@@ -10,9 +10,9 @@
  * server/_core/vite.ts 使用）與 injectMetaIntoHtml 共同運作後的結果。
  */
 import { describe, expect, it } from "vitest";
-import { parseIndustryPath, buildIndustryPageMeta } from "@shared/seo/industryPages";
+import { parseIndustryPath, buildIndustryPageMeta, resolveLegacyIndustrySlugRedirect } from "@shared/seo/industryPages";
 import { injectMetaIntoHtml, DEFAULT_OG_IMAGE } from "./_core/ogMeta";
-import { INDUSTRY_SLUGS, PHASE1_SUB_INDUSTRY_PAGES } from "@shared/constants";
+import { INDUSTRY_SLUGS, INDUSTRY_SLUG_TO_NAMES, PHASE1_SUB_INDUSTRY_PAGES } from "@shared/constants";
 
 const BASE_HTML = `<!doctype html>
 <html lang="zh-TW">
@@ -116,6 +116,71 @@ describe("buildIndustryPageMeta：Pagination（page 參數，見對話中「Pagi
     const metaPage1 = buildIndustryPageMeta("industrial-machinery", undefined, 1);
     expect(metaZero).toEqual(metaPage1);
     expect(metaNegative).toEqual(metaPage1);
+  });
+});
+
+describe("resolveLegacyIndustrySlugRedirect：plastic-rubber 舊 slug 永久轉址（見對話中「plastic-rubber duplicate content 修正」）", () => {
+  it("/industry/plastic-rubber → /industry/plastic", () => {
+    expect(resolveLegacyIndustrySlugRedirect("/industry/plastic-rubber")).toBe("/industry/plastic");
+  });
+
+  it("正式 /industry/plastic → null（不轉址）", () => {
+    expect(resolveLegacyIndustrySlugRedirect("/industry/plastic")).toBeNull();
+  });
+
+  it("正式 /industry/rubber-silicone → null（不轉址）", () => {
+    expect(resolveLegacyIndustrySlugRedirect("/industry/rubber-silicone")).toBeNull();
+  });
+
+  it("其他任一正式 industry slug → null（不受影響）", () => {
+    for (const slug of Object.values(INDUSTRY_SLUGS)) {
+      expect(resolveLegacyIndustrySlugRedirect(`/industry/${slug}`)).toBeNull();
+    }
+  });
+
+  it("完全不存在的 slug → null（不是 plastic-rubber 的舊別名，不應該被轉址）", () => {
+    expect(resolveLegacyIndustrySlugRedirect("/industry/not-a-real-industry")).toBeNull();
+  });
+
+  it("/industry/plastic-rubber/:sub → null（plastic-rubber 從未有過任何合法子產業頁，不應該猜測轉址到 /industry/plastic/:sub，避免把一個原本無效的網址改導到另一個語意錯誤的網址）", () => {
+    expect(resolveLegacyIndustrySlugRedirect("/industry/plastic-rubber/plastic-injection")).toBeNull();
+    expect(resolveLegacyIndustrySlugRedirect("/industry/plastic-rubber/anything")).toBeNull();
+  });
+
+  it("非 /industry/ 路徑 → null", () => {
+    expect(resolveLegacyIndustrySlugRedirect("/search")).toBeNull();
+    expect(resolveLegacyIndustrySlugRedirect("/")).toBeNull();
+  });
+
+  it("正式 slug 帶 pagination 不受影響：resolveLegacyIndustrySlugRedirect 只看 pathname（不含 query string），/industry/plastic 不會被誤判成需要轉址，既有 pagination 完全不受影響", () => {
+    // server/_core/vite.ts 呼叫這個函式時傳的是已經用 stripQueryString()
+    // 去掉 query string 的純 pathname，這裡直接驗證函式本身對「乾淨的
+    // /industry/plastic」回傳 null，等同確認 /industry/plastic?page=2
+    // 這類網址不會被攔截轉址。
+    expect(resolveLegacyIndustrySlugRedirect("/industry/plastic")).toBeNull();
+    expect(buildIndustryPageMeta("plastic", undefined, 2)!.canonical)
+      .toBe("https://www.oxmmatch.com/industry/plastic?page=2");
+  });
+});
+
+describe("shared/constants.ts：plastic-rubber legacy mapping 已移除，正式 plastic／rubber-silicone mapping 維持不變", () => {
+  it("INDUSTRY_SLUG_TO_NAMES 不再含有 plastic-rubber", () => {
+    expect(INDUSTRY_SLUG_TO_NAMES["plastic-rubber"]).toBeUndefined();
+    expect(Object.keys(INDUSTRY_SLUG_TO_NAMES)).not.toContain("plastic-rubber");
+  });
+
+  it("buildIndustryPageMeta(\"plastic-rubber\") 現在回傳 null（即使繞過 redirect 檢查，也不會再渲染出跟 plastic 相同的內容）", () => {
+    expect(buildIndustryPageMeta("plastic-rubber")).toBeNull();
+  });
+
+  it("正式「塑膠」slug 仍是 plastic", () => {
+    expect(INDUSTRY_SLUGS["塑膠"]).toBe("plastic");
+    expect(INDUSTRY_SLUG_TO_NAMES["plastic"]).toEqual(["塑膠"]);
+  });
+
+  it("正式「橡膠 / 矽膠」slug 仍是 rubber-silicone", () => {
+    expect(INDUSTRY_SLUGS["橡膠 / 矽膠"]).toBe("rubber-silicone");
+    expect(INDUSTRY_SLUG_TO_NAMES["rubber-silicone"]).toEqual(["橡膠 / 矽膠"]);
   });
 });
 

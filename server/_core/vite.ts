@@ -8,7 +8,7 @@ import viteConfig from "../../vite.config";
 import { buildFactoryMeta, buildNewsMeta, buildRegionIndustryMeta, injectMetaIntoHtml, parseFactoryPath, parseNewsPath, stripQueryString, extractQueryString, DEFAULT_OG_IMAGE } from "./ogMeta";
 import { injectPublicPageSeo } from "./publicPageMeta";
 import { injectPrerenderedBody, injectDynamicSemanticBody } from "./prerenderedBody";
-import { parseIndustryPath, buildIndustryPageMeta, buildIndustryBreadcrumbJsonLd } from "@shared/seo/industryPages";
+import { parseIndustryPath, buildIndustryPageMeta, buildIndustryBreadcrumbJsonLd, resolveLegacyIndustrySlugRedirect } from "@shared/seo/industryPages";
 import { parseRegionIndustryPath, resolveRegionIndustry, buildRegionIndustryPageContent } from "@shared/seo/regionIndustryPages";
 import { buildSearchPageMeta } from "@shared/seo/searchPage";
 import { parsePageParam } from "@shared/industryPagination";
@@ -69,6 +69,19 @@ export async function setupVite(app: Express, server: Server) {
       // req.baseUrl, leaving req.path as just "/". Derive the pathname from
       // req.originalUrl instead.
       const pathname = stripQueryString(req.originalUrl);
+
+      // 舊產業 slug 永久轉址（見對話中「plastic-rubber duplicate content
+      // 修正」）：必須在任何 meta 注入／render 之前就回應真正的 HTTP 301，
+      // 不能只靠 client 端 JS mount 後才 navigate()——那樣 Googlebot 第一次
+      // 抓取仍然會拿到舊頁面的 200 + 自己的 canonical，SEO 上等於沒修。查詢
+      // 字串（例如 pagination 的 ?page=2）原樣保留、完整轉發到新網址。
+      const legacyRedirectTarget = resolveLegacyIndustrySlugRedirect(pathname);
+      if (legacyRedirectTarget) {
+        const qs = extractQueryString(req.originalUrl);
+        res.redirect(301, qs ? `${legacyRedirectTarget}?${qs}` : legacyRedirectTarget);
+        return;
+      }
+
       const factoryPath = parseFactoryPath(pathname);
       let statusCode = 200;
       if (factoryPath) {
@@ -213,6 +226,17 @@ export function serveStatic(app: Express) {
     // whole matched path into req.baseUrl, leaving req.path as "/". Derive
     // the pathname from req.originalUrl instead.
     const pathname = stripQueryString(req.originalUrl);
+
+    // 舊產業 slug 永久轉址：見上方 setupVite() 內同一段邏輯的說明，這裡是
+    // production 靜態伺服的對應分支，必須套用同一套
+    // resolveLegacyIndustrySlugRedirect() 規則，在任何 meta 注入之前就回應
+    // 真正的 HTTP 301，查詢字串原樣保留。
+    const legacyRedirectTarget = resolveLegacyIndustrySlugRedirect(pathname);
+    if (legacyRedirectTarget) {
+      const qs = extractQueryString(req.originalUrl);
+      res.redirect(301, qs ? `${legacyRedirectTarget}?${qs}` : legacyRedirectTarget);
+      return;
+    }
 
     // /factory/:id: inject factory-specific OG/Twitter meta into the same
     // static index.html before sending, so social crawlers (which don't run
