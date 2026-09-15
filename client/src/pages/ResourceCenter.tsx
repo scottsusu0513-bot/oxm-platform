@@ -3,6 +3,7 @@ import { Helmet } from "react-helmet-async";
 import { Link } from "wouter";
 import Navbar from "@/components/Navbar";
 import { FloatingBackButton } from "@/components/FloatingBackButton";
+import ResourceDiagnostic from "@/components/ResourceDiagnostic";
 import { useRemoveServerSeoHead } from "@/hooks/useRemoveServerSeoHead";
 import { PUBLIC_PAGE_SEO } from "@/lib/publicPageSeo";
 import { RESOURCES_CONTENT } from "@shared/content/resources";
@@ -226,6 +227,8 @@ export default function ResourceCenter() {
           </div>
         </div>
       </section>
+
+      <ResourceDiagnostic />
 
       <section className="border-t border-slate-100 bg-slate-950 px-4 py-14 text-white">
         <div className="container max-w-5xl">
