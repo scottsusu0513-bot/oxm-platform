@@ -117,3 +117,6 @@ _backup_*.json
 # Manus version file (auto-generated, not part of source)
 client/public/__manus__/version.json
 ios/App/App/GoogleService-Info.plist
+
+# Local backup scripts (Windows-only automation, never part of source)
+scripts/backup/
