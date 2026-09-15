@@ -5,10 +5,10 @@ import { nanoid } from "nanoid";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import viteConfig from "../../vite.config";
-import { buildFactoryMeta, buildNewsMeta, buildRegionIndustryMeta, injectMetaIntoHtml, parseFactoryPath, parseNewsPath, stripQueryString, extractQueryString, DEFAULT_OG_IMAGE } from "./ogMeta";
+import { buildFactoryMeta, buildNewsMeta, buildRegionIndustryMeta, buildIndustryMeta, injectMetaIntoHtml, parseFactoryPath, parseNewsPath, stripQueryString, extractQueryString, DEFAULT_OG_IMAGE } from "./ogMeta";
 import { injectPublicPageSeo } from "./publicPageMeta";
 import { injectPrerenderedBody, injectDynamicSemanticBody } from "./prerenderedBody";
-import { parseIndustryPath, buildIndustryPageMeta, buildIndustryBreadcrumbJsonLd, resolveLegacyIndustrySlugRedirect } from "@shared/seo/industryPages";
+import { parseIndustryPath, resolveLegacyIndustrySlugRedirect } from "@shared/seo/industryPages";
 import { parseRegionIndustryPath, resolveRegionIndustry, buildRegionIndustryPageContent } from "@shared/seo/regionIndustryPages";
 import { buildSearchPageMeta } from "@shared/seo/searchPage";
 import { parsePageParam } from "@shared/industryPagination";
@@ -148,22 +148,18 @@ export async function setupVite(app: Express, server: Server) {
         // 頁的 meta，實際超出範圍的 redirect／normalize 交給 client 端
         // hydrate 後處理（client 端拿得到 tRPC 回傳的 total）。
         const industryPage = parsePageParam(new URLSearchParams(extractQueryString(req.originalUrl)).get("page"));
-        const industryMeta = industryPath ? buildIndustryPageMeta(industryPath.slug, industryPath.subSlug, industryPage) : null;
-        if (industryMeta && industryPath) {
+        if (industryPath) {
           // /industry/:slug(/:sub)：純資料查表（無 DB），與工廠頁共用同一套
           // marker-based 注入函式，title／description／canonical 公式與
-          // client 端 IndustryPage.tsx 的 Helmet 保持一致。slug 對不到任何
-          // 已知產業時 industryMeta 為 null，落到下面的預設 index.html 不變。
-          // 額外補上 BreadcrumbList 結構化資料（只進 <head>，畫面不可見）。
-          page = injectMetaIntoHtml(page, {
-            title: industryMeta.title,
-            description: industryMeta.description,
-            image: DEFAULT_OG_IMAGE,
-            url: industryMeta.canonical,
-            status: 200,
-            noindex: false,
-            jsonLd: buildIndustryBreadcrumbJsonLd(industryPath.slug, industryPath.subSlug) ?? undefined,
-          });
+          // client 端 IndustryPage.tsx 的 Helmet 保持一致。slug／subSlug 對不到
+          // 任何已知產業（無效 slug、已退休且沒有
+          // resolveLegacyIndustrySlugRedirect 對應項的舊 slug，或有效主產業配上
+          // 不存在的子產業）時 buildIndustryMeta 回傳真正的 404 + noindex，不是
+          // 200 + 通用 fallback 內容——後者正是 buildFactoryMeta 修正前造成
+          // Google 軟式 404 的同一種問題（見 server/factoryPageStatus.test.ts）。
+          const industryMeta = buildIndustryMeta(industryPath, industryPage, pathname);
+          statusCode = industryMeta.status;
+          page = injectMetaIntoHtml(page, industryMeta);
         } else {
           // 固定公開頁（目前為 "/"、"/about"、"/upgrade-center"）：不查資料庫，
           // 直接用 shared/seo 常數注入 title／description／canonical／OG／
@@ -349,26 +345,19 @@ export function serveStatic(app: Express) {
     }
 
     // /industry/:slug(/:sub)：純資料查表（無 DB），與工廠頁共用同一套
-    // marker-based 注入函式；slug 對不到任何已知產業時 industryMeta 為
-    // null，落到下面的固定公開頁／SPA fallback 分支，行為不變。
+    // marker-based 注入函式；slug／subSlug 對不到任何已知產業時
+    // buildIndustryMeta 回傳真正的 404 + noindex（見上方 setupVite() 內同一段
+    // 邏輯的說明，與 server/factoryPageStatus.test.ts 的軟式 404 修正）。
     const industryPath = parseIndustryPath(pathname);
     // Pagination：見上方 setupVite() 內同一段邏輯的說明，這裡是 production
     // 靜態伺服的對應分支，必須套用同一套 parsePageParam() 正規化規則。
     const industryPage = parsePageParam(new URLSearchParams(extractQueryString(req.originalUrl)).get("page"));
-    const industryMeta = industryPath ? buildIndustryPageMeta(industryPath.slug, industryPath.subSlug, industryPage) : null;
-    if (industryMeta && industryPath) {
+    if (industryPath) {
       try {
         const template = await getCachedTemplate();
-        const page = injectMetaIntoHtml(template, {
-          title: industryMeta.title,
-          description: industryMeta.description,
-          image: DEFAULT_OG_IMAGE,
-          url: industryMeta.canonical,
-          status: 200,
-          noindex: false,
-          jsonLd: buildIndustryBreadcrumbJsonLd(industryPath.slug, industryPath.subSlug) ?? undefined,
-        });
-        res.status(200).set({ "Content-Type": "text/html" }).end(page);
+        const industryMeta = buildIndustryMeta(industryPath, industryPage, pathname);
+        const page = injectMetaIntoHtml(template, industryMeta);
+        res.status(industryMeta.status).set({ "Content-Type": "text/html" }).end(page);
       } catch (err) {
         console.error(
           "[ogMeta] serveStatic industry meta injection failed:",

@@ -2,6 +2,7 @@ import * as db from "../db";
 import { BRAND } from "@shared/seo/brand";
 import { toSafeJsonLdString, getBreadcrumbSchema, type JsonLdObject } from "@shared/seo/schema";
 import { resolveRegionIndustry, buildRegionIndustryPageContent } from "@shared/seo/regionIndustryPages";
+import { buildIndustryPageMeta, buildIndustryBreadcrumbJsonLd } from "@shared/seo/industryPages";
 import { INDUSTRY_SLUGS } from "@shared/constants";
 
 const SITE_BASE_URL = "https://www.oxmmatch.com";
@@ -431,6 +432,43 @@ export async function buildRegionIndustryMeta(regionSlug: string, industrySlug: 
     );
     return { ...baseMeta, noindex: true };
   }
+}
+
+/**
+ * Builds the meta for a /industry/:slug(/:sub) request. Pure/synchronous
+ * (buildIndustryPageMeta is a plain lookup table, no DB) unlike the other
+ * buildXMeta functions here, but returns the same FactoryMeta shape so
+ * server/_core/vite.ts can inject and set the real HTTP status the same way
+ * for every route type.
+ *
+ * slug／subSlug that don't resolve to any known industry (an invalid slug, a
+ * retired legacy slug with no resolveLegacyIndustrySlugRedirect entry, or a
+ * valid main industry paired with a nonexistent sub-industry) get a real 404
+ * + noindex — previously these fell through to the generic SPA fallback at
+ * 200 with the default index.html title, the exact same soft-404 pattern
+ * buildFactoryMeta was fixed for (see server/factoryPageStatus.test.ts).
+ * Reuses GENERIC_FALLBACK for the 404 copy — same "nothing here" wording
+ * already used for the factory 404 case.
+ */
+export function buildIndustryMeta(
+  industryPath: { slug: string; subSlug?: string },
+  page: number | undefined,
+  pathname: string
+): FactoryMeta {
+  const url = `${SITE_BASE_URL}${pathname}`;
+  const meta = buildIndustryPageMeta(industryPath.slug, industryPath.subSlug, page);
+  if (!meta) {
+    return { ...GENERIC_FALLBACK, url, status: 404, noindex: true };
+  }
+  return {
+    title: meta.title,
+    description: meta.description,
+    image: DEFAULT_OG_IMAGE,
+    url: meta.canonical,
+    status: 200,
+    noindex: false,
+    jsonLd: buildIndustryBreadcrumbJsonLd(industryPath.slug, industryPath.subSlug) ?? undefined,
+  };
 }
 
 function renderMetaHtml(meta: FactoryMeta): string {
