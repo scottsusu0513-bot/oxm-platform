@@ -136,6 +136,16 @@ export const factories = mysqlTable("factories", {
   deletedAt: timestamp("deletedAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  // 工廠公開頁「資料最後更新時間」：只代表這間工廠對外公開的資料（名稱／
+  // 產業／地區／簡介／聯絡資料／封面圖／工廠圖片／商品等，見
+  // server/db.ts 的 PUBLIC_CONTENT_FACTORY_FIELDS 與 touchFactoryPublicContentUpdatedAt）
+  // 最後一次被更新的時間。刻意不掛 .onUpdateNow()——updatedAt 已經證明
+  // 這種寫法會被 CRM contactStatus／adminNote／審核狀態／delisted／
+  // deletedAt 等完全不影響公開內容的操作一併觸發（同一張表的任何 UPDATE
+  // 都會讓 ON UPDATE CURRENT_TIMESTAMP 跳動），不能拿來代表「公開資料
+  // 何時更新」。這個欄位只由應用層在偵測到白名單內的公開欄位／關聯的
+  // 商品／工廠圖片實際變動時才明確 SET。
+  publicContentUpdatedAt: timestamp("publicContentUpdatedAt").defaultNow().notNull(),
 });
 
 export type Factory = typeof factories.$inferSelect;

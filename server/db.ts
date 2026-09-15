@@ -179,6 +179,39 @@ export async function setFactoryOwner(userId: number, isOwner: boolean) {
 }
 
 // ===== Factory helpers =====
+
+// 工廠公開頁「資料最後更新時間」（factories.publicContentUpdatedAt）視為
+// 已變動的欄位白名單：只涵蓋公開工廠頁（client/src/components/
+// FactoryDetailView.tsx）實際會顯示的內容欄位，逐一對照過該元件目前渲染
+// 的每一個 factory.* 欄位後列出。刻意排除：
+// - status／submittedAt／rejectionReason（審核狀態，不是公開內容本身）
+// - contactStatus／adminNote（CRM／後台專用，從不對外顯示）
+// - deletedAt（軟刪除標記）
+// - avgRating／reviewCount／avgResponseHours（系統依使用者活動自動計算，
+//   不是工廠自己編輯的內容）
+// - certificationBadges／certificationBadgesVisible／certificationEvidence
+//   （徽章系統有自己獨立的審核／顯示規則，這輪任務範圍未列入，見任務
+//   回報，之後如需納入可再評估）
+const PUBLIC_CONTENT_FACTORY_FIELDS = new Set<keyof InsertFactory>([
+  "name", "industry", "subIndustry", "mfgModes", "region", "description",
+  "capitalLevel", "foundedYear", "ownerName", "contactPersonName", "phone",
+  "website", "contactEmail", "address", "taxId",
+  "avatarUrl", "avatarCrop", "coverImageUrl", "coverCrop",
+  "businessType", "operationStatus", "weekdayHours", "weekendHours", "businessNote",
+]);
+
+/**
+ * 商品／工廠圖片存放在各自獨立的表，不會經過 updateFactory()，因此新增／
+ * 修改／刪除後另外呼叫這支函式明確標記「這間工廠的公開資料剛剛更新」。
+ * 刻意用獨立的 UPDATE（只動這一欄），不透過 updateFactory()——避免不小心
+ * 也一併覆寫呼叫端沒打算變更的其他欄位。
+ */
+export async function touchFactoryPublicContentUpdatedAt(factoryId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(factories).set({ publicContentUpdatedAt: new Date() }).where(eq(factories.id, factoryId));
+}
+
 export async function createFactory(data: Omit<InsertFactory, "id" | "createdAt" | "updatedAt" | "avgRating" | "reviewCount">) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
@@ -227,6 +260,19 @@ export async function updateFactory(id: number, ownerId: number, data: Partial<I
     );
     (normalized as any).certificationBadges = certificationBadges;
     (normalized as any).certificationEvidence = certificationEvidence;
+  }
+
+  // 公開頁「資料最後更新時間」：呼叫端這次實際帶入的欄位（data，不是
+  // normalized——normalized 只是格式正規化，key 集合相同）只要有任何一個
+  // 落在 PUBLIC_CONTENT_FACTORY_FIELDS 白名單內，就代表公開內容真的有變
+  // 動，一併明確 SET publicContentUpdatedAt。純狀態／CRM／後台操作（例如
+  // approveFactoryWithBadgeSync 只帶 status／certificationBadgesVisible、
+  // CRM 更新只帶 contactStatus／adminNote）不會命中任何白名單欄位，因此
+  // 不會觸發——不掛在 schema 的 ON UPDATE CURRENT_TIMESTAMP 上就是為了避免
+  // 這些操作誤觸發（見 drizzle/schema.ts 的欄位註解）。
+  const touchesPublicContent = Object.keys(data).some(key => PUBLIC_CONTENT_FACTORY_FIELDS.has(key as keyof InsertFactory));
+  if (touchesPublicContent) {
+    (normalized as any).publicContentUpdatedAt = new Date();
   }
 
   // Drizzle 的 .set({}) 會直接丟「No values to set」——呼叫端（例如
@@ -781,6 +827,7 @@ export async function createProduct(data: { factoryId: number; name: string; cat
   const db = await getDb();
   if (!db) throw new Error("DB not available");
   const result = await db.insert(products).values(data);
+  await touchFactoryPublicContentUpdatedAt(data.factoryId);
   return result[0].insertId;
 }
 
@@ -788,12 +835,14 @@ export async function updateProduct(id: number, factoryId: number, data: Partial
   const db = await getDb();
   if (!db) throw new Error("DB not available");
   await db.update(products).set(data).where(and(eq(products.id, id), eq(products.factoryId, factoryId)));
+  await touchFactoryPublicContentUpdatedAt(factoryId);
 }
 
 export async function deleteProduct(id: number, factoryId: number) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
   await db.delete(products).where(and(eq(products.id, id), eq(products.factoryId, factoryId)));
+  await touchFactoryPublicContentUpdatedAt(factoryId);
 }
 
 export async function getProductsByFactoryId(factoryId: number) {
@@ -2298,6 +2347,7 @@ export async function addFactoryPhoto(factoryId: number, url: string, caption?: 
   if (existing.length >= 20) throw new Error("照片集最多 20 張");
   const sortOrder = existing.length;
   const result = await db.insert(factoryPhotos).values({ factoryId, url, caption, sortOrder, crop: crop ?? null });
+  await touchFactoryPublicContentUpdatedAt(factoryId);
   return result[0].insertId;
 }
 
@@ -2305,12 +2355,14 @@ export async function deleteFactoryPhoto(id: number, factoryId: number) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
   await db.delete(factoryPhotos).where(and(eq(factoryPhotos.id, id), eq(factoryPhotos.factoryId, factoryId)));
+  await touchFactoryPublicContentUpdatedAt(factoryId);
 }
 
 export async function updateFactoryPhotoCaption(id: number, factoryId: number, caption: string) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
   await db.update(factoryPhotos).set({ caption }).where(and(eq(factoryPhotos.id, id), eq(factoryPhotos.factoryId, factoryId)));
+  await touchFactoryPublicContentUpdatedAt(factoryId);
 }
 
 // 只更新這張相簿照片的顯示範圍中繼資料，不動 url／caption／sortOrder，滿足
@@ -2319,6 +2371,7 @@ export async function updateFactoryPhotoCrop(id: number, factoryId: number, crop
   const db = await getDb();
   if (!db) throw new Error("DB not available");
   await db.update(factoryPhotos).set({ crop }).where(and(eq(factoryPhotos.id, id), eq(factoryPhotos.factoryId, factoryId)));
+  await touchFactoryPublicContentUpdatedAt(factoryId);
 }
 
 // ===== 產品分類 =====
@@ -6889,6 +6942,18 @@ export async function approveRevisionAtomic(revisionId: number, adminId: number)
           setValues.push(val ?? null);
         }
       }
+    }
+
+    // 公開頁「資料最後更新時間」：approved（已公開上線）工廠的基本資料只能
+    // 透過這個修改申請流程變更（見 factory.update 對 approved 工廠的
+    // status-based routing 阻擋），所以這裡是「已公開工廠的公開內容真的
+    // 被改了」的實際發生點，跟 updateFactory() 用同一份
+    // PUBLIC_CONTENT_FACTORY_FIELDS 白名單判斷 proposedData 有沒有帶到任何
+    // 公開欄位——certificationBadges／certificationEvidence 不算在內（見
+    // 該常數定義處的排除理由）。
+    const touchesPublicContent = Object.keys(proposed).some(field => PUBLIC_CONTENT_FACTORY_FIELDS.has(field as keyof InsertFactory));
+    if (touchesPublicContent) {
+      setClauses.push("`publicContentUpdatedAt` = NOW()");
     }
 
     if (setClauses.length > 0) {

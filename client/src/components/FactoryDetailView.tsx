@@ -15,6 +15,7 @@ import { sortBadgeIds, CERTIFICATION_BADGE_MAP } from "@shared/badges";
 import { BadgeIcon } from "@/components/badges/BadgeIcon";
 import { CroppedImage } from "@/components/CroppedImage";
 import type { ImageCropData } from "@shared/imageCrop";
+import { formatPublicContentUpdatedAt } from "@/lib/factoryDates";
 
 function normalizeDescription(text: string): string {
   return text.replace(/\n{3,}/g, "\n\n");
@@ -122,6 +123,8 @@ export interface FactoryDetailViewFactory {
    *  summarizeCertificationEvidenceForOwner）——公開頁與預覽一律讀這個欄位，
    *  不會、也不該讀到擁有但隱藏、或待審中的徽章。 */
   certificationBadgesVisible?: string[] | null;
+  /** 公開頁「資料最後更新時間」，見 client/src/lib/factoryDates.ts。 */
+  publicContentUpdatedAt?: Date | string | null;
   products: any[];
 }
 
@@ -362,6 +365,18 @@ export function FactoryDetailView({
                   {normalizeDescription(factory.description)}
                 </p>
               )}
+              {/* 低調的資料可信度標示：只到「日」為止的固定日期，不用相對時間
+                  （見 client/src/lib/factoryDates.ts 說明），不搶主要 CTA 或
+                  工廠名稱視覺焦點。文案用「維護」不用「更新」——
+                  publicContentUpdatedAt 代表工廠近期主動維護公開資料，不要求
+                  這次送出的內容一定跟先前不同（見 server/db.ts 的
+                  PUBLIC_CONTENT_FACTORY_FIELDS 說明）。 */}
+              {(() => {
+                const updatedText = formatPublicContentUpdatedAt(factory.publicContentUpdatedAt);
+                return updatedText ? (
+                  <p className="mt-1.5 text-xs text-muted-foreground">資料最近維護：{updatedText}</p>
+                ) : null;
+              })()}
             </div>
           </div>
 
