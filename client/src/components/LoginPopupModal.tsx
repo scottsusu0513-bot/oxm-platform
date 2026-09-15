@@ -6,11 +6,41 @@ import { useAuth } from "@/_core/hooks/useAuth";
 
 const MAX_ITEMS = 5;
 
+// 訪客版「今天是否已自動顯示過」記錄——訪客沒有 session，後端
+// getLoginPopupsToShowForGuest() 不做任何持久化（每次呼叫都直接回傳目前
+// 啟用中的消息），所以「每個本地日曆日最多自動顯示一次」只能由前端這個
+// key 自己記錄，值是 YYYY-MM-DD（本地時間，見 getLocalDateKey()）。
+// 不可用 toISOString().slice(0, 10)：那是 UTC 日期，台灣時間每天 00:00–08:00
+// 會被判定成前一天，導致跨日時間點算錯。
+const GUEST_POPUP_LS_KEY = "oxm_home_popup_last_shown_date";
+
+function getLocalDateKey(d: Date = new Date()): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function hasGuestSeenToday(): boolean {
+  try {
+    return localStorage.getItem(GUEST_POPUP_LS_KEY) === getLocalDateKey();
+  } catch {
+    return false;
+  }
+}
+
+function markGuestSeenToday() {
+  try {
+    localStorage.setItem(GUEST_POPUP_LS_KEY, getLocalDateKey());
+  } catch {}
+}
+
 // 登入通知面板：最多同時呈現 5 則啟用中的登入彈窗消息（既有「平台消息」公告
 // 的登入曝光入口，不是獨立公告系統）。未登入訪客與已登入會員共用同一支
 // toShow query，後端依 session 是否存在分流——訪客每次進首頁都可能再看到
-// （沒有「今天看過」這個狀態、也不會建立任何觀看紀錄），會員則維持每個台灣
-// 日曆日只完成顯示一次。
+// 相同的啟用消息（後端不建立任何觀看紀錄），因此訪客版「今天是否已顯示過」
+// 改由上面的 localStorage key 在前端記錄；會員則維持後端每個台灣日曆日只
+// 完成顯示一次（(userId, date) 唯一索引，見 server/db.ts）。
 //
 // 刻意不用 client/src/components/ui/dialog.tsx 共用的 <DialogContent>——那個
 // 元件預設可以點遮罩或按 Esc 關閉，且沒有暴露 overlay 透明度／卡片樣式的客製
@@ -39,9 +69,10 @@ export default function LoginPopupModal() {
   // 呼叫不會出錯或造成重複紀錄；標記的是「今天完成顯示」這件事本身，不是
   // 逐則消息分別已讀，所以哪一則被點擊／自動彈出都只需要呼叫一次。
   //
-  // 未登入訪客沒有 session 可以寫入，且訪客版本本來就允許「每次進首頁都
-  // 可能再看到」，所以訪客一律不呼叫 markViewed，也不會用 cookie／
-  // localStorage 等替代方式記錄「訪客看過」。
+  // 未登入訪客沒有 session 可以寫入 markViewed（那支 mutation 是
+  // protectedProcedure），訪客版「今天是否已顯示過」改由上面的
+  // markGuestSeenToday()／hasGuestSeenToday()（localStorage）處理，與這支
+  // 後端 mutation 無關。
   const markTodayDoneIfAuthenticated = (representativeId: number) => {
     if (isAuthenticated) {
       markViewedMut.mutate({ id: representativeId });
@@ -50,13 +81,21 @@ export default function LoginPopupModal() {
 
   useEffect(() => {
     if (items.length > 0) {
+      // 訪客沒有後端持久化，toShow 每次都可能回傳同一批消息；換頁再回首頁
+      // 會讓這個元件重新 mount、effect 重新從頭跑一次，若不在這裡擋下來，
+      // 就會對訪客重複自動彈出（同一批消息、同一個本地日曆日）。
+      if (!isAuthenticated && hasGuestSeenToday()) return;
+
       setOpen(true);
       // 規格是「今天最多自動顯示一次」，不是「今天最多按一次我知道了」——
       // 一旦這個 effect 判定要自動打開面板，就在同一次流程立刻標記今天已
       // 完成顯示。原本只在按鈕 onClick 裡標記，會導致面板開著時直接切頁、
       // 按瀏覽器返回鍵、或因換頁造成元件 unmount／remount，都會因為「使用者
-      // 從未點過按鈕」而被 toShow 判定成「今天還沒顯示過」，回首頁又跳出
-      // 一次——這裡把寫入時機提前到「實際自動顯示」當下，才符合規格。
+      // 從未點過按鈕」而被判定成「今天還沒顯示過」，回首頁又跳出一次——這裡
+      // 把寫入時機提前到「實際自動顯示」當下，才符合規格。會員寫入後端
+      // （markTodayDoneIfAuthenticated），訪客寫入 localStorage
+      // （markGuestSeenToday）。
+      if (!isAuthenticated) markGuestSeenToday();
       markTodayDoneIfAuthenticated(items[0].id);
     }
     // 只在「這批消息的組成」改變時重新評估要不要開啟／標記，避免同一批
