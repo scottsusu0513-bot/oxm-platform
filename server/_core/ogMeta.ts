@@ -3,6 +3,10 @@ import { BRAND } from "@shared/seo/brand";
 import { toSafeJsonLdString, getBreadcrumbSchema, type JsonLdObject } from "@shared/seo/schema";
 import { resolveRegionIndustry, buildRegionIndustryPageContent } from "@shared/seo/regionIndustryPages";
 import { buildIndustryPageMeta, buildIndustryBreadcrumbJsonLd } from "@shared/seo/industryPages";
+import {
+  resolveSubIndustry, buildSubIndustryPageContent, buildSubIndustryBreadcrumbJsonLd,
+  resolveRegionSubIndustry, buildRegionSubIndustryPageContent, buildRegionSubIndustryBreadcrumbJsonLd,
+} from "@shared/seo/subIndustryPages";
 import { INDUSTRY_SLUGS } from "@shared/constants";
 
 const SITE_BASE_URL = "https://www.oxmmatch.com";
@@ -432,6 +436,107 @@ export async function buildRegionIndustryMeta(regionSlug: string, industrySlug: 
     );
     return { ...baseMeta, noindex: true };
   }
+}
+
+const SUB_INDUSTRY_GENERIC_FALLBACK = {
+  title: `台灣工廠資源媒合｜${SITE_NAME}`,
+  description: "在 OXM 尋找適合您的台灣工廠與工作室資源。",
+  image: DEFAULT_OG_IMAGE,
+};
+
+/**
+ * Builds the meta for a /factories/:subIndustrySlug request（全台子產業，見
+ * shared/constants.ts 的 SubIndustrySearchEntry／任務定案「子產業 SEO 完整
+ * 化」三種頁面狀態，跟 buildRegionIndustryMeta 同一套規則）：
+ * - subIndustrySlug 對不到任何已知子產業 → 真 404 + noindex。
+ * - 合法 slug 但目前查無任何 approved 公開工廠 → 200 + noindex。
+ * - 合法 slug 且至少 1 家 approved 公開工廠 → 200 + index。
+ * DB existence 查詢失敗時 fail-safe 成 noindex（跟 buildRegionIndustryMeta
+ * 同一個理由：不確定時寧可不索引），但仍是合法頁面的 200 + 正確 title。
+ */
+export async function buildSubIndustryMeta(subIndustrySlug: string, pathname: string): Promise<FactoryMeta> {
+  const url = `${SITE_BASE_URL}${pathname}`;
+
+  const resolved = resolveSubIndustry(subIndustrySlug);
+  if (!resolved) {
+    return { ...SUB_INDUSTRY_GENERIC_FALLBACK, url, status: 404, noindex: true };
+  }
+
+  const content = buildSubIndustryPageContent(resolved);
+  const baseMeta = {
+    title: content.title,
+    description: content.description,
+    image: DEFAULT_OG_IMAGE,
+    url: content.canonical,
+    status: 200 as const,
+    jsonLd: buildSubIndustryBreadcrumbJsonLd(resolved),
+  };
+
+  try {
+    // DB 篩選一律用 entry.label（完整原始子產業值），不是 displayName；一定要
+    // 連同 entry.parentIndustry 一起查，「塑膠包裝」同時是塑膠／包裝底下的
+    // 子產業，只查 label 會讓兩個獨立 SEO 頁的 existence 判斷變成同一個結果
+    // （見 server/db.ts hasApprovedFactoryForSubIndustry 的說明）。
+    const hasApproved = await db.hasApprovedFactoryForSubIndustry(resolved.entry.parentIndustry, resolved.entry.label);
+    return { ...baseMeta, noindex: !hasApproved };
+  } catch (err) {
+    console.error(
+      `[ogMeta] buildSubIndustryMeta existence check failed for ${subIndustrySlug}:`,
+      err instanceof Error ? err.message : String(err)
+    );
+    return { ...baseMeta, noindex: true };
+  }
+}
+
+/**
+ * Builds the meta for a /factories/:region/:subIndustrySlug request（地區 ×
+ * 子產業），規則同 buildSubIndustryMeta，只是 existence 查詢多帶 region 條件。
+ */
+export async function buildRegionSubIndustryMeta(regionSlug: string, subIndustrySlug: string, pathname: string): Promise<FactoryMeta> {
+  const url = `${SITE_BASE_URL}${pathname}`;
+
+  const resolved = resolveRegionSubIndustry(regionSlug, subIndustrySlug);
+  if (!resolved) {
+    return { ...SUB_INDUSTRY_GENERIC_FALLBACK, url, status: 404, noindex: true };
+  }
+
+  const content = buildRegionSubIndustryPageContent(resolved);
+  const baseMeta = {
+    title: content.title,
+    description: content.description,
+    image: DEFAULT_OG_IMAGE,
+    url: content.canonical,
+    status: 200 as const,
+    jsonLd: buildRegionSubIndustryBreadcrumbJsonLd(resolved),
+  };
+
+  try {
+    const hasApproved = await db.hasApprovedFactoryForRegionSubIndustry(resolved.regionName, resolved.entry.parentIndustry, resolved.entry.label);
+    return { ...baseMeta, noindex: !hasApproved };
+  } catch (err) {
+    console.error(
+      `[ogMeta] buildRegionSubIndustryMeta existence check failed for ${regionSlug}/${subIndustrySlug}:`,
+      err instanceof Error ? err.message : String(err)
+    );
+    return { ...baseMeta, noindex: true };
+  }
+}
+
+/**
+ * /factories/:region/:second 的統一 dispatcher：第二段究竟是主產業 slug
+ * 還是子產業 slug 不能靠 path shape 判斷（網址結構完全相同），這裡是
+ * server 端唯一的判斷入口，跟 client 端
+ * shared/seo/factoriesPathResolver.ts 的 resolveFactoriesTwoSegment 用同一個
+ * 「先試主產業、查不到再試子產業」順序，避免 server／client 判斷結果不一致。
+ * 主產業命中時直接呼叫既有 buildRegionIndustryMeta（完全不重新實作），保證
+ * 現有 22×13 種主產業 URL 的輸出跟這輪修改前逐位元組相同。
+ */
+export async function buildFactoriesTwoSegmentMeta(regionSlug: string, secondSlug: string, pathname: string): Promise<FactoryMeta> {
+  const industryResolved = resolveRegionIndustry(regionSlug, secondSlug);
+  if (industryResolved) {
+    return buildRegionIndustryMeta(regionSlug, secondSlug, pathname);
+  }
+  return buildRegionSubIndustryMeta(regionSlug, secondSlug, pathname);
 }
 
 /**

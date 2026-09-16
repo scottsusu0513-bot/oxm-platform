@@ -5,11 +5,13 @@ import { nanoid } from "nanoid";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import viteConfig from "../../vite.config";
-import { buildFactoryMeta, buildNewsMeta, buildRegionIndustryMeta, buildIndustryMeta, injectMetaIntoHtml, parseFactoryPath, parseNewsPath, stripQueryString, extractQueryString, DEFAULT_OG_IMAGE } from "./ogMeta";
+import { buildFactoryMeta, buildNewsMeta, buildRegionIndustryMeta, buildIndustryMeta, buildSubIndustryMeta, buildFactoriesTwoSegmentMeta, injectMetaIntoHtml, parseFactoryPath, parseNewsPath, stripQueryString, extractQueryString, DEFAULT_OG_IMAGE } from "./ogMeta";
 import { injectPublicPageSeo } from "./publicPageMeta";
 import { injectPrerenderedBody, injectDynamicSemanticBody } from "./prerenderedBody";
 import { parseIndustryPath, resolveLegacyIndustrySlugRedirect } from "@shared/seo/industryPages";
 import { parseRegionIndustryPath, resolveRegionIndustry, buildRegionIndustryPageContent } from "@shared/seo/regionIndustryPages";
+import { parseSubIndustryPath, resolveSubIndustry, buildSubIndustryPageContent, resolveRegionSubIndustry, buildRegionSubIndustryPageContent } from "@shared/seo/subIndustryPages";
+import { resolveFactoriesTwoSegment } from "@shared/seo/factoriesPathResolver";
 import { buildSearchPageMeta } from "@shared/seo/searchPage";
 import { parsePageParam } from "@shared/industryPagination";
 
@@ -116,24 +118,46 @@ export async function setupVite(app: Express, server: Server) {
         statusCode = newsMeta.status;
         page = injectMetaIntoHtml(page, newsMeta);
       } else if (parseRegionIndustryPath(pathname)) {
-        // /factories/:region/:industry：地區 × 主產業 SEO Landing Page。
-        // DB-backed（是否至少 1 家 approved 公開工廠），與工廠頁／消息頁共用
-        // 同一套 marker-based 注入函式；無效 region／industry slug 一律真
-        // 404，合法但目前 0 筆結果一律 200+noindex（不是 404，見任務定案
-        // 「三種頁面狀態」）。額外把固定 H1＋intro 語意殼動態注入
-        // <div id="root">——這條路由是 22×13＝286 種組合，不適合比照
-        // /search／/about 那樣為每個組合各自跑一支 build-time prerender
-        // script，改成 request-time 直接算字串注入（純字串處理，不執行
-        // renderToString）。
-        const { regionSlug, industrySlug } = parseRegionIndustryPath(pathname)!;
-        const regionIndustryMeta = await buildRegionIndustryMeta(regionSlug, industrySlug, pathname);
-        statusCode = regionIndustryMeta.status;
-        page = injectMetaIntoHtml(page, regionIndustryMeta);
-        if (regionIndustryMeta.status === 200) {
-          const resolved = resolveRegionIndustry(regionSlug, industrySlug);
-          if (resolved) {
-            const content = buildRegionIndustryPageContent(resolved);
+        // /factories/:region/:second：第二段可能是主產業 slug（既有）或子
+        // 產業 slug（新增），網址結構完全相同、不能靠 path shape 判斷，統一
+        // 交給 resolveFactoriesTwoSegment 決定性判斷（見
+        // shared/seo/factoriesPathResolver.ts）。主產業命中時
+        // buildFactoriesTwoSegmentMeta 內部直接呼叫既有 buildRegionIndustryMeta，
+        // 輸出跟這輪修改前逐位元組相同；子產業命中時走新的
+        // buildRegionSubIndustryMeta，兩者都是 DB-backed（是否至少 1 家
+        // approved 公開工廠），與工廠頁／消息頁共用同一套 marker-based 注入
+        // 函式；無效 region／第二段 slug 一律真 404，合法但目前 0 筆結果一律
+        // 200+noindex（不是 404，見任務定案「三種頁面狀態」）。額外把固定
+        // H1＋intro 語意殼動態注入 <div id="root">（request-time 直接算字串
+        // 注入，不執行 renderToString，理由同既有主產業頁）。
+        const { regionSlug, industrySlug: secondSlug } = parseRegionIndustryPath(pathname)!;
+        const factoriesMeta = await buildFactoriesTwoSegmentMeta(regionSlug, secondSlug, pathname);
+        statusCode = factoriesMeta.status;
+        page = injectMetaIntoHtml(page, factoriesMeta);
+        if (factoriesMeta.status === 200) {
+          const twoSegment = resolveFactoriesTwoSegment(regionSlug, secondSlug);
+          if (twoSegment?.kind === "industry") {
+            const content = buildRegionIndustryPageContent(twoSegment.resolved);
             const bodyPage = injectDynamicSemanticBody(page, content.h1, content.intro, "region-industry");
+            if (bodyPage !== null) page = bodyPage;
+          } else if (twoSegment?.kind === "subIndustry") {
+            const content = buildRegionSubIndustryPageContent(twoSegment.resolved);
+            const bodyPage = injectDynamicSemanticBody(page, content.h1, content.intro, "region-sub-industry");
+            if (bodyPage !== null) page = bodyPage;
+          }
+        }
+      } else if (parseSubIndustryPath(pathname)) {
+        // /factories/:subIndustrySlug：全台子產業 SEO Landing Page，規則同上，
+        // 差別只是不含地區維度。
+        const { subIndustrySlug } = parseSubIndustryPath(pathname)!;
+        const subIndustryMeta = await buildSubIndustryMeta(subIndustrySlug, pathname);
+        statusCode = subIndustryMeta.status;
+        page = injectMetaIntoHtml(page, subIndustryMeta);
+        if (subIndustryMeta.status === 200) {
+          const resolved = resolveSubIndustry(subIndustrySlug);
+          if (resolved) {
+            const content = buildSubIndustryPageContent(resolved);
+            const bodyPage = injectDynamicSemanticBody(page, content.h1, content.intro, "sub-industry");
             if (bodyPage !== null) page = bodyPage;
           }
         }
@@ -323,13 +347,19 @@ export function serveStatic(app: Express) {
     if (regionIndustryPath) {
       try {
         const template = await getCachedTemplate();
-        const meta = await buildRegionIndustryMeta(regionIndustryPath.regionSlug, regionIndustryPath.industrySlug, pathname);
+        // 第二段是主產業還是子產業 slug 不能靠 path shape 判斷，見上方
+        // setupVite() 內同一段邏輯的說明與 shared/seo/factoriesPathResolver.ts。
+        const meta = await buildFactoriesTwoSegmentMeta(regionIndustryPath.regionSlug, regionIndustryPath.industrySlug, pathname);
         let page = injectMetaIntoHtml(template, meta);
         if (meta.status === 200) {
-          const resolved = resolveRegionIndustry(regionIndustryPath.regionSlug, regionIndustryPath.industrySlug);
-          if (resolved) {
-            const content = buildRegionIndustryPageContent(resolved);
+          const twoSegment = resolveFactoriesTwoSegment(regionIndustryPath.regionSlug, regionIndustryPath.industrySlug);
+          if (twoSegment?.kind === "industry") {
+            const content = buildRegionIndustryPageContent(twoSegment.resolved);
             const bodyPage = injectDynamicSemanticBody(page, content.h1, content.intro, "region-industry");
+            if (bodyPage !== null) page = bodyPage;
+          } else if (twoSegment?.kind === "subIndustry") {
+            const content = buildRegionSubIndustryPageContent(twoSegment.resolved);
+            const bodyPage = injectDynamicSemanticBody(page, content.h1, content.intro, "region-sub-industry");
             if (bodyPage !== null) page = bodyPage;
           }
         }
@@ -337,6 +367,33 @@ export function serveStatic(app: Express) {
       } catch (err) {
         console.error(
           "[ogMeta] serveStatic region-industry meta injection failed:",
+          err instanceof Error ? err.message : String(err)
+        );
+        res.sendFile(indexPath);
+      }
+      return;
+    }
+
+    // /factories/:subIndustrySlug：全台子產業 SEO Landing Page，規則同地區 ×
+    // 主產業／子產業頁，差別只是不含地區維度。
+    const subIndustryPath = parseSubIndustryPath(pathname);
+    if (subIndustryPath) {
+      try {
+        const template = await getCachedTemplate();
+        const meta = await buildSubIndustryMeta(subIndustryPath.subIndustrySlug, pathname);
+        let page = injectMetaIntoHtml(template, meta);
+        if (meta.status === 200) {
+          const resolved = resolveSubIndustry(subIndustryPath.subIndustrySlug);
+          if (resolved) {
+            const content = buildSubIndustryPageContent(resolved);
+            const bodyPage = injectDynamicSemanticBody(page, content.h1, content.intro, "sub-industry");
+            if (bodyPage !== null) page = bodyPage;
+          }
+        }
+        res.status(meta.status).set({ "Content-Type": "text/html" }).end(page);
+      } catch (err) {
+        console.error(
+          "[ogMeta] serveStatic sub-industry meta injection failed:",
           err instanceof Error ? err.message : String(err)
         );
         res.sendFile(indexPath);

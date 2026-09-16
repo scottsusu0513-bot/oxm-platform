@@ -288,6 +288,156 @@ export const PHASE1_SUB_INDUSTRY_PAGES = Object.keys(SUB_INDUSTRY_SLUG_TO_NAME).
   return { industrySlug: key.slice(0, idx), subSlug: key.slice(idx + 1) };
 });
 
+// ===== 子產業「搜尋」SEO Slug 對照表（/factories/:subIndustrySlug 與
+// /factories/:regionSlug/:subIndustrySlug，見「子產業 SEO 完整化」任務定案）=====
+//
+// 這是跟上面 SUB_INDUSTRY_SLUG_TO_NAME（Phase 1，服務 /industry/:slug/:sub
+// 傳產圖書館長文頁、只收 13 筆代表性子產業、key 用 "industrySlug/subSlug"
+// 複合字串）完全不同的另一組 canonical slug——本表服務的是以真實 factory
+// 搜尋結果為核心、用工廠數當 indexing 閘門的 /factories/* 搜尋 landing
+// page，涵蓋 INDUSTRIES 底下「除了『其他』」的每一筆 (主產業, 子產業)
+// 組合，slug 是「全台單一扁平命名空間」（URL 只有一段，不像 Phase 1 用
+// industrySlug 當前綴），所以每個 slug 必須在全部子產業之間唯一，也不能跟
+// 13 個主產業 slug（INDUSTRY_SLUGS 的值）撞名——見
+// server/subIndustrySearchSlugs.test.ts 的完整覆蓋率／唯一性測試。
+//
+// 「其他」在全部 13 個主產業底下都存在（逐字重複 13 次），語意上不是一個
+// 可獨立索引的具體子產業，且 DB 篩選（JSON_CONTAINS 比對 factories.subIndustry
+// 這個純字串陣列欄位）無法從資料本身分辨這家工廠選的「其他」屬於哪個主
+// 產業，因此刻意不建 SEO 頁（使用者仍可在 /search 手動篩選到），不在這張表
+// 裡出現。
+//
+// 「塑膠包裝」同時是「塑膠」與「包裝」兩個主產業底下的子產業（資料設計上
+// 本來就允許同名子產業存在於不同主產業，不是資料錯誤）——這裡刻意保留兩筆
+// 各自獨立的 entry、各自唯一的 slug（plastic-packaging／
+// packaging-plastic-materials），不合併、不刪除任何一筆，label 都維持
+// 「塑膠包裝」，靠 parentIndustry／breadcrumb／intro 文字的語境與各自獨立
+// 的 canonical URL 區分，不是靠 slug 語意本身區分（見對話中「parent-aware
+// unique slug」定案）。
+export interface SubIndustrySearchEntry {
+  /** 全台唯一，供 /factories/:slug 與 /factories/:region/:slug 使用。 */
+  slug: string;
+  /** INDUSTRIES[n].sub 的原始中文值，可能有多筆 entry 共用同一個 label（塑膠包裝）——
+   *  DB 篩選（factory.search 的 subIndustry 參數）一律用這個完整值，不可用 displayName。 */
+  label: string;
+  /** SEO title／H1／breadcrumb 用的簡短顯示名稱（人工簡化，拿掉「/」「（）」等
+   *  複合寫法，避免 H1 出現「XX / YY廠」這種不自然的標題），純顯示用途，
+   *  絕不可用於 DB 篩選或 /search 的 subIndustry 參數。 */
+  displayName: string;
+  /** INDUSTRIES[n].name，一定是 INDUSTRY_OPTIONS 裡的合法值。 */
+  parentIndustry: string;
+  /** INDUSTRY_SLUGS[parentIndustry]，一定是既有 13 個主產業 slug 之一。 */
+  parentIndustrySlug: string;
+}
+
+export const SUB_INDUSTRY_SEARCH_ENTRIES: SubIndustrySearchEntry[] = [
+  // 紡織
+  { slug: "fabric-materials", label: "布料 / 面料", displayName: "布料", parentIndustry: "紡織", parentIndustrySlug: "textile" },
+  { slug: "apparel-manufacturing", label: "服飾 / 成衣", displayName: "成衣", parentIndustry: "紡織", parentIndustrySlug: "textile" },
+  { slug: "webbing-yarn", label: "織帶 / 線材", displayName: "織帶", parentIndustry: "紡織", parentIndustrySlug: "textile" },
+  { slug: "towel-home-textiles", label: "毛巾 / 家用織品", displayName: "家用織品", parentIndustry: "紡織", parentIndustrySlug: "textile" },
+  { slug: "functional-textiles", label: "功能性紡織品", displayName: "功能性紡織品", parentIndustry: "紡織", parentIndustrySlug: "textile" },
+  // 金屬加工
+  { slug: "cnc-machining", label: "CNC加工 / 精密加工", displayName: "CNC加工", parentIndustry: "金屬加工", parentIndustrySlug: "metal-processing" },
+  { slug: "sheet-metal", label: "鈑金加工", displayName: "鈑金加工", parentIndustry: "金屬加工", parentIndustrySlug: "metal-processing" },
+  { slug: "welding-assembly", label: "焊接 / 組裝", displayName: "焊接組裝", parentIndustry: "金屬加工", parentIndustrySlug: "metal-processing" },
+  { slug: "mold-making", label: "模具製造", displayName: "模具", parentIndustry: "金屬加工", parentIndustrySlug: "metal-processing" },
+  { slug: "metal-craft-design", label: "金工飾品 / 金屬設計", displayName: "金工飾品", parentIndustry: "金屬加工", parentIndustrySlug: "metal-processing" },
+  { slug: "metal-materials", label: "金屬原料", displayName: "金屬原料", parentIndustry: "金屬加工", parentIndustrySlug: "metal-processing" },
+  // 電子零件
+  { slug: "pcb", label: "PCB / 電路板", displayName: "PCB", parentIndustry: "電子零件", parentIndustrySlug: "electronics" },
+  { slug: "smt-assembly", label: "電子組裝 / SMT", displayName: "SMT電子組裝", parentIndustry: "電子零件", parentIndustrySlug: "electronics" },
+  { slug: "wire-harness-connectors", label: "線束 / 連接器", displayName: "線束連接器", parentIndustry: "電子零件", parentIndustrySlug: "electronics" },
+  { slug: "sensors-modules", label: "感測器 / 模組", displayName: "感測器模組", parentIndustry: "電子零件", parentIndustrySlug: "electronics" },
+  { slug: "semiconductor-packaging", label: "半導體封裝", displayName: "半導體封裝", parentIndustry: "電子零件", parentIndustrySlug: "electronics" },
+  { slug: "lighting-modules", label: "照明模組 / 工業照明", displayName: "工業照明", parentIndustry: "電子零件", parentIndustrySlug: "electronics" },
+  // 塑膠
+  { slug: "plastic-injection", label: "塑膠外殼 / 零件", displayName: "塑膠外殼", parentIndustry: "塑膠", parentIndustrySlug: "plastic" },
+  { slug: "plastic-containers-bottles", label: "塑膠容器 / 瓶罐", displayName: "塑膠容器", parentIndustry: "塑膠", parentIndustrySlug: "plastic" },
+  { slug: "plastic-pipes-sheets", label: "塑膠管材 / 板材", displayName: "塑膠管材", parentIndustry: "塑膠", parentIndustrySlug: "plastic" },
+  { slug: "plastic-packaging", label: "塑膠包裝", displayName: "塑膠包裝", parentIndustry: "塑膠", parentIndustrySlug: "plastic" },
+  { slug: "foam-plastics", label: "發泡塑膠", displayName: "發泡塑膠", parentIndustry: "塑膠", parentIndustrySlug: "plastic" },
+  { slug: "custom-plastic-products", label: "客製塑膠製品", displayName: "客製塑膠", parentIndustry: "塑膠", parentIndustrySlug: "plastic" },
+  // 橡膠 / 矽膠
+  { slug: "rubber-silicone-seals", label: "橡膠 / 矽膠密封件", displayName: "橡膠矽膠密封件", parentIndustry: "橡膠 / 矽膠", parentIndustrySlug: "rubber-silicone" },
+  { slug: "industrial-rubber-silicone", label: "工業橡膠 / 矽膠製品", displayName: "工業橡膠矽膠", parentIndustry: "橡膠 / 矽膠", parentIndustrySlug: "rubber-silicone" },
+  { slug: "pu-products", label: "PU製品（聚氨酯）", displayName: "PU製品", parentIndustry: "橡膠 / 矽膠", parentIndustrySlug: "rubber-silicone" },
+  { slug: "food-medical-silicone", label: "食品 / 醫療級矽膠", displayName: "食品醫療級矽膠", parentIndustry: "橡膠 / 矽膠", parentIndustrySlug: "rubber-silicone" },
+  { slug: "lsr-silicone", label: "高精密矽膠（LSR）", displayName: "LSR矽膠", parentIndustry: "橡膠 / 矽膠", parentIndustrySlug: "rubber-silicone" },
+  { slug: "custom-rubber-silicone", label: "客製橡膠 / 矽膠製品", displayName: "客製橡膠矽膠", parentIndustry: "橡膠 / 矽膠", parentIndustrySlug: "rubber-silicone" },
+  // 木工
+  { slug: "furniture-making", label: "家具製作", displayName: "家具", parentIndustry: "木工", parentIndustrySlug: "woodworking" },
+  { slug: "wood-products-crafts", label: "木製品 / 工藝品", displayName: "木製品", parentIndustry: "木工", parentIndustrySlug: "woodworking" },
+  { slug: "building-decor-materials", label: "建材 / 裝潢材料", displayName: "建材裝潢", parentIndustry: "木工", parentIndustrySlug: "woodworking" },
+  { slug: "bamboo-products", label: "竹製品", displayName: "竹製品", parentIndustry: "木工", parentIndustrySlug: "woodworking" },
+  // 包裝
+  { slug: "paper-boxes-bags", label: "紙盒 / 紙袋", displayName: "紙盒紙袋", parentIndustry: "包裝", parentIndustrySlug: "packaging" },
+  { slug: "packaging-plastic-materials", label: "塑膠包裝", displayName: "塑膠包裝", parentIndustry: "包裝", parentIndustrySlug: "packaging" },
+  { slug: "eco-packaging", label: "環保包裝", displayName: "環保包裝", parentIndustry: "包裝", parentIndustrySlug: "packaging" },
+  { slug: "gift-specialty-packaging", label: "禮盒 / 特殊包裝", displayName: "禮盒包裝", parentIndustry: "包裝", parentIndustrySlug: "packaging" },
+  { slug: "protective-packaging", label: "緩衝包材", displayName: "緩衝包材", parentIndustry: "包裝", parentIndustrySlug: "packaging" },
+  // 食品
+  { slug: "bakery-pastry", label: "烘焙 / 糕點", displayName: "烘焙糕點", parentIndustry: "食品", parentIndustrySlug: "food" },
+  { slug: "beverage-oem", label: "飲料 / 飲品", displayName: "飲料", parentIndustry: "食品", parentIndustrySlug: "food" },
+  { slug: "frozen-food", label: "冷凍食品", displayName: "冷凍食品", parentIndustry: "食品", parentIndustrySlug: "food" },
+  { slug: "snacks", label: "零食 / 點心", displayName: "零食點心", parentIndustry: "食品", parentIndustrySlug: "food" },
+  { slug: "seasonings-sauces", label: "調味料 / 醬料", displayName: "調味料", parentIndustry: "食品", parentIndustrySlug: "food" },
+  // 化工製造
+  { slug: "cleaning-products", label: "清潔用品", displayName: "清潔用品", parentIndustry: "化工製造", parentIndustrySlug: "chemical-manufacturing" },
+  { slug: "coatings-adhesives", label: "塗料 / 黏著劑", displayName: "塗料黏著劑", parentIndustry: "化工製造", parentIndustrySlug: "chemical-manufacturing" },
+  { slug: "cosmetic-odm", label: "保養品 / 化妝品原料", displayName: "保養品化妝品", parentIndustry: "化工製造", parentIndustrySlug: "chemical-manufacturing" },
+  { slug: "fragrance-essential-oils", label: "香氛 / 精油", displayName: "香氛精油", parentIndustry: "化工製造", parentIndustrySlug: "chemical-manufacturing" },
+  { slug: "industrial-chemicals", label: "工業化學品", displayName: "工業化學品", parentIndustry: "化工製造", parentIndustrySlug: "chemical-manufacturing" },
+  // 生活用品
+  { slug: "home-goods", label: "家居用品", displayName: "家居用品", parentIndustry: "生活用品", parentIndustrySlug: "consumer-goods" },
+  { slug: "lighting-fixtures", label: "照明燈具", displayName: "照明燈具", parentIndustry: "生活用品", parentIndustrySlug: "consumer-goods" },
+  { slug: "stationery-office-supplies", label: "文具 / 辦公用品", displayName: "文具辦公用品", parentIndustry: "生活用品", parentIndustrySlug: "consumer-goods" },
+  { slug: "outdoor-sports-goods", label: "戶外 / 運動用品", displayName: "戶外運動用品", parentIndustry: "生活用品", parentIndustrySlug: "consumer-goods" },
+  { slug: "pet-supplies", label: "寵物用品", displayName: "寵物用品", parentIndustry: "生活用品", parentIndustrySlug: "consumer-goods" },
+  { slug: "baby-products", label: "嬰幼兒用品", displayName: "嬰幼兒用品", parentIndustry: "生活用品", parentIndustrySlug: "consumer-goods" },
+  // 印刷
+  { slug: "large-format-printing", label: "展場 / 大圖輸出（立牌、背板、布條）", displayName: "大圖輸出", parentIndustry: "印刷", parentIndustrySlug: "printing" },
+  { slug: "sticker-label", label: "貼紙 / 標籤（商品貼紙、LOGO貼）", displayName: "貼紙標籤", parentIndustry: "印刷", parentIndustrySlug: "printing" },
+  { slug: "packaging-print", label: "包裝印刷（彩盒、紙盒、包裝袋）", displayName: "包裝印刷", parentIndustry: "印刷", parentIndustrySlug: "printing" },
+  { slug: "general-printing", label: "一般印刷（名片、DM、型錄）", displayName: "一般印刷", parentIndustry: "印刷", parentIndustrySlug: "printing" },
+  { slug: "custom-merchandise-printing", label: "商品周邊印刷（客製商品、品牌周邊、布料印刷）", displayName: "商品周邊印刷", parentIndustry: "印刷", parentIndustrySlug: "printing" },
+  { slug: "professional-printing-technology", label: "專業印刷技術（平版 / 數位 / 網版）", displayName: "專業印刷", parentIndustry: "印刷", parentIndustrySlug: "printing" },
+  // 工業設備／機械
+  { slug: "industrial-machinery-equipment", label: "工業機械設備", displayName: "工業機械設備", parentIndustry: "工業設備／機械", parentIndustrySlug: "industrial-machinery" },
+  { slug: "automation-production-line-equipment", label: "自動化／產線設備", displayName: "自動化產線設備", parentIndustry: "工業設備／機械", parentIndustrySlug: "industrial-machinery" },
+  { slug: "industry-specific-machinery", label: "產業專用機械", displayName: "產業專用機械", parentIndustry: "工業設備／機械", parentIndustrySlug: "industrial-machinery" },
+  { slug: "inspection-measurement-equipment", label: "檢測／量測設備", displayName: "檢測量測設備", parentIndustry: "工業設備／機械", parentIndustrySlug: "industrial-machinery" },
+  { slug: "machinery-parts-maintenance", label: "機械零件／維修保養", displayName: "機械零件維修", parentIndustry: "工業設備／機械", parentIndustrySlug: "industrial-machinery" },
+  // 永續材料
+  { slug: "bioplastics", label: "生質塑膠", displayName: "生質塑膠", parentIndustry: "永續材料", parentIndustrySlug: "sustainable-materials" },
+  { slug: "starch-based-materials", label: "全澱粉基材料", displayName: "全澱粉基材料", parentIndustry: "永續材料", parentIndustrySlug: "sustainable-materials" },
+  { slug: "biodegradable-materials", label: "生物可分解材料", displayName: "生物可分解材料", parentIndustry: "永續材料", parentIndustrySlug: "sustainable-materials" },
+  { slug: "recycled-materials", label: "再生材料", displayName: "再生材料", parentIndustry: "永續材料", parentIndustrySlug: "sustainable-materials" },
+  { slug: "natural-fiber-materials", label: "天然纖維材料", displayName: "天然纖維材料", parentIndustry: "永續材料", parentIndustrySlug: "sustainable-materials" },
+  { slug: "biocomposite-materials", label: "生質複合材料", displayName: "生質複合材料", parentIndustry: "永續材料", parentIndustrySlug: "sustainable-materials" },
+  { slug: "compostable-materials", label: "可堆肥材料", displayName: "可堆肥材料", parentIndustry: "永續材料", parentIndustrySlug: "sustainable-materials" },
+];
+
+/** slug → entry 唯一反查表，是 /factories/:slug 與 /factories/:region/:slug
+ *  判斷「這段 slug 是不是合法子產業」的唯一依據，不得在其他地方另建一份。 */
+export const SUB_INDUSTRY_SEARCH_SLUG_TO_ENTRY: Record<string, SubIndustrySearchEntry> =
+  Object.fromEntries(SUB_INDUSTRY_SEARCH_ENTRIES.map(e => [e.slug, e]));
+
+/**
+ * (parentIndustry, label) → entry 反查表，key 是 `${parentIndustry}|||${label}`。
+ * 「塑膠包裝」同時是「塑膠」與「包裝」底下的子產業（parent-aware
+ * collision，見上方說明），單純用 label 反查會拿到兩筆裡的其中一筆、
+ * 語意不明確，所以查表一定要同時帶 parentIndustry 才能唯一鎖定是哪一筆
+ * entry。sitemap（server/_core/index.ts）用這個把 DB 撈出來的
+ * (industry, subIndustry) 組合對回正確的那一個 slug，existence 查詢
+ * （server/db.ts 的 hasApprovedFactoryForSubIndustry 系列）也用同一組
+ * (industry, subIndustry) 條件，確保「這個 slug 是否至少 1 家 approved
+ * 工廠」的判斷跟這個 slug 實際會顯示的搜尋結果（factory.search 用
+ * industry+subIndustry 兩個條件 AND）完全一致。
+ */
+export const SUB_INDUSTRY_SEARCH_ENTRY_BY_PARENT_AND_LABEL: Record<string, SubIndustrySearchEntry> =
+  Object.fromEntries(SUB_INDUSTRY_SEARCH_ENTRIES.map(e => [`${e.parentIndustry}|||${e.label}`, e]));
+
 // 子產業頁 SEO 內容（Phase 1）
 export const SUB_INDUSTRY_SEO_CONTENT: Record<string, {
   title: string;

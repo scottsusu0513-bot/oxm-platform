@@ -11,9 +11,13 @@ import { setupSecurityHeaders, setupOriginCheck, setupNoIndexRoutes } from "./se
 import { setupGoneRoutes } from "./goneRoutes";
 import { apiLimiter, loginLimiter, uploadLimiter, messageLimiter, submitReviewLimiter, adminLimiter, searchLimiter, reportLimiter } from "./rateLimit";
 import { COOKIE_NAME } from "@shared/const";
-import { INDUSTRY_SLUGS, REGION_SLUGS, PHASE1_SUB_INDUSTRY_PAGES } from "../../shared/constants";
+import { INDUSTRY_SLUGS, REGION_SLUGS, PHASE1_SUB_INDUSTRY_PAGES, SUB_INDUSTRY_SEARCH_ENTRY_BY_PARENT_AND_LABEL } from "../../shared/constants";
 import { escapeXmlText } from "@shared/seo/xml";
-import { getDb, getApprovedFactoriesForSitemap, getApprovedRegionIndustryCombosForSitemap, getPublishedNewsForSitemap, ensureConsultantsSeeded, ensureCertificationServiceCatalogSeeded } from "../db";
+import {
+  getDb, getApprovedFactoriesForSitemap, getApprovedRegionIndustryCombosForSitemap,
+  getApprovedIndustrySubIndustryCombosForSitemap, getApprovedRegionIndustrySubIndustryCombosForSitemap,
+  getPublishedNewsForSitemap, ensureConsultantsSeeded, ensureCertificationServiceCatalogSeeded,
+} from "../db";
 import { ensureUpgradeProgramsSeeded } from "../upgradePrograms";
 import { runCollaborationOrderOverdueEmailCheck } from "../orderOverdueCheck";
 
@@ -230,6 +234,48 @@ async function startServer() {
       }
     } catch {
       // DB 暫時不可用時跳過地區×產業 URL，仍回傳其餘 sitemap 內容
+    }
+
+    // 全台子產業 SEO Landing Page：同樣只加入「目前至少 1 家 approved 公開
+    // 工廠」的 distinct 子產業（見任務定案「子產業 SEO 完整化」）。
+    // getApprovedIndustrySubIndustryCombosForSitemap 是單一查詢（不逐子產業
+    // 各打一次 DB），回傳 (industry, subIndustry) 組合，透過
+    // SUB_INDUSTRY_SEARCH_ENTRY_BY_PARENT_AND_LABEL 對回唯一的 slug——
+    // 「塑膠包裝」這種同名不同 parent 的子產業必須連 industry 一起查表才能
+    // 分辨是哪一個 entry（見 shared/constants.ts 的說明）；對不到任何已知
+    // entry 的組合（資料庫裡的歷史髒資料、或工廠身兼多主產業時產生的
+    // industry×subIndustry 交叉但不是任何一個合法子產業組合）安全 skip，
+    // 不是硬塞進 URL。用 Set 對 slug 去重——同一個 slug 理論上只會對應到
+    // 一組 (industry, subIndustry)，但多一層保險避免未來資料異常時重複。
+    try {
+      const industrySubCombos = await getApprovedIndustrySubIndustryCombosForSitemap();
+      const matchedSlugs = new Set<string>();
+      for (const { industry, subIndustry } of industrySubCombos) {
+        const entry_ = SUB_INDUSTRY_SEARCH_ENTRY_BY_PARENT_AND_LABEL[`${industry}|||${subIndustry}`];
+        if (entry_) matchedSlugs.add(entry_.slug);
+      }
+      for (const slug of Array.from(matchedSlugs)) {
+        urls.push(entry(`${BASE}/factories/${slug}`, "0.6", "weekly"));
+      }
+    } catch {
+      // DB 暫時不可用時跳過全台子產業 URL，仍回傳其餘 sitemap 內容
+    }
+
+    // 地區 × 子產業 SEO Landing Page：理由與查詢策略同上，多一個地區維度。
+    try {
+      const regionIndustrySubCombos = await getApprovedRegionIndustrySubIndustryCombosForSitemap();
+      const matchedRegionSlugPairs = new Set<string>();
+      for (const { region, industry, subIndustry } of regionIndustrySubCombos) {
+        const entry_ = SUB_INDUSTRY_SEARCH_ENTRY_BY_PARENT_AND_LABEL[`${industry}|||${subIndustry}`];
+        const regionSlug = REGION_SLUGS[region];
+        if (!entry_ || !regionSlug) continue;
+        const key = `${regionSlug}|${entry_.slug}`;
+        if (matchedRegionSlugPairs.has(key)) continue;
+        matchedRegionSlugPairs.add(key);
+        urls.push(entry(`${BASE}/factories/${regionSlug}/${entry_.slug}`, "0.5", "weekly"));
+      }
+    } catch {
+      // DB 暫時不可用時跳過地區×子產業 URL，仍回傳其餘 sitemap 內容
     }
 
     // 已審核工廠頁

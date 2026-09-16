@@ -435,6 +435,126 @@ export async function getApprovedRegionIndustryCombosForSitemap(): Promise<{ reg
   return combos;
 }
 
+/**
+ * 「子產業 SEO Landing Page」existence 判斷：全台是否至少有 1 家 approved
+ * 公開工廠「同時」符合 industry（所屬主產業）與 subIndustry 兩個條件——跟
+ * 這個 slug 實際會顯示的搜尋結果（factory.search 用 industry+subIndustry
+ * 兩個獨立條件 AND）完全一致。
+ *
+ * 必須帶 industry，不能只查 subIndustry：「塑膠包裝」同時是「塑膠」與
+ * 「包裝」底下的子產業（parent-aware collision，見
+ * shared/constants.ts 的 SUB_INDUSTRY_SEARCH_ENTRY_BY_PARENT_AND_LABEL
+ * 說明），只查 subIndustry 字串會讓兩個獨立的 SEO 頁（/factories/
+ * plastic-packaging 與 /factories/packaging-plastic-materials）的
+ * existence 判斷變成同一個結果，即使兩者實際的候選工廠集合不同。
+ *
+ * industry 用 JSON_OVERLAPS（跟 searchFactories 的 industry 篩選語意相同），
+ * subIndustry 用 JSON_CONTAINS（跟 searchFactories 的 subIndustry 篩選語意
+ * 相同），approved 條件與 searchFactories／getApprovedFactoriesForSitemap
+ * 完全一致。
+ */
+export async function hasApprovedFactoryForSubIndustry(industry: string, subIndustry: string): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const rows = await db.select({ id: factories.id })
+    .from(factories)
+    .where(and(
+      eq(factories.status, 'approved'),
+      sql`JSON_OVERLAPS(${factories.industry}, ${JSON.stringify([industry])})`,
+      sql`JSON_CONTAINS(${factories.subIndustry}, ${JSON.stringify([subIndustry])})`,
+    ))
+    .limit(1);
+  return rows.length > 0;
+}
+
+/**
+ * 「地區 × 子產業 SEO Landing Page」existence 判斷：region + industry +
+ * subIndustry 三個條件同時符合的 approved 公開工廠是否至少 1 家，理由同
+ * hasApprovedFactoryForSubIndustry。
+ */
+export async function hasApprovedFactoryForRegionSubIndustry(region: string, industry: string, subIndustry: string): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const rows = await db.select({ id: factories.id })
+    .from(factories)
+    .where(and(
+      eq(factories.status, 'approved'),
+      eq(factories.region, region),
+      sql`JSON_OVERLAPS(${factories.industry}, ${JSON.stringify([industry])})`,
+      sql`JSON_CONTAINS(${factories.subIndustry}, ${JSON.stringify([subIndustry])})`,
+    ))
+    .limit(1);
+  return rows.length > 0;
+}
+
+/**
+ * Sitemap 用：目前「有至少 1 家 approved 公開工廠」的 (industry, subIndustry)
+ * distinct 組合（全台，不分地區）。單一查詢（只 SELECT industry／
+ * subIndustry 兩欄），應用層對每一列的 industry[] × subIndustry[] 做巢狀
+ * 攤平＋用 Set 去重——跟 getApprovedRegionIndustryCombosForSitemap 同一種
+ * 效能策略，不逐組合各打一次 DB。
+ *
+ * 刻意回傳 (industry, subIndustry) 而不是單純的 subIndustry 字串清單：
+ * 呼叫端（server/_core/index.ts）需要用
+ * SUB_INDUSTRY_SEARCH_ENTRY_BY_PARENT_AND_LABEL 把組合對回唯一的 slug，
+ * 「塑膠包裝」這種同名不同 parent 的子產業才能各自正確判斷。這裡的巢狀
+ * 攤平是「同一家工廠自己的 industry[] × subIndustry[] 交叉」，不是「所有
+ * 工廠的 industry 值 × 所有工廠的 subIndustry 值」，量級跟工廠數／每家工廠
+ * 選幾個產業別成正比，不是 O(全站 industry 數 × 全站 subIndustry 數)。
+ */
+export async function getApprovedIndustrySubIndustryCombosForSitemap(): Promise<{ industry: string; subIndustry: string }[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.select({ industry: factories.industry, subIndustry: factories.subIndustry })
+    .from(factories)
+    .where(eq(factories.status, 'approved'));
+
+  const seen = new Set<string>();
+  const combos: { industry: string; subIndustry: string }[] = [];
+  for (const row of rows) {
+    const industries = Array.isArray(row.industry) ? (row.industry as string[]) : [];
+    const subIndustries = Array.isArray(row.subIndustry) ? (row.subIndustry as string[]) : [];
+    for (const industry of industries) {
+      for (const sub of subIndustries) {
+        const key = `${industry}|${sub}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        combos.push({ industry, subIndustry: sub });
+      }
+    }
+  }
+  return combos;
+}
+
+/**
+ * Sitemap 用：目前「有至少 1 家 approved 公開工廠」的
+ * (region, industry, subIndustry) distinct 組合。單一查詢，理由同
+ * getApprovedIndustrySubIndustryCombosForSitemap，多一個 region 維度。
+ */
+export async function getApprovedRegionIndustrySubIndustryCombosForSitemap(): Promise<{ region: string; industry: string; subIndustry: string }[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.select({ region: factories.region, industry: factories.industry, subIndustry: factories.subIndustry })
+    .from(factories)
+    .where(eq(factories.status, 'approved'));
+
+  const seen = new Set<string>();
+  const combos: { region: string; industry: string; subIndustry: string }[] = [];
+  for (const row of rows) {
+    const industries = Array.isArray(row.industry) ? (row.industry as string[]) : [];
+    const subIndustries = Array.isArray(row.subIndustry) ? (row.subIndustry as string[]) : [];
+    for (const industry of industries) {
+      for (const sub of subIndustries) {
+        const key = `${row.region}|${industry}|${sub}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        combos.push({ region: row.region, industry, subIndustry: sub });
+      }
+    }
+  }
+  return combos;
+}
+
 export async function getFactoryById(id: number) {
   const db = await getDb();
   if (!db) return undefined;
