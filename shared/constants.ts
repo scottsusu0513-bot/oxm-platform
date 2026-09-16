@@ -335,12 +335,16 @@ export interface SubIndustrySearchEntry {
   // key（entry 本身），不建第二份 slug 對照表。shared/seo/subIndustryPages.ts
   // 的 buildSubIndustryPageContent() 在算 title／description／H1／intro 時，
   // 優先讀這裡的 override，沒有設定就 fallback 沿用既有固定 template——
-  // 目前共 14 個子產業有值：第一批（cnc-machining／sheet-metal／
+  // 目前共 38 個子產業有值：第一批 6 筆（cnc-machining／sheet-metal／
   // smt-assembly／plastic-injection／packaging-print／cosmetic-odm）+
-  // 第二批（apparel-manufacturing／mold-making／metal-materials／
+  // 第二批 8 筆（apparel-manufacturing／mold-making／metal-materials／
   // eco-packaging／beverage-oem／frozen-food／large-format-printing／
-  // sticker-label）。pcb 本輪明確暫緩，其餘 58 個子產業維持 undefined、
-  // 頁面輸出完全不變。
+  // sticker-label）+ 第三批 24 筆（剩餘 58 筆全量審核後，通過 confidence／
+  // cannibalization／doorway 三項把關的子產業，見任務定案「剩餘 Sub-industry
+  // SEO Mapping 全量審核」）。pcb 本輪重新審核後仍無法高信心確定單一
+  // primary，維持 fallback；其餘 34 筆因 confidence 低、split-intent、
+  // cannibalization 風險高或屬 informational intent，同樣維持 fallback。
+  // 其餘（72-38=）34 個子產業維持 undefined，頁面輸出完全不變。
   //
   // 極重要的前台限制（見任務定案「正式站視覺限制」）：primarySeoKeyword／
   // secondaryKeywords 純粹是 SEO 研究資料（判斷 title/H1/description 怎麼
@@ -367,7 +371,15 @@ export interface SubIndustrySearchEntry {
 
 export const SUB_INDUSTRY_SEARCH_ENTRIES: SubIndustrySearchEntry[] = [
   // 紡織
-  { slug: "fabric-materials", label: "布料 / 面料", displayName: "布料", parentIndustry: "紡織", parentIndustrySlug: "textile" },
+  {
+    slug: "fabric-materials", label: "布料 / 面料", displayName: "布料",
+    parentIndustry: "紡織", parentIndustrySlug: "textile",
+    primarySeoKeyword: "布料供應商",
+    secondaryKeywords: ["布料工廠", "布料批發", "面料供應商", "機能布料供應商"],
+    seoTitleOverride: "布料供應商｜台灣布料工廠搜尋與詢價｜OXM",
+    metaDescriptionOverride: "尋找台灣布料供應商？OXM 整理可供應各式布料、面料與機能布料的廠商，可依地區瀏覽相關供應商並直接詢價。",
+    seoIntroOverride: "OXM 整理台灣布料供應商資訊，涵蓋一般布料與面料來源，可依地區瀏覽相關供應商並直接詢價。",
+  },
   {
     slug: "apparel-manufacturing", label: "服飾 / 成衣", displayName: "成衣",
     parentIndustry: "紡織", parentIndustrySlug: "textile",
@@ -379,7 +391,15 @@ export const SUB_INDUSTRY_SEARCH_ENTRIES: SubIndustrySearchEntry[] = [
   },
   { slug: "webbing-yarn", label: "織帶 / 線材", displayName: "織帶", parentIndustry: "紡織", parentIndustrySlug: "textile" },
   { slug: "towel-home-textiles", label: "毛巾 / 家用織品", displayName: "家用織品", parentIndustry: "紡織", parentIndustrySlug: "textile" },
-  { slug: "functional-textiles", label: "功能性紡織品", displayName: "功能性紡織品", parentIndustry: "紡織", parentIndustrySlug: "textile" },
+  {
+    slug: "functional-textiles", label: "功能性紡織品", displayName: "功能性紡織品",
+    parentIndustry: "紡織", parentIndustrySlug: "textile",
+    primarySeoKeyword: "機能布料代工",
+    secondaryKeywords: ["機能性紡織品", "機能布代工", "機能布廠商", "機能布料廠"],
+    seoTitleOverride: "機能布料代工｜台灣機能性紡織品廠商｜OXM",
+    metaDescriptionOverride: "尋找台灣機能布料代工廠？OXM 整理可承接機能性紡織品需求的製造業者，可依地區瀏覽相關廠商並直接詢價。",
+    seoIntroOverride: "OXM 整理台灣機能布料代工廠資訊，涵蓋機能性紡織品生產需求，可依地區瀏覽相關工廠並直接詢價。",
+  },
   // 金屬加工
   {
     slug: "cnc-machining", label: "CNC加工 / 精密加工", displayName: "CNC加工",
@@ -399,7 +419,15 @@ export const SUB_INDUSTRY_SEARCH_ENTRIES: SubIndustrySearchEntry[] = [
     metaDescriptionOverride: "尋找台灣鈑金加工廠？OXM 整理可承接鈑金代工與金屬鈑金製造需求的工廠，可依地區、代工模式、可接小量與可打樣等條件進一步篩選並直接詢價。",
     seoIntroOverride: "鈑金加工是金屬加工底下的子產業，涵蓋鈑金代工與金屬製造需求。OXM 整理台灣相關工廠資訊，可依地區與生產條件篩選，直接送出詢價。",
   },
-  { slug: "welding-assembly", label: "焊接 / 組裝", displayName: "焊接組裝", parentIndustry: "金屬加工", parentIndustrySlug: "metal-processing" },
+  {
+    slug: "welding-assembly", label: "焊接 / 組裝", displayName: "焊接組裝",
+    parentIndustry: "金屬加工", parentIndustrySlug: "metal-processing",
+    primarySeoKeyword: "焊接加工",
+    secondaryKeywords: ["焊接代工", "焊接加工廠", "金屬焊接代工", "焊接廠商"],
+    seoTitleOverride: "焊接加工｜台灣焊接代工廠商搜尋與詢價｜OXM",
+    metaDescriptionOverride: "尋找台灣焊接加工廠？OXM 整理可承接焊接代工、金屬組裝需求的廠商，可依地區查看相關廠商並直接詢價。",
+    seoIntroOverride: "OXM 整理台灣焊接加工廠資訊，涵蓋焊接代工與金屬組裝需求，可依地區瀏覽相關工廠並直接詢價。",
+  },
   {
     slug: "mold-making", label: "模具製造", displayName: "模具",
     parentIndustry: "金屬加工", parentIndustrySlug: "metal-processing",
@@ -430,10 +458,26 @@ export const SUB_INDUSTRY_SEARCH_ENTRIES: SubIndustrySearchEntry[] = [
     metaDescriptionOverride: "尋找台灣 SMT 代工廠？OXM 整理可承接 SMT 貼片、打件與電子組裝需求的工廠，可依地區、代工模式、可接小量與可打樣等條件篩選詢價。",
     seoIntroOverride: "SMT 代工是電子零件底下的子產業，涵蓋貼片與電子組裝服務。OXM 整理台灣相關工廠資訊，可依地區與生產條件篩選，直接送出詢價。",
   },
-  { slug: "wire-harness-connectors", label: "線束 / 連接器", displayName: "線束連接器", parentIndustry: "電子零件", parentIndustrySlug: "electronics" },
+  {
+    slug: "wire-harness-connectors", label: "線束 / 連接器", displayName: "線束連接器",
+    parentIndustry: "電子零件", parentIndustrySlug: "electronics",
+    primarySeoKeyword: "線束加工",
+    secondaryKeywords: ["線束代工", "連接器代工", "線材加工廠", "端子加工"],
+    seoTitleOverride: "線束加工｜台灣連接器代工廠商搜尋與詢價｜OXM",
+    metaDescriptionOverride: "尋找台灣線束加工廠？OXM 整理可承接線束代工、連接器組裝需求的廠商，可依地區查看相關廠商並直接詢價。",
+    seoIntroOverride: "OXM 整理台灣線束加工廠資訊，涵蓋線束代工與連接器組裝需求，可依地區瀏覽相關工廠並直接詢價。",
+  },
   { slug: "sensors-modules", label: "感測器 / 模組", displayName: "感測器模組", parentIndustry: "電子零件", parentIndustrySlug: "electronics" },
   { slug: "semiconductor-packaging", label: "半導體封裝", displayName: "半導體封裝", parentIndustry: "電子零件", parentIndustrySlug: "electronics" },
-  { slug: "lighting-modules", label: "照明模組 / 工業照明", displayName: "工業照明", parentIndustry: "電子零件", parentIndustrySlug: "electronics" },
+  {
+    slug: "lighting-modules", label: "照明模組 / 工業照明", displayName: "工業照明",
+    parentIndustry: "電子零件", parentIndustrySlug: "electronics",
+    primarySeoKeyword: "LED照明代工",
+    secondaryKeywords: ["照明模組代工", "工業照明代工", "LED模組OEM", "照明控制模組"],
+    seoTitleOverride: "LED照明代工｜台灣照明模組廠商搜尋與詢價｜OXM",
+    metaDescriptionOverride: "尋找台灣LED照明代工廠？OXM 整理可承接照明模組、工業照明需求的廠商，可依地區瀏覽相關廠商並直接詢價。",
+    seoIntroOverride: "OXM 整理台灣LED照明代工廠資訊，涵蓋照明模組與工業照明生產需求，可依地區查看相關工廠並直接詢價。",
+  },
   // 塑膠
   {
     slug: "plastic-injection", label: "塑膠外殼 / 零件", displayName: "塑膠外殼",
@@ -444,20 +488,60 @@ export const SUB_INDUSTRY_SEARCH_ENTRIES: SubIndustrySearchEntry[] = [
     metaDescriptionOverride: "尋找台灣塑膠射出代工廠？OXM 整理可承接射出成型、塑膠模具與塑膠製品代工需求的工廠，可依地區、代工模式等條件進一步篩選詢價。",
     seoIntroOverride: "塑膠射出代工是塑膠底下的子產業，涵蓋射出成型與塑膠製品需求。OXM 整理台灣相關工廠資訊，可依地區與生產條件篩選，直接送出詢價。",
   },
-  { slug: "plastic-containers-bottles", label: "塑膠容器 / 瓶罐", displayName: "塑膠容器", parentIndustry: "塑膠", parentIndustrySlug: "plastic" },
-  { slug: "plastic-pipes-sheets", label: "塑膠管材 / 板材", displayName: "塑膠管材", parentIndustry: "塑膠", parentIndustrySlug: "plastic" },
+  {
+    slug: "plastic-containers-bottles", label: "塑膠容器 / 瓶罐", displayName: "塑膠容器",
+    parentIndustry: "塑膠", parentIndustrySlug: "plastic",
+    primarySeoKeyword: "塑膠容器代工",
+    secondaryKeywords: ["塑膠瓶罐代工", "塑膠罐工廠", "塑膠瓶供應商", "吹塑成型代工"],
+    seoTitleOverride: "塑膠容器代工｜台灣塑膠瓶罐廠商搜尋與詢價｜OXM",
+    metaDescriptionOverride: "尋找台灣塑膠容器代工廠？OXM 整理可承接塑膠瓶罐、容器生產需求的廠商，可依地區瀏覽相關廠商並直接詢價。",
+    seoIntroOverride: "OXM 整理台灣塑膠容器代工廠資訊，涵蓋塑膠瓶罐與容器生產需求，可依地區查看相關工廠並直接詢價。",
+  },
+  {
+    slug: "plastic-pipes-sheets", label: "塑膠管材 / 板材", displayName: "塑膠管材",
+    parentIndustry: "塑膠", parentIndustrySlug: "plastic",
+    primarySeoKeyword: "塑膠板材供應商",
+    secondaryKeywords: ["塑膠管材廠商", "塑膠押出加工", "PVC板材供應商", "塑膠押出代工"],
+    seoTitleOverride: "塑膠板材供應商｜台灣塑膠管材廠商搜尋與詢價｜OXM",
+    metaDescriptionOverride: "尋找台灣塑膠板材供應商？OXM 整理可供應塑膠管材、板材與押出加工的廠商，可依地區瀏覽相關供應商並直接詢價。",
+    seoIntroOverride: "OXM 整理台灣塑膠板材與管材供應商資訊，涵蓋押出加工相關廠商，可依地區瀏覽相關供應商並直接詢價。",
+  },
   { slug: "plastic-packaging", label: "塑膠包裝", displayName: "塑膠包裝", parentIndustry: "塑膠", parentIndustrySlug: "plastic" },
   { slug: "foam-plastics", label: "發泡塑膠", displayName: "發泡塑膠", parentIndustry: "塑膠", parentIndustrySlug: "plastic" },
   { slug: "custom-plastic-products", label: "客製塑膠製品", displayName: "客製塑膠", parentIndustry: "塑膠", parentIndustrySlug: "plastic" },
   // 橡膠 / 矽膠
-  { slug: "rubber-silicone-seals", label: "橡膠 / 矽膠密封件", displayName: "橡膠矽膠密封件", parentIndustry: "橡膠 / 矽膠", parentIndustrySlug: "rubber-silicone" },
+  {
+    slug: "rubber-silicone-seals", label: "橡膠 / 矽膠密封件", displayName: "橡膠矽膠密封件",
+    parentIndustry: "橡膠 / 矽膠", parentIndustrySlug: "rubber-silicone",
+    primarySeoKeyword: "橡膠密封件代工",
+    secondaryKeywords: ["矽膠密封件廠商", "O-Ring代工", "密封圈代工", "油封代工"],
+    seoTitleOverride: "橡膠密封件代工｜台灣O-Ring廠商搜尋與詢價｜OXM",
+    metaDescriptionOverride: "尋找台灣橡膠密封件代工廠？OXM 整理可承接O-Ring、密封圈生產需求的廠商，可依地區查看相關廠商並直接詢價。",
+    seoIntroOverride: "OXM 整理台灣橡膠密封件代工廠資訊，涵蓋O-Ring、密封圈生產需求，可依地區瀏覽相關工廠並直接詢價。",
+  },
   { slug: "industrial-rubber-silicone", label: "工業橡膠 / 矽膠製品", displayName: "工業橡膠矽膠", parentIndustry: "橡膠 / 矽膠", parentIndustrySlug: "rubber-silicone" },
-  { slug: "pu-products", label: "PU製品（聚氨酯）", displayName: "PU製品", parentIndustry: "橡膠 / 矽膠", parentIndustrySlug: "rubber-silicone" },
+  {
+    slug: "pu-products", label: "PU製品（聚氨酯）", displayName: "PU製品",
+    parentIndustry: "橡膠 / 矽膠", parentIndustrySlug: "rubber-silicone",
+    primarySeoKeyword: "PU製品代工",
+    secondaryKeywords: ["聚氨酯代工", "PU發泡代工", "PU零件代工", "聚氨酯製品廠"],
+    seoTitleOverride: "PU製品代工｜台灣聚氨酯製品廠商搜尋與詢價｜OXM",
+    metaDescriptionOverride: "尋找台灣PU製品代工廠？OXM 整理可承接聚氨酯、PU發泡製品需求的廠商，可依地區瀏覽相關廠商並直接詢價。",
+    seoIntroOverride: "OXM 整理台灣PU製品代工廠資訊，涵蓋聚氨酯與PU發泡製品需求，可依地區查看相關工廠並直接詢價。",
+  },
   { slug: "food-medical-silicone", label: "食品 / 醫療級矽膠", displayName: "食品醫療級矽膠", parentIndustry: "橡膠 / 矽膠", parentIndustrySlug: "rubber-silicone" },
   { slug: "lsr-silicone", label: "高精密矽膠（LSR）", displayName: "LSR矽膠", parentIndustry: "橡膠 / 矽膠", parentIndustrySlug: "rubber-silicone" },
   { slug: "custom-rubber-silicone", label: "客製橡膠 / 矽膠製品", displayName: "客製橡膠矽膠", parentIndustry: "橡膠 / 矽膠", parentIndustrySlug: "rubber-silicone" },
   // 木工
-  { slug: "furniture-making", label: "家具製作", displayName: "家具", parentIndustry: "木工", parentIndustrySlug: "woodworking" },
+  {
+    slug: "furniture-making", label: "家具製作", displayName: "家具",
+    parentIndustry: "木工", parentIndustrySlug: "woodworking",
+    primarySeoKeyword: "家具代工",
+    secondaryKeywords: ["OEM家具工廠", "家具製造代工", "訂製家具工廠", "家具貼牌代工"],
+    seoTitleOverride: "家具代工｜台灣OEM家具工廠搜尋與詢價｜OXM",
+    metaDescriptionOverride: "尋找台灣家具代工廠？OXM 整理可承接家具OEM、訂製生產需求的工廠，可依地區瀏覽相關廠商並直接詢價。",
+    seoIntroOverride: "OXM 整理台灣家具代工廠資訊，涵蓋家具OEM與訂製生產需求，可依地區查看相關工廠並直接詢價。",
+  },
   { slug: "wood-products-crafts", label: "木製品 / 工藝品", displayName: "木製品", parentIndustry: "木工", parentIndustrySlug: "woodworking" },
   { slug: "building-decor-materials", label: "建材 / 裝潢材料", displayName: "建材裝潢", parentIndustry: "木工", parentIndustrySlug: "woodworking" },
   { slug: "bamboo-products", label: "竹製品", displayName: "竹製品", parentIndustry: "木工", parentIndustrySlug: "woodworking" },
@@ -473,10 +557,34 @@ export const SUB_INDUSTRY_SEARCH_ENTRIES: SubIndustrySearchEntry[] = [
     metaDescriptionOverride: "尋找台灣環保包裝供應商？OXM 整理可供應環保包材、可分解包裝與相關包裝方案的廠商，可依地區瀏覽相關供應商並直接詢價。",
     seoIntroOverride: "OXM 整理台灣環保包裝與包材供應商資訊，涵蓋環保包材、可分解包裝等方案，可依地區瀏覽相關供應商並直接詢價。",
   },
-  { slug: "gift-specialty-packaging", label: "禮盒 / 特殊包裝", displayName: "禮盒包裝", parentIndustry: "包裝", parentIndustrySlug: "packaging" },
-  { slug: "protective-packaging", label: "緩衝包材", displayName: "緩衝包材", parentIndustry: "包裝", parentIndustrySlug: "packaging" },
+  {
+    slug: "gift-specialty-packaging", label: "禮盒 / 特殊包裝", displayName: "禮盒包裝",
+    parentIndustry: "包裝", parentIndustrySlug: "packaging",
+    primarySeoKeyword: "禮盒代工",
+    secondaryKeywords: ["禮盒包裝工廠", "特殊包裝代工", "禮盒設計代工", "精品包裝代工"],
+    seoTitleOverride: "禮盒代工｜台灣禮盒包裝廠商搜尋與詢價｜OXM",
+    metaDescriptionOverride: "尋找台灣禮盒代工廠？OXM 整理可承接禮盒、特殊包裝生產需求的廠商，可依地區查看相關廠商並直接詢價。",
+    seoIntroOverride: "OXM 整理台灣禮盒代工廠資訊，涵蓋禮盒與特殊包裝生產需求，可依地區瀏覽相關工廠並直接詢價。",
+  },
+  {
+    slug: "protective-packaging", label: "緩衝包材", displayName: "緩衝包材",
+    parentIndustry: "包裝", parentIndustrySlug: "packaging",
+    primarySeoKeyword: "緩衝包材廠商",
+    secondaryKeywords: ["緩衝材代工", "氣泡布供應商", "包裝緩衝材", "防震包材"],
+    seoTitleOverride: "緩衝包材廠商｜台灣包裝緩衝材搜尋與詢價｜OXM",
+    metaDescriptionOverride: "尋找台灣緩衝包材廠商？OXM 整理可供應緩衝材、氣泡布等包裝防護方案的廠商，可依地區瀏覽相關供應商並直接詢價。",
+    seoIntroOverride: "OXM 整理台灣緩衝包材廠商資訊，涵蓋緩衝材、氣泡布等包裝防護方案，可依地區瀏覽相關供應商並直接詢價。",
+  },
   // 食品
-  { slug: "bakery-pastry", label: "烘焙 / 糕點", displayName: "烘焙糕點", parentIndustry: "食品", parentIndustrySlug: "food" },
+  {
+    slug: "bakery-pastry", label: "烘焙 / 糕點", displayName: "烘焙糕點",
+    parentIndustry: "食品", parentIndustrySlug: "food",
+    primarySeoKeyword: "烘焙代工",
+    secondaryKeywords: ["糕點代工廠", "伴手禮代工", "烘焙OEM", "甜點代工"],
+    seoTitleOverride: "烘焙代工｜台灣糕點伴手禮廠商搜尋與詢價｜OXM",
+    metaDescriptionOverride: "尋找台灣烘焙代工廠？OXM 整理可承接糕點、伴手禮代工需求的製造業者，可依地區瀏覽相關廠商並直接詢價。",
+    seoIntroOverride: "OXM 整理台灣烘焙代工廠資訊，涵蓋糕點與伴手禮代工需求，可依地區查看相關工廠並直接詢價。",
+  },
   {
     slug: "beverage-oem", label: "飲料 / 飲品", displayName: "飲料",
     parentIndustry: "食品", parentIndustrySlug: "food",
@@ -495,10 +603,34 @@ export const SUB_INDUSTRY_SEARCH_ENTRIES: SubIndustrySearchEntry[] = [
     metaDescriptionOverride: "尋找台灣冷凍食品代工廠？OXM 整理可承接冷凍食品 OEM、ODM、調理包與料理包代工需求的製造業者，可依地區與生產條件篩選並直接詢價。",
     seoIntroOverride: "OXM 整理台灣冷凍食品代工廠資訊，涵蓋冷凍食品 OEM、ODM、調理包與料理包等生產需求，可依地區與生產條件篩選並直接詢價。",
   },
-  { slug: "snacks", label: "零食 / 點心", displayName: "零食點心", parentIndustry: "食品", parentIndustrySlug: "food" },
-  { slug: "seasonings-sauces", label: "調味料 / 醬料", displayName: "調味料", parentIndustry: "食品", parentIndustrySlug: "food" },
+  {
+    slug: "snacks", label: "零食 / 點心", displayName: "零食點心",
+    parentIndustry: "食品", parentIndustrySlug: "food",
+    primarySeoKeyword: "零食代工",
+    secondaryKeywords: ["點心代工廠", "零食OEM", "休閒食品代工", "餅乾代工"],
+    seoTitleOverride: "零食代工｜台灣休閒食品廠商搜尋與詢價｜OXM",
+    metaDescriptionOverride: "尋找台灣零食代工廠？OXM 整理可承接零食、休閒食品代工需求的製造業者，可依地區查看相關廠商並直接詢價。",
+    seoIntroOverride: "OXM 整理台灣零食代工廠資訊，涵蓋零食與休閒食品代工需求，可依地區瀏覽相關工廠並直接詢價。",
+  },
+  {
+    slug: "seasonings-sauces", label: "調味料 / 醬料", displayName: "調味料",
+    parentIndustry: "食品", parentIndustrySlug: "food",
+    primarySeoKeyword: "調味料代工",
+    secondaryKeywords: ["醬料代工廠", "醬料OEM", "醬料代工廠商", "辣椒醬代工"],
+    seoTitleOverride: "調味料代工｜台灣醬料代工廠商搜尋與詢價｜OXM",
+    metaDescriptionOverride: "尋找台灣調味料代工廠？OXM 整理可承接調味料、醬料代工需求的製造業者，可依地區瀏覽相關廠商並直接詢價。",
+    seoIntroOverride: "OXM 整理台灣調味料代工廠資訊，涵蓋調味料與醬料代工需求，可依地區查看相關工廠並直接詢價。",
+  },
   // 化工製造
-  { slug: "cleaning-products", label: "清潔用品", displayName: "清潔用品", parentIndustry: "化工製造", parentIndustrySlug: "chemical-manufacturing" },
+  {
+    slug: "cleaning-products", label: "清潔用品", displayName: "清潔用品",
+    parentIndustry: "化工製造", parentIndustrySlug: "chemical-manufacturing",
+    primarySeoKeyword: "清潔用品代工",
+    secondaryKeywords: ["清潔劑OEM", "洗劑代工廠", "居家清潔代工", "清潔用品ODM"],
+    seoTitleOverride: "清潔用品代工｜台灣清潔劑廠商搜尋與詢價｜OXM",
+    metaDescriptionOverride: "尋找台灣清潔用品代工廠？OXM 整理可承接清潔劑、洗劑代工需求的製造業者，可依地區查看相關廠商並直接詢價。",
+    seoIntroOverride: "OXM 整理台灣清潔用品代工廠資訊，涵蓋清潔劑與洗劑代工需求，可依地區瀏覽相關工廠並直接詢價。",
+  },
   { slug: "coatings-adhesives", label: "塗料 / 黏著劑", displayName: "塗料黏著劑", parentIndustry: "化工製造", parentIndustrySlug: "chemical-manufacturing" },
   {
     slug: "cosmetic-odm", label: "保養品 / 化妝品原料", displayName: "保養品化妝品",
@@ -509,15 +641,63 @@ export const SUB_INDUSTRY_SEARCH_ENTRIES: SubIndustrySearchEntry[] = [
     metaDescriptionOverride: "尋找台灣保養品代工廠？OXM 整理提供化妝品 ODM、OEM 開發與生產服務的工廠，可依地區、代工模式、可接小量與可打樣等條件篩選詢價。",
     seoIntroOverride: "保養品代工是化工製造底下的子產業，涵蓋化妝品 ODM 與 OEM 開發服務。OXM 整理台灣相關工廠資訊，可依地區與生產條件篩選，直接送出詢價。",
   },
-  { slug: "fragrance-essential-oils", label: "香氛 / 精油", displayName: "香氛精油", parentIndustry: "化工製造", parentIndustrySlug: "chemical-manufacturing" },
+  {
+    slug: "fragrance-essential-oils", label: "香氛 / 精油", displayName: "香氛精油",
+    parentIndustry: "化工製造", parentIndustrySlug: "chemical-manufacturing",
+    primarySeoKeyword: "精油代工",
+    secondaryKeywords: ["香氛OEM", "精油ODM", "香氛保養品代工", "香氛蠟燭代工"],
+    seoTitleOverride: "精油代工｜台灣香氛保養品廠商搜尋與詢價｜OXM",
+    metaDescriptionOverride: "尋找台灣精油代工廠？OXM 整理可承接精油、香氛產品代工需求的製造業者，可依地區瀏覽相關廠商並直接詢價。",
+    seoIntroOverride: "OXM 整理台灣精油代工廠資訊，涵蓋精油與香氛產品代工需求，可依地區查看相關工廠並直接詢價。",
+  },
   { slug: "industrial-chemicals", label: "工業化學品", displayName: "工業化學品", parentIndustry: "化工製造", parentIndustrySlug: "chemical-manufacturing" },
   // 生活用品
   { slug: "home-goods", label: "家居用品", displayName: "家居用品", parentIndustry: "生活用品", parentIndustrySlug: "consumer-goods" },
-  { slug: "lighting-fixtures", label: "照明燈具", displayName: "照明燈具", parentIndustry: "生活用品", parentIndustrySlug: "consumer-goods" },
-  { slug: "stationery-office-supplies", label: "文具 / 辦公用品", displayName: "文具辦公用品", parentIndustry: "生活用品", parentIndustrySlug: "consumer-goods" },
-  { slug: "outdoor-sports-goods", label: "戶外 / 運動用品", displayName: "戶外運動用品", parentIndustry: "生活用品", parentIndustrySlug: "consumer-goods" },
-  { slug: "pet-supplies", label: "寵物用品", displayName: "寵物用品", parentIndustry: "生活用品", parentIndustrySlug: "consumer-goods" },
-  { slug: "baby-products", label: "嬰幼兒用品", displayName: "嬰幼兒用品", parentIndustry: "生活用品", parentIndustrySlug: "consumer-goods" },
+  {
+    slug: "lighting-fixtures", label: "照明燈具", displayName: "照明燈具",
+    parentIndustry: "生活用品", parentIndustrySlug: "consumer-goods",
+    primarySeoKeyword: "燈具代工",
+    secondaryKeywords: ["照明燈具OEM", "燈具製造廠", "燈飾代工", "LED燈具代工"],
+    seoTitleOverride: "燈具代工｜台灣照明燈具廠商搜尋與詢價｜OXM",
+    metaDescriptionOverride: "尋找台灣燈具代工廠？OXM 整理可承接照明燈具、燈飾生產需求的製造業者，可依地區查看相關廠商並直接詢價。",
+    seoIntroOverride: "OXM 整理台灣燈具代工廠資訊，涵蓋照明燈具與燈飾生產需求，可依地區瀏覽相關工廠並直接詢價。",
+  },
+  {
+    slug: "stationery-office-supplies", label: "文具 / 辦公用品", displayName: "文具辦公用品",
+    parentIndustry: "生活用品", parentIndustrySlug: "consumer-goods",
+    primarySeoKeyword: "文具代工",
+    secondaryKeywords: ["辦公用品OEM", "文具製造廠", "文具ODM", "辦公用品代工"],
+    seoTitleOverride: "文具代工｜台灣辦公用品廠商搜尋與詢價｜OXM",
+    metaDescriptionOverride: "尋找台灣文具代工廠？OXM 整理可承接文具、辦公用品生產需求的製造業者，可依地區瀏覽相關廠商並直接詢價。",
+    seoIntroOverride: "OXM 整理台灣文具代工廠資訊，涵蓋文具與辦公用品生產需求，可依地區查看相關工廠並直接詢價。",
+  },
+  {
+    slug: "outdoor-sports-goods", label: "戶外 / 運動用品", displayName: "戶外運動用品",
+    parentIndustry: "生活用品", parentIndustrySlug: "consumer-goods",
+    primarySeoKeyword: "運動用品代工",
+    secondaryKeywords: ["戶外用品OEM", "運動器材代工", "戶外用品代工", "運動用品ODM"],
+    seoTitleOverride: "運動用品代工｜台灣戶外用品廠商搜尋與詢價｜OXM",
+    metaDescriptionOverride: "尋找台灣運動用品代工廠？OXM 整理可承接運動用品、戶外用品生產需求的製造業者，可依地區查看相關廠商並直接詢價。",
+    seoIntroOverride: "OXM 整理台灣運動用品代工廠資訊，涵蓋運動用品與戶外用品生產需求，可依地區瀏覽相關工廠並直接詢價。",
+  },
+  {
+    slug: "pet-supplies", label: "寵物用品", displayName: "寵物用品",
+    parentIndustry: "生活用品", parentIndustrySlug: "consumer-goods",
+    primarySeoKeyword: "寵物用品代工",
+    secondaryKeywords: ["寵物用品OEM", "寵物商品代工", "寵物用品ODM", "寵物周邊代工"],
+    seoTitleOverride: "寵物用品代工｜台灣寵物商品廠商搜尋與詢價｜OXM",
+    metaDescriptionOverride: "尋找台灣寵物用品代工廠？OXM 整理可承接寵物用品、寵物商品生產需求的製造業者，可依地區瀏覽相關廠商並直接詢價。",
+    seoIntroOverride: "OXM 整理台灣寵物用品代工廠資訊，涵蓋寵物用品與寵物商品生產需求，可依地區查看相關工廠並直接詢價。",
+  },
+  {
+    slug: "baby-products", label: "嬰幼兒用品", displayName: "嬰幼兒用品",
+    parentIndustry: "生活用品", parentIndustrySlug: "consumer-goods",
+    primarySeoKeyword: "嬰幼兒用品代工",
+    secondaryKeywords: ["嬰兒用品OEM", "嬰幼兒商品代工", "嬰兒用品ODM", "兒童用品代工"],
+    seoTitleOverride: "嬰幼兒用品代工｜台灣嬰兒用品廠商搜尋與詢價｜OXM",
+    metaDescriptionOverride: "尋找台灣嬰幼兒用品代工廠？OXM 整理可承接嬰幼兒用品生產需求的製造業者，可依地區查看相關廠商並直接詢價。",
+    seoIntroOverride: "OXM 整理台灣嬰幼兒用品代工廠資訊，涵蓋嬰幼兒用品生產需求，可依地區瀏覽相關工廠並直接詢價。",
+  },
   // 印刷
   {
     slug: "large-format-printing", label: "展場 / 大圖輸出（立牌、背板、布條）", displayName: "大圖輸出",
@@ -551,9 +731,25 @@ export const SUB_INDUSTRY_SEARCH_ENTRIES: SubIndustrySearchEntry[] = [
   { slug: "professional-printing-technology", label: "專業印刷技術（平版 / 數位 / 網版）", displayName: "專業印刷", parentIndustry: "印刷", parentIndustrySlug: "printing" },
   // 工業設備／機械
   { slug: "industrial-machinery-equipment", label: "工業機械設備", displayName: "工業機械設備", parentIndustry: "工業設備／機械", parentIndustrySlug: "industrial-machinery" },
-  { slug: "automation-production-line-equipment", label: "自動化／產線設備", displayName: "自動化產線設備", parentIndustry: "工業設備／機械", parentIndustrySlug: "industrial-machinery" },
+  {
+    slug: "automation-production-line-equipment", label: "自動化／產線設備", displayName: "自動化產線設備",
+    parentIndustry: "工業設備／機械", parentIndustrySlug: "industrial-machinery",
+    primarySeoKeyword: "自動化設備廠商",
+    secondaryKeywords: ["產線設備代工", "自動化整合廠商", "工業自動化設備", "產線自動化廠商"],
+    seoTitleOverride: "自動化設備廠商｜台灣產線設備搜尋與詢價｜OXM",
+    metaDescriptionOverride: "尋找台灣自動化設備廠商？OXM 整理可供應產線設備、自動化整合方案的廠商，可依地區瀏覽相關供應商並直接詢價。",
+    seoIntroOverride: "OXM 整理台灣自動化設備廠商資訊，涵蓋產線設備與自動化整合方案，可依地區瀏覽相關供應商並直接詢價。",
+  },
   { slug: "industry-specific-machinery", label: "產業專用機械", displayName: "產業專用機械", parentIndustry: "工業設備／機械", parentIndustrySlug: "industrial-machinery" },
-  { slug: "inspection-measurement-equipment", label: "檢測／量測設備", displayName: "檢測量測設備", parentIndustry: "工業設備／機械", parentIndustrySlug: "industrial-machinery" },
+  {
+    slug: "inspection-measurement-equipment", label: "檢測／量測設備", displayName: "檢測量測設備",
+    parentIndustry: "工業設備／機械", parentIndustrySlug: "industrial-machinery",
+    primarySeoKeyword: "檢測設備廠商",
+    secondaryKeywords: ["量測設備代工", "品管檢測儀器", "檢測儀器廠商", "量測儀器代工"],
+    seoTitleOverride: "檢測設備廠商｜台灣量測設備搜尋與詢價｜OXM",
+    metaDescriptionOverride: "尋找台灣檢測設備廠商？OXM 整理可供應檢測設備、量測儀器與品管設備的廠商，可依地區瀏覽相關供應商並直接詢價。",
+    seoIntroOverride: "OXM 整理台灣檢測設備廠商資訊，涵蓋檢測與量測設備供應，可依地區瀏覽相關供應商並直接詢價。",
+  },
   { slug: "machinery-parts-maintenance", label: "機械零件／維修保養", displayName: "機械零件維修", parentIndustry: "工業設備／機械", parentIndustrySlug: "industrial-machinery" },
   // 永續材料
   { slug: "bioplastics", label: "生質塑膠", displayName: "生質塑膠", parentIndustry: "永續材料", parentIndustrySlug: "sustainable-materials" },
