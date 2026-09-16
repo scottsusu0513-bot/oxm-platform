@@ -533,6 +533,10 @@ export async function searchFactories(params: {
   mfgMode?: string;
   keyword?: string;
   businessType?: string;
+  /** 「可接小量」——products.acceptSmallOrder 是既有的 product-level 欄位（無 factory-level 對應欄位），工廠旗下只要有任一 product 符合即視為該工廠符合，用 EXISTS 子查詢判斷，見下方 conditions 組裝處。 */
+  smallBatch?: boolean;
+  /** 「可打樣」——products.provideSample，語意同上。 */
+  sample?: boolean;
   page?: number;
   pageSize?: number;
   sortBy?: string;
@@ -562,7 +566,7 @@ export async function searchFactories(params: {
   if (!db) return { items: [], total: 0 };
   const {
     industry, subIndustry, region, capitalLevel, mfgMode, keyword,
-    businessType, page = 1, pageSize = 20, sortBy,
+    businessType, smallBatch, sample, page = 1, pageSize = 20, sortBy,
     intent, userHasSelectedIndustry = false, rankingSignals,
   } = params;
 
@@ -578,6 +582,11 @@ export async function searchFactories(params: {
   if (region && region.length > 0)       conditions.push(inArray(factories.region, region));
   if (capitalLevel && capitalLevel.length > 0) conditions.push(inArray(factories.capitalLevel, capitalLevel));
   if (mfgMode)                           conditions.push(sql`JSON_CONTAINS(${factories.mfgModes}, ${JSON.stringify([mfgMode])})`);
+  // 「可接小量」／「可打樣」：products 是既有 product-level 欄位，工廠旗下只要
+  // 有任一 product 符合即算該工廠符合，不要求同一個 product 同時符合兩者
+  // （見對話中「不要求一定是同一個 product 同時符合兩個條件」）。
+  if (smallBatch) conditions.push(sql`EXISTS (SELECT 1 FROM ${products} WHERE ${products.factoryId} = ${factories.id} AND ${products.acceptSmallOrder} = true)`);
+  if (sample)     conditions.push(sql`EXISTS (SELECT 1 FROM ${products} WHERE ${products.factoryId} = ${factories.id} AND ${products.provideSample} = true)`);
 
   // === Hard Filter + AI Ranking（不排除候選，只排序）===
   // rankingSignals 存在時，候選集合完全由上面已經組好的 hard filter

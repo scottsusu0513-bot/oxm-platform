@@ -1812,6 +1812,10 @@ export const appRouter = router({
    */
   aiSearchConversationId: z.number().int().positive().optional(),
   businessType: z.string().max(20).optional(),
+  /** 「可接小量」——EXISTS 任一 products.acceptSmallOrder=true，見 server/db.ts searchFactories。 */
+  smallBatch: z.boolean().optional(),
+  /** 「可打樣」——EXISTS 任一 products.provideSample=true，見 server/db.ts searchFactories。 */
+  sample: z.boolean().optional(),
   sortBy: z.enum(["rating", "reviews", "response", "newest"]).optional(),
   page: z.number().int().min(1).default(1),
   pageSize: z.number().int().min(1).max(50).default(20),

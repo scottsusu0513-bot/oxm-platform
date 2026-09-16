@@ -116,7 +116,10 @@ function BusinessTypeBadge({ businessType }: { businessType?: string }) {
 }
 
 // ── URL ↔ filter state 轉換 ───────────────────────────────────────────────
-function buildParams(vals: {
+// 這兩個 export 只給 Search.searchUrlParams.test.ts 用（buildParams 是序列化
+// 唯一實作，元件內每個寫 URL 的地方都呼叫同一份，測試對它斷言等於直接驗證
+// 元件實際行為）。
+export function buildParams(vals: {
   mfgMode: string;
   industry: string[];
   subIndustry: string[];
@@ -124,6 +127,11 @@ function buildParams(vals: {
   keyword: string;
   businessType: string;
   sortBy: string;
+  // 「可接小量」／「可打樣」——不勾選時完全不出現在 query string 裡（不留
+  // smallBatch=false 這種冗餘值），見對話中「使用者取消勾選：對應 query
+  // param 應移除，不要留下 false=true 類型的冗餘值」。
+  smallBatch?: boolean;
+  sample?: boolean;
   // Optional: omit entirely (e.g. when building a shareable URL) to leave
   // pagination out of the query string altogether.
   page?: number;
@@ -135,19 +143,23 @@ function buildParams(vals: {
   vals.region.forEach(r => p.append("region", r));
   if (vals.keyword) p.set("keyword", vals.keyword);
   if (vals.businessType && vals.businessType !== "all") p.set("businessType", vals.businessType);
+  if (vals.smallBatch) p.set("smallBatch", "true");
+  if (vals.sample) p.set("sample", "true");
   if (vals.sortBy && vals.sortBy !== "rating") p.set("sortBy", vals.sortBy);
   if (vals.page && vals.page > 1) p.set("page", String(vals.page));
   return p;
 }
 
 // ── 分享搜尋結果：組出人類看得懂的條件摘要（不含 sortBy／enum 值）──────────
-function buildSearchShareSummary(vals: {
+export function buildSearchShareSummary(vals: {
   keyword: string;
   region: string[];
   industry: string[];
   subIndustry: string[];
   businessType: string;
   mfgMode: string;
+  smallBatch?: boolean;
+  sample?: boolean;
 }): string {
   const parts: string[] = [];
   if (vals.keyword) parts.push(`搜尋「${vals.keyword}」`);
@@ -157,6 +169,8 @@ function buildSearchShareSummary(vals: {
   if (vals.businessType === "factory") parts.push("工廠");
   else if (vals.businessType === "studio") parts.push("工作室");
   if (vals.mfgMode) parts.push(vals.mfgMode);
+  if (vals.smallBatch) parts.push("可接小量");
+  if (vals.sample) parts.push("可打樣");
 
   if (parts.length === 0) return "台灣工廠搜尋結果｜OXM";
   return `${parts.join("・")}｜OXM 工廠搜尋結果`;
@@ -194,6 +208,12 @@ export default function Search() {
     return Number.isInteger(n) && n > 0 ? n : undefined;
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const [businessType, setBusinessType] = useState(() => params.get("businessType") ?? "all");
+  // 「可接小量」／「可打樣」——EXISTS 任一 products.acceptSmallOrder／
+  // provideSample=true 即符合（見 server/db.ts searchFactories）。只有字面值
+  // "true" 才算勾選，其餘（含缺省）一律視為不限，避免 URL 出現非預期值時
+  // 誤判成已勾選。
+  const [smallBatch, setSmallBatch] = useState(() => params.get("smallBatch") === "true");
+  const [sample, setSample] = useState(() => params.get("sample") === "true");
   const isComposing = useRef(false);
   const [showHistory, setShowHistory] = useState(false);
   // page is transient UI/pagination state, intentionally not read from or
@@ -210,6 +230,35 @@ export default function Search() {
     return () => mq.removeEventListener("change", handler);
   }, []);
   const pageSize = isMobile ? 12 : 20;
+
+  // 瀏覽器上一頁／下一頁：filter state 原本只在 mount 時讀一次 URL（wouter 的
+  // useLocation 只追蹤 pathname，query string 變化不會觸發重新 render，也沒有
+  // 任何 popstate 監聽），所以純粹的 query-only history 變化過去不會反映在
+  // UI 上，要 reload 才會更新。這裡補上真正的 popstate 監聽，讓上一頁／下一頁
+  // 正確從當下網址重新同步全部篩選 state（不只是這輪新增的 smallBatch／
+  // sample）。只監聽原生 popstate，不監聽 wouter monkey-patch 出來的
+  // pushState／replaceState 事件——那些都是這個元件自己呼叫 navigate() 觸發，
+  // 對應的 state 已經在呼叫前手動設好，重複同步只是多做一次相同的事，但為了
+  // 避免不必要的重複渲染，這裡刻意只處理瀏覽器原生上一頁／下一頁。
+  useEffect(() => {
+    const onPopState = () => {
+      const p = new URLSearchParams(window.location.search);
+      setMfgMode(p.get("mfgMode") ?? "");
+      setIndustry(p.getAll("industry").filter(Boolean));
+      setSubIndustry(p.getAll("subIndustry").filter(Boolean));
+      setRegion(p.getAll("region").filter(Boolean));
+      const kw = p.get("keyword") ?? "";
+      setKeyword(kw);
+      setCommittedKeyword(kw);
+      setBusinessType(p.get("businessType") ?? "all");
+      setSmallBatch(p.get("smallBatch") === "true");
+      setSample(p.get("sample") === "true");
+      setSortBy(p.get("sortBy") ?? "rating");
+      setPage(1);
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
 
   const { cart, add: cartAdd, remove: cartRemove, clear: cartClear, has: cartHas } = useInquiryCart();
   const [inquiryTitle, setInquiryTitle] = useState("");
@@ -262,11 +311,12 @@ export default function Search() {
   const syncURL = (overrides: Partial<{
     mfgMode: string; industry: string[]; subIndustry: string[];
     region: string[]; keyword: string; businessType: string;
+    smallBatch: boolean; sample: boolean;
     sortBy: string; page: number;
   }> = {}) => {
     const vals = {
       mfgMode, industry, subIndustry, region,
-      keyword: committedKeyword, businessType, sortBy, page,
+      keyword: committedKeyword, businessType, smallBatch, sample, sortBy, page,
       ...overrides,
     };
     const qs = buildParams(vals).toString();
@@ -299,6 +349,16 @@ export default function Search() {
     syncURL({ region: val, page: 1 });
   };
 
+  const onSmallBatchChange = (v: boolean) => {
+    setSmallBatch(v); setPage(1);
+    syncURL({ smallBatch: v, page: 1 });
+  };
+
+  const onSampleChange = (v: boolean) => {
+    setSample(v); setPage(1);
+    syncURL({ sample: v, page: 1 });
+  };
+
   const onSortByChange = (v: string) => {
     setSortBy(v); setPage(1);
     syncURL({ sortBy: v, page: 1 });
@@ -321,10 +381,12 @@ export default function Search() {
     q: q || undefined,
     aiSearchConversationId,
     businessType: businessType && businessType !== "all" ? businessType : undefined,
+    smallBatch: smallBatch || undefined,
+    sample: sample || undefined,
     sortBy: sortBy as "rating" | "reviews" | "response" | "newest" | undefined,
     page,
     pageSize,
-  }), [mfgMode, industry, subIndustry, region, committedKeyword, q, aiSearchConversationId, businessType, sortBy, page, pageSize]);
+  }), [mfgMode, industry, subIndustry, region, committedKeyword, q, aiSearchConversationId, businessType, smallBatch, sample, sortBy, page, pageSize]);
 
   const appliedFilters = useMemo(() => {
     const filters: Array<{ key: string; label: string; value: string }> = [];
@@ -334,20 +396,25 @@ export default function Search() {
     if (region.length > 0) filters.push({ key: "region", label: "地區", value: region.join("、") });
     if (committedKeyword) filters.push({ key: "keyword", label: "關鍵字", value: committedKeyword });
     if (businessType && businessType !== "all") filters.push({ key: "businessType", label: "類型", value: businessType === "factory" ? "工廠" : "工作室" });
+    if (smallBatch) filters.push({ key: "smallBatch", label: "生產條件", value: "可接小量" });
+    if (sample) filters.push({ key: "sample", label: "生產條件", value: "可打樣" });
     return filters;
-  }, [mfgMode, industry, subIndustry, region, committedKeyword, businessType]);
+  }, [mfgMode, industry, subIndustry, region, committedKeyword, businessType, smallBatch, sample]);
 
   const removeFilter = (key: string) => {
     let nMfgMode = mfgMode, nIndustry = industry, nSubIndustry = subIndustry;
     let nRegion = region, nKeyword = committedKeyword, nBT = businessType;
+    let nSmallBatch = smallBatch, nSample = sample;
     if (key === "businessType") { setBusinessType("all"); nBT = "all"; }
     else if (key === "mfgMode") { setMfgMode(""); nMfgMode = ""; }
     else if (key === "industry") { setIndustry([]); setSubIndustry([]); nIndustry = []; nSubIndustry = []; }
     else if (key === "subIndustry") { setSubIndustry([]); nSubIndustry = []; }
     else if (key === "region") { setRegion([]); nRegion = []; }
     else if (key === "keyword") { setKeyword(""); setCommittedKeyword(""); nKeyword = ""; }
+    else if (key === "smallBatch") { setSmallBatch(false); nSmallBatch = false; }
+    else if (key === "sample") { setSample(false); nSample = false; }
     setPage(1);
-    const qs = buildParams({ mfgMode: nMfgMode, industry: nIndustry, subIndustry: nSubIndustry, region: nRegion, keyword: nKeyword, businessType: nBT, sortBy, page: 1 }).toString();
+    const qs = buildParams({ mfgMode: nMfgMode, industry: nIndustry, subIndustry: nSubIndustry, region: nRegion, keyword: nKeyword, businessType: nBT, smallBatch: nSmallBatch, sample: nSample, sortBy, page: 1 }).toString();
     navigate(qs ? `/search?${qs}` : "/search", { replace: true });
   };
 
@@ -374,8 +441,8 @@ export default function Search() {
 
   // filterFingerprint detects when search conditions change (excluding page) to reset mobile accumulated list
   const filterFingerprint = useMemo(() =>
-    JSON.stringify({ mfgMode, industry, subIndustry, region, committedKeyword, businessType, sortBy }),
-    [mfgMode, industry, subIndustry, region, committedKeyword, businessType, sortBy]
+    JSON.stringify({ mfgMode, industry, subIndustry, region, committedKeyword, businessType, smallBatch, sample, sortBy }),
+    [mfgMode, industry, subIndustry, region, committedKeyword, businessType, smallBatch, sample, sortBy]
   );
   const [displayedItems, setDisplayedItems] = useState<any[]>([]);
   const prevFingerprintRef = useRef(filterFingerprint);
@@ -424,13 +491,14 @@ export default function Search() {
     setPage(1);
     setCommittedKeyword(keyword);
     if (keyword) saveToHistory(keyword);
-    const qs = buildParams({ mfgMode, industry, subIndustry, region, keyword, businessType, sortBy, page: 1 }).toString();
+    const qs = buildParams({ mfgMode, industry, subIndustry, region, keyword, businessType, smallBatch, sample, sortBy, page: 1 }).toString();
     navigate(qs ? `/search?${qs}` : "/search", { replace: true });
   };
 
   const clearFilters = () => {
     setMfgMode(""); setIndustry([]); setSubIndustry([]); setRegion([]);
-    setKeyword(""); setCommittedKeyword(""); setBusinessType("all"); setPage(1);
+    setKeyword(""); setCommittedKeyword(""); setBusinessType("all");
+    setSmallBatch(false); setSample(false); setPage(1);
     navigate("/search", { replace: true });
   };
 
@@ -438,12 +506,12 @@ export default function Search() {
   const handleShareSearch = () => {
     const qs = buildParams({
       mfgMode, industry, subIndustry, region,
-      keyword: committedKeyword, businessType, sortBy,
+      keyword: committedKeyword, businessType, smallBatch, sample, sortBy,
     }).toString();
     const url = `${window.location.origin}/search${qs ? `?${qs}` : ""}`;
     const shareTitle = "OXM 工廠搜尋結果";
     const shareText = buildSearchShareSummary({
-      keyword: committedKeyword, region, industry, subIndustry, businessType, mfgMode,
+      keyword: committedKeyword, region, industry, subIndustry, businessType, mfgMode, smallBatch, sample,
     });
     void shareContent({ title: shareTitle, text: shareText, url }, { copySuccessMessage: "搜尋結果連結已複製" });
   };
@@ -459,7 +527,7 @@ export default function Search() {
   // 網址快照。
   const canonicalQs = buildParams({
     mfgMode, industry, subIndustry, region,
-    keyword: committedKeyword, businessType, sortBy,
+    keyword: committedKeyword, businessType, smallBatch, sample, sortBy,
   }).toString();
   const searchMeta = buildSearchPageMeta(canonicalQs);
 
@@ -563,6 +631,22 @@ export default function Search() {
                     className="h-9 w-full"
                     withClear
                   />
+                </div>
+
+                {/* 生產條件：可接小量／可打樣（products 既有 product-level 欄位，
+                    見 server/db.ts searchFactories 的 EXISTS 子查詢說明）。 */}
+                <div className="mb-4">
+                  <label className="text-xs font-medium text-muted-foreground mb-2 block">生產條件</label>
+                  <div className="flex flex-col gap-2">
+                    <label className="flex items-center gap-2 cursor-pointer text-sm min-h-[2rem]">
+                      <Checkbox checked={smallBatch} onCheckedChange={(v) => onSmallBatchChange(v === true)} />
+                      可接小量
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer text-sm min-h-[2rem]">
+                      <Checkbox checked={sample} onCheckedChange={(v) => onSampleChange(v === true)} />
+                      可打樣
+                    </label>
+                  </div>
                 </div>
 
                 <div className="relative">
@@ -766,6 +850,16 @@ export default function Search() {
                     className="w-[120px] h-8 text-xs"
                     withClear
                   />
+                  <div className="flex gap-2 items-center">
+                    <label className="flex items-center gap-1.5 cursor-pointer text-xs min-h-[2rem]">
+                      <Checkbox checked={smallBatch} onCheckedChange={(v) => onSmallBatchChange(v === true)} />
+                      可接小量
+                    </label>
+                    <label className="flex items-center gap-1.5 cursor-pointer text-xs min-h-[2rem]">
+                      <Checkbox checked={sample} onCheckedChange={(v) => onSampleChange(v === true)} />
+                      可打樣
+                    </label>
+                  </div>
                   <Input placeholder="關鍵字..." value={keyword} onChange={e => setKeyword(e.target.value)}
                     onCompositionStart={() => { isComposing.current = true; }}
                     onCompositionEnd={() => { isComposing.current = false; }}

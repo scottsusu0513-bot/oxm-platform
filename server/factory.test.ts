@@ -85,6 +85,23 @@ describe("factory.search", () => {
     expect(result).toHaveProperty("items");
     expect(result).toHaveProperty("total");
   }, 15000);
+
+  // 「可接小量」／「可打樣」query params 加入 factory.search zod schema（見
+  // CLAUDE.md 本輪「搜尋篩選優化」）——這裡只驗證 schema 接受 boolean 且不
+  // 拋錯，實際 EXISTS 子查詢的篩選結果由
+  // server/factorySmallBatchSampleFilter.test.ts 的 A/B/C/D/E fixture 驗證。
+  it("accepts smallBatch and sample filter parameters", async () => {
+    const ctx = createPublicContext();
+    const caller = appRouter.createCaller(ctx);
+    const result = await caller.factory.search({
+      smallBatch: true,
+      sample: true,
+      page: 1,
+      pageSize: 5,
+    });
+    expect(result).toHaveProperty("items");
+    expect(result).toHaveProperty("total");
+  }, 15000);
 });
 
 describe("factory.getById", () => {

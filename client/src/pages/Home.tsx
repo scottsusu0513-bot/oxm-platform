@@ -408,6 +408,8 @@ export default function Home() {
   const [region, setRegion] = useState<string[]>([]);
   const [keyword, setKeyword] = useState("");
   const [businessType, setBusinessType] = useState("");
+  const [smallBatch, setSmallBatch] = useState(false);
+  const [sample, setSample] = useState(false);
   const [industryRequestOpen, setIndustryRequestOpen] = useState(false);
 
   const handleSearch = () => {
@@ -418,6 +420,8 @@ export default function Home() {
     region.forEach(r => params.append("region", r));
     if (keyword) params.set("keyword", keyword);
     if (businessType) params.set("businessType", businessType);
+    if (smallBatch) params.set("smallBatch", "true");
+    if (sample) params.set("sample", "true");
     navigate(`/search?${params.toString()}`);
   };
 
@@ -628,15 +632,30 @@ export default function Home() {
                   </Popover>
                 </div>
 
-                {/* 第三列：關鍵字 */}
-                <div className="mb-2 md:mb-4">
-                  <Input
-                    className="w-full h-10 md:h-12 text-sm md:text-base"
-                    placeholder="搜尋工廠、工作室名稱或產品關鍵字..."
-                    value={keyword}
-                    onChange={(e) => setKeyword(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-                  />
+                {/* 第三列：關鍵字（桌機約 80%）＋可接小量／可打樣（桌機約 20%，
+                    垂直置中、上下排列；products 既有 product-level 欄位，見
+                    server/db.ts searchFactories 的 EXISTS 子查詢說明）。手機版
+                    關鍵字滿版、checkbox 移到下方自然排列。 */}
+                <div className="mb-2 md:mb-4 flex flex-col md:flex-row md:items-center gap-4">
+                  <div className="md:flex-[4] min-w-0">
+                    <Input
+                      className="w-full h-10 md:h-12 text-sm md:text-base"
+                      placeholder="搜尋工廠、工作室名稱或產品關鍵字..."
+                      value={keyword}
+                      onChange={(e) => setKeyword(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+                    />
+                  </div>
+                  <div className="flex flex-row flex-wrap md:flex-col gap-x-5 gap-y-1.5 md:gap-y-1.5 md:flex-[1] md:min-w-[110px] md:max-w-[150px]">
+                    <label className="flex items-center gap-1.5 cursor-pointer text-sm whitespace-nowrap">
+                      <Checkbox checked={smallBatch} onCheckedChange={(v) => setSmallBatch(v === true)} />
+                      可接小量
+                    </label>
+                    <label className="flex items-center gap-1.5 cursor-pointer text-sm whitespace-nowrap">
+                      <Checkbox checked={sample} onCheckedChange={(v) => setSample(v === true)} />
+                      可打樣
+                    </label>
+                  </div>
                 </div>
 
                 {/* 第四列：搜尋按鈕（文案依類型動態） */}
