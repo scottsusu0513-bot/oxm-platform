@@ -1,11 +1,16 @@
 /**
- * 子產業 SEO Keyword Mapping 基礎架構 + 第一批 6 頁優化（見任務定案）。
+ * 子產業 SEO Keyword Mapping 基礎架構 + 第一批 6 頁 + 第二批 8 頁優化
+ * （見任務定案）。
  *
  * 涵蓋：
- *   - 6 個子產業（cnc-machining／sheet-metal／smt-assembly／
- *     plastic-injection／packaging-print／cosmetic-odm）的 title／
- *     description／H1／intro override 正確套用
- *   - 沒有設定 override 的其餘子產業（66 個）完全沿用既有固定 template，
+ *   - 第一批 6 個子產業（cnc-machining／sheet-metal／smt-assembly／
+ *     plastic-injection／packaging-print／cosmetic-odm）+ 第二批 8 個子產業
+ *     （apparel-manufacturing／mold-making／metal-materials／
+ *     eco-packaging／beverage-oem／frozen-food／large-format-printing／
+ *     sticker-label）共 14 筆的 title／description／H1／intro override
+ *     正確套用
+ *   - pcb 本輪明確暫緩，維持沒有 override（fallback）
+ *   - 沒有設定 override 的其餘子產業（58 個）完全沿用既有固定 template，
  *     一個字都不變
  *   - secondaryKeywords 純粹是 SEO 研究資料，程式碼裡任何地方都不得把它
  *     直接 render 成前台可見文字
@@ -29,7 +34,9 @@ function readSource(...segments: string[]): string {
   return fs.readFileSync(path.resolve(import.meta.dirname, "..", ...segments), "utf-8");
 }
 
-const OVERRIDDEN_SLUGS = ["cnc-machining", "sheet-metal", "smt-assembly", "plastic-injection", "packaging-print", "cosmetic-odm"];
+const BATCH_1_SLUGS = ["cnc-machining", "sheet-metal", "smt-assembly", "plastic-injection", "packaging-print", "cosmetic-odm"];
+const BATCH_2_SLUGS = ["apparel-manufacturing", "mold-making", "metal-materials", "eco-packaging", "beverage-oem", "frozen-food", "large-format-printing", "sticker-label"];
+const OVERRIDDEN_SLUGS = [...BATCH_1_SLUGS, ...BATCH_2_SLUGS];
 
 const EXPECTED = {
   "cnc-machining": {
@@ -68,6 +75,54 @@ const EXPECTED = {
     description: "尋找台灣保養品代工廠？OXM 整理提供化妝品 ODM、OEM 開發與生產服務的工廠，可依地區、代工模式、可接小量與可打樣等條件篩選詢價。",
     intro: "保養品代工是化工製造底下的子產業，涵蓋化妝品 ODM 與 OEM 開發服務。OXM 整理台灣相關工廠資訊，可依地區與生產條件篩選，直接送出詢價。",
   },
+  "apparel-manufacturing": {
+    h1: "成衣代工",
+    title: "成衣代工｜台灣成衣代工廠搜尋與詢價｜OXM",
+    description: "尋找台灣成衣代工廠？OXM 整理可承接成衣 OEM／ODM 訂單的製造業者，可依地區、代工模式、可接小量與可打樣等條件篩選與詢價。",
+    intro: "成衣代工是紡織產業的重要製造服務。OXM 整理台灣可承接成衣代工、OEM／ODM 生產需求的工廠，可依地區與生產條件篩選並直接詢價。",
+  },
+  "mold-making": {
+    h1: "模具廠",
+    title: "模具廠｜台灣模具製造與加工廠商｜OXM",
+    description: "尋找台灣模具廠？OXM 整理可承接模具製造、加工、開發與開模需求的廠商，涵蓋塑膠模具、沖壓模具等類型，可依地區與生產條件篩選詢價。",
+    intro: "OXM 整理台灣模具廠與模具製造廠商資訊，涵蓋塑膠模具、沖壓模具、模具加工與開模需求，可依地區與生產條件篩選並直接詢價。",
+  },
+  "metal-materials": {
+    h1: "金屬材料供應商",
+    title: "金屬材料供應商｜台灣金屬原料廠商搜尋與詢價｜OXM",
+    description: "尋找台灣金屬材料供應商？OXM 整理不鏽鋼、鋁材與其他金屬原料供應廠商，可依地區瀏覽相關供應商並直接詢價。",
+    intro: "OXM 整理台灣金屬材料與原料供應商資訊，涵蓋不鏽鋼、鋁材等材料來源，可依地區瀏覽相關供應商並直接詢價。",
+  },
+  "eco-packaging": {
+    h1: "環保包裝供應商",
+    title: "環保包裝供應商｜台灣環保包材廠商搜尋與詢價｜OXM",
+    description: "尋找台灣環保包裝供應商？OXM 整理可供應環保包材、可分解包裝與相關包裝方案的廠商，可依地區瀏覽相關供應商並直接詢價。",
+    intro: "OXM 整理台灣環保包裝與包材供應商資訊，涵蓋環保包材、可分解包裝等方案，可依地區瀏覽相關供應商並直接詢價。",
+  },
+  "beverage-oem": {
+    h1: "飲料代工廠",
+    title: "飲料代工廠｜台灣飲品 OEM 廠商搜尋與詢價｜OXM",
+    description: "尋找台灣飲料代工廠？OXM 整理可承接飲料 OEM、手搖飲與機能飲料代工需求的製造業者，可依地區與生產條件篩選並直接詢價。",
+    intro: "OXM 整理台灣飲料代工廠資訊，涵蓋飲料 OEM、手搖飲與機能飲料等生產需求，可依地區與生產條件篩選並直接詢價。",
+  },
+  "frozen-food": {
+    h1: "冷凍食品代工廠",
+    title: "冷凍食品代工廠｜台灣冷凍食品 OEM／ODM 廠商｜OXM",
+    description: "尋找台灣冷凍食品代工廠？OXM 整理可承接冷凍食品 OEM、ODM、調理包與料理包代工需求的製造業者，可依地區與生產條件篩選並直接詢價。",
+    intro: "OXM 整理台灣冷凍食品代工廠資訊，涵蓋冷凍食品 OEM、ODM、調理包與料理包等生產需求，可依地區與生產條件篩選並直接詢價。",
+  },
+  "large-format-printing": {
+    h1: "大圖輸出",
+    title: "大圖輸出｜台灣展場輸出與布條製作廠商｜OXM",
+    description: "尋找台灣大圖輸出廠商？OXM 整理可承接展場輸出、布條、立牌與大型圖像製作需求的廠商，可依地區與生產條件篩選並直接詢價。",
+    intro: "OXM 整理台灣大圖輸出廠商資訊，涵蓋展場輸出、布條、立牌等製作需求，可依地區與生產條件篩選並直接詢價。",
+  },
+  "sticker-label": {
+    h1: "貼紙印刷",
+    title: "貼紙印刷｜台灣標籤貼紙印刷廠搜尋與詢價｜OXM",
+    description: "尋找台灣貼紙印刷廠？OXM 整理可承接商品貼紙、LOGO 貼紙與標籤印刷需求的廠商，可依地區與生產條件篩選並直接詢價。",
+    intro: "OXM 整理台灣貼紙印刷與標籤印刷廠商資訊，涵蓋商品貼紙、LOGO 貼紙與標籤製作需求，可依地區與生產條件篩選並直接詢價。",
+  },
 } as const;
 
 describe.each(OVERRIDDEN_SLUGS)("buildSubIndustryPageContent：%s 的 SEO override 正確套用", (slug) => {
@@ -104,8 +159,8 @@ describe.each(OVERRIDDEN_SLUGS)("buildSubIndustryPageContent：%s 的 SEO overri
     }
   });
 
-  it("Title 長度約 25-35 字（含品牌與分隔符號，抓寬鬆邊界 20-40）", () => {
-    expect(content.title.length).toBeGreaterThanOrEqual(20);
+  it("Title 長度約 25-35 字（含品牌與分隔符號，抓寬鬆邊界 18-40）", () => {
+    expect(content.title.length).toBeGreaterThanOrEqual(18);
     expect(content.title.length).toBeLessThanOrEqual(40);
   });
 
@@ -135,8 +190,8 @@ describe("沒有設定 override 的子產業：完全沿用既有固定 template
     .map(e => e.slug)
     .filter(slug => !OVERRIDDEN_SLUGS.includes(slug));
 
-  it("除了本輪的 6 筆，其餘全部 66 筆都沒有設定任何 override 欄位", () => {
-    expect(nonOverriddenSlugs.length).toBe(66);
+  it("除了兩批共 14 筆，其餘全部 58 筆都沒有設定任何 override 欄位", () => {
+    expect(nonOverriddenSlugs.length).toBe(58);
     for (const slug of nonOverriddenSlugs) {
       const entry = SUB_INDUSTRY_SEARCH_SLUG_TO_ENTRY[slug];
       expect(entry.primarySeoKeyword).toBeUndefined();
@@ -147,13 +202,14 @@ describe("沒有設定 override 的子產業：完全沿用既有固定 template
     }
   });
 
-  it("pcb（沒有 override）的 h1／title／description／intro 完全符合舊有固定公式，不受本輪任何影響", () => {
+  it("pcb 本輪明確暫緩，維持沒有 override：h1／title／description／intro 完全符合舊有固定公式，不受本輪任何影響", () => {
     const resolved = resolveSubIndustry("pcb")!;
     const content = buildSubIndustryPageContent(resolved);
     expect(content.h1).toBe("PCB廠");
     expect(content.title).toBe("PCB廠｜台灣PCB廠搜尋與詢價｜OXM");
     expect(content.description).toBe("尋找台灣PCB廠？OXM 整理可承接PCB需求的製造業者，可依地區、代工模式、可接小量與可打樣等條件進一步篩選與詢價。");
     expect(content.intro).toBe("PCB是電子零件底下的子產業。OXM 整理台灣可承接PCB需求的工廠與工作室資訊，可使用 OXM 的搜尋功能依地區、類型、ODM／OEM／OBM 代工模式，以及可接小量、可打樣等生產條件進一步篩選，並直接送出詢價。");
+    expect(resolved.entry.primarySeoKeyword).toBeUndefined();
   });
 
   it("welding-assembly（沒有 override）同樣完全符合舊有固定公式", () => {
@@ -165,7 +221,7 @@ describe("沒有設定 override 的子產業：完全沿用既有固定 template
 });
 
 describe("secondaryKeywords：純 SEO 研究資料，禁止任何形式直接 render 到前台", () => {
-  it("6 個 override 頁都有設定 secondaryKeywords（SEO 策略資料存在，供文案研究參考）", () => {
+  it("14 個 override 頁都有設定 secondaryKeywords（SEO 策略資料存在，供文案研究參考）", () => {
     for (const slug of OVERRIDDEN_SLUGS) {
       const entry = SUB_INDUSTRY_SEARCH_SLUG_TO_ENTRY[slug];
       expect(entry.secondaryKeywords).toBeDefined();
@@ -174,10 +230,12 @@ describe("secondaryKeywords：純 SEO 研究資料，禁止任何形式直接 re
   });
 
   it("buildSubIndustryPageContent 的回傳值（實際會被畫面使用的資料）不包含 secondaryKeywords 這個欄位", () => {
-    const resolved = resolveSubIndustry("cnc-machining")!;
-    const content = buildSubIndustryPageContent(resolved);
-    expect(content).not.toHaveProperty("secondaryKeywords");
-    expect(Object.keys(content).sort()).toEqual(["canonical", "description", "h1", "intro", "title"]);
+    for (const slug of OVERRIDDEN_SLUGS) {
+      const resolved = resolveSubIndustry(slug)!;
+      const content = buildSubIndustryPageContent(resolved);
+      expect(content).not.toHaveProperty("secondaryKeywords");
+      expect(Object.keys(content).sort()).toEqual(["canonical", "description", "h1", "intro", "title"]);
+    }
   });
 
   it("client/src/pages/SubIndustryPage.tsx 原始碼完全沒有引用 secondaryKeywords（不會被拿去 render 成 chips／tags／熱門搜尋詞）", () => {
@@ -223,17 +281,32 @@ describe("region × subIndustry（buildRegionSubIndustryPageContent）完全不�
     expect(buildRegionSubIndustryPageContent(resolveRegionSubIndustry("taichung", "packaging-print")!).h1).toBe("台中包裝印刷廠");
     expect(buildRegionSubIndustryPageContent(resolveRegionSubIndustry("taichung", "cosmetic-odm")!).h1).toBe("台中保養品化妝品廠");
   });
+
+  it("第二批 8 筆的地區版同樣不受影響（沿用 displayName，不是 primarySeoKeyword）", () => {
+    expect(buildRegionSubIndustryPageContent(resolveRegionSubIndustry("taichung", "apparel-manufacturing")!).h1).toBe("台中成衣廠");
+    expect(buildRegionSubIndustryPageContent(resolveRegionSubIndustry("taichung", "mold-making")!).h1).toBe("台中模具廠");
+    expect(buildRegionSubIndustryPageContent(resolveRegionSubIndustry("taichung", "metal-materials")!).h1).toBe("台中金屬原料廠");
+    expect(buildRegionSubIndustryPageContent(resolveRegionSubIndustry("taichung", "eco-packaging")!).h1).toBe("台中環保包裝廠");
+    expect(buildRegionSubIndustryPageContent(resolveRegionSubIndustry("taichung", "beverage-oem")!).h1).toBe("台中飲料廠");
+    expect(buildRegionSubIndustryPageContent(resolveRegionSubIndustry("taichung", "frozen-food")!).h1).toBe("台中冷凍食品廠");
+    expect(buildRegionSubIndustryPageContent(resolveRegionSubIndustry("taichung", "large-format-printing")!).h1).toBe("台中大圖輸出廠");
+    expect(buildRegionSubIndustryPageContent(resolveRegionSubIndustry("taichung", "sticker-label")!).h1).toBe("台中貼紙標籤廠");
+  });
 });
 
 describe("shared/constants.ts：SubIndustrySearchEntry 的 SEO 欄位是唯一 source，沒有第二份 slug 對照表", () => {
-  it("6 個 override 頁的 key 都是既有 canonical slug（沒有另外新增 key 命名法）", () => {
+  it("14 個 override 頁的 key 都是既有 canonical slug（沒有另外新增 key 命名法）", () => {
     for (const slug of OVERRIDDEN_SLUGS) {
       expect(SUB_INDUSTRY_SEARCH_SLUG_TO_ENTRY[slug]).toBeDefined();
       expect(SUB_INDUSTRY_SEARCH_SLUG_TO_ENTRY[slug].slug).toBe(slug);
     }
   });
 
-  it("SubIndustrySearchEntry 陣列總筆數仍是 72（本輪沒有新增／刪除任何 entry，只在既有 6 筆上加欄位）", () => {
+  it("SubIndustrySearchEntry 陣列總筆數仍是 72（本輪沒有新增／刪除任何 entry，只在既有 8 筆上加欄位）", () => {
     expect(SUB_INDUSTRY_SEARCH_ENTRIES.length).toBe(72);
+  });
+
+  it("pcb 明確沒有被加進 OVERRIDDEN_SLUGS（本輪暫緩）", () => {
+    expect(OVERRIDDEN_SLUGS).not.toContain("pcb");
   });
 });

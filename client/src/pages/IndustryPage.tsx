@@ -5,13 +5,14 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { IndustryQuickNav } from "@/components/seo/IndustryQuickNav";
 import {
   Pagination, PaginationContent, PaginationItem, PaginationLink, PaginationEllipsis,
 } from "@/components/ui/pagination";
 import { trpc } from "@/lib/trpc";
 import { useRoute, useLocation, useSearch, Link } from "wouter";
 import { useRef, useEffect } from "react";
-import { INDUSTRY_SLUG_TO_NAMES, INDUSTRY_SLUG_TO_NAME, INDUSTRY_SEO_CONTENT, INDUSTRY_SLUGS, SUB_INDUSTRY_SLUG_TO_NAME, SUB_INDUSTRY_SEO_CONTENT } from "@shared/constants";
+import { INDUSTRY_SLUG_TO_NAMES, INDUSTRY_SLUG_TO_NAME, INDUSTRY_SEO_CONTENT, SUB_INDUSTRY_SLUG_TO_NAME, SUB_INDUSTRY_SEO_CONTENT } from "@shared/constants";
 import { buildIndustryPageMeta, resolveLegacyIndustrySlugRedirect, resolveLegacySubIndustryRedirect } from "@shared/seo/industryPages";
 import { parsePageParam, pageToQueryValue, computeTotalPages, clampPage, getPaginationRange } from "@shared/industryPagination";
 import { ChevronLeft, ChevronRight, Factory, Wrench, Star, MapPin } from "lucide-react";
@@ -278,18 +279,7 @@ export default function IndustryPage() {
           <p className="text-muted-foreground">
             台灣{displayName}工廠列表，共 {total} 間，支援 OEM / ODM 服務
           </p>
-          <div className="mt-4 flex flex-wrap gap-2">
-            {Object.entries(INDUSTRY_SLUGS).map(([name, s]) => (
-              <Link key={s} href={`/industry/${s}`}>
-                <Badge
-                  variant={name === industryName ? "default" : "outline"}
-                  className="cursor-pointer hover:bg-primary hover:text-primary-foreground transition-colors"
-                >
-                  {name}
-                </Badge>
-              </Link>
-            ))}
-          </div>
+          <IndustryQuickNav activeIndustryName={industryName} activeIndustrySlug={slug} />
         </div>
 
         {/* 工廠列表 */}

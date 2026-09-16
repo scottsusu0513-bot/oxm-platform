@@ -335,9 +335,12 @@ export interface SubIndustrySearchEntry {
   // key（entry 本身），不建第二份 slug 對照表。shared/seo/subIndustryPages.ts
   // 的 buildSubIndustryPageContent() 在算 title／description／H1／intro 時，
   // 優先讀這裡的 override，沒有設定就 fallback 沿用既有固定 template——
-  // 目前只有本輪指定的 6 個子產業（cnc-machining／sheet-metal／
-  // smt-assembly／plastic-injection／packaging-print／cosmetic-odm）有值，
-  // 其餘 66 個子產業維持 undefined、頁面輸出完全不變。
+  // 目前共 14 個子產業有值：第一批（cnc-machining／sheet-metal／
+  // smt-assembly／plastic-injection／packaging-print／cosmetic-odm）+
+  // 第二批（apparel-manufacturing／mold-making／metal-materials／
+  // eco-packaging／beverage-oem／frozen-food／large-format-printing／
+  // sticker-label）。pcb 本輪明確暫緩，其餘 58 個子產業維持 undefined、
+  // 頁面輸出完全不變。
   //
   // 極重要的前台限制（見任務定案「正式站視覺限制」）：primarySeoKeyword／
   // secondaryKeywords 純粹是 SEO 研究資料（判斷 title/H1/description 怎麼
@@ -365,7 +368,15 @@ export interface SubIndustrySearchEntry {
 export const SUB_INDUSTRY_SEARCH_ENTRIES: SubIndustrySearchEntry[] = [
   // 紡織
   { slug: "fabric-materials", label: "布料 / 面料", displayName: "布料", parentIndustry: "紡織", parentIndustrySlug: "textile" },
-  { slug: "apparel-manufacturing", label: "服飾 / 成衣", displayName: "成衣", parentIndustry: "紡織", parentIndustrySlug: "textile" },
+  {
+    slug: "apparel-manufacturing", label: "服飾 / 成衣", displayName: "成衣",
+    parentIndustry: "紡織", parentIndustrySlug: "textile",
+    primarySeoKeyword: "成衣代工",
+    secondaryKeywords: ["成衣代工廠", "服飾代工", "服裝OEM", "ODM成衣", "成衣製造"],
+    seoTitleOverride: "成衣代工｜台灣成衣代工廠搜尋與詢價｜OXM",
+    metaDescriptionOverride: "尋找台灣成衣代工廠？OXM 整理可承接成衣 OEM／ODM 訂單的製造業者，可依地區、代工模式、可接小量與可打樣等條件篩選與詢價。",
+    seoIntroOverride: "成衣代工是紡織產業的重要製造服務。OXM 整理台灣可承接成衣代工、OEM／ODM 生產需求的工廠，可依地區與生產條件篩選並直接詢價。",
+  },
   { slug: "webbing-yarn", label: "織帶 / 線材", displayName: "織帶", parentIndustry: "紡織", parentIndustrySlug: "textile" },
   { slug: "towel-home-textiles", label: "毛巾 / 家用織品", displayName: "家用織品", parentIndustry: "紡織", parentIndustrySlug: "textile" },
   { slug: "functional-textiles", label: "功能性紡織品", displayName: "功能性紡織品", parentIndustry: "紡織", parentIndustrySlug: "textile" },
@@ -389,9 +400,25 @@ export const SUB_INDUSTRY_SEARCH_ENTRIES: SubIndustrySearchEntry[] = [
     seoIntroOverride: "鈑金加工是金屬加工底下的子產業，涵蓋鈑金代工與金屬製造需求。OXM 整理台灣相關工廠資訊，可依地區與生產條件篩選，直接送出詢價。",
   },
   { slug: "welding-assembly", label: "焊接 / 組裝", displayName: "焊接組裝", parentIndustry: "金屬加工", parentIndustrySlug: "metal-processing" },
-  { slug: "mold-making", label: "模具製造", displayName: "模具", parentIndustry: "金屬加工", parentIndustrySlug: "metal-processing" },
+  {
+    slug: "mold-making", label: "模具製造", displayName: "模具",
+    parentIndustry: "金屬加工", parentIndustrySlug: "metal-processing",
+    primarySeoKeyword: "模具廠",
+    secondaryKeywords: ["模具製造", "模具加工", "模具開發", "開模", "塑膠模具", "沖壓模具"],
+    seoTitleOverride: "模具廠｜台灣模具製造與加工廠商｜OXM",
+    metaDescriptionOverride: "尋找台灣模具廠？OXM 整理可承接模具製造、加工、開發與開模需求的廠商，涵蓋塑膠模具、沖壓模具等類型，可依地區與生產條件篩選詢價。",
+    seoIntroOverride: "OXM 整理台灣模具廠與模具製造廠商資訊，涵蓋塑膠模具、沖壓模具、模具加工與開模需求，可依地區與生產條件篩選並直接詢價。",
+  },
   { slug: "metal-craft-design", label: "金工飾品 / 金屬設計", displayName: "金工飾品", parentIndustry: "金屬加工", parentIndustrySlug: "metal-processing" },
-  { slug: "metal-materials", label: "金屬原料", displayName: "金屬原料", parentIndustry: "金屬加工", parentIndustrySlug: "metal-processing" },
+  {
+    slug: "metal-materials", label: "金屬原料", displayName: "金屬原料",
+    parentIndustry: "金屬加工", parentIndustrySlug: "metal-processing",
+    primarySeoKeyword: "金屬材料供應商",
+    secondaryKeywords: ["金屬原料", "金屬材料", "金屬原料供應商", "不鏽鋼材料", "鋁材供應商"],
+    seoTitleOverride: "金屬材料供應商｜台灣金屬原料廠商搜尋與詢價｜OXM",
+    metaDescriptionOverride: "尋找台灣金屬材料供應商？OXM 整理不鏽鋼、鋁材與其他金屬原料供應廠商，可依地區瀏覽相關供應商並直接詢價。",
+    seoIntroOverride: "OXM 整理台灣金屬材料與原料供應商資訊，涵蓋不鏽鋼、鋁材等材料來源，可依地區瀏覽相關供應商並直接詢價。",
+  },
   // 電子零件
   { slug: "pcb", label: "PCB / 電路板", displayName: "PCB", parentIndustry: "電子零件", parentIndustrySlug: "electronics" },
   {
@@ -437,13 +464,37 @@ export const SUB_INDUSTRY_SEARCH_ENTRIES: SubIndustrySearchEntry[] = [
   // 包裝
   { slug: "paper-boxes-bags", label: "紙盒 / 紙袋", displayName: "紙盒紙袋", parentIndustry: "包裝", parentIndustrySlug: "packaging" },
   { slug: "packaging-plastic-materials", label: "塑膠包裝", displayName: "塑膠包裝", parentIndustry: "包裝", parentIndustrySlug: "packaging" },
-  { slug: "eco-packaging", label: "環保包裝", displayName: "環保包裝", parentIndustry: "包裝", parentIndustrySlug: "packaging" },
+  {
+    slug: "eco-packaging", label: "環保包裝", displayName: "環保包裝",
+    parentIndustry: "包裝", parentIndustrySlug: "packaging",
+    primarySeoKeyword: "環保包裝供應商",
+    secondaryKeywords: ["環保包裝廠商", "環保包材", "環保包材供應商", "可分解包裝"],
+    seoTitleOverride: "環保包裝供應商｜台灣環保包材廠商搜尋與詢價｜OXM",
+    metaDescriptionOverride: "尋找台灣環保包裝供應商？OXM 整理可供應環保包材、可分解包裝與相關包裝方案的廠商，可依地區瀏覽相關供應商並直接詢價。",
+    seoIntroOverride: "OXM 整理台灣環保包裝與包材供應商資訊，涵蓋環保包材、可分解包裝等方案，可依地區瀏覽相關供應商並直接詢價。",
+  },
   { slug: "gift-specialty-packaging", label: "禮盒 / 特殊包裝", displayName: "禮盒包裝", parentIndustry: "包裝", parentIndustrySlug: "packaging" },
   { slug: "protective-packaging", label: "緩衝包材", displayName: "緩衝包材", parentIndustry: "包裝", parentIndustrySlug: "packaging" },
   // 食品
   { slug: "bakery-pastry", label: "烘焙 / 糕點", displayName: "烘焙糕點", parentIndustry: "食品", parentIndustrySlug: "food" },
-  { slug: "beverage-oem", label: "飲料 / 飲品", displayName: "飲料", parentIndustry: "食品", parentIndustrySlug: "food" },
-  { slug: "frozen-food", label: "冷凍食品", displayName: "冷凍食品", parentIndustry: "食品", parentIndustrySlug: "food" },
+  {
+    slug: "beverage-oem", label: "飲料 / 飲品", displayName: "飲料",
+    parentIndustry: "食品", parentIndustrySlug: "food",
+    primarySeoKeyword: "飲料代工廠",
+    secondaryKeywords: ["飲料OEM", "飲品代工", "手搖飲代工", "機能飲料代工"],
+    seoTitleOverride: "飲料代工廠｜台灣飲品 OEM 廠商搜尋與詢價｜OXM",
+    metaDescriptionOverride: "尋找台灣飲料代工廠？OXM 整理可承接飲料 OEM、手搖飲與機能飲料代工需求的製造業者，可依地區與生產條件篩選並直接詢價。",
+    seoIntroOverride: "OXM 整理台灣飲料代工廠資訊，涵蓋飲料 OEM、手搖飲與機能飲料等生產需求，可依地區與生產條件篩選並直接詢價。",
+  },
+  {
+    slug: "frozen-food", label: "冷凍食品", displayName: "冷凍食品",
+    parentIndustry: "食品", parentIndustrySlug: "food",
+    primarySeoKeyword: "冷凍食品代工廠",
+    secondaryKeywords: ["冷凍食品代工", "冷凍食品OEM", "冷凍食品ODM", "調理包代工", "料理包代工"],
+    seoTitleOverride: "冷凍食品代工廠｜台灣冷凍食品 OEM／ODM 廠商｜OXM",
+    metaDescriptionOverride: "尋找台灣冷凍食品代工廠？OXM 整理可承接冷凍食品 OEM、ODM、調理包與料理包代工需求的製造業者，可依地區與生產條件篩選並直接詢價。",
+    seoIntroOverride: "OXM 整理台灣冷凍食品代工廠資訊，涵蓋冷凍食品 OEM、ODM、調理包與料理包等生產需求，可依地區與生產條件篩選並直接詢價。",
+  },
   { slug: "snacks", label: "零食 / 點心", displayName: "零食點心", parentIndustry: "食品", parentIndustrySlug: "food" },
   { slug: "seasonings-sauces", label: "調味料 / 醬料", displayName: "調味料", parentIndustry: "食品", parentIndustrySlug: "food" },
   // 化工製造
@@ -468,8 +519,24 @@ export const SUB_INDUSTRY_SEARCH_ENTRIES: SubIndustrySearchEntry[] = [
   { slug: "pet-supplies", label: "寵物用品", displayName: "寵物用品", parentIndustry: "生活用品", parentIndustrySlug: "consumer-goods" },
   { slug: "baby-products", label: "嬰幼兒用品", displayName: "嬰幼兒用品", parentIndustry: "生活用品", parentIndustrySlug: "consumer-goods" },
   // 印刷
-  { slug: "large-format-printing", label: "展場 / 大圖輸出（立牌、背板、布條）", displayName: "大圖輸出", parentIndustry: "印刷", parentIndustrySlug: "printing" },
-  { slug: "sticker-label", label: "貼紙 / 標籤（商品貼紙、LOGO貼）", displayName: "貼紙標籤", parentIndustry: "印刷", parentIndustrySlug: "printing" },
+  {
+    slug: "large-format-printing", label: "展場 / 大圖輸出（立牌、背板、布條）", displayName: "大圖輸出",
+    parentIndustry: "印刷", parentIndustrySlug: "printing",
+    primarySeoKeyword: "大圖輸出",
+    secondaryKeywords: ["大圖輸出廠商", "大圖輸出公司", "展場輸出", "布條輸出", "立牌製作"],
+    seoTitleOverride: "大圖輸出｜台灣展場輸出與布條製作廠商｜OXM",
+    metaDescriptionOverride: "尋找台灣大圖輸出廠商？OXM 整理可承接展場輸出、布條、立牌與大型圖像製作需求的廠商，可依地區與生產條件篩選並直接詢價。",
+    seoIntroOverride: "OXM 整理台灣大圖輸出廠商資訊，涵蓋展場輸出、布條、立牌等製作需求，可依地區與生產條件篩選並直接詢價。",
+  },
+  {
+    slug: "sticker-label", label: "貼紙 / 標籤（商品貼紙、LOGO貼）", displayName: "貼紙標籤",
+    parentIndustry: "印刷", parentIndustrySlug: "printing",
+    primarySeoKeyword: "貼紙印刷",
+    secondaryKeywords: ["標籤印刷", "貼紙印刷廠", "貼紙代工", "標籤貼紙印刷", "LOGO貼紙製作"],
+    seoTitleOverride: "貼紙印刷｜台灣標籤貼紙印刷廠搜尋與詢價｜OXM",
+    metaDescriptionOverride: "尋找台灣貼紙印刷廠？OXM 整理可承接商品貼紙、LOGO 貼紙與標籤印刷需求的廠商，可依地區與生產條件篩選並直接詢價。",
+    seoIntroOverride: "OXM 整理台灣貼紙印刷與標籤印刷廠商資訊，涵蓋商品貼紙、LOGO 貼紙與標籤製作需求，可依地區與生產條件篩選並直接詢價。",
+  },
   {
     slug: "packaging-print", label: "包裝印刷（彩盒、紙盒、包裝袋）", displayName: "包裝印刷",
     parentIndustry: "印刷", parentIndustrySlug: "printing",
