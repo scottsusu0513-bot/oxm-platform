@@ -273,11 +273,11 @@ describe("sitemap.xml 產生邏輯（server/_core/index.ts）：地區 x 主產�
     expect(sitemapSource.length).toBeGreaterThan(0);
   });
 
-  it("既有的固定頁／主產業頁／子產業頁／工廠頁／消息頁 entries 都還在", () => {
+  it("既有的固定頁／主產業頁／工廠頁／消息頁 entries 都還在；舊 Phase 1 子產業頁已 301 轉址到 /factories/:subIndustrySlug，不再殘留於 sitemap（見任務定案「SEO route consolidation」）", () => {
     expect(sitemapSource).toContain("${BASE}/`");
     expect(sitemapSource).toContain("getApprovedFactoriesForSitemap");
     expect(sitemapSource).toContain("INDUSTRY_SLUGS");
-    expect(sitemapSource).toContain("PHASE1_SUB_INDUSTRY_PAGES");
+    expect(sitemapSource).not.toContain("PHASE1_SUB_INDUSTRY_PAGES");
     expect(sitemapSource).toContain("getPublishedNewsForSitemap");
   });
 

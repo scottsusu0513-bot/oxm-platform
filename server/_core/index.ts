@@ -11,7 +11,7 @@ import { setupSecurityHeaders, setupOriginCheck, setupNoIndexRoutes } from "./se
 import { setupGoneRoutes } from "./goneRoutes";
 import { apiLimiter, loginLimiter, uploadLimiter, messageLimiter, submitReviewLimiter, adminLimiter, searchLimiter, reportLimiter } from "./rateLimit";
 import { COOKIE_NAME } from "@shared/const";
-import { INDUSTRY_SLUGS, REGION_SLUGS, PHASE1_SUB_INDUSTRY_PAGES, SUB_INDUSTRY_SEARCH_ENTRY_BY_PARENT_AND_LABEL } from "../../shared/constants";
+import { INDUSTRY_SLUGS, REGION_SLUGS, SUB_INDUSTRY_SEARCH_ENTRY_BY_PARENT_AND_LABEL } from "../../shared/constants";
 import { escapeXmlText } from "@shared/seo/xml";
 import {
   getDb, getApprovedFactoriesForSitemap, getApprovedRegionIndustryCombosForSitemap,
@@ -211,10 +211,15 @@ async function startServer() {
       urls.push(entry(`${BASE}/industry/${slug}`, "0.8", "weekly"));
     }
 
-    // 子產業頁（Phase 1）：理由同主產業頁，省略 lastmod。
-    for (const { industrySlug, subSlug } of PHASE1_SUB_INDUSTRY_PAGES) {
-      urls.push(entry(`${BASE}/industry/${industrySlug}/${subSlug}`, "0.7", "weekly"));
-    }
+    // 子產業頁（Phase 1，/industry/:industry/:subIndustry）：SEO route
+    // consolidation 後已 301 永久轉址到 /factories/:subIndustrySlug（見
+    // shared/seo/industryPages.ts 的 resolveLegacySubIndustryRedirect 與
+    // server/_core/vite.ts 的對應處理），不再是自己可被索引的合法網址，故意
+    // 不再放進 sitemap——同一個 URL 同時出現在 sitemap（「請索引」）又回
+    // 301（「這裡已經搬家」）是矛盾訊號。新的 canonical 網址
+    // （/factories/:subIndustrySlug）已經在下面「全台子產業」區塊依既有
+    // DB-gated 規則加入。主產業頁（上面 INDUSTRY_SLUGS 迴圈）完全不受影響、
+    // 維持原樣。
 
     // 地區 × 主產業 SEO Landing Page：與主產業頁不同，這裡刻意只加入「目前
     // 至少 1 家 approved 公開工廠」的 distinct 組合（22 縣市 × 13 主產業 = 286

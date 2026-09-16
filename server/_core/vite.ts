@@ -8,7 +8,7 @@ import viteConfig from "../../vite.config";
 import { buildFactoryMeta, buildNewsMeta, buildRegionIndustryMeta, buildIndustryMeta, buildSubIndustryMeta, buildFactoriesTwoSegmentMeta, injectMetaIntoHtml, parseFactoryPath, parseNewsPath, stripQueryString, extractQueryString, DEFAULT_OG_IMAGE } from "./ogMeta";
 import { injectPublicPageSeo } from "./publicPageMeta";
 import { injectPrerenderedBody, injectDynamicSemanticBody } from "./prerenderedBody";
-import { parseIndustryPath, resolveLegacyIndustrySlugRedirect } from "@shared/seo/industryPages";
+import { parseIndustryPath, resolveLegacyIndustrySlugRedirect, resolveLegacySubIndustryRedirect } from "@shared/seo/industryPages";
 import { parseRegionIndustryPath, resolveRegionIndustry, buildRegionIndustryPageContent } from "@shared/seo/regionIndustryPages";
 import { parseSubIndustryPath, resolveSubIndustry, buildSubIndustryPageContent, resolveRegionSubIndustry, buildRegionSubIndustryPageContent } from "@shared/seo/subIndustryPages";
 import { resolveFactoriesTwoSegment } from "@shared/seo/factoriesPathResolver";
@@ -81,6 +81,19 @@ export async function setupVite(app: Express, server: Server) {
       if (legacyRedirectTarget) {
         const qs = extractQueryString(req.originalUrl);
         res.redirect(301, qs ? `${legacyRedirectTarget}?${qs}` : legacyRedirectTarget);
+        return;
+      }
+
+      // 舊子產業 Phase 1 頁（/industry/:industry/:subIndustry）→ 新子產業搜尋頁
+      // （/factories/:subIndustrySlug）301 永久轉址（見任務定案「SEO route
+      // consolidation」）：同樣必須在任何 meta 注入／render 之前就回應真正的
+      // HTTP 301。刻意不轉發 query string——舊頁唯一有意義的 query 是
+      // `?page=N`，新頁完全不支援分頁參數，依任務定案直接捨棄，不無條件
+      // preserve（與上面 resolveLegacyIndustrySlugRedirect 轉發 query 的行為
+      // 刻意不同，那邊新舊頁是同一種有分頁的頁面類型）。
+      const legacySubIndustryRedirectTarget = resolveLegacySubIndustryRedirect(pathname);
+      if (legacySubIndustryRedirectTarget) {
+        res.redirect(301, legacySubIndustryRedirectTarget);
         return;
       }
 
@@ -255,6 +268,15 @@ export function serveStatic(app: Express) {
     if (legacyRedirectTarget) {
       const qs = extractQueryString(req.originalUrl);
       res.redirect(301, qs ? `${legacyRedirectTarget}?${qs}` : legacyRedirectTarget);
+      return;
+    }
+
+    // 舊子產業 Phase 1 頁 301 永久轉址：見上方 setupVite() 內同一段邏輯的
+    // 說明，這裡是 production 靜態伺服的對應分支，同樣必須在任何 meta 注入
+    // 之前處理，且刻意不轉發 query string（新頁不支援分頁參數）。
+    const legacySubIndustryRedirectTarget = resolveLegacySubIndustryRedirect(pathname);
+    if (legacySubIndustryRedirectTarget) {
+      res.redirect(301, legacySubIndustryRedirectTarget);
       return;
     }
 

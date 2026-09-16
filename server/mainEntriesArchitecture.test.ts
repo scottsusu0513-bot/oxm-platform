@@ -333,9 +333,9 @@ describe("sitemap／noindex 一致性（server/_core/index.ts、server/_core/sec
     expect(sitemapSource).toMatch(/\$\{BASE\}\/search`/);
   });
 
-  it("sitemap 沒有因為本輪調整就把產業分類頁移除（禁止誤傷產業 SEO）", () => {
+  it("sitemap 沒有因為本輪調整就把主產業分類頁移除（禁止誤傷產業 SEO）；舊 Phase 1 子產業頁已依 SEO route consolidation 301 轉址到 /factories/:subIndustrySlug，故意不再殘留於 sitemap（同一個網址不能同時「請索引」又「已搬家」）", () => {
     expect(sitemapSource).toMatch(/INDUSTRY_SLUGS/);
-    expect(sitemapSource).toMatch(/PHASE1_SUB_INDUSTRY_PAGES/);
+    expect(sitemapSource).not.toMatch(/PHASE1_SUB_INDUSTRY_PAGES/);
   });
 
   it("正式開站前最後微調：sitemap 不再包含 /privacy、/terms（降低相對權重，不等於 noindex）", () => {

@@ -9,6 +9,7 @@ import { useRoute, Link } from "wouter";
 import { resolveSubIndustry, buildSubIndustryPageContent, buildSubIndustryBreadcrumbJsonLd } from "@shared/seo/subIndustryPages";
 import { toSafeJsonLdString } from "@shared/seo/schema";
 import { FactoriesLandingResults } from "@/components/seo/FactoriesLandingResults";
+import { NEW_SUB_INDUSTRY_SLUG_TO_LEGACY_SEO_CONTENT } from "@shared/constants";
 
 // /factories/:subIndustrySlug — 全台子產業 SEO Landing Page（不含地區維度）。
 //
@@ -52,6 +53,17 @@ function SubIndustryContent({ resolved }: { resolved: NonNullable<ReturnType<typ
   const factories = data?.items ?? [];
   const total = data?.total ?? 0;
   const noindex = total === 0;
+
+  // 舊 /industry/:industry/:subIndustry（Phase 1）頁本來就有的 SEO 長文內容
+  // （intro／applications／howToChoose），301 轉址過來後不能讓這些內容消失
+  // ——直接 reuse 既有 SUB_INDUSTRY_SEO_CONTENT（透過
+  // NEW_SUB_INDUSTRY_SLUG_TO_LEGACY_SEO_CONTENT 這個純推導、不複製文案的
+  // 反查表），只有原本就有 Phase 1 內容的 13 個子產業才會查到，其餘子產業
+  // 這裡是 undefined，畫面行為維持現狀（見任務定案「若該新子產業沒有舊
+  // SUB_INDUSTRY_SEO_CONTENT：維持現在的新頁行為即可」）。title／
+  // description／H1／上面的 content.intro 完全不受影響，這段只是在工廠
+  // 結果列表之後、作為補充資訊。
+  const legacySeoContent = NEW_SUB_INDUSTRY_SLUG_TO_LEGACY_SEO_CONTENT[resolved.subIndustrySlug];
 
   const parentIndustryHref = `/industry/${resolved.entry.parentIndustrySlug}`;
   const searchHref = `/search?industry=${encodeURIComponent(resolved.entry.parentIndustry)}&subIndustry=${encodeURIComponent(resolved.entry.label)}`;
@@ -162,6 +174,30 @@ function SubIndustryContent({ resolved }: { resolved: NonNullable<ReturnType<typ
             </div>
           }
         />
+
+        {/* 舊 Phase 1 子產業頁的 SEO 內容區塊，reuse 既有 SUB_INDUSTRY_SEO_CONTENT
+            （見上方 legacySeoContent 說明）。樣式沿用 IndustryPage.tsx 既有的
+            「關於{industry}代工」區塊，位置在工廠結果列表之後，作為補充資訊，
+            不影響上面的 title／description／H1／intro。 */}
+        {legacySeoContent && (
+          <section className="border-t border-border pt-10 pb-6 space-y-6">
+            <h2 className="text-xl font-bold text-foreground">關於{resolved.entry.parentIndustry}代工</h2>
+            <div className="grid md:grid-cols-3 gap-6 text-sm text-muted-foreground leading-relaxed">
+              <div>
+                <h3 className="font-semibold text-foreground mb-2">什麼是{resolved.entry.parentIndustry}代工</h3>
+                <p>{legacySeoContent.intro}</p>
+              </div>
+              <div>
+                <h3 className="font-semibold text-foreground mb-2">常見應用</h3>
+                <p>{legacySeoContent.applications}</p>
+              </div>
+              <div>
+                <h3 className="font-semibold text-foreground mb-2">如何選擇工廠</h3>
+                <p>{legacySeoContent.howToChoose}</p>
+              </div>
+            </div>
+          </section>
+        )}
       </div>
     </div>
   );

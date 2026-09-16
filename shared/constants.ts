@@ -538,3 +538,44 @@ export const SUB_INDUSTRY_SEO_CONTENT: Record<string, {
     howToChoose: "選擇成衣工廠時，應確認廠商的打版師資歷與打版費用；是否具備目標認證（WRAP、GOTS 有機棉）；最低起訂量（MOQ）與每款顏色最低數量；面料採購的彈性（是否可客戶提供面料）；以及樣品製作週期與費用。建議先製作 Pre-Production Sample（PP 樣），確認版型、縫工與材質後再下量產訂單。",
   },
 };
+
+// ===== 舊子產業 Phase 1 頁（/industry/:industry/:subIndustry）→ 新子產業搜尋頁
+// （/factories/:subIndustrySlug）route consolidation（見任務定案「SEO route
+// consolidation」）=====
+//
+// 純由既有資料推導，不是第二套 hardcoded mapping：
+// 1. 走訪 SUB_INDUSTRY_SLUG_TO_NAME（Phase 1，13 筆，key 是舊
+//    "industrySlug/subSlug"）拿到 label；
+// 2. 用 INDUSTRY_SLUG_TO_NAME 把舊 industrySlug 轉成 parentIndustry 中文名；
+// 3. 用 SUB_INDUSTRY_SEARCH_ENTRY_BY_PARENT_AND_LABEL（本輪上一次任務新增，
+//    parent-aware，可正確處理「塑膠包裝」這種同 label 不同 parent 的情況）
+//    以 parentIndustry+label 查回新的 SubIndustrySearchEntry，取其 slug。
+// 對不到（理論上不會發生，SUB_INDUSTRY_SLUG_TO_NAME 的 13 筆本來就都在
+// SUB_INDUSTRY_SEARCH_ENTRIES 涵蓋範圍內）的組合直接跳過，不猜測、不硬塞。
+export const LEGACY_SUB_INDUSTRY_SLUG_TO_NEW_SLUG: Record<string, string> = (() => {
+  const map: Record<string, string> = {};
+  for (const [legacyKey, label] of Object.entries(SUB_INDUSTRY_SLUG_TO_NAME)) {
+    const industrySlug = legacyKey.slice(0, legacyKey.indexOf("/"));
+    const parentIndustry = INDUSTRY_SLUG_TO_NAME[industrySlug];
+    if (!parentIndustry) continue;
+    const entry = SUB_INDUSTRY_SEARCH_ENTRY_BY_PARENT_AND_LABEL[`${parentIndustry}|||${label}`];
+    if (entry) map[legacyKey] = entry.slug;
+  }
+  return map;
+})();
+
+/**
+ * 新 slug → 舊 Phase 1 SEO 長文內容（intro／applications／howToChoose）反查表。
+ * 直接 reuse SUB_INDUSTRY_SEO_CONTENT 既有物件（不複製、不改寫文案），供
+ * /factories/:subIndustrySlug 在工廠結果列表之後顯示補充資訊——只有原本就有
+ * Phase 1 內容的 13 個子產業會出現在這裡，其餘子產業查不到、新頁行為不變
+ * （見任務定案「若該新子產業沒有舊 SUB_INDUSTRY_SEO_CONTENT：維持現在的新頁
+ * 行為即可」）。
+ */
+export const NEW_SUB_INDUSTRY_SLUG_TO_LEGACY_SEO_CONTENT: Record<string, (typeof SUB_INDUSTRY_SEO_CONTENT)[string]> = (() => {
+  const map: Record<string, (typeof SUB_INDUSTRY_SEO_CONTENT)[string]> = {};
+  for (const [legacyKey, newSlug] of Object.entries(LEGACY_SUB_INDUSTRY_SLUG_TO_NEW_SLUG)) {
+    map[newSlug] = SUB_INDUSTRY_SEO_CONTENT[legacyKey];
+  }
+  return map;
+})();

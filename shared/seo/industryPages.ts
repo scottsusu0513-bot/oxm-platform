@@ -7,6 +7,7 @@
 import {
   INDUSTRY_SLUG_TO_NAME, INDUSTRY_SLUG_TO_NAMES,
   SUB_INDUSTRY_SLUG_TO_NAME, SUB_INDUSTRY_SEO_CONTENT,
+  LEGACY_SUB_INDUSTRY_SLUG_TO_NEW_SLUG,
 } from "../constants";
 import { BRAND } from "./brand";
 import { getBreadcrumbSchema, type JsonLdObject } from "./schema";
@@ -111,6 +112,33 @@ export function resolveLegacyIndustrySlugRedirect(pathname: string): string | nu
   if (!parsed || parsed.subSlug) return null;
   const newSlug = LEGACY_INDUSTRY_SLUG_REDIRECTS[parsed.slug];
   return newSlug ? `/industry/${newSlug}` : null;
+}
+
+/**
+ * 舊子產業 Phase 1 頁（/industry/:industry/:subIndustry）→ 新子產業搜尋頁
+ * （/factories/:subIndustrySlug）301 永久轉址（見任務定案「SEO route
+ * consolidation」）。跟上面 resolveLegacyIndustrySlugRedirect 是同一種角色，
+ * 差別只在於：
+ * - 上面那個處理的是「整個主產業 slug 退休」（要求 !parsed.subSlug，只比對
+ *   單段 /industry/:slug）；
+ * - 這個處理的是「合法主產業 + 合法 Phase 1 子產業」的兩段網址（要求一定要
+ *   有 subSlug），轉去完全不同的網址空間（/factories/ 而不是 /industry/）。
+ *
+ * mapping 完全來自 shared/constants.ts 的 LEGACY_SUB_INDUSTRY_SLUG_TO_NEW_SLUG
+ * （純由 SUB_INDUSTRY_SLUG_TO_NAME／INDUSTRY_SLUG_TO_NAME／
+ * SUB_INDUSTRY_SEARCH_ENTRY_BY_PARENT_AND_LABEL 三個既有資料表推導出來，不是
+ * 這裡另外 hardcode 一份），對不到（非法子產業 slug、或合法主產業配上不存在
+ * 的子產業 slug）一律回傳 null，交給既有「找不到此產業頁面」的行為，不猜測、
+ * 不誤轉。只吃乾淨的 pathname，不帶 query string——舊頁唯一有意義的 query
+ * 是 `?page=N`（正式頁碼分頁），新頁完全不支援分頁參數，帶過去也不起作用，
+ * 依任務定案直接捨棄，不無條件 preserve query（見任務定案「Query string
+ * 策略」）。
+ */
+export function resolveLegacySubIndustryRedirect(pathname: string): string | null {
+  const parsed = parseIndustryPath(pathname);
+  if (!parsed || !parsed.subSlug) return null;
+  const newSlug = LEGACY_SUB_INDUSTRY_SLUG_TO_NEW_SLUG[`${parsed.slug}/${parsed.subSlug}`];
+  return newSlug ? `/factories/${newSlug}` : null;
 }
 
 /**

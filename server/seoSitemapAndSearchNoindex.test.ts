@@ -26,12 +26,12 @@ describe("sitemap.xml 產生邏輯（server/_core/index.ts）", () => {
     expect(sitemapSource.length).toBeGreaterThan(0);
   });
 
-  it("包含首頁、/upgrade-center、已審核工廠、主產業頁、子產業頁與可公開消息", () => {
+  it("包含首頁、/upgrade-center、已審核工廠、主產業頁與可公開消息；舊 Phase 1 子產業頁已 301 轉址到 /factories/:subIndustrySlug，不再出現在 sitemap", () => {
     expect(sitemapSource).toContain("${BASE}/`");
     expect(sitemapSource).toContain("${BASE}/upgrade-center");
     expect(sitemapSource).toContain("getApprovedFactoriesForSitemap");
     expect(sitemapSource).toContain("INDUSTRY_SLUGS");
-    expect(sitemapSource).toContain("PHASE1_SUB_INDUSTRY_PAGES");
+    expect(sitemapSource).not.toContain("PHASE1_SUB_INDUSTRY_PAGES");
     expect(sitemapSource).toContain("${BASE}/news`");
     expect(sitemapSource).toContain("getPublishedNewsForSitemap");
   });
@@ -75,14 +75,13 @@ describe("sitemap.xml 產生邏輯（server/_core/index.ts）", () => {
     expect(sitemapSource).not.toMatch(/\/apply/);
   });
 
-  it("主產業頁與子產業頁的 entry() 呼叫沒有帶 lastmod（沒有真實逐頁更新時間可查，不得每次都用 today 偽造）", () => {
+  it("主產業頁的 entry() 呼叫沒有帶 lastmod（沒有真實逐頁更新時間可查，不得每次都用 today 偽造）；舊 Phase 1 子產業頁迴圈已移除（301 轉址取代），sitemap 原始碼裡不應再有這段迴圈", () => {
     const industryLoopMatch = sitemapSource.match(/for \(const slug of Object\.values\(INDUSTRY_SLUGS\)\)[\s\S]*?\n {4}\}/);
     expect(industryLoopMatch).toBeTruthy();
     expect(industryLoopMatch![0]).not.toContain("today");
 
     const subIndustryLoopMatch = sitemapSource.match(/for \(const \{ industrySlug, subSlug \} of PHASE1_SUB_INDUSTRY_PAGES\)[\s\S]*?\n {4}\}/);
-    expect(subIndustryLoopMatch).toBeTruthy();
-    expect(subIndustryLoopMatch![0]).not.toContain("today");
+    expect(subIndustryLoopMatch).toBeNull();
   });
 
   it("已審核工廠頁的 lastmod 用工廠實際 updatedAt，不是寫死 today", () => {

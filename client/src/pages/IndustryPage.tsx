@@ -12,7 +12,7 @@ import { trpc } from "@/lib/trpc";
 import { useRoute, useLocation, useSearch, Link } from "wouter";
 import { useRef, useEffect } from "react";
 import { INDUSTRY_SLUG_TO_NAMES, INDUSTRY_SLUG_TO_NAME, INDUSTRY_SEO_CONTENT, INDUSTRY_SLUGS, SUB_INDUSTRY_SLUG_TO_NAME, SUB_INDUSTRY_SEO_CONTENT } from "@shared/constants";
-import { buildIndustryPageMeta, resolveLegacyIndustrySlugRedirect } from "@shared/seo/industryPages";
+import { buildIndustryPageMeta, resolveLegacyIndustrySlugRedirect, resolveLegacySubIndustryRedirect } from "@shared/seo/industryPages";
 import { parsePageParam, pageToQueryValue, computeTotalPages, clampPage, getPaginationRange } from "@shared/industryPagination";
 import { ChevronLeft, ChevronRight, Factory, Wrench, Star, MapPin } from "lucide-react";
 
@@ -90,6 +90,21 @@ export default function IndustryPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [basePath, searchString]);
+
+  // 0b) 舊子產業 Phase 1 頁 client 端防呆，同上一個 effect 同一種角色分工
+  //     （理由完全相同：server 301 是主機制，這裡只處理 SPA 已載入後
+  //     Back/Forward 切回舊網址、server 完全攔截不到的情境）——差別只在於
+  //     目標網址跳去完全不同的路由（/factories/...），且刻意不帶查詢字串
+  //     （見 shared/seo/industryPages.ts 的 resolveLegacySubIndustryRedirect
+  //     說明：新頁不支援 ?page=N 這類分頁參數，不 preserve）。直接沿用同一個
+  //     resolveLegacySubIndustryRedirect，不重複維護一份對照表。
+  useEffect(() => {
+    const legacySubIndustryTarget = resolveLegacySubIndustryRedirect(basePath);
+    if (legacySubIndustryTarget) {
+      navigate(legacySubIndustryTarget, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [basePath]);
 
   // 1) 語法正規化：?page=abc / ?page=0 / ?page=-1 / ?page=01 這類不是「乾淨
   //    正整數字串」的網址，一律馬上 replace 成正規化後的網址（第 1 頁不留
