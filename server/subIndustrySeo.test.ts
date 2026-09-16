@@ -103,20 +103,20 @@ describe("resolveRegionSubIndustry", () => {
   });
 });
 
-describe("buildSubIndustryPageContent：CNC加工 定案範例", () => {
-  const resolved = resolveSubIndustry("cnc-machining")!;
+describe("buildSubIndustryPageContent：PCB 定案範例（無 SEO override，測預設 fallback template；cnc-machining 從「子產業 SEO Keyword Mapping」這輪起已有 override，預設 template 的範例改用這裡沒有設定 override 的 pcb，見 server/subIndustrySeoKeywordOverride.test.ts 另外測 override 行為）", () => {
+  const resolved = resolveSubIndustry("pcb")!;
   const content = buildSubIndustryPageContent(resolved);
 
-  it("H1", () => expect(content.h1).toBe("CNC加工廠"));
+  it("H1", () => expect(content.h1).toBe("PCB廠"));
   it("Title 含品牌與 displayName", () => {
-    expect(content.title).toContain("CNC加工");
+    expect(content.title).toContain("PCB");
     expect(content.title).toContain("OXM");
   });
-  it("Canonical 自我指向 /factories/cnc-machining", () => {
-    expect(content.canonical).toBe("https://www.oxmmatch.com/factories/cnc-machining");
+  it("Canonical 自我指向 /factories/pcb", () => {
+    expect(content.canonical).toBe("https://www.oxmmatch.com/factories/pcb");
   });
   it("不同子產業的 title 彼此不同", () => {
-    const other = buildSubIndustryPageContent(resolveSubIndustry("pcb")!);
+    const other = buildSubIndustryPageContent(resolveSubIndustry("sensors-modules")!);
     expect(other.title).not.toBe(content.title);
   });
   it("intro 不含主觀／不可驗證敘述", () => {

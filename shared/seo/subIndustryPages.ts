@@ -68,22 +68,36 @@ export interface SubIndustryPageContent {
  * 不虛構工廠數／產業歷史／產值、不使用「最推薦／最完整」等不可驗證敘述
  * （見任務定案「SEO intro 文案」）。displayName 只用於顯示（title／H1／
  * intro），DB 篩選／連到 /search 一律用 entry.label（完整原始值）。
+ *
+ * SEO keyword mapping override（見任務定案「子產業 SEO Keyword Mapping
+ * 基礎架構」）：entry 上的 seoTitleOverride／metaDescriptionOverride／
+ * seoIntroOverride／primarySeoKeyword 有值時優先採用，取代這裡的固定
+ * template；沒有設定 override 的子產業（目前 66 個）完全不受影響，
+ * 一律 fallback 沿用下面原本的公式。H1 只有在 primarySeoKeyword 有值時
+ * 才會改用它（本輪定案「H1 允許使用 primarySeoKeyword」），title／
+ * description／intro 則各自對應獨立的 override 欄位，四者互不牽動——
+ * 例如只設定 primarySeoKeyword 沒設定 seoTitleOverride，title 仍然照舊公式
+ * 生成（只是公式裡的 h1 部分會用新的 primarySeoKeyword）。
  */
 export function buildSubIndustryPageContent(resolved: ResolvedSubIndustry): SubIndustryPageContent {
   const { subIndustrySlug, entry } = resolved;
   const ambiguous = isAmbiguousSubIndustryLabel(entry.label);
-  const h1 = `${entry.displayName}廠`;
+  const h1 = entry.primarySeoKeyword ?? `${entry.displayName}廠`;
   // label 有 collision 時（例如「塑膠包裝」同時屬於塑膠／包裝），title／
   // description 額外帶上（parentIndustry）區分，避免兩個不同 canonical URL
   // 輸出逐字相同的 <title>；H1 維持不變，兩筆 entry 都正常顯示同樣的
   // displayName（見上方 isAmbiguousSubIndustryLabel 說明）。
-  const title = ambiguous
+  const defaultTitle = ambiguous
     ? `${h1}｜台灣${entry.displayName}廠（${entry.parentIndustry}）搜尋與詢價｜OXM`
     : `${h1}｜台灣${entry.displayName}廠搜尋與詢價｜OXM`;
-  const description = ambiguous
+  const defaultDescription = ambiguous
     ? `尋找台灣${entry.displayName}廠？OXM 整理${entry.parentIndustry}底下可承接${entry.displayName}需求的製造業者，可依地區、代工模式、可接小量與可打樣等條件進一步篩選與詢價。`
     : `尋找台灣${entry.displayName}廠？OXM 整理可承接${entry.displayName}需求的製造業者，可依地區、代工模式、可接小量與可打樣等條件進一步篩選與詢價。`;
-  const intro = `${entry.displayName}是${entry.parentIndustry}底下的子產業。OXM 整理台灣可承接${entry.displayName}需求的工廠與工作室資訊，可使用 OXM 的搜尋功能依地區、類型、ODM／OEM／OBM 代工模式，以及可接小量、可打樣等生產條件進一步篩選，並直接送出詢價。`;
+  const defaultIntro = `${entry.displayName}是${entry.parentIndustry}底下的子產業。OXM 整理台灣可承接${entry.displayName}需求的工廠與工作室資訊，可使用 OXM 的搜尋功能依地區、類型、ODM／OEM／OBM 代工模式，以及可接小量、可打樣等生產條件進一步篩選，並直接送出詢價。`;
+
+  const title = entry.seoTitleOverride ?? defaultTitle;
+  const description = entry.metaDescriptionOverride ?? defaultDescription;
+  const intro = entry.seoIntroOverride ?? defaultIntro;
   const canonical = `${BRAND.url}/factories/${subIndustrySlug}`;
   return { title, description, canonical, h1, intro };
 }

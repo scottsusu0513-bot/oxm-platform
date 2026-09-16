@@ -328,6 +328,38 @@ export interface SubIndustrySearchEntry {
   parentIndustry: string;
   /** INDUSTRY_SLUGS[parentIndustry]，一定是既有 13 個主產業 slug 之一。 */
   parentIndustrySlug: string;
+
+  // ===== SEO keyword mapping（選填，見任務定案「子產業 SEO Keyword Mapping
+  // 基礎架構」）=====
+  // 這五個欄位是唯一的 SEO 設定層：以這個 entry 的 canonical slug 為唯一
+  // key（entry 本身），不建第二份 slug 對照表。shared/seo/subIndustryPages.ts
+  // 的 buildSubIndustryPageContent() 在算 title／description／H1／intro 時，
+  // 優先讀這裡的 override，沒有設定就 fallback 沿用既有固定 template——
+  // 目前只有本輪指定的 6 個子產業（cnc-machining／sheet-metal／
+  // smt-assembly／plastic-injection／packaging-print／cosmetic-odm）有值，
+  // 其餘 66 個子產業維持 undefined、頁面輸出完全不變。
+  //
+  // 極重要的前台限制（見任務定案「正式站視覺限制」）：primarySeoKeyword／
+  // secondaryKeywords 純粹是 SEO 研究資料（判斷 title/H1/description 怎麼
+  // 下的依據），secondaryKeywords 尤其絕對禁止被任何元件直接 render 成
+  // 前台可見的 keyword chips／tags／熱門搜尋詞／關鍵字牆——目前唯一合法的
+  // 消費者只有 shared/seo/subIndustryPages.ts 的內容產生函式，且只會用來
+  // 決定 h1（primarySeoKeyword 有值時取代預設的「{displayName}廠」），不會
+  // 把 secondaryKeywords 本身輸出到任何畫面或 meta 標籤。
+
+  /** 主要 SEO 關鍵字，例如「CNC 加工廠」。有值時取代預設 h1 公式
+   *  （`${displayName}廠`），沒有其他用途（不影響 DB 篩選、不影響 slug）。 */
+  primarySeoKeyword?: string;
+  /** 次要 keyword cluster，純 SEO 策略研究資料——只給人／未來 SEO 工具參考
+   *  怎麼寫文案，程式碼裡任何地方都不得把這個陣列直接 render 成前台可見的
+   *  文字、清單、標籤或 badge。 */
+  secondaryKeywords?: string[];
+  /** 覆寫預設 title 公式；未設定則 fallback 沿用既有固定 template。 */
+  seoTitleOverride?: string;
+  /** 覆寫預設 meta description；未設定則 fallback。 */
+  metaDescriptionOverride?: string;
+  /** 覆寫預設 intro（H1 正下方那段簡短文字）；未設定則 fallback。 */
+  seoIntroOverride?: string;
 }
 
 export const SUB_INDUSTRY_SEARCH_ENTRIES: SubIndustrySearchEntry[] = [
@@ -338,21 +370,53 @@ export const SUB_INDUSTRY_SEARCH_ENTRIES: SubIndustrySearchEntry[] = [
   { slug: "towel-home-textiles", label: "毛巾 / 家用織品", displayName: "家用織品", parentIndustry: "紡織", parentIndustrySlug: "textile" },
   { slug: "functional-textiles", label: "功能性紡織品", displayName: "功能性紡織品", parentIndustry: "紡織", parentIndustrySlug: "textile" },
   // 金屬加工
-  { slug: "cnc-machining", label: "CNC加工 / 精密加工", displayName: "CNC加工", parentIndustry: "金屬加工", parentIndustrySlug: "metal-processing" },
-  { slug: "sheet-metal", label: "鈑金加工", displayName: "鈑金加工", parentIndustry: "金屬加工", parentIndustrySlug: "metal-processing" },
+  {
+    slug: "cnc-machining", label: "CNC加工 / 精密加工", displayName: "CNC加工",
+    parentIndustry: "金屬加工", parentIndustrySlug: "metal-processing",
+    primarySeoKeyword: "CNC 加工廠",
+    secondaryKeywords: ["CNC 加工", "CNC 代工", "CNC 代工廠", "CNC 小量代工", "CNC 零件代工", "CNC 精密加工", "五軸加工代工"],
+    seoTitleOverride: "CNC 加工廠｜台灣 CNC 代工與精密零件工廠｜OXM",
+    metaDescriptionOverride: "尋找台灣 CNC 加工廠？OXM 整理可承接 CNC 代工、精密零件加工與小量試作需求的工廠與工作室，並可依地區、代工模式、可接小量與可打樣等條件篩選詢價。",
+    seoIntroOverride: "CNC 加工是金屬加工底下的重要子產業。OXM 整理台灣可承接 CNC 代工與精密零件加工需求的工廠，可依地區與生產條件進一步篩選，直接送出詢價。",
+  },
+  {
+    slug: "sheet-metal", label: "鈑金加工", displayName: "鈑金加工",
+    parentIndustry: "金屬加工", parentIndustrySlug: "metal-processing",
+    primarySeoKeyword: "鈑金加工廠",
+    secondaryKeywords: ["鈑金加工", "鈑金代工", "金屬鈑金加工", "鈑金製造"],
+    seoTitleOverride: "鈑金加工廠｜台灣鈑金代工、金屬製造廠商資訊｜OXM",
+    metaDescriptionOverride: "尋找台灣鈑金加工廠？OXM 整理可承接鈑金代工與金屬鈑金製造需求的工廠，可依地區、代工模式、可接小量與可打樣等條件進一步篩選並直接詢價。",
+    seoIntroOverride: "鈑金加工是金屬加工底下的子產業，涵蓋鈑金代工與金屬製造需求。OXM 整理台灣相關工廠資訊，可依地區與生產條件篩選，直接送出詢價。",
+  },
   { slug: "welding-assembly", label: "焊接 / 組裝", displayName: "焊接組裝", parentIndustry: "金屬加工", parentIndustrySlug: "metal-processing" },
   { slug: "mold-making", label: "模具製造", displayName: "模具", parentIndustry: "金屬加工", parentIndustrySlug: "metal-processing" },
   { slug: "metal-craft-design", label: "金工飾品 / 金屬設計", displayName: "金工飾品", parentIndustry: "金屬加工", parentIndustrySlug: "metal-processing" },
   { slug: "metal-materials", label: "金屬原料", displayName: "金屬原料", parentIndustry: "金屬加工", parentIndustrySlug: "metal-processing" },
   // 電子零件
   { slug: "pcb", label: "PCB / 電路板", displayName: "PCB", parentIndustry: "電子零件", parentIndustrySlug: "electronics" },
-  { slug: "smt-assembly", label: "電子組裝 / SMT", displayName: "SMT電子組裝", parentIndustry: "電子零件", parentIndustrySlug: "electronics" },
+  {
+    slug: "smt-assembly", label: "電子組裝 / SMT", displayName: "SMT電子組裝",
+    parentIndustry: "電子零件", parentIndustrySlug: "electronics",
+    primarySeoKeyword: "SMT 代工",
+    secondaryKeywords: ["SMT 加工", "SMT 打件", "SMT 貼片", "電子組裝代工", "SMT 廠商"],
+    seoTitleOverride: "SMT 代工｜台灣 SMT 貼片與電子組裝廠商｜OXM",
+    metaDescriptionOverride: "尋找台灣 SMT 代工廠？OXM 整理可承接 SMT 貼片、打件與電子組裝需求的工廠，可依地區、代工模式、可接小量與可打樣等條件篩選詢價。",
+    seoIntroOverride: "SMT 代工是電子零件底下的子產業，涵蓋貼片與電子組裝服務。OXM 整理台灣相關工廠資訊，可依地區與生產條件篩選，直接送出詢價。",
+  },
   { slug: "wire-harness-connectors", label: "線束 / 連接器", displayName: "線束連接器", parentIndustry: "電子零件", parentIndustrySlug: "electronics" },
   { slug: "sensors-modules", label: "感測器 / 模組", displayName: "感測器模組", parentIndustry: "電子零件", parentIndustrySlug: "electronics" },
   { slug: "semiconductor-packaging", label: "半導體封裝", displayName: "半導體封裝", parentIndustry: "電子零件", parentIndustrySlug: "electronics" },
   { slug: "lighting-modules", label: "照明模組 / 工業照明", displayName: "工業照明", parentIndustry: "電子零件", parentIndustrySlug: "electronics" },
   // 塑膠
-  { slug: "plastic-injection", label: "塑膠外殼 / 零件", displayName: "塑膠外殼", parentIndustry: "塑膠", parentIndustrySlug: "plastic" },
+  {
+    slug: "plastic-injection", label: "塑膠外殼 / 零件", displayName: "塑膠外殼",
+    parentIndustry: "塑膠", parentIndustrySlug: "plastic",
+    primarySeoKeyword: "塑膠射出代工",
+    secondaryKeywords: ["塑膠射出", "塑膠射出工廠", "射出成型", "塑膠製品代工", "塑膠模具"],
+    seoTitleOverride: "塑膠射出代工｜台灣射出成型與塑膠製品代工工廠｜OXM",
+    metaDescriptionOverride: "尋找台灣塑膠射出代工廠？OXM 整理可承接射出成型、塑膠模具與塑膠製品代工需求的工廠，可依地區、代工模式等條件進一步篩選詢價。",
+    seoIntroOverride: "塑膠射出代工是塑膠底下的子產業，涵蓋射出成型與塑膠製品需求。OXM 整理台灣相關工廠資訊，可依地區與生產條件篩選，直接送出詢價。",
+  },
   { slug: "plastic-containers-bottles", label: "塑膠容器 / 瓶罐", displayName: "塑膠容器", parentIndustry: "塑膠", parentIndustrySlug: "plastic" },
   { slug: "plastic-pipes-sheets", label: "塑膠管材 / 板材", displayName: "塑膠管材", parentIndustry: "塑膠", parentIndustrySlug: "plastic" },
   { slug: "plastic-packaging", label: "塑膠包裝", displayName: "塑膠包裝", parentIndustry: "塑膠", parentIndustrySlug: "plastic" },
@@ -385,7 +449,15 @@ export const SUB_INDUSTRY_SEARCH_ENTRIES: SubIndustrySearchEntry[] = [
   // 化工製造
   { slug: "cleaning-products", label: "清潔用品", displayName: "清潔用品", parentIndustry: "化工製造", parentIndustrySlug: "chemical-manufacturing" },
   { slug: "coatings-adhesives", label: "塗料 / 黏著劑", displayName: "塗料黏著劑", parentIndustry: "化工製造", parentIndustrySlug: "chemical-manufacturing" },
-  { slug: "cosmetic-odm", label: "保養品 / 化妝品原料", displayName: "保養品化妝品", parentIndustry: "化工製造", parentIndustrySlug: "chemical-manufacturing" },
+  {
+    slug: "cosmetic-odm", label: "保養品 / 化妝品原料", displayName: "保養品化妝品",
+    parentIndustry: "化工製造", parentIndustrySlug: "chemical-manufacturing",
+    primarySeoKeyword: "保養品代工",
+    secondaryKeywords: ["保養品 ODM", "保養品 OEM", "化妝品代工", "化妝品 OEM", "化妝品 ODM"],
+    seoTitleOverride: "保養品代工｜台灣化妝品 ODM／OEM 廠商｜OXM",
+    metaDescriptionOverride: "尋找台灣保養品代工廠？OXM 整理提供化妝品 ODM、OEM 開發與生產服務的工廠，可依地區、代工模式、可接小量與可打樣等條件篩選詢價。",
+    seoIntroOverride: "保養品代工是化工製造底下的子產業，涵蓋化妝品 ODM 與 OEM 開發服務。OXM 整理台灣相關工廠資訊，可依地區與生產條件篩選，直接送出詢價。",
+  },
   { slug: "fragrance-essential-oils", label: "香氛 / 精油", displayName: "香氛精油", parentIndustry: "化工製造", parentIndustrySlug: "chemical-manufacturing" },
   { slug: "industrial-chemicals", label: "工業化學品", displayName: "工業化學品", parentIndustry: "化工製造", parentIndustrySlug: "chemical-manufacturing" },
   // 生活用品
@@ -398,7 +470,15 @@ export const SUB_INDUSTRY_SEARCH_ENTRIES: SubIndustrySearchEntry[] = [
   // 印刷
   { slug: "large-format-printing", label: "展場 / 大圖輸出（立牌、背板、布條）", displayName: "大圖輸出", parentIndustry: "印刷", parentIndustrySlug: "printing" },
   { slug: "sticker-label", label: "貼紙 / 標籤（商品貼紙、LOGO貼）", displayName: "貼紙標籤", parentIndustry: "印刷", parentIndustrySlug: "printing" },
-  { slug: "packaging-print", label: "包裝印刷（彩盒、紙盒、包裝袋）", displayName: "包裝印刷", parentIndustry: "印刷", parentIndustrySlug: "printing" },
+  {
+    slug: "packaging-print", label: "包裝印刷（彩盒、紙盒、包裝袋）", displayName: "包裝印刷",
+    parentIndustry: "印刷", parentIndustrySlug: "printing",
+    primarySeoKeyword: "包裝印刷廠",
+    secondaryKeywords: ["包裝印刷", "包裝印刷代工", "包裝印刷工廠", "彩盒印刷"],
+    seoTitleOverride: "包裝印刷廠｜台灣彩盒印刷與包裝印刷代工廠商｜OXM",
+    metaDescriptionOverride: "尋找台灣包裝印刷廠？OXM 整理可承接彩盒印刷與包裝印刷代工需求的工廠，可依地區、代工模式、可接小量與可打樣等條件篩選詢價。",
+    seoIntroOverride: "包裝印刷是印刷底下的子產業，涵蓋彩盒與包裝印刷代工需求。OXM 整理台灣相關工廠資訊，可依地區與生產條件篩選，直接送出詢價。",
+  },
   { slug: "general-printing", label: "一般印刷（名片、DM、型錄）", displayName: "一般印刷", parentIndustry: "印刷", parentIndustrySlug: "printing" },
   { slug: "custom-merchandise-printing", label: "商品周邊印刷（客製商品、品牌周邊、布料印刷）", displayName: "商品周邊印刷", parentIndustry: "印刷", parentIndustrySlug: "printing" },
   { slug: "professional-printing-technology", label: "專業印刷技術（平版 / 數位 / 網版）", displayName: "專業印刷", parentIndustry: "印刷", parentIndustrySlug: "printing" },
