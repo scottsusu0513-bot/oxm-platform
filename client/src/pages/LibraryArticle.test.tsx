@@ -133,6 +133,84 @@ describe("LibraryArticle — 第一次找代工廠：單一 CTA + 兩個 context
   });
 });
 
+describe("LibraryArticle — 新文章：代工是什麼？代工廠是什麼？", () => {
+  it("H1、libraryId、分類、最後更新日期都正確渲染", () => {
+    renderAt("/library/what-is-contract-manufacturing");
+    const article = LIBRARY_ARTICLE_BY_SLUG["what-is-contract-manufacturing"];
+    expect(screen.getByRole("heading", { level: 1, name: article.h1 })).toBeTruthy();
+    expect(screen.getByText(article.libraryId)).toBeTruthy();
+    expect(screen.getAllByText(article.category).length).toBeGreaterThan(0);
+    expect(screen.getByText(new RegExp(`最後更新 ${article.updatedAt}`))).toBeTruthy();
+  });
+
+  it("7 個核心問題全部渲染成畫面上的標題，順序固定由淺入深", () => {
+    renderAt("/library/what-is-contract-manufacturing");
+    const headings = screen.getAllByRole("heading", { level: 2 }).map(h => h.textContent);
+    const questions = [
+      "代工是什麼？",
+      "代工廠是什麼？是不是所有工廠都一樣？",
+      "哪些人會需要找代工廠？",
+      "找代工廠前，要準備什麼？",
+      "為什麼同一個產品，不同工廠報價會差很多？",
+      "我要怎麼知道自己該找哪一種工廠？",
+      "OEM、ODM 跟代工有什麼關係？",
+    ];
+    let lastIndex = -1;
+    for (const q of questions) {
+      const idx = headings.indexOf(q);
+      expect(idx).toBeGreaterThan(-1);
+      expect(idx).toBeGreaterThan(lastIndex);
+      lastIndex = idx;
+    }
+  });
+
+  it("結尾有獨立的「OXM 小整理」標題與 5 個重點", () => {
+    renderAt("/library/what-is-contract-manufacturing");
+    expect(screen.getByRole("heading", { level: 2, name: "OXM 小整理" })).toBeTruthy();
+    for (const point of ["先確認需求", "找對工廠類型", "數量會影響工廠選擇", "價格不是唯一條件", "找適合的製造合作夥伴"]) {
+      expect(screen.getByText(point)).toBeTruthy();
+    }
+  });
+
+  it("CTA 導向 /search，文字為「前往 OXM 找工廠」", () => {
+    renderAt("/library/what-is-contract-manufacturing");
+    const ctaLink = screen.getByRole("link", { name: "前往 OXM 找工廠" });
+    expect(ctaLink.getAttribute("href")).toBe("/search");
+  });
+
+  it("正文含連到 what-is-moq 與 oem-vs-odm 的 contextual relatedLink", () => {
+    renderAt("/library/what-is-contract-manufacturing");
+    expect(screen.getByRole("link", { name: /延伸閱讀：MOQ 是什麼/ }).getAttribute("href")).toBe("/library/what-is-moq");
+    expect(screen.getByRole("link", { name: /延伸閱讀：OEM 與 ODM 差在哪/ }).getAttribute("href")).toBe("/library/oem-vs-odm");
+  });
+
+  it("相關館藏區塊列出 oem-vs-odm 與 first-time-factory-guide，且 href 正確", () => {
+    renderAt("/library/what-is-contract-manufacturing");
+    const related = screen.getByTestId("related-articles");
+    const links = Array.from(related.querySelectorAll("a"));
+    const hrefs = links.map(a => a.getAttribute("href"));
+    expect(hrefs).toContain("/library/oem-vs-odm");
+    expect(hrefs).toContain("/library/first-time-factory-guide");
+    expect(hrefs).not.toContain("/library/what-is-moq");
+  });
+
+  it("沒有「常見問題」區塊（這篇文章沒有 faq）", () => {
+    renderAt("/library/what-is-contract-manufacturing");
+    expect(screen.queryByText("常見問題")).toBeNull();
+  });
+});
+
+describe("LibraryArticle — oem-vs-odm 相關館藏新增前置知識連結", () => {
+  it("相關館藏區塊現在包含 what-is-contract-manufacturing，href 正確", () => {
+    renderAt("/library/oem-vs-odm");
+    const related = screen.getByTestId("related-articles");
+    const links = Array.from(related.querySelectorAll("a"));
+    const hrefs = links.map(a => a.getAttribute("href"));
+    expect(hrefs).toContain("/library/what-is-contract-manufacturing");
+    expect(hrefs).toContain("/library/what-is-moq");
+  });
+});
+
 describe("LibraryArticle — 非法 slug", () => {
   it("渲染 NotFound，不是空白頁", () => {
     renderAt("/library/does-not-exist");

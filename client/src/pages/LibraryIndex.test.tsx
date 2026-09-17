@@ -35,11 +35,18 @@ function renderIndex() {
 }
 
 describe("LibraryIndex — 渲染館藏記錄", () => {
-  it("預設（全部館藏）渲染出全部 3 筆館藏資料卡", () => {
+  it("預設（全部館藏）渲染出全部 4 筆館藏資料卡", () => {
     renderIndex();
     const cards = screen.getAllByTestId("library-card");
     expect(cards).toHaveLength(LIBRARY_ARTICLES.length);
-    expect(cards).toHaveLength(3);
+    expect(cards).toHaveLength(4);
+  });
+
+  it("卡片依 learningOrder（入門閱讀順序）排列，不是依陣列宣告順序或 libraryId：代工是什麼 → OEM/ODM → MOQ → 第一次找代工廠", () => {
+    renderIndex();
+    const cards = screen.getAllByTestId("library-card");
+    const libraryIds = cards.map(c => c.querySelector(".library-record-id")?.textContent);
+    expect(libraryIds).toEqual(["LIB-004", "LIB-002", "LIB-001", "LIB-003"]);
   });
 
   it("每張卡片顯示 libraryId、分類、標題、摘要、最後更新日期", () => {
@@ -66,10 +73,10 @@ describe("LibraryIndex — 渲染館藏記錄", () => {
 });
 
 describe("LibraryIndex — category filter 互動", () => {
-  it("點擊「代工基礎」（唯一有文章的分類）仍顯示全部 3 篇；其餘分類目前沒有文章", () => {
+  it("點擊「代工基礎」（唯一有文章的分類）仍顯示全部 4 篇；其餘分類目前沒有文章", () => {
     renderIndex();
     fireEvent.click(screen.getByRole("tab", { name: "代工基礎" }));
-    expect(screen.getAllByTestId("library-card")).toHaveLength(3);
+    expect(screen.getAllByTestId("library-card")).toHaveLength(4);
   });
 
   it("點擊「製程與設備」（目前無文章）顯示空狀態文字，不是卡片", () => {
@@ -79,12 +86,12 @@ describe("LibraryIndex — category filter 互動", () => {
     expect(screen.getByText("此分類目前尚無館藏資料。")).toBeTruthy();
   });
 
-  it("切回「全部館藏」恢復顯示 3 篇", () => {
+  it("切回「全部館藏」恢復顯示 4 篇", () => {
     renderIndex();
     fireEvent.click(screen.getByRole("tab", { name: "材料知識" }));
     expect(screen.queryAllByTestId("library-card")).toHaveLength(0);
     fireEvent.click(screen.getByRole("tab", { name: "全部館藏" }));
-    expect(screen.getAllByTestId("library-card")).toHaveLength(3);
+    expect(screen.getAllByTestId("library-card")).toHaveLength(4);
   });
 
   it("aria-selected 正確反映目前選中的分類", () => {

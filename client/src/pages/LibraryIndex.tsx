@@ -121,10 +121,17 @@ export default function LibraryIndex() {
   const [filter, setFilter] = useState<CategoryFilter>("全部");
   const content = buildLibraryIndexContent();
   const breadcrumbJsonLd = buildLibraryIndexBreadcrumbJsonLd();
-  const visibleArticles =
+  // 排序一律讀 article.learningOrder（入門閱讀順序），不依賴陣列宣告順序、
+  // libraryId 或 publishedAt——這三者都只反映「什麼時候寫的／上架的」，不
+  // 是「應該先讀哪一篇」（見任務定案「傳產圖書館新增文章 + 入門閱讀順序
+  // 重整」）。
+  const visibleArticles = (
     filter === "全部"
       ? LIBRARY_ARTICLES
-      : LIBRARY_ARTICLES.filter(article => article.category === filter);
+      : LIBRARY_ARTICLES.filter(article => article.category === filter)
+  )
+    .slice()
+    .sort((a, b) => a.learningOrder - b.learningOrder);
 
   function selectWithKeyboard(
     event: React.KeyboardEvent<HTMLButtonElement>,

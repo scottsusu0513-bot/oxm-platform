@@ -93,8 +93,8 @@ describe("buildLibraryArticleContent／buildLibraryArticleMeta：合法 slug", (
     expect(content.h1).toBe(LIBRARY_ARTICLE_BY_SLUG["what-is-moq"].h1);
   });
 
-  it("canonical 不會指回舊 /blog", () => {
-    for (const slug of ["what-is-moq", "oem-vs-odm", "first-time-factory-guide"]) {
+  it("canonical 不會指回舊 /blog（含新增的 what-is-contract-manufacturing）", () => {
+    for (const slug of ["what-is-moq", "oem-vs-odm", "first-time-factory-guide", "what-is-contract-manufacturing"]) {
       const resolved = resolveLibraryArticle(slug)!;
       const content = buildLibraryArticleContent(resolved);
       expect(content.canonical).not.toContain("/blog");
@@ -107,6 +107,26 @@ describe("buildLibraryArticleContent／buildLibraryArticleMeta：合法 slug", (
     expect(meta.status).toBe(200);
     expect(meta.noindex).toBe(false);
     expect(meta.ogType).toBe("article");
+  });
+});
+
+describe("新文章路由：what-is-contract-manufacturing", () => {
+  it("resolveLibraryArticle 正確解析，libraryId 為 LIB-004", () => {
+    const resolved = resolveLibraryArticle("what-is-contract-manufacturing");
+    expect(resolved?.slug).toBe("what-is-contract-manufacturing");
+    expect(resolved?.article.libraryId).toBe("LIB-004");
+  });
+
+  it("buildLibraryArticleMeta 回傳 200 + index + ogType article，跟其他 3 篇一致", () => {
+    const meta = buildLibraryArticleMeta("what-is-contract-manufacturing", "/library/what-is-contract-manufacturing");
+    expect(meta.status).toBe(200);
+    expect(meta.noindex).toBe(false);
+    expect(meta.ogType).toBe("article");
+  });
+
+  it("buildLibraryArticleAllJsonLd 只回傳 [Article, BreadcrumbList]（沒有 faq，不硬加 FAQPage）", () => {
+    const all = buildLibraryArticleAllJsonLd(resolveLibraryArticle("what-is-contract-manufacturing")!);
+    expect(all.map(x => x["@type"])).toEqual(["Article", "BreadcrumbList"]);
   });
 });
 

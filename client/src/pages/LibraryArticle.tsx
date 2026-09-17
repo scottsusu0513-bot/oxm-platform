@@ -98,6 +98,7 @@ function groupConversation(body: LibraryBodyBlock[]): ConversationSection[] {
 }
 
 const openingQuestions: Record<string, string> = {
+  "what-is-contract-manufacturing": "「代工」到底是什麼意思？",
   "what-is-moq": "第一次聽到 MOQ，該從哪裡開始？",
   "oem-vs-odm": "OEM 和 ODM，怎麼快速理解？",
   "first-time-factory-guide": "第一次找代工廠，該從哪裡開始？",

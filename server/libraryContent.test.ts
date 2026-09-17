@@ -12,9 +12,9 @@ import {
   type LibraryArticle,
 } from "@shared/content/library";
 
-describe("LIBRARY_ARTICLES：Phase 1 共 3 筆", () => {
-  it("目前正好 3 篇文章", () => {
-    expect(LIBRARY_ARTICLES.length).toBe(3);
+describe("LIBRARY_ARTICLES：目前共 4 筆（Phase 1 三篇 + 新增「代工是什麼」一篇）", () => {
+  it("目前正好 4 篇文章", () => {
+    expect(LIBRARY_ARTICLES.length).toBe(4);
   });
 
   it("slug 全部唯一", () => {
@@ -30,8 +30,8 @@ describe("LIBRARY_ARTICLES：Phase 1 共 3 筆", () => {
     }
   });
 
-  it("libraryId 依上架順序遞增，沒有跳號或重複編號", () => {
-    expect(LIBRARY_ARTICLES.map(a => a.libraryId)).toEqual(["LIB-001", "LIB-002", "LIB-003"]);
+  it("libraryId 集合剛好是 LIB-001～004（依上架順序遞增，沒有跳號或重複編號；libraryId 反映上架順序，不代表閱讀順序，見 learningOrder）", () => {
+    expect(new Set(LIBRARY_ARTICLES.map(a => a.libraryId))).toEqual(new Set(["LIB-001", "LIB-002", "LIB-003", "LIB-004"]));
   });
 
   it("每篇文章的 category 都在 LIBRARY_CATEGORIES 合法清單內", () => {
@@ -40,7 +40,7 @@ describe("LIBRARY_ARTICLES：Phase 1 共 3 筆", () => {
     }
   });
 
-  it("Phase 1 三篇全部歸類在「代工基礎」（見任務定案，不做 13 主產業分類版圖書館）", () => {
+  it("目前 4 篇全部歸類在「代工基礎」（見任務定案，不做 13 主產業分類版圖書館）", () => {
     for (const article of LIBRARY_ARTICLES) {
       expect(article.category).toBe("代工基礎");
     }
@@ -107,6 +107,7 @@ describe("LIBRARY_ARTICLES：Phase 1 共 3 筆", () => {
     expect(LIBRARY_ARTICLE_BY_SLUG["oem-vs-odm"].faq).toBeDefined();
     expect(LIBRARY_ARTICLE_BY_SLUG["what-is-moq"].faq).toBeUndefined();
     expect(LIBRARY_ARTICLE_BY_SLUG["first-time-factory-guide"].faq).toBeUndefined();
+    expect(LIBRARY_ARTICLE_BY_SLUG["what-is-contract-manufacturing"].faq).toBeUndefined();
   });
 
   it("cta.href 一律是站內相對路徑（以 / 開頭），不是外部網址", () => {
@@ -134,12 +135,119 @@ describe("LIBRARY_ARTICLES：Phase 1 共 3 筆", () => {
     expect(guide.cta.href).toBe("/search");
   });
 
-  it("relatedIndustrySlugs／relatedSubIndustrySlugs／relatedFactoryLandingSlugs 目前刻意留空（3 篇都是跨產業通用概念文章，不虛構關聯）", () => {
+  it("代工是什麼文章的 CTA 指向 /search（一般搜尋入口，不是其他 URL）", () => {
+    const intro = LIBRARY_ARTICLE_BY_SLUG["what-is-contract-manufacturing"];
+    expect(intro.cta.label).toBe("前往 OXM 找工廠");
+    expect(intro.cta.href).toBe("/search");
+  });
+
+  it("relatedIndustrySlugs／relatedSubIndustrySlugs／relatedFactoryLandingSlugs 目前刻意留空（4 篇都是跨產業通用概念文章，不虛構關聯）", () => {
     for (const article of LIBRARY_ARTICLES) {
       expect(article.relatedIndustrySlugs).toEqual([]);
       expect(article.relatedSubIndustrySlugs).toEqual([]);
       expect(article.relatedFactoryLandingSlugs).toEqual([]);
     }
+  });
+});
+
+describe("learningOrder：入門閱讀順序（見任務定案「傳產圖書館新增文章 + 入門閱讀順序重整」）", () => {
+  it("每篇文章都有 learningOrder，且是正整數", () => {
+    for (const article of LIBRARY_ARTICLES) {
+      expect(Number.isInteger(article.learningOrder)).toBe(true);
+      expect(article.learningOrder).toBeGreaterThan(0);
+    }
+  });
+
+  it("learningOrder 全部唯一（不允許並列，排序才有明確結果）", () => {
+    const orders = LIBRARY_ARTICLES.map(a => a.learningOrder);
+    expect(new Set(orders).size).toBe(orders.length);
+  });
+
+  it("依 learningOrder 排序後，順序是「代工是什麼 → OEM/ODM → MOQ → 第一次找代工廠」——概念先於細節，不是機械照 libraryId 或陣列宣告順序", () => {
+    const sorted = [...LIBRARY_ARTICLES].sort((a, b) => a.learningOrder - b.learningOrder);
+    expect(sorted.map(a => a.slug)).toEqual([
+      "what-is-contract-manufacturing",
+      "oem-vs-odm",
+      "what-is-moq",
+      "first-time-factory-guide",
+    ]);
+  });
+
+  it("learningOrder 跟 libraryId（上架順序）刻意不同：最新上架的 LIB-004 反而 learningOrder 最小", () => {
+    const intro = LIBRARY_ARTICLE_BY_SLUG["what-is-contract-manufacturing"];
+    expect(intro.libraryId).toBe("LIB-004");
+    expect(intro.learningOrder).toBe(Math.min(...LIBRARY_ARTICLES.map(a => a.learningOrder)));
+  });
+});
+
+describe("新文章：代工是什麼？代工廠是什麼？", () => {
+  const article = LIBRARY_ARTICLE_BY_SLUG["what-is-contract-manufacturing"];
+
+  it("slug 不與任何現有文章衝突", () => {
+    expect(article).toBeDefined();
+    expect(article.slug).toBe("what-is-contract-manufacturing");
+  });
+
+  it("title／h1 一致，且涵蓋「代工」「代工廠」，不是拿 OEM/ODM 當標題搶既有文章的主題", () => {
+    expect(article.title).toBe(article.h1);
+    expect(article.title).toContain("代工");
+    expect(article.title).toContain("代工廠");
+  });
+
+  it("body 剛好包含 7 個核心問題 heading，順序固定由淺入深，不多拆也不少拆", () => {
+    const headings = article.body.filter((b): b is Extract<LibraryArticle["body"][number], { type: "heading" }> => b.type === "heading");
+    const questionHeadings = headings.filter(h => h.text !== "OXM 小整理");
+    expect(questionHeadings.map(h => h.text)).toEqual([
+      "代工是什麼？",
+      "代工廠是什麼？是不是所有工廠都一樣？",
+      "哪些人會需要找代工廠？",
+      "找代工廠前，要準備什麼？",
+      "為什麼同一個產品，不同工廠報價會差很多？",
+      "我要怎麼知道自己該找哪一種工廠？",
+      "OEM、ODM 跟代工有什麼關係？",
+    ]);
+  });
+
+  it("結尾有獨立的「OXM 小整理」區塊，剛好 5 個重點，不是整篇重複摘要", () => {
+    const headingIndex = article.body.findIndex(b => b.type === "heading" && b.text === "OXM 小整理");
+    expect(headingIndex).toBeGreaterThan(-1);
+    const summaryList = article.body[headingIndex + 1];
+    expect(summaryList.type).toBe("list");
+    if (summaryList.type === "list") {
+      expect(summaryList.items).toEqual([
+        "先確認需求",
+        "找對工廠類型",
+        "數量會影響工廠選擇",
+        "價格不是唯一條件",
+        "找適合的製造合作夥伴",
+      ]);
+    }
+  });
+
+  it("正文含連到 what-is-moq 與 oem-vs-odm 的 contextual relatedLink，不深講 OEM/ODM 細節（已有獨立館藏）", () => {
+    const relatedLinks = article.body.filter((b): b is Extract<LibraryArticle["body"][number], { type: "relatedLink" }> => b.type === "relatedLink");
+    expect(relatedLinks.map(l => l.slug)).toEqual(["what-is-moq", "oem-vs-odm"]);
+  });
+
+  it("relatedArticleSlugs 是 oem-vs-odm 與 first-time-factory-guide（下一步概念 + 實際行動），沒有硬塞全部文章", () => {
+    expect(article.relatedArticleSlugs).toEqual(["oem-vs-odm", "first-time-factory-guide"]);
+  });
+
+  it("沒有 faq（跟 what-is-moq／first-time-factory-guide 一樣，不是每篇都硬加）", () => {
+    expect(article.faq).toBeUndefined();
+  });
+});
+
+describe("既有文章的 relatedArticleSlugs 更新：oem-vs-odm 新增前置知識連結", () => {
+  it("oem-vs-odm 的相關館藏新增 what-is-contract-manufacturing 作為前置知識，維持在 1–3 筆之內", () => {
+    const oemOdm = LIBRARY_ARTICLE_BY_SLUG["oem-vs-odm"];
+    expect(oemOdm.relatedArticleSlugs).toEqual(["what-is-contract-manufacturing", "what-is-moq", "first-time-factory-guide"]);
+    expect(oemOdm.relatedArticleSlugs.length).toBeLessThanOrEqual(3);
+  });
+
+  it("what-is-moq／first-time-factory-guide 本輪內容與既有 relatedArticleSlugs 不變（不修改現有文章文字）", () => {
+    expect(LIBRARY_ARTICLE_BY_SLUG["what-is-moq"].relatedArticleSlugs).toEqual(["oem-vs-odm", "first-time-factory-guide"]);
+    expect(LIBRARY_ARTICLE_BY_SLUG["first-time-factory-guide"].relatedArticleSlugs).toEqual(["what-is-moq", "oem-vs-odm"]);
   });
 });
 
@@ -154,7 +262,7 @@ describe("getLibraryArticle／getLibraryArticlesByCategory", () => {
 
   it("依分類回傳的文章筆數與 filter 結果一致", () => {
     const byCategory = getLibraryArticlesByCategory("代工基礎");
-    expect(byCategory.length).toBe(3);
+    expect(byCategory.length).toBe(4);
     for (const a of byCategory) expect(a.category).toBe("代工基礎");
   });
 
