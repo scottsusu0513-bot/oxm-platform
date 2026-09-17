@@ -66,6 +66,20 @@ describe("sitemap.xml 產生邏輯（server/_core/index.ts）", () => {
     expect(sitemapSource).not.toMatch(/finance-optimization\/apply/);
   });
 
+  it("傳產圖書館：/library 索引與 3 篇文章都進 sitemap，舊 /blog/* 完全不出現，資料來源是 LIBRARY_ARTICLES（不是另一份 hardcode 文章清單）", () => {
+    expect(sitemapSource).toMatch(/\$\{BASE\}\/library`/);
+    expect(sitemapSource).toContain("LIBRARY_ARTICLES");
+    expect(sitemapSource).toMatch(/for \(const article of LIBRARY_ARTICLES\)/);
+    expect(sitemapSource).toContain("${BASE}/library/${article.slug}");
+    expect(sitemapSource).not.toMatch(/\/blog/);
+  });
+
+  it("圖書館文章 lastmod 用 article.updatedAt（缺值時 fallback publishedAt），不是寫死 today", () => {
+    const libraryLoopMatch = sitemapSource.match(/for \(const article of LIBRARY_ARTICLES\)[\s\S]*?\n {4}\}/);
+    expect(libraryLoopMatch).toBeTruthy();
+    expect(libraryLoopMatch![0]).toMatch(/article\.updatedAt\s*\?\?\s*article\.publishedAt/);
+  });
+
   it("完全沒有登入／會員／收藏／後台／註冊工廠／申請表相關路徑", () => {
     expect(sitemapSource).not.toMatch(/\/admin/);
     expect(sitemapSource).not.toMatch(/\/dashboard/);

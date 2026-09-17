@@ -1,0 +1,196 @@
+/**
+ * shared/seo/libraryPages.ts + server/_core/ogMeta.ts 的
+ * buildLibraryIndexMeta／buildLibraryArticleMeta（見任務定案「傳產圖書館
+ * Phase 1 實作」）。涵蓋：
+ *   - /library index：固定 200 + index，title／description／canonical
+ *   - /library/:slug：合法 slug 200 + index + Article／BreadcrumbList／
+ *     FAQPage（只在文章有 faq 才有）JSON-LD；非法 slug 真 404 + noindex
+ *   - canonical 一律 self-canonical，不指回舊 /blog
+ *   - Article JSON-LD 至少含 headline／description／datePublished／
+ *     dateModified／author／publisher／mainEntityOfPage／url
+ *   - FAQPage 內容與畫面上會 render 的 article.faq 逐字一致（同一份資料）
+ */
+import { describe, expect, it } from "vitest";
+import {
+  parseLibraryIndexPath, parseLibraryArticlePath, resolveLibraryArticle,
+  buildLibraryIndexContent, buildLibraryArticleContent,
+  buildLibraryIndexBreadcrumbJsonLd, buildLibraryArticleBreadcrumbJsonLd,
+  buildLibraryArticleJsonLd, buildLibraryArticleFaqJsonLd, buildLibraryArticleAllJsonLd,
+  resolveLegacyBlogRedirect,
+} from "@shared/seo/libraryPages";
+import { buildLibraryIndexMeta, buildLibraryArticleMeta } from "./_core/ogMeta";
+import { LIBRARY_ARTICLE_BY_SLUG } from "@shared/content/library";
+
+describe("parseLibraryIndexPath", () => {
+  it("命中 /library 與 /library/（結尾斜線）", () => {
+    expect(parseLibraryIndexPath("/library")).toBe(true);
+    expect(parseLibraryIndexPath("/library/")).toBe(true);
+  });
+
+  it("不命中文章頁或其他路徑", () => {
+    expect(parseLibraryIndexPath("/library/what-is-moq")).toBe(false);
+    expect(parseLibraryIndexPath("/news")).toBe(false);
+    expect(parseLibraryIndexPath("/")).toBe(false);
+  });
+});
+
+describe("parseLibraryArticlePath", () => {
+  it("解析合法單段文章路徑，忽略結尾斜線", () => {
+    expect(parseLibraryArticlePath("/library/what-is-moq")).toEqual({ slug: "what-is-moq" });
+    expect(parseLibraryArticlePath("/library/what-is-moq/")).toEqual({ slug: "what-is-moq" });
+  });
+
+  it("不命中 /library 本身（沒有 slug）或兩段以上路徑", () => {
+    expect(parseLibraryArticlePath("/library")).toBeNull();
+    expect(parseLibraryArticlePath("/library/a/b")).toBeNull();
+  });
+});
+
+describe("resolveLibraryArticle", () => {
+  it("合法 slug 回傳 { slug, article }", () => {
+    const resolved = resolveLibraryArticle("what-is-moq");
+    expect(resolved?.slug).toBe("what-is-moq");
+    expect(resolved?.article.libraryId).toBe("LIB-001");
+  });
+
+  it("不存在的 slug 回傳 null", () => {
+    expect(resolveLibraryArticle("does-not-exist")).toBeNull();
+  });
+});
+
+describe("buildLibraryIndexContent／buildLibraryIndexMeta", () => {
+  it("title／description／canonical／h1 都是固定值，self-canonical 指向 /library", () => {
+    const content = buildLibraryIndexContent();
+    expect(content.canonical).toBe("https://www.oxmmatch.com/library");
+    expect(content.title).toContain("OXM");
+    expect(content.title).toContain("傳產圖書館");
+    expect(content.h1).toBe("OXM 傳產圖書館");
+  });
+
+  it("buildLibraryIndexMeta 永遠 200 + index（不是 noindex）", () => {
+    const meta = buildLibraryIndexMeta("/library");
+    expect(meta.status).toBe(200);
+    expect(meta.noindex).toBe(false);
+  });
+
+  it("BreadcrumbList JSON-LD：首頁 → 傳產圖書館", () => {
+    const jsonLd = buildLibraryIndexBreadcrumbJsonLd();
+    expect(jsonLd["@type"]).toBe("BreadcrumbList");
+    const items = jsonLd.itemListElement as any[];
+    expect(items[0].name).toBe("首頁");
+    expect(items[1].name).toBe("傳產圖書館");
+    expect(items[1].item).toBe("https://www.oxmmatch.com/library");
+  });
+});
+
+describe("buildLibraryArticleContent／buildLibraryArticleMeta：合法 slug", () => {
+  it("title 帶文章標題與品牌，description 用 metaDescription，canonical self-canonical", () => {
+    const resolved = resolveLibraryArticle("what-is-moq")!;
+    const content = buildLibraryArticleContent(resolved);
+    expect(content.title).toBe("MOQ 是什麼？代工廠最低訂購量怎麼談｜OXM 傳產圖書館");
+    expect(content.description).toBe(LIBRARY_ARTICLE_BY_SLUG["what-is-moq"].metaDescription);
+    expect(content.canonical).toBe("https://www.oxmmatch.com/library/what-is-moq");
+    expect(content.h1).toBe(LIBRARY_ARTICLE_BY_SLUG["what-is-moq"].h1);
+  });
+
+  it("canonical 不會指回舊 /blog", () => {
+    for (const slug of ["what-is-moq", "oem-vs-odm", "first-time-factory-guide"]) {
+      const resolved = resolveLibraryArticle(slug)!;
+      const content = buildLibraryArticleContent(resolved);
+      expect(content.canonical).not.toContain("/blog");
+      expect(content.canonical).toContain(`/library/${slug}`);
+    }
+  });
+
+  it("buildLibraryArticleMeta 對合法 slug 回傳 200 + index + ogType article", () => {
+    const meta = buildLibraryArticleMeta("what-is-moq", "/library/what-is-moq");
+    expect(meta.status).toBe(200);
+    expect(meta.noindex).toBe(false);
+    expect(meta.ogType).toBe("article");
+  });
+});
+
+describe("buildLibraryArticleMeta：非法 slug", () => {
+  it("回傳真 404 + noindex，不是 200 + 通用 fallback（避免軟式 404）", () => {
+    const meta = buildLibraryArticleMeta("does-not-exist", "/library/does-not-exist");
+    expect(meta.status).toBe(404);
+    expect(meta.noindex).toBe(true);
+  });
+});
+
+describe("buildLibraryArticleBreadcrumbJsonLd", () => {
+  it("首頁 → 傳產圖書館 → 文章（不含 category 這一層，避免虛構不存在的 URL）", () => {
+    const resolved = resolveLibraryArticle("oem-vs-odm")!;
+    const jsonLd = buildLibraryArticleBreadcrumbJsonLd(resolved);
+    const items = jsonLd.itemListElement as any[];
+    expect(items).toHaveLength(3);
+    expect(items[0].name).toBe("首頁");
+    expect(items[1].name).toBe("傳產圖書館");
+    expect(items[1].item).toBe("https://www.oxmmatch.com/library");
+    expect(items[2].name).toBe(resolved.article.h1);
+    expect(items[2].item).toBe("https://www.oxmmatch.com/library/oem-vs-odm");
+  });
+});
+
+describe("buildLibraryArticleJsonLd：Article schema", () => {
+  it("至少含 headline／description／datePublished／dateModified／author／publisher／mainEntityOfPage／url", () => {
+    const resolved = resolveLibraryArticle("what-is-moq")!;
+    const jsonLd = buildLibraryArticleJsonLd(resolved);
+    expect(jsonLd["@type"]).toBe("Article");
+    expect(jsonLd.headline).toBe(resolved.article.title);
+    expect(jsonLd.description).toBe(resolved.article.metaDescription);
+    expect(jsonLd.datePublished).toBe(new Date(resolved.article.publishedAt).toISOString());
+    expect(jsonLd.dateModified).toBe(new Date(resolved.article.updatedAt).toISOString());
+    expect(jsonLd.url).toBe("https://www.oxmmatch.com/library/what-is-moq");
+    expect((jsonLd.mainEntityOfPage as any)["@id"]).toBe(jsonLd.url);
+    expect((jsonLd.author as any).name).toBe("OXM");
+    expect((jsonLd.publisher as any).name).toBe("OXM");
+    expect((jsonLd.publisher as any).logo).toBeDefined();
+  });
+
+  it("不是 BlogPosting，也沒有疊加 WebPage 頂層 schema（只用 Article 一種型別）", () => {
+    const resolved = resolveLibraryArticle("what-is-moq")!;
+    const jsonLd = buildLibraryArticleJsonLd(resolved);
+    expect(jsonLd["@type"]).toBe("Article");
+    expect(jsonLd["@type"]).not.toBe("BlogPosting");
+  });
+});
+
+describe("buildLibraryArticleFaqJsonLd：只在文章真的有 faq 時才產生", () => {
+  it("oem-vs-odm 有 faq → 回傳 FAQPage，且內容與 article.faq 逐字一致", () => {
+    const resolved = resolveLibraryArticle("oem-vs-odm")!;
+    const jsonLd = buildLibraryArticleFaqJsonLd(resolved);
+    expect(jsonLd).not.toBeNull();
+    expect(jsonLd!["@type"]).toBe("FAQPage");
+    const mainEntity = jsonLd!.mainEntity as any[];
+    const faq = resolved.article.faq!;
+    expect(mainEntity.length).toBe(faq.length);
+    mainEntity.forEach((q, i) => {
+      expect(q.name).toBe(faq[i].question);
+      expect(q.acceptedAnswer.text).toBe(faq[i].answer);
+    });
+  });
+
+  it("what-is-moq／first-time-factory-guide 沒有 faq → 回傳 null，不硬加 FAQPage", () => {
+    expect(buildLibraryArticleFaqJsonLd(resolveLibraryArticle("what-is-moq")!)).toBeNull();
+    expect(buildLibraryArticleFaqJsonLd(resolveLibraryArticle("first-time-factory-guide")!)).toBeNull();
+  });
+});
+
+describe("buildLibraryArticleAllJsonLd：組合順序", () => {
+  it("有 faq 的文章回傳 [Article, BreadcrumbList, FAQPage] 三個", () => {
+    const all = buildLibraryArticleAllJsonLd(resolveLibraryArticle("oem-vs-odm")!);
+    expect(all.map(x => x["@type"])).toEqual(["Article", "BreadcrumbList", "FAQPage"]);
+  });
+
+  it("沒有 faq 的文章只回傳 [Article, BreadcrumbList] 兩個", () => {
+    const all = buildLibraryArticleAllJsonLd(resolveLibraryArticle("what-is-moq")!);
+    expect(all.map(x => x["@type"])).toEqual(["Article", "BreadcrumbList"]);
+  });
+});
+
+describe("resolveLegacyBlogRedirect（同時在這裡驗證一次匯出正確，完整行為測試見 server/legacyBlogRedirect.test.ts）", () => {
+  it("3 筆 mapping 存在", () => {
+    expect(resolveLegacyBlogRedirect("/blog/what-is-moq")).toBe("/library/what-is-moq");
+  });
+});

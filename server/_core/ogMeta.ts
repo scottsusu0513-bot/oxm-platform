@@ -7,6 +7,10 @@ import {
   resolveSubIndustry, buildSubIndustryPageContent, buildSubIndustryBreadcrumbJsonLd,
   resolveRegionSubIndustry, buildRegionSubIndustryPageContent, buildRegionSubIndustryBreadcrumbJsonLd,
 } from "@shared/seo/subIndustryPages";
+import {
+  buildLibraryIndexContent, buildLibraryIndexBreadcrumbJsonLd,
+  resolveLibraryArticle, buildLibraryArticleContent, buildLibraryArticleAllJsonLd,
+} from "@shared/seo/libraryPages";
 import { INDUSTRY_SLUGS } from "@shared/constants";
 
 const SITE_BASE_URL = "https://www.oxmmatch.com";
@@ -520,6 +524,58 @@ export async function buildRegionSubIndustryMeta(regionSlug: string, subIndustry
     );
     return { ...baseMeta, noindex: true };
   }
+}
+
+const LIBRARY_GENERIC_FALLBACK = {
+  title: "OXM 傳產圖書館｜台灣製造業代工知識索引",
+  description: "OXM 傳產圖書館整理代工基礎、製程與設備、材料知識與採購指南。",
+  image: DEFAULT_OG_IMAGE,
+};
+
+/**
+ * Builds the meta for the /library index request——純資料查表（不查 DB），
+ * slug 集合固定來自 shared/content/library.ts，沒有「查無公開工廠」這種
+ * 動態 noindex 判斷，永遠 200 + index。
+ */
+export function buildLibraryIndexMeta(pathname: string): FactoryMeta {
+  const url = `${SITE_BASE_URL}${pathname}`;
+  const content = buildLibraryIndexContent();
+  return {
+    title: content.title,
+    description: content.description,
+    image: DEFAULT_OG_IMAGE,
+    url,
+    status: 200,
+    noindex: false,
+    jsonLd: buildLibraryIndexBreadcrumbJsonLd(),
+  };
+}
+
+/**
+ * Builds the meta for a /library/:slug request. slug 對不到
+ * LIBRARY_ARTICLES 裡任何一篇 → 真 404 + noindex；合法 slug → 200 + index
+ * （跟子產業頁不同，圖書館文章不是「可能 0 筆結果」的動態頁，slug 存在
+ * 就代表內容存在）。
+ */
+export function buildLibraryArticleMeta(slug: string, pathname: string): FactoryMeta {
+  const url = `${SITE_BASE_URL}${pathname}`;
+
+  const resolved = resolveLibraryArticle(slug);
+  if (!resolved) {
+    return { ...LIBRARY_GENERIC_FALLBACK, url, status: 404, noindex: true };
+  }
+
+  const content = buildLibraryArticleContent(resolved);
+  return {
+    title: content.title,
+    description: content.description,
+    image: DEFAULT_OG_IMAGE,
+    url: content.canonical,
+    status: 200,
+    noindex: false,
+    ogType: "article",
+    jsonLd: buildLibraryArticleAllJsonLd(resolved),
+  };
 }
 
 /**

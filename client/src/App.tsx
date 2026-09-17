@@ -98,6 +98,8 @@ const AdminAnnouncements    = lazy(() => import("./pages/AdminAnnouncements"));
 const AdminNews             = lazy(() => import("./pages/AdminNews"));
 const News                  = lazy(() => import("./pages/News"));
 const NewsDetail            = lazy(() => import("./pages/NewsDetail"));
+const LibraryIndex          = lazy(() => import("./pages/LibraryIndex"));
+const LibraryArticle        = lazy(() => import("./pages/LibraryArticle"));
 const AdminMessages         = lazy(() => import("./pages/AdminMessages"));
 const AdminMessageDetail    = lazy(() => import("./pages/AdminMessageDetail"));
 const AdminCertificationServices = lazy(() => import("./pages/AdminCertificationServices"));
@@ -424,6 +426,10 @@ function Router() {
             但路由本身必須完整存在，讓管理員／測試者可以直接輸入網址瀏覽。 */}
         <Route path="/news/:slug" component={NewsDetail} />
         <Route path="/news" component={News} />
+        {/* /library、/library/:slug：OXM 傳產圖書館（見任務定案「傳產圖書館
+            Phase 1 實作」），正式公開入口，可索引。 */}
+        <Route path="/library/:slug" component={LibraryArticle} />
+        <Route path="/library" component={LibraryIndex} />
         {/* ISO 與低碳認證專區：/resources 是唯一受控的公開導覽入口；頁面仍
             維持 noindex／nofollow（Helmet 與 X-Robots-Tag），也不加入 sitemap
             或 prerender，直到另行授權正式公開。 */}

@@ -15,13 +15,14 @@ describe("Footer", () => {
     expect(screen.getByText("台灣傳統產業資源媒合平台")).toBeTruthy();
   });
 
-  it("(2) 六大平台服務 link 正確", () => {
+  it("(2) 六大平台服務與傳產圖書館 link 正確", () => {
     render(<Footer />);
     expect((screen.getByText("找工廠") as HTMLAnchorElement).getAttribute("href")).toBe("/search");
     expect((screen.getByText("找資源") as HTMLAnchorElement).getAttribute("href")).toBe("/resources");
     expect((screen.getByText("找人才") as HTMLAnchorElement).getAttribute("href")).toBe("/talent");
     expect((screen.getByText("找形象") as HTMLAnchorElement).getAttribute("href")).toBe("/brand");
     expect((screen.getByText("找消息") as HTMLAnchorElement).getAttribute("href")).toBe("/news");
+    expect(screen.getByRole("link", { name: "傳產圖書館" }).getAttribute("href")).toBe("/library");
     expect((screen.getByText("找討論") as HTMLAnchorElement).getAttribute("href")).toBe("/community");
   });
 

@@ -9,9 +9,11 @@ import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import { setupSecurityHeaders, setupOriginCheck, setupNoIndexRoutes } from "./security";
 import { setupGoneRoutes } from "./goneRoutes";
+import { setupLegacyBlogRedirect } from "./legacyBlogRedirect";
 import { apiLimiter, loginLimiter, uploadLimiter, messageLimiter, submitReviewLimiter, adminLimiter, searchLimiter, reportLimiter } from "./rateLimit";
 import { COOKIE_NAME } from "@shared/const";
 import { INDUSTRY_SLUGS, REGION_SLUGS, SUB_INDUSTRY_SEARCH_ENTRY_BY_PARENT_AND_LABEL } from "../../shared/constants";
+import { LIBRARY_ARTICLES } from "../../shared/content/library";
 import { escapeXmlText } from "@shared/seo/xml";
 import {
   getDb, getApprovedFactoriesForSitemap, getApprovedRegionIndustryCombosForSitemap,
@@ -33,8 +35,15 @@ async function startServer() {
   console.log("[boot] applying security headers");
   setupSecurityHeaders(app);
   setupNoIndexRoutes(app);
+  // 傳產圖書館 Phase 1：舊 /blog/:slug 裡「有對應新 /library 文章」的 3 筆
+  // （見 shared/seo/libraryPages.ts 的 resolveLegacyBlogRedirect）301 到新
+  // 文章，必須註冊在下面的 setupGoneRoutes 之前——goneRoutes 對整個 /blog
+  // 前綴一律攔截，註冊順序反過來的話這 3 筆 mapping 永遠不會執行到。
+  setupLegacyBlogRedirect(app);
   // 原「找代工指南」Blog（/blog 與所有 /blog/* 舊文章）已永久移除：在所有
   // SPA fallback 之前攔截，回 HTTP 410 Gone + noindex，不 redirect、不回 200。
+  // 沒有對應新文章的舊 slug（上面 setupLegacyBlogRedirect 沒攔到的）維持這裡
+  // 的既有 410 行為。
   setupGoneRoutes(app);
   console.log("[boot] applying origin check");
   setupOriginCheck(app);
@@ -175,6 +184,15 @@ async function startServer() {
     urls.push(entry(`${BASE}/search`, "0.9", "daily", today));
     urls.push(entry(`${BASE}/announcements`, "0.6", "weekly", today));
     urls.push(entry(`${BASE}/news`, "0.6", "daily", today));
+    // 傳產圖書館（見任務定案「傳產圖書館 Phase 1 實作」）：索引頁固定列入，
+    // 文章逐篇迴圈 LIBRARY_ARTICLES（shared/content/library.ts 是唯一資料
+    // 來源，不在這裡另外 hardcode 一份文章 URL 清單），lastmod 用
+    // updatedAt（缺值時 fallback publishedAt，兩者皆為文章自己的真實日期，
+    // 不使用 today 偽造）。
+    urls.push(entry(`${BASE}/library`, "0.6", "monthly", today));
+    for (const article of LIBRARY_ARTICLES) {
+      urls.push(entry(`${BASE}/library/${article.slug}`, "0.5", "monthly", article.updatedAt ?? article.publishedAt));
+    }
     // 正式開站前最後 sitemap 微調：/privacy、/terms 是必要的法律頁面，維持
     // 正常公開、可被索引（不加 noindex、robots.txt 不 Disallow、canonical
     // 不變、Footer 連結不變），但故意不再放進 sitemap——sitemap 是「主動

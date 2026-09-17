@@ -207,6 +207,9 @@ const HUB_ITEMS: HubItem[] = [
     card: "bg-gradient-to-br from-indigo-600/10 to-purple-600/10 border-indigo-300/40 text-indigo-700",
     cardHover: "hover:from-indigo-600/20 hover:to-purple-600/20 hover:border-indigo-400/60 hover:shadow-sm hover:shadow-indigo-500/10 hover:-translate-y-px",
     mCard: "from-indigo-500/15 to-purple-600/15 border-indigo-300/50", mText: "text-indigo-700",
+    // 傳產圖書館（/library）已改移到左上角 OXM 品牌下拉選單（見任務定案
+    // 「傳產圖書館 Navigation 調整」），找消息 hub 維持原本的時效性內容
+    // 定位，只保留「產業情報中心」這一項，不再有兩個 Navbar 入口。
     dropdownItems: [
       { title: "產業情報中心", description: "整合產業動態、競賽資訊、展覽活動與重要消息", href: "/news", Icon: BookOpen },
     ],
@@ -683,6 +686,16 @@ export default function Navbar() {
             <Link href="/faq" onClick={() => setBrandMenuOpen(false)}>
               <div className="px-3.5 py-2 text-sm font-medium text-foreground hover:bg-orange-50 hover:text-orange-700 transition-colors cursor-pointer">
                 常見問答 FAQ
+              </div>
+            </Link>
+            {/* 傳產圖書館正式入口（見任務定案「傳產圖書館 Navigation 調整」）：
+                從找消息 hub 移過來，沿用這個下拉選單既有的純文字列樣式（沒有
+                icon／description，跟首頁／關於 OXM／FAQ 三項一致），刻意不
+                加寬 160px 的固定寬度、不加 icon，避免只為這一項另外重做一套
+                視覺。 */}
+            <Link href="/library" onClick={() => setBrandMenuOpen(false)}>
+              <div className="px-3.5 py-2 text-sm font-medium text-foreground hover:bg-orange-50 hover:text-orange-700 transition-colors cursor-pointer">
+                傳產圖書館
               </div>
             </Link>
           </div>,

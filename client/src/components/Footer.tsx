@@ -66,6 +66,7 @@ export function Footer() {
                 <li><Link href="/talent" className={NAV_LINK_CLASS}>找人才</Link></li>
                 <li><Link href="/brand" className={NAV_LINK_CLASS}>找形象</Link></li>
                 <li><Link href="/news" className={NAV_LINK_CLASS}>找消息</Link></li>
+                <li><Link href="/library" className={NAV_LINK_CLASS}>傳產圖書館</Link></li>
                 <li><Link href="/community" className={NAV_LINK_CLASS}>找討論</Link></li>
               </ul>
             </div>

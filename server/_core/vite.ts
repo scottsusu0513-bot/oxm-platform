@@ -5,12 +5,13 @@ import { nanoid } from "nanoid";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import viteConfig from "../../vite.config";
-import { buildFactoryMeta, buildNewsMeta, buildRegionIndustryMeta, buildIndustryMeta, buildSubIndustryMeta, buildFactoriesTwoSegmentMeta, injectMetaIntoHtml, parseFactoryPath, parseNewsPath, stripQueryString, extractQueryString, DEFAULT_OG_IMAGE } from "./ogMeta";
+import { buildFactoryMeta, buildNewsMeta, buildRegionIndustryMeta, buildIndustryMeta, buildSubIndustryMeta, buildFactoriesTwoSegmentMeta, buildLibraryIndexMeta, buildLibraryArticleMeta, injectMetaIntoHtml, parseFactoryPath, parseNewsPath, stripQueryString, extractQueryString, DEFAULT_OG_IMAGE } from "./ogMeta";
 import { injectPublicPageSeo } from "./publicPageMeta";
 import { injectPrerenderedBody, injectDynamicSemanticBody } from "./prerenderedBody";
 import { parseIndustryPath, resolveLegacyIndustrySlugRedirect, resolveLegacySubIndustryRedirect } from "@shared/seo/industryPages";
 import { parseRegionIndustryPath, resolveRegionIndustry, buildRegionIndustryPageContent } from "@shared/seo/regionIndustryPages";
 import { parseSubIndustryPath, resolveSubIndustry, buildSubIndustryPageContent, resolveRegionSubIndustry, buildRegionSubIndustryPageContent } from "@shared/seo/subIndustryPages";
+import { parseLibraryIndexPath, parseLibraryArticlePath } from "@shared/seo/libraryPages";
 import { resolveFactoriesTwoSegment } from "@shared/seo/factoriesPathResolver";
 import { buildSearchPageMeta } from "@shared/seo/searchPage";
 import { parsePageParam } from "@shared/industryPagination";
@@ -174,6 +175,19 @@ export async function setupVite(app: Express, server: Server) {
             if (bodyPage !== null) page = bodyPage;
           }
         }
+      } else if (parseLibraryIndexPath(pathname)) {
+        // /library：傳產圖書館索引頁，純資料查表（不查 DB），永遠 200 + index。
+        const libraryIndexMeta = buildLibraryIndexMeta(pathname);
+        statusCode = libraryIndexMeta.status;
+        page = injectMetaIntoHtml(page, libraryIndexMeta);
+      } else if (parseLibraryArticlePath(pathname)) {
+        // /library/:slug：傳產圖書館文章頁，slug 對不到 shared/content/library.ts
+        // 任何一篇 → 真 404 + noindex；合法 slug → 200 + index + Article／
+        // BreadcrumbList／FAQPage（有 faq 才有）JSON-LD。
+        const { slug: librarySlug } = parseLibraryArticlePath(pathname)!;
+        const libraryArticleMeta = buildLibraryArticleMeta(librarySlug, pathname);
+        statusCode = libraryArticleMeta.status;
+        page = injectMetaIntoHtml(page, libraryArticleMeta);
       } else {
         const industryPath = parseIndustryPath(pathname);
         // Pagination（見對話中「Pagination + 產業 slug mapping 稽核」）：
@@ -416,6 +430,43 @@ export function serveStatic(app: Express) {
       } catch (err) {
         console.error(
           "[ogMeta] serveStatic sub-industry meta injection failed:",
+          err instanceof Error ? err.message : String(err)
+        );
+        res.sendFile(indexPath);
+      }
+      return;
+    }
+
+    // /library：傳產圖書館索引頁，純資料查表（不查 DB），永遠 200 + index。
+    if (parseLibraryIndexPath(pathname)) {
+      try {
+        const template = await getCachedTemplate();
+        const meta = buildLibraryIndexMeta(pathname);
+        const page = injectMetaIntoHtml(template, meta);
+        res.status(meta.status).set({ "Content-Type": "text/html" }).end(page);
+      } catch (err) {
+        console.error(
+          "[ogMeta] serveStatic library index meta injection failed:",
+          err instanceof Error ? err.message : String(err)
+        );
+        res.sendFile(indexPath);
+      }
+      return;
+    }
+
+    // /library/:slug：傳產圖書館文章頁，slug 對不到 shared/content/library.ts
+    // 任何一篇 → 真 404 + noindex；合法 slug → 200 + index + Article／
+    // BreadcrumbList／FAQPage（有 faq 才有）JSON-LD。
+    const libraryArticlePath = parseLibraryArticlePath(pathname);
+    if (libraryArticlePath) {
+      try {
+        const template = await getCachedTemplate();
+        const meta = buildLibraryArticleMeta(libraryArticlePath.slug, pathname);
+        const page = injectMetaIntoHtml(template, meta);
+        res.status(meta.status).set({ "Content-Type": "text/html" }).end(page);
+      } catch (err) {
+        console.error(
+          "[ogMeta] serveStatic library article meta injection failed:",
           err instanceof Error ? err.message : String(err)
         );
         res.sendFile(indexPath);
