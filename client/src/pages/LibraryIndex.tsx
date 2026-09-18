@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Helmet } from "react-helmet-async";
 import {
   ArrowUpRight,
@@ -26,6 +26,28 @@ import "./library.css";
 type CategoryFilter = "全部" | LibraryCategory;
 const categories: CategoryFilter[] = ["全部", ...LIBRARY_CATEGORIES];
 
+// 見任務定案「Library UX 修正」—返回上一頁恢復原本位置：/library 的分類
+// filter 是純 React state，瀏覽器 history.back() 讓這個元件重新掛載時預設
+// 會回到 useState 的初始值「全部」，即使 App.tsx 既有的
+// ScrollRestorationManager 正確保留了 scrollY（見 FloatingBackButton 拿掉
+// deterministic 的說明），畫面內容仍會因為 filter 被重置而跟使用者離開時
+// 看到的不一樣，導致同一個 scrollY 對到不同的卡片。這裡用 sessionStorage
+// 記住最後選擇的分類，讓重新掛載時內容先恢復一致，瀏覽器原生 scroll
+// restoration 才有意義——只存一個字串 key，不是另外做一套全域 state
+// manager。
+const LIBRARY_FILTER_STORAGE_KEY = "oxm.library.filter";
+
+function readStoredFilter(): CategoryFilter {
+  try {
+    const stored = sessionStorage.getItem(LIBRARY_FILTER_STORAGE_KEY);
+    if (stored && (categories as string[]).includes(stored))
+      return stored as CategoryFilter;
+  } catch {
+    // sessionStorage unavailable
+  }
+  return "全部";
+}
+
 const shelfSpineColors = [
   "#e9a776",
   "#b99ad1",
@@ -35,7 +57,26 @@ const shelfSpineColors = [
   "#c5aedc",
   "#f0b992",
 ];
-const shelfLabels = ["代工", "製程", "材料", "設備", "採購", "品質", "工廠"];
+// Selected titles from the Library collection, placed only on roomy spines.
+const HERO_SPINE_LABELS = [
+  { row: 0, index: 4, title: "MOQ" },
+  { row: 0, index: 14, title: "OEM vs ODM" },
+  { row: 0, index: 27, title: "第一次找代工廠", mobile: true },
+  { row: 0, index: 37, title: "CNC 加工" },
+  { row: 0, index: 49, title: "鈑金加工" },
+  { row: 0, index: 61, title: "塑膠射出" },
+  { row: 1, index: 10, title: "工廠報價" },
+  { row: 1, index: 25, title: "RFQ" },
+  { row: 1, index: 34, title: "不鏽鋼鋁鐵", mobile: true },
+  { row: 1, index: 49, title: "包裝代工" },
+  { row: 1, index: 59, title: "包裝印刷方式" },
+  { row: 2, index: 6, title: "選工廠" },
+  { row: 2, index: 18, title: "良率" },
+  { row: 2, index: 28, title: "塑膠材料", mobile: true },
+  { row: 2, index: 41, title: "紙盒紙袋軟包裝" },
+  { row: 2, index: 53, title: "PCB打樣" },
+  { row: 2, index: 63, title: "公差" },
+] as const;
 
 function LibraryHeroShelves() {
   const rows = [122, 252, 382];
@@ -63,7 +104,21 @@ function LibraryHeroShelves() {
               const height = 68 + ((index * 17 + row * 29) % 42);
               const x = position;
               position += width + 4;
-              const label = index % 12 === 4;
+              const label = HERO_SPINE_LABELS.find(
+                spine => spine.row === row && spine.index === index
+              );
+              const glyphs = label
+                ? Array.from(label.title.replace(/\s/g, ""))
+                : [];
+              const fontSize = label
+                ? Math.min(
+                    10,
+                    Math.floor((width - 5) / 1.7),
+                    Math.floor(
+                      (height - 24 - (glyphs.length - 1)) / glyphs.length
+                    )
+                  )
+                : 0;
               return (
                 <g key={`${row}-${index}`}>
                   <rect
@@ -87,17 +142,27 @@ function LibraryHeroShelves() {
                   />
                   {label && (
                     <text
-                      transform={`translate(${x + width / 2 + 3} ${baseline - height + 19}) rotate(90)`}
-                      fill="#76518d"
-                      fontSize="8"
-                      fontWeight="700"
-                      letterSpacing="1"
+                      className={`library-hero-spine-label${"mobile" in label ? " library-hero-spine-label-mobile" : ""}`}
+                      textAnchor="middle"
+                      dominantBaseline="central"
+                      fill="#4a2d64"
+                      fontSize={fontSize}
+                      fontWeight="800"
                     >
-                      {
-                        shelfLabels[
-                          (Math.floor(index / 12) + row) % shelfLabels.length
-                        ]
-                      }
+                      {glyphs.map((glyph, glyphIndex) => (
+                        <tspan
+                          key={glyphIndex}
+                          x={x + width / 2}
+                          y={
+                            baseline -
+                            height / 2 +
+                            (glyphIndex - (glyphs.length - 1) / 2) *
+                              (fontSize + 1)
+                          }
+                        >
+                          {glyph}
+                        </tspan>
+                      ))}
                     </text>
                   )}
                 </g>
@@ -118,7 +183,14 @@ function LibraryHeroShelves() {
 }
 
 export default function LibraryIndex() {
-  const [filter, setFilter] = useState<CategoryFilter>("全部");
+  const [filter, setFilter] = useState<CategoryFilter>(readStoredFilter);
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(LIBRARY_FILTER_STORAGE_KEY, filter);
+    } catch {
+      // sessionStorage unavailable
+    }
+  }, [filter]);
   const content = buildLibraryIndexContent();
   const breadcrumbJsonLd = buildLibraryIndexBreadcrumbJsonLd();
   // 排序一律讀 article.learningOrder（入門閱讀順序），不依賴陣列宣告順序、

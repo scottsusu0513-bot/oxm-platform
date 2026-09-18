@@ -17,6 +17,10 @@
  *   29. libraryId 顯示
  *   30. related articles（相關館藏）正確渲染，連到正確 slug
  *   31. CTA（含 oem-vs-odm 的雙 CTA）正確渲染，href 正確
+ *   32. 全 45 篇畫面上第一個 H2 問題（LibraryArticle.tsx 的
+ *       openingQuestions／article.h1 fallback，不是 shared/content/library.ts
+ *       body 裡的第一個 heading 區塊——見任務定案「Library 第一題 generic
+ *       opener 修正」audit）存在、不是通用 meta 開場句、且渲染成真正的 H2
  *   非法 slug → 渲染 NotFound（不是空白頁或 500）
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -27,7 +31,7 @@ import { vi } from "vitest";
 vi.mock("@/components/Navbar", () => ({ default: () => null }));
 
 import LibraryArticle from "./LibraryArticle";
-import { LIBRARY_ARTICLE_BY_SLUG } from "@shared/content/library";
+import { LIBRARY_ARTICLE_BY_SLUG, LIBRARY_ARTICLES } from "@shared/content/library";
 
 function renderAt(pathname: string) {
   window.history.pushState({}, "", pathname);
@@ -113,11 +117,6 @@ describe("LibraryArticle — OEM/ODM 文章：雙 CTA 與 FAQ", () => {
     expect(screen.getAllByText("ODM").length).toBeGreaterThan(0);
   });
 
-  it("正文含連到 what-is-moq 的 contextual relatedLink", () => {
-    renderAt("/library/oem-vs-odm");
-    const link = screen.getByRole("link", { name: /延伸閱讀：MOQ 是什麼/ });
-    expect(link.getAttribute("href")).toBe("/library/what-is-moq");
-  });
 });
 
 describe("LibraryArticle — 第一次找代工廠：單一 CTA + 兩個 contextual link", () => {
@@ -126,11 +125,6 @@ describe("LibraryArticle — 第一次找代工廠：單一 CTA + 兩個 context
     expect(screen.getByRole("link", { name: "開始找工廠" }).getAttribute("href")).toBe("/search");
   });
 
-  it("正文含連到 oem-vs-odm 與 what-is-moq 的 contextual relatedLink", () => {
-    renderAt("/library/first-time-factory-guide");
-    expect(screen.getByRole("link", { name: /延伸閱讀：OEM 與 ODM 差在哪/ }).getAttribute("href")).toBe("/library/oem-vs-odm");
-    expect(screen.getByRole("link", { name: /延伸閱讀：MOQ 是什麼/ }).getAttribute("href")).toBe("/library/what-is-moq");
-  });
 });
 
 describe("LibraryArticle — 新文章：代工是什麼？代工廠是什麼？", () => {
@@ -178,12 +172,6 @@ describe("LibraryArticle — 新文章：代工是什麼？代工廠是什麼？
     expect(ctaLink.getAttribute("href")).toBe("/search");
   });
 
-  it("正文含連到 what-is-moq 與 oem-vs-odm 的 contextual relatedLink", () => {
-    renderAt("/library/what-is-contract-manufacturing");
-    expect(screen.getByRole("link", { name: /延伸閱讀：MOQ 是什麼/ }).getAttribute("href")).toBe("/library/what-is-moq");
-    expect(screen.getByRole("link", { name: /延伸閱讀：OEM 與 ODM 差在哪/ }).getAttribute("href")).toBe("/library/oem-vs-odm");
-  });
-
   it("相關館藏區塊列出 oem-vs-odm 與 first-time-factory-guide，且 href 正確", () => {
     renderAt("/library/what-is-contract-manufacturing");
     const related = screen.getByTestId("related-articles");
@@ -208,6 +196,199 @@ describe("LibraryArticle — oem-vs-odm 相關館藏新增前置知識連結", (
     const hrefs = links.map(a => a.getAttribute("href"));
     expect(hrefs).toContain("/library/what-is-contract-manufacturing");
     expect(hrefs).toContain("/library/what-is-moq");
+  });
+});
+
+describe("LibraryArticle — Level 2 第一批 5 篇：H1／結尾 CTA／相關館藏（正文 OXM 導流已於本輪移除）", () => {
+  it("small-batch-manufacturing：H1、結尾 CTA 正確渲染", () => {
+    renderAt("/library/small-batch-manufacturing");
+    expect(screen.getByRole("heading", { level: 1, name: "小量代工怎麼找？MOQ 太高怎麼辦？" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "查看可接小量／可打樣的工廠" }).getAttribute("href")).toBe("/search?smallBatch=true&sample=true");
+    const related = screen.getByTestId("related-articles");
+    const hrefs = Array.from(related.querySelectorAll("a")).map(a => a.getAttribute("href"));
+    expect(hrefs).toEqual(["/library/what-is-moq", "/library/what-is-prototyping"]);
+  });
+
+  it("how-to-read-factory-quotes：H1、結尾 CTA 正確渲染", () => {
+    renderAt("/library/how-to-read-factory-quotes");
+    expect(screen.getByRole("heading", { level: 1, name: "工廠報價怎麼看？為什麼同一個產品價格差這麼多？" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "前往 OXM 找工廠、比較報價" }).getAttribute("href")).toBe("/search");
+    const related = screen.getByTestId("related-articles");
+    const hrefs = Array.from(related.querySelectorAll("a")).map(a => a.getAttribute("href"));
+    expect(hrefs).toEqual(["/library/what-is-rfq", "/library/how-to-choose-a-factory"]);
+  });
+
+  it("how-to-choose-a-factory：H1、結尾 CTA 正確渲染", () => {
+    renderAt("/library/how-to-choose-a-factory");
+    expect(screen.getByRole("heading", { level: 1, name: "怎麼判斷一間工廠適不適合你的案子？" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "前往 OXM 找工廠" }).getAttribute("href")).toBe("/search");
+    const related = screen.getByTestId("related-articles");
+    const hrefs = Array.from(related.querySelectorAll("a")).map(a => a.getAttribute("href"));
+    expect(hrefs).toEqual(["/library/how-to-read-factory-quotes", "/library/what-is-prototyping"]);
+  });
+
+  it("what-is-rfq：H1、結尾 CTA 正確渲染", () => {
+    renderAt("/library/what-is-rfq");
+    expect(screen.getByRole("heading", { level: 1, name: "詢價要提供哪些資料？RFQ 怎麼準備？" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "前往 OXM 開始詢價" }).getAttribute("href")).toBe("/search");
+    const related = screen.getByTestId("related-articles");
+    const hrefs = Array.from(related.querySelectorAll("a")).map(a => a.getAttribute("href"));
+    expect(hrefs).toEqual(["/library/first-time-factory-guide", "/library/how-to-read-factory-quotes"]);
+  });
+
+  it("what-is-prototyping：H1、結尾 CTA 正確渲染", () => {
+    renderAt("/library/what-is-prototyping");
+    expect(screen.getByRole("heading", { level: 1, name: "打樣是什麼？從樣品到量產通常要經過哪些階段？" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "查看可打樣的工廠" }).getAttribute("href")).toBe("/search?sample=true");
+    const related = screen.getByTestId("related-articles");
+    const hrefs = Array.from(related.querySelectorAll("a")).map(a => a.getAttribute("href"));
+    expect(hrefs).toEqual(["/library/small-batch-manufacturing", "/library/how-to-choose-a-factory"]);
+  });
+
+  it("本批 5 篇都沒有「常見問題」區塊（都沒有 faq）", () => {
+    for (const slug of ["small-batch-manufacturing", "how-to-read-factory-quotes", "how-to-choose-a-factory", "what-is-rfq", "what-is-prototyping"]) {
+      renderAt(`/library/${slug}`);
+      expect(screen.queryByText("常見問題")).toBeNull();
+      cleanup();
+    }
+  });
+});
+
+describe("LibraryArticle — 全 45 篇 UI render 與正文不再有任何 OXM 導流連結（見任務定案「傳產圖書館內容完成階段」／「移除正文 OXM 導流」）", () => {
+  const allSlugs = LIBRARY_ARTICLES.map(a => a.slug);
+
+  it("全部 45 篇都能正確渲染 H1，且 H1 文字跟資料源一致（涵蓋本輪新增的 36 篇，不會渲染出空白頁或報錯）", () => {
+    for (const slug of allSlugs) {
+      renderAt(`/library/${slug}`);
+      expect(screen.getByRole("heading", { level: 1, name: LIBRARY_ARTICLE_BY_SLUG[slug].h1 }), slug).toBeTruthy();
+      cleanup();
+    }
+  });
+
+  it("全部 45 篇正文都沒有「延伸閱讀」文字，也沒有 library-context-link（原本 relatedLink／oxmLink 共用的正文連結樣式）", () => {
+    for (const slug of allSlugs) {
+      renderAt(`/library/${slug}`);
+      expect(screen.queryByText(/延伸閱讀/), slug).toBeNull();
+      expect(document.querySelectorAll(".library-context-link").length, slug).toBe(0);
+      cleanup();
+    }
+  });
+
+  it("每篇文末都有唯一的 NEXT STEP CTA（library-cta-primary），OXM 導流全部集中在這裡，且 href 都在 allowlist 內", () => {
+    for (const slug of allSlugs) {
+      renderAt(`/library/${slug}`);
+      const ctaLinks = document.querySelectorAll("a.library-cta-primary");
+      expect(ctaLinks.length, slug).toBe(1);
+      expect(ctaLinks[0].getAttribute("href"), slug).toBe(LIBRARY_ARTICLE_BY_SLUG[slug].cta.href);
+      cleanup();
+    }
+  });
+
+  it("相關館藏區塊每篇都仍存在，且連結數與 relatedArticleSlugs 一致", () => {
+    for (const slug of allSlugs) {
+      renderAt(`/library/${slug}`);
+      const related = screen.getByTestId("related-articles");
+      expect(related, slug).toBeTruthy();
+      const hrefs = Array.from(related.querySelectorAll("a")).map(a => a.getAttribute("href"));
+      expect(hrefs, slug).toEqual(LIBRARY_ARTICLE_BY_SLUG[slug].relatedArticleSlugs.map(s => `/library/${s}`));
+      cleanup();
+    }
+  });
+});
+
+describe("LibraryArticle — 全 45 篇第一個問題（見任務定案「Library 第一題 generic opener 修正」audit：原本 openingQuestions 只覆蓋 9 篇，其餘 36 篇會 fallback 成硬編碼的「這份指南從哪裡開始？」，本輪補齊全部 45 篇並移除這個通用字串）", () => {
+  const GENERIC_OPENER_SUBSTRINGS = [
+    "這份指南從哪裡開始",
+    "這篇文章要從哪裡開始",
+    "我該先知道什麼",
+    "這篇先講什麼",
+    "從哪裡開始",
+  ];
+
+  it("全部 45 篇都存在畫面上第一個 H2 問題，且真的渲染成 <h2>（不是純文字或其他層級標題）", () => {
+    for (const article of LIBRARY_ARTICLES) {
+      renderAt(`/library/${article.slug}`);
+      const h2s = screen.getAllByRole("heading", { level: 2 });
+      expect(h2s.length, article.slug).toBeGreaterThan(0);
+      expect(h2s[0].textContent, article.slug).toBeTruthy();
+      cleanup();
+    }
+  });
+
+  it("全部 45 篇第一個問題都不是通用 meta 開場句（不含「從哪裡開始」「我該先知道什麼」「這篇先講什麼」等樣式）", () => {
+    for (const article of LIBRARY_ARTICLES) {
+      renderAt(`/library/${article.slug}`);
+      const firstQuestion = screen.getAllByRole("heading", { level: 2 })[0].textContent ?? "";
+      for (const pattern of GENERIC_OPENER_SUBSTRINGS) {
+        expect(firstQuestion, `${article.slug}: "${firstQuestion}" 不應含有「${pattern}」`).not.toContain(pattern);
+      }
+      cleanup();
+    }
+  });
+
+  it("每篇仍然只有一個 H1（getByRole 在多於一個相符節點時會直接拋錯，等同斷言唯一性）", () => {
+    for (const article of LIBRARY_ARTICLES) {
+      renderAt(`/library/${article.slug}`);
+      expect(screen.getByRole("heading", { level: 1, name: article.h1 }), article.slug).toBeTruthy();
+      cleanup();
+    }
+  });
+
+  it("第一個問題與 body 實際第一個 heading 區塊文字不同（不是機械重複貼兩次同一句），且該 body heading 仍完整存在於畫面上", () => {
+    for (const article of LIBRARY_ARTICLES) {
+      renderAt(`/library/${article.slug}`);
+      const h2Texts = screen.getAllByRole("heading", { level: 2 }).map(h => h.textContent);
+      const firstBodyHeading = article.body.find(b => b.type === "heading")?.text;
+      if (firstBodyHeading) {
+        expect(h2Texts[0], article.slug).not.toBe(firstBodyHeading);
+        expect(h2Texts, article.slug).toContain(firstBodyHeading);
+      }
+      cleanup();
+    }
+  });
+
+  it("article body 結構沒有被破壞：相關館藏、NEXT STEP CTA 仍正常渲染（抽樣涵蓋新增/修改的 openingQuestions 條目）", () => {
+    for (const slug of ["what-is-cnc-machining", "what-is-tolerance", "how-to-find-packaging-manufacturer", "what-is-moq", "first-time-factory-guide"]) {
+      renderAt(`/library/${slug}`);
+      expect(screen.getByTestId("related-articles"), slug).toBeTruthy();
+      expect(document.querySelectorAll("a.library-cta-primary").length, slug).toBe(1);
+      cleanup();
+    }
+  });
+});
+
+describe("LibraryArticle — 重點文字標示（見任務定案「Library 重點文字標示」）", () => {
+  it("正文出現帶 emphasis class 的 <strong>，且文字內容正確（以 what-is-contract-manufacturing 為例）", () => {
+    renderAt("/library/what-is-contract-manufacturing");
+    const primaryStrong = Array.from(document.querySelectorAll("strong.library-emphasis-primary"));
+    expect(primaryStrong.length).toBeGreaterThan(0);
+    expect(primaryStrong.some(el => el.textContent === "適合你產品製造流程的合作夥伴")).toBe(true);
+    const secondaryStrong = Array.from(document.querySelectorAll("strong.library-emphasis-secondary"));
+    expect(secondaryStrong.length).toBeGreaterThan(0);
+  });
+
+  it("segments 渲染後的可見文字，逐字等於原本 text（emphasis 只改樣式，不改內容、不用 raw HTML）", () => {
+    renderAt("/library/small-batch-manufacturing");
+    const article = LIBRARY_ARTICLE_BY_SLUG["small-batch-manufacturing"];
+    const withSegments = article.body.filter(
+      (b): b is Extract<typeof article.body[number], { type: "paragraph" }> => b.type === "paragraph" && !!b.segments,
+    );
+    expect(withSegments.length).toBeGreaterThan(0);
+    for (const block of withSegments) {
+      expect(screen.getByText((_, node) => node?.textContent === block.text && node?.tagName.toLowerCase() === "p")).toBeTruthy();
+    }
+  });
+});
+
+describe("LibraryArticle — 返回按鈕不再是 deterministic（見任務定案「Library UX 修正」—返回上一頁恢復原本位置）", () => {
+  it("FloatingBackButton 沒有 deterministic prop，走預設的 history.back()／sessionStorage fallback 行為", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const source = fs.readFileSync(path.resolve(import.meta.dirname, "LibraryArticle.tsx"), "utf-8");
+    const match = source.match(/<FloatingBackButton\b[\s\S]*?\/>/);
+    expect(match).toBeTruthy();
+    expect(match![0]).not.toContain("deterministic");
+    expect(match![0]).toContain('fallbackHref="/library"');
   });
 });
 

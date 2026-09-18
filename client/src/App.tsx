@@ -531,10 +531,22 @@ function RouteTracker() {
 // BUG 2 — 「新頁面偶發先看到 Footer、最後卡在頁尾」的全域修正（見對話「BUG
 // 2」Audit、client/src/lib/scrollRestoration.ts 的完整說明）。決策邏輯本身
 // 抽成純函式 decideScrollNavigationAction，這裡只負責：
-// 1. 用一個不觸發 re-render 的 ref 記錄「這次 pathname 變化是不是由瀏覽器
-//    原生 popstate（上一頁／下一頁）觸發」——popstate 監聽器與 pathname 變化
-//    的 effect 都是同一輪 event loop 內同步／依序處理，ref 寫入不需要等
-//    re-render，能可靠地在 effect 讀取到當下這次導航的真實來源。
+// 1. 判斷「這次 pathname 變化是不是由瀏覽器原生 popstate（上一頁／下一頁）
+//    觸發」。原本用一個 popstate 監聽器寫入的 ref 判斷，假設監聽器一定會在
+//    pathname 變化的 effect 之前、同一輪 event loop 內同步跑完——經「Library
+//    scroll regression」audit 實測證實這個假設不成立：wouter 自己更新
+//    location 的時機可能搶在這個元件（掛載後才註冊）的 popstate 監聽器之前，
+//    導致 popstate 觸發的那次 pathname-effect 讀到 ref 還沒被設成 true（誤判
+//    成新導航），而稍後才姍姍來遲的 popstate 事件把 ref 設回 true 時，已經沒
+//    有對應的 pathname 變化能消費它——這個「延遲設真」的旗標會殘留到下一次
+//    真正的新導航，讓那次新導航被誤判成 popstate、錯誤地保留了舊 scroll
+//    （用瀏覽器實際操作可重現：/library 往下滑→點文章→上一頁→再點另一篇
+//    「新」文章，新文章會繼承 /library 的 scrollY 而不是從頂端開始）。
+//    改用不依賴事件時機的判斷方式：在每次 pathname-effect 決定完動作之後，
+//    把目前這筆 history entry 標記起來（history.replaceState 寫入一個遞增
+//    key）；popstate 一定會回到「先前已經標記過」的 entry，新 PUSH 一定會
+//    落在瀏覽器指派的全新、未標記 entry 上——這個判斷是同步的，不需要等任何
+//    事件先到達，因此沒有時序競態。
 // 2. 只有「新導航」才 window.scrollTo(0, 0)；popstate（返回／前進）與
 //    reload 後的第一次判斷一律不動 scroll，交給瀏覽器原生行為與各頁面
 //    既有的還原邏輯（例如 FactoryDetail.tsx 自己對 factoryId 變化的處理），
@@ -548,23 +560,44 @@ function RouteTracker() {
 //    誤判瀏覽器返回鍵回首頁這筆 history entry。
 let _scrollManagerMounted = false; // resets on page refresh，用來判斷「這次掛載後的第一次」
 
-function ScrollRestorationManager() {
+const SCROLL_NAV_VISITED_KEY = "__oxmScrollNavVisited";
+let _scrollNavVisitedSeq = 0;
+
+// 這筆 history entry 是否曾經被我們標記過（＝先前已經導覽過、現在是 popstate
+// 回到它，不是全新的 push）。history.pushState 預設不會把目前 entry 的 state
+// 帶到新 entry（沒有明講 state 就是全新的 null/undefined），所以新 push 落地
+// 的 entry 一定讀不到這個標記；popstate 則一定會回到「當初 push 進去、之後被
+// 我們標記過」的同一個 entry object，可以同步、可靠地讀到標記。
+function isCurrentHistoryEntryVisited(): boolean {
+  try {
+    const state = window.history.state as Record<string, unknown> | null;
+    return !!state && state[SCROLL_NAV_VISITED_KEY] != null;
+  } catch {
+    return false;
+  }
+}
+
+function markCurrentHistoryEntryVisited(): void {
+  try {
+    const state = (window.history.state ?? {}) as Record<string, unknown>;
+    if (state[SCROLL_NAV_VISITED_KEY] != null) return;
+    window.history.replaceState(
+      { ...state, [SCROLL_NAV_VISITED_KEY]: ++_scrollNavVisitedSeq },
+      "",
+    );
+  } catch { /* history API unavailable */ }
+}
+
+export function ScrollRestorationManager() {
   const [pathname] = useLocation();
-  const isPopStateRef = useRef(false);
   const previousPathnameRef = useRef<string | null>(null);
   const isFirstRunRef = useRef(!_scrollManagerMounted);
-
-  useEffect(() => {
-    const handlePopState = () => { isPopStateRef.current = true; };
-    window.addEventListener("popstate", handlePopState);
-    return () => window.removeEventListener("popstate", handlePopState);
-  }, []);
 
   useEffect(() => {
     const action = decideScrollNavigationAction({
       previousPathname: previousPathnameRef.current,
       nextPathname: pathname,
-      isPopStateNavigation: isPopStateRef.current,
+      isPopStateNavigation: isCurrentHistoryEntryVisited(),
       isInitialMount: isFirstRunRef.current,
       hasExplicitTarget: hasExplicitScrollTarget(window.location.search, window.location.hash),
       isHomeNavigationIntent: isHomeNavigationIntentState(window.history.state),
@@ -572,7 +605,7 @@ function ScrollRestorationManager() {
     if (action === "reset-to-top") {
       window.scrollTo(0, 0);
     }
-    isPopStateRef.current = false;
+    markCurrentHistoryEntryVisited();
     isFirstRunRef.current = false;
     _scrollManagerMounted = true;
     previousPathnameRef.current = pathname;

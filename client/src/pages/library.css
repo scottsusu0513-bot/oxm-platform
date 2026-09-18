@@ -679,6 +679,21 @@
 .library-body-paragraph {
   margin-top: 14px;
 }
+/* Library 重點文字標示（見任務定案「Library 重點文字標示」）：沿用既有
+   --lib-orange／--lib-purple token（--lib-purple 先前只宣告未使用，這是它
+   第一次真正套用），不是另外發明新顏色；render 一律搭配 <strong>，顏色只是
+   掛在既有 semantic emphasis 標籤上的樣式，不是純色塊。 */
+.library-emphasis-bold {
+  font-weight: 700;
+}
+.library-emphasis-primary {
+  color: var(--lib-orange);
+  font-weight: 700;
+}
+.library-emphasis-secondary {
+  color: var(--lib-purple);
+  font-weight: 700;
+}
 .library-body-list {
   display: grid;
   gap: 9px;
@@ -981,6 +996,9 @@
     opacity: 0.21;
     -webkit-mask-image: linear-gradient(90deg, #0003, #0009);
     mask-image: linear-gradient(90deg, #0003, #0009);
+  }
+  .library-hero-spine-label:not(.library-hero-spine-label-mobile) {
+    display: none;
   }
   .library-hero-artwork-book {
     top: 0;

@@ -62,9 +62,29 @@ describe("App.tsx: 全站 scroll-to-top 機制必須是「只在真正新導航�
     expect(managerMatch![0]).toMatch(/if \(action === "reset-to-top"\)\s*\{\s*\n\s*window\.scrollTo\(0, 0\);/);
   });
 
-  it("ScrollRestorationManager 有監聽瀏覽器原生 popstate，用來分辨新導航與返回／前進導航", () => {
+  // 「Library scroll regression 修正」之前，這裡原本鎖定「用 popstate 監聽器
+  // 寫入 ref，pathname-effect 再讀取這個 ref」來分辨新導航與返回／前進導航。
+  // 實測（見任務對話的瀏覽器重現）證實這個設計不安全：它假設 popstate 監聽器
+  // 一定會在 pathname 變化的 effect 之前、同一輪 event loop 內同步跑完，但
+  // wouter 更新 location 的實際時機可能搶在這個元件（掛載後才註冊）的 popstate
+  // 監聽器之前，導致 popstate 觸發的那次判斷讀到 ref 還是舊值，而姍姍來遲的
+  // popstate 事件把 ref 設回 true 時已經沒有對應的 pathname 變化可以消費——這個
+  // 「延遲設真」的旗標會殘留、誤判到下一次真正的新導航上（重現序列：/library
+  // 往下滑 → 點文章 → 上一頁 → 再點另一篇「新」文章，新文章會繼承 /library 的
+  // scrollY，不是從頂端開始）。
+  //
+  // 改用不依賴事件時機的判斷：在每次 pathname-effect 決定完動作之後，把目前
+  // 這筆 history entry 標記起來（history.replaceState 寫入一個遞增 key）；
+  // popstate 一定會回到「先前已經標記過」的 entry，新 PUSH 一定會落在瀏覽器
+  // 指派的全新、未標記 entry——這個判斷是同步的，不需要等任何事件先到達，
+  // 因此沒有時序競態。
+  it("ScrollRestorationManager 用『history.state 標記』同步分辨新導航與返回／前進導航，不依賴 popstate 監聽器的時機", () => {
+    expect(source).not.toMatch(/function ScrollRestorationManager\(\)[\s\S]*?addEventListener\("popstate"/);
     const managerMatch = source.match(/function ScrollRestorationManager\(\)[\s\S]*?\n\}/);
     expect(managerMatch).not.toBeNull();
-    expect(managerMatch![0]).toMatch(/addEventListener\("popstate"/);
+    expect(managerMatch![0]).toMatch(/isPopStateNavigation:\s*isCurrentHistoryEntryVisited\(\)/);
+    expect(source).toMatch(/function isCurrentHistoryEntryVisited\(\)/);
+    expect(source).toMatch(/function markCurrentHistoryEntryVisited\(\)/);
+    expect(source).toMatch(/window\.history\.replaceState\(/);
   });
 });

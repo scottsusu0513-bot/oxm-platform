@@ -19,7 +19,7 @@ import {
   resolveLegacyBlogRedirect,
 } from "@shared/seo/libraryPages";
 import { buildLibraryIndexMeta, buildLibraryArticleMeta } from "./_core/ogMeta";
-import { LIBRARY_ARTICLE_BY_SLUG } from "@shared/content/library";
+import { LIBRARY_ARTICLE_BY_SLUG, LIBRARY_ARTICLES } from "@shared/content/library";
 
 describe("parseLibraryIndexPath", () => {
   it("命中 /library 與 /library/（結尾斜線）", () => {
@@ -93,8 +93,11 @@ describe("buildLibraryArticleContent／buildLibraryArticleMeta：合法 slug", (
     expect(content.h1).toBe(LIBRARY_ARTICLE_BY_SLUG["what-is-moq"].h1);
   });
 
-  it("canonical 不會指回舊 /blog（含新增的 what-is-contract-manufacturing）", () => {
-    for (const slug of ["what-is-moq", "oem-vs-odm", "first-time-factory-guide", "what-is-contract-manufacturing"]) {
+  it("canonical 不會指回舊 /blog（含全部 9 篇，含 Level 2 第一批 5 篇）", () => {
+    for (const slug of [
+      "what-is-moq", "oem-vs-odm", "first-time-factory-guide", "what-is-contract-manufacturing",
+      "small-batch-manufacturing", "how-to-read-factory-quotes", "how-to-choose-a-factory", "what-is-rfq", "what-is-prototyping",
+    ]) {
       const resolved = resolveLibraryArticle(slug)!;
       const content = buildLibraryArticleContent(resolved);
       expect(content.canonical).not.toContain("/blog");
@@ -127,6 +130,74 @@ describe("新文章路由：what-is-contract-manufacturing", () => {
   it("buildLibraryArticleAllJsonLd 只回傳 [Article, BreadcrumbList]（沒有 faq，不硬加 FAQPage）", () => {
     const all = buildLibraryArticleAllJsonLd(resolveLibraryArticle("what-is-contract-manufacturing")!);
     expect(all.map(x => x["@type"])).toEqual(["Article", "BreadcrumbList"]);
+  });
+});
+
+describe("Level 2 第一批 5 篇路由", () => {
+  const slugs = [
+    "small-batch-manufacturing", "how-to-read-factory-quotes", "how-to-choose-a-factory", "what-is-rfq", "what-is-prototyping",
+  ];
+
+  it("每篇都能正確 resolve", () => {
+    for (const slug of slugs) {
+      const resolved = resolveLibraryArticle(slug);
+      expect(resolved?.slug).toBe(slug);
+    }
+  });
+
+  it("每篇 buildLibraryArticleMeta 都回傳 200 + index + ogType article", () => {
+    for (const slug of slugs) {
+      const meta = buildLibraryArticleMeta(slug, `/library/${slug}`);
+      expect(meta.status).toBe(200);
+      expect(meta.noindex).toBe(false);
+      expect(meta.ogType).toBe("article");
+    }
+  });
+
+  it("每篇 buildLibraryArticleAllJsonLd 都只回傳 [Article, BreadcrumbList]（本批 5 篇都沒有 faq）", () => {
+    for (const slug of slugs) {
+      const all = buildLibraryArticleAllJsonLd(resolveLibraryArticle(slug)!);
+      expect(all.map(x => x["@type"])).toEqual(["Article", "BreadcrumbList"]);
+    }
+  });
+});
+
+describe("全 Library（45 篇，見任務定案「傳產圖書館內容完成階段」）：route resolve／meta／JSON-LD 逐篇驗證", () => {
+  it("每篇 slug 都能正確 resolve，resolved.article.libraryId 跟資料源一致", () => {
+    for (const article of LIBRARY_ARTICLES) {
+      const resolved = resolveLibraryArticle(article.slug);
+      expect(resolved?.slug).toBe(article.slug);
+      expect(resolved?.article.libraryId).toBe(article.libraryId);
+    }
+  });
+
+  it("每篇 buildLibraryArticleMeta 都回傳 200 + index + ogType article，canonical self-canonical 不指回 /blog", () => {
+    for (const article of LIBRARY_ARTICLES) {
+      const meta = buildLibraryArticleMeta(article.slug, `/library/${article.slug}`);
+      expect(meta.status, article.slug).toBe(200);
+      expect(meta.noindex, article.slug).toBe(false);
+      expect(meta.ogType, article.slug).toBe("article");
+
+      const content = buildLibraryArticleContent(resolveLibraryArticle(article.slug)!);
+      expect(content.canonical, article.slug).toBe(`https://www.oxmmatch.com/library/${article.slug}`);
+      expect(content.canonical, article.slug).not.toContain("/blog");
+    }
+  });
+
+  it("每篇 buildLibraryArticleAllJsonLd 都是 [Article, BreadcrumbList]，只有 oem-vs-odm 多一個 FAQPage", () => {
+    for (const article of LIBRARY_ARTICLES) {
+      const all = buildLibraryArticleAllJsonLd(resolveLibraryArticle(article.slug)!);
+      const expectedTypes = article.slug === "oem-vs-odm" ? ["Article", "BreadcrumbList", "FAQPage"] : ["Article", "BreadcrumbList"];
+      expect(all.map(x => x["@type"]), article.slug).toEqual(expectedTypes);
+    }
+  });
+
+  it("每篇 Article JSON-LD 的 headline／description 跟資料源逐字一致", () => {
+    for (const article of LIBRARY_ARTICLES) {
+      const jsonLd = buildLibraryArticleJsonLd(resolveLibraryArticle(article.slug)!);
+      expect(jsonLd.headline, article.slug).toBe(article.title);
+      expect(jsonLd.description, article.slug).toBe(article.metaDescription);
+    }
   });
 });
 
