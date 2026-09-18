@@ -1500,6 +1500,21 @@ export const appRouter = router({
       return result;
     }),
 
+    // 工廠詳情頁「相關工廠」推薦（見任務定案「工廠詳情頁底部同類型工廠推薦」）。
+    // publicProcedure：不需要登入即可瀏覽，跟頁面本身一致。輸入只有
+    // factoryId／limit，不接受 industry／subIndustry／taxId——真正的分類與
+    // 去重依據一律由 db.getSimilarFactories() 內部重新從資料庫讀取目前工廠
+    // 的真實值，避免呼叫端偽造分類騙出不相關推薦。
+    getSimilar: publicProcedure.input(z.object({
+      factoryId: z.number(),
+      limit: z.number().min(1).max(12).optional().default(12),
+    })).query(async ({ input }) => {
+      const similar = await db.getSimilarFactories(input.factoryId, input.limit);
+      // 跟 search／getById 未授權視角同一套消毒：絕不外流 certificationEvidence
+      // ／adminNote／contactStatus／deletedAt，徽章只回傳公開顯示的子集合。
+      return similar.map(f => stripHiddenBadgesForPublic(stripCertificationEvidence(f)));
+    }),
+
     getMine: protectedProcedure.query(async ({ ctx }) => {
       const factory = await db.getFactoryByOwnerId(ctx.user.id);
       if (!factory) return null;

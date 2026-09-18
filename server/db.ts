@@ -569,6 +569,93 @@ export async function getFactoryByOwnerId(ownerId: number) {
   return result.length > 0 ? result[0] : undefined;
 }
 
+/**
+ * 工廠詳情頁「相關工廠」推薦（見任務定案「工廠詳情頁底部同類型工廠推薦」）。
+ *
+ * 安全原則：只信任 factoryId，industry／subIndustry／taxId 一律從資料庫重新
+ * 讀取目前工廠的真實值，不接受呼叫端傳入這三者本身當作推薦依據——避免有心
+ * 呼叫端偽造分類，騙出不相關的推薦或繞過去重。目前工廠必須是
+ * status='approved'（跟 searchFactories／getApprovedFactoriesForSitemap
+ * 等既有公開查詢同一套判斷，approved 工廠不可能同時有 deletedAt，見上方
+ * getApprovedRegionIndustryCombosForSitemap 附近的說明），否則直接回傳空陣列
+ * ——不存在、未上架或已下架的工廠不推薦任何內容，呼叫端據此隱藏整個區塊。
+ *
+ * Overlap 語意：candidate 只要跟目前工廠的 subIndustry 或 industry「至少
+ * 有一個共同值」就算符合（JSON_OVERLAPS），不是「candidate 必須包含目前
+ * 工廠全部 subIndustry」——跟 searchFactories 的 industry 篩選語意一致。
+ *
+ * 排序：同子產業 overlap > 同主產業 overlap（沒有同子產業）> avgRating >
+ * reviewCount > id（最後一道 deterministic tie-breaker，避免每次查詢順序
+ * 不穩定）。
+ *
+ * 同企業去重：只用 taxId，且只在雙方都非 null 時才比對——既有工廠大量是
+ * NULL taxId（見 drizzle/schema.ts 的欄位註解，只有新建工廠強制必填、沒有
+ * backfill），null 一律視為獨立工廠，不嘗試用 name／phone／address／ownerId
+ * 做模糊推測（那些都可能同名同姓或共用聯絡窗口，不是可靠的同企業判斷）。
+ * 候選之間彼此撞 taxId 時，只保留排序較前的一家。
+ *
+ * 效能：只有一次 DB 查詢（先抓 candidateLimit=30 筆候選），tier 判斷／排序／
+ * 去重／截斷全部在應用層一次完成，不逐筆再查一次 DB（不是 N+1）。
+ */
+export async function getSimilarFactories(factoryId: number, limit = 12): Promise<Factory[]> {
+  const db = await getDb();
+  if (!db) return [];
+
+  const current = await getFactoryById(factoryId);
+  if (!current || current.status !== 'approved') return [];
+
+  const currentIndustry = Array.isArray(current.industry) ? (current.industry as string[]) : [];
+  const currentSubIndustry = Array.isArray(current.subIndustry) ? (current.subIndustry as string[]) : [];
+  const currentTaxId = current.taxId ?? null;
+  if (currentIndustry.length === 0 && currentSubIndustry.length === 0) return [];
+
+  const matchConditions = [];
+  if (currentSubIndustry.length > 0)
+    matchConditions.push(sql`JSON_OVERLAPS(${factories.subIndustry}, ${JSON.stringify(currentSubIndustry)})`);
+  if (currentIndustry.length > 0)
+    matchConditions.push(sql`JSON_OVERLAPS(${factories.industry}, ${JSON.stringify(currentIndustry)})`);
+
+  const CANDIDATE_LIMIT = 30;
+  const candidates = await db.select().from(factories)
+    .where(and(
+      eq(factories.status, 'approved'),
+      ne(factories.id, factoryId),
+      or(...matchConditions)!,
+    ))
+    .orderBy(desc(factories.avgRating), desc(factories.reviewCount))
+    .limit(CANDIDATE_LIMIT);
+
+  const hasOverlap = (a: string[], b: string[]) => a.some(v => b.includes(v));
+
+  const ranked = candidates
+    .map(f => ({
+      factory: f,
+      subIndustryMatch: hasOverlap(Array.isArray(f.subIndustry) ? (f.subIndustry as string[]) : [], currentSubIndustry),
+    }))
+    .sort((a, b) => {
+      if (a.subIndustryMatch !== b.subIndustryMatch) return a.subIndustryMatch ? -1 : 1;
+      const ratingDiff = Number(b.factory.avgRating ?? 0) - Number(a.factory.avgRating ?? 0);
+      if (ratingDiff !== 0) return ratingDiff;
+      const reviewDiff = (b.factory.reviewCount ?? 0) - (a.factory.reviewCount ?? 0);
+      if (reviewDiff !== 0) return reviewDiff;
+      return a.factory.id - b.factory.id;
+    });
+
+  const seenTaxIds = new Set<string>();
+  const result: Factory[] = [];
+  for (const { factory: f } of ranked) {
+    if (result.length >= limit) break;
+    const taxId = f.taxId ?? null;
+    if (taxId != null) {
+      if (currentTaxId != null && taxId === currentTaxId) continue;
+      if (seenTaxIds.has(taxId)) continue;
+      seenTaxIds.add(taxId);
+    }
+    result.push(f);
+  }
+  return result;
+}
+
 // AI 搜尋候選集上限：避免全表掃後在 JS 排序太多筆
 const AI_CANDIDATE_LIMIT = 300;
 

@@ -1,0 +1,121 @@
+/*
+ * 工廠詳情頁「相關工廠」跑馬燈（見任務定案「工廠詳情頁底部同類型工廠推薦」／
+ * 「修正 desktop 尾端空白」）。
+ *
+ * 核心原則：動畫完全交給 CSS／瀏覽器 compositor 處理（純 transform 動畫），
+ * 不用 setInterval／requestAnimationFrame／React setState 每個 frame 重新渲染。
+ *
+ * ── Desktop 尾端空白修正（見任務定案「發現一個明顯 UX 問題」audit）──
+ * Root cause：舊版用 `.related-marquee-eligible .related-marquee-viewport`
+ * 這個「後代選擇器」，但 eligible 這個 class 實際上是跟 viewport 同一個
+ * DOM 元素（見 RelatedFactoriesMarquee.tsx 兩個 class 一起寫在同一個
+ * div 上），後代選擇器要求 viewport 是 eligible 元素的「子孫」，同一個
+ * 元素不會是自己的子孫，這條規則因此永遠不會命中——實際結果是 desktop
+ * 進入 6+ marquee 狀態時，viewport 從頭到尾都停在預設的
+ * `overflow-x: auto`，animation 卻正常套用在 row 上（那條選擇器沒有這個
+ * 問題，row 真的是 viewport 的子孫），變成「畫面在跑動畫，同時整條兩倍寬
+ * 的 row 又可以用捲軸手動捲到底」——手動捲到 row 尾端時，動畫已經讓內容
+ * 偏移到別的位置，視覺上就是使用者回報的「尾端一大片空白、捲軸可以捲進
+ * 沒有卡片的區域」。修正方式：改用 `.related-marquee-eligible` 本身當
+ * selector（它就是 viewport 元素），不再寫成後代選擇器。
+ *
+ * ── Desktop 固定視窗（見任務定案「固定寬度 viewport + 內部 track 跑馬燈」）──
+ * viewport 在 >= 1024px 時一律有 max-width 上限，卡在「約 4 張卡片＋間距」
+ * 的寬度（280px 是卡片桌機寬度，見 RelatedFactoriesMarquee.tsx 的
+ * CARD_WIDTH_CLASS／RelatedFactoryCard、RecruitmentCard 共用的
+ * sm:w-[280px]；1rem 是 .related-marquee-track 的 gap）。max-width 只是
+ * 上限，不是固定寬度——如果外層容器本身比這個上限窄，viewport 會自然只吃
+ * 到容器實際寬度（看到 3.x 張），不會硬把卡片縮小塞滿 4 張。這條 max-width
+ * 規則不論 eligible 與否都套用（2–5 家的靜態列同樣不该撐爆整個容器寬度），
+ * 只有「要不要 overflow:hidden＋跑動畫＋顯示複製軌道」才特別限定
+ * eligible。這樣 reduced-motion 情境下即使動畫關掉，desktop 也還是有一個
+ * 合理大小、可用原生捲軸瀏覽的固定視窗，不會突然變成撐滿整頁寬度的長條。
+ *
+ * 手機（< 1024px）完全不受這兩條規則影響，維持原本「單一軌道、
+ * overflow-x: auto、原生滑動」的策略，不限制成 4 張視窗。
+ *
+ * 方向：使用者明確要求「卡片慢慢從左往右移動」，不是常見 marquee 的右往左。
+ * from translateX(-50%) to translateX(0%)：起始時 row 整體往左偏移自身寬度
+ * 的一半（此時看到的是複製軌道的開頭），動畫過程中 row 逐漸往右移回原位，
+ * row 往右移動 = row 上每一張卡片的畫面座標都隨時間遞增 = 卡片從左邊進場、
+ * 往右邊移出，視覺上就是「從左往右」。row 的總寬度必須剛好是單一軌道的兩倍
+ * （靠兩條軌道渲染相同清單達成），-50%→0% 才會剛好銜接回本來的畫面，
+ * 不會有跳動或明顯的重複痕跡。
+ */
+.related-marquee-viewport {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+}
+
+/* row 是 track A／track B 兩個 wrapper 的 flex 容器；沒有這個 gap，A 最後
+   一張卡跟 B 第一張卡的接縫會是 0px（只有 track 內部卡片之間才吃得到下面
+   .related-marquee-track 的 gap），造成「有些卡片黏在一起」——row 跟 track
+   兩層都用同一個 1rem，接縫距離才會跟其他任兩張卡完全一致。 */
+.related-marquee-row {
+  display: flex;
+  gap: 1rem;
+  width: max-content;
+}
+
+.related-marquee-track {
+  display: flex;
+  gap: 1rem;
+}
+
+/* 複製軌道：預設（手機／未進入 marquee 狀態）完全不渲染進畫面，只有桌機且
+   動畫啟用時才出現——避免手機使用者在同一排看到重複兩次的卡片。 */
+.related-marquee-track-duplicate {
+  display: none;
+}
+
+/* Desktop 固定視窗上限：不論是否進入 marquee 動畫狀態都套用，2–5 張的靜態
+   列同樣不該撐滿整個容器寬度。只是上限（max-width），容器更窄時自然只顯示
+   3.x 張，不縮小卡片本身。 */
+@media (min-width: 1024px) {
+  .related-marquee-viewport {
+    max-width: calc(4 * 280px + 3 * 1rem);
+  }
+}
+
+@media (min-width: 1024px) and (prefers-reduced-motion: no-preference) {
+  .related-marquee-eligible {
+    overflow: hidden;
+  }
+
+  .related-marquee-eligible .related-marquee-track-duplicate {
+    display: flex;
+  }
+
+  .related-marquee-eligible .related-marquee-row {
+    animation: related-marquee-ltr 65s linear infinite;
+  }
+
+  /* 滑鼠移上去或鍵盤 Tab 到卡片時，畫面停止移動，方便使用者看清楚／點擊。 */
+  .related-marquee-eligible:hover .related-marquee-row,
+  .related-marquee-eligible:focus-within .related-marquee-row {
+    animation-play-state: paused;
+  }
+}
+
+/*
+ * 位移距離改用「精確像素」而不是 -50%／0%（見任務定案「卡片間距不一致」
+ * audit）：row 上加了 gap 之後（見上面 .related-marquee-row 的說明），row
+ * 總寬度不再剛好是單一 track 寬度的兩倍（多了 row 自己的那條 gap），
+ * -50% 這個「總寬度的一半」就不再精確落在 track A 結束、track B 開始的
+ * 那個接縫上，動畫繞回起點時會有半個 gap（8px）的跳動。改成用
+ * --related-marquee-count（RelatedFactoriesMarquee.tsx 用 inline style
+ * 設定，等於這次清單的 item 數量）乘上「單張卡寬度＋gap」，算出「整整一組
+ * 清單＋它後面那條銜接 gap」的精確像素寬度，位移剛好這個距離，不管清單有
+ * 幾張卡都一定精確對齊 track B 的起點，接縫距離也一定跟其他任兩張卡一樣是
+ * 1rem。280px 是桌機卡片寬度（這條動畫規則本身就限定在 >=1024px，此時一定
+ * 已經超過卡片的 sm: 280px 斷點，不需要再處理手機的 240px）。
+ */
+@keyframes related-marquee-ltr {
+  from {
+    transform: translateX(calc(-1 * var(--related-marquee-count) * (280px + 1rem)));
+  }
+  to {
+    transform: translateX(0);
+  }
+}

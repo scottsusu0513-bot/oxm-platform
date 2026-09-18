@@ -16,6 +16,8 @@ import { BadgeIcon } from "@/components/badges/BadgeIcon";
 import { CroppedImage } from "@/components/CroppedImage";
 import type { ImageCropData } from "@shared/imageCrop";
 import { formatPublicContentUpdatedAt } from "@/lib/factoryDates";
+import { RelatedFactoriesMarquee } from "@/components/RelatedFactoriesMarquee";
+import type { RelatedFactoryCardData } from "@/components/RelatedFactoryCard";
 
 function normalizeDescription(text: string): string {
   return text.replace(/\n{3,}/g, "\n\n");
@@ -132,6 +134,17 @@ interface FactoryDetailViewProps {
   factory: FactoryDetailViewFactory;
   photos: { id: number | string; url: string; caption?: string | null }[];
   categories: { id: number; name: string }[];
+  /**
+   * 「相關工廠」推薦（見任務定案「工廠詳情頁底部同類型工廠推薦」／「無論
+   * 相關工廠數量多少都要有內容，不要整區隱藏」）。undefined＝還在載入／
+   * 查詢失敗／尚未 fetch，此時區塊不渲染，不需要另外做 skeleton——這是
+   * 次要內容，失敗不該影響工廠詳情頁主要內容。查詢成功後即使是空陣列
+   * （這個分類目前 0 家真實相關工廠）也會渲染，由 RelatedFactoriesMarquee
+   * 用招募卡補位，不再有「筆數不足就整區隱藏」的行為。只有 mode==="public"
+   * 才會渲染，preview 模式一律不渲染、也不該傳這個 prop 觸發任何查詢
+   * （見 FactoryPreviewModal.tsx 不傳這個 prop）。
+   */
+  similarFactories?: RelatedFactoryCardData[];
   reviewData: { items: any[] } | undefined;
   myReview?: any | null;
   isAuthenticated: boolean;
@@ -164,6 +177,7 @@ export function FactoryDetailView({
   factory,
   photos,
   categories,
+  similarFactories,
   reviewData,
   myReview,
   isAuthenticated,
@@ -873,6 +887,40 @@ export function FactoryDetailView({
                 </CardContent>
               </Card>
             </section>
+
+            {/* ── 相關工廠（見任務定案「工廠詳情頁底部同類型工廠推薦」／
+                「無論相關工廠數量多少都要有內容，不要整區隱藏」）──緊接在
+                評價區塊之後、Footer 之前（Footer 由 App.tsx 的 FooterGate
+                在這個元件樹外面另外渲染，不需要在這裡處理順序）。preview
+                模式（FactoryDashboard 後台預覽彈窗）一律不渲染，避免後台
+                預覽多出公開站才該有的推薦牆。寬度沿用外層既有的 w-full
+                lg:max-w-7xl lg:mx-auto 容器，不做滿版跑馬燈——這裡要看起來
+                是頁面自然延伸的一個 section，不是廣告 banner。
+                similarFactories !== undefined 才渲染（undefined＝查詢還在
+                載入／失敗，這種次要區塊寧可不顯示也不要顯示不確定的狀態；
+                已成功查詢、即使結果是空陣列，也照常渲染，由
+                RelatedFactoriesMarquee 用招募卡補位，不再有「0–1 家就整區
+                隱藏」的行為）。真實推薦是 0 家時，副標改成更符合情境的
+                文案，不誤導使用者以為下面全部都是真實工廠。 */}
+            {!isPreview && similarFactories && (
+              <section id="section-related-factories" className="scroll-mt-20">
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2 text-base">
+                      <FactoryIcon className="w-4 h-4" />相關工廠
+                    </CardTitle>
+                    <p className="text-sm text-muted-foreground">
+                      {similarFactories.length > 0
+                        ? "看看其他提供相近製程與服務的工廠"
+                        : "目前這個類別仍有更多合作夥伴進駐空間"}
+                    </p>
+                  </CardHeader>
+                  <CardContent>
+                    <RelatedFactoriesMarquee factories={similarFactories} />
+                  </CardContent>
+                </Card>
+              </section>
+            )}
 
           </div>
         </div>

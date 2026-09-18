@@ -47,6 +47,12 @@ export default function FactoryDetail() {
   const { data: myReview } = trpc.review.getMyReviewForFactory.useQuery({ factoryId }, { enabled: !!factoryId && isAuthenticated });
   const { data: photos = [] } = trpc.factory.getPhotos.useQuery({ factoryId }, { enabled: !!factoryId });
   const { data: categories = [] } = trpc.category.getByFactory.useQuery({ factoryId }, { enabled: !!factoryId });
+  // 「相關工廠」推薦（見任務定案「工廠詳情頁底部同類型工廠推薦」）：跟其他
+  // 區塊一樣在頁面層 fetch、往下傳給 FactoryDetailView。loading／error 時
+  // similarFactories 維持 undefined，FactoryDetailView 據此不渲染整個區塊
+  // （見該檔案內的判斷），不需要為這個次要區塊另外做 loading skeleton 或
+  // 錯誤處理，也不會影響工廠詳情頁本身的載入。
+  const { data: similarFactories } = trpc.factory.getSimilar.useQuery({ factoryId }, { enabled: !!factoryId });
 
   const [isFav, setIsFav] = useState(false);
   const [overlayOpen, setOverlayOpen] = useState(false);
@@ -251,6 +257,7 @@ export default function FactoryDetail() {
           factory={factory as any}
           photos={photos}
           categories={categories}
+          similarFactories={similarFactories}
           reviewData={reviewData}
           myReview={myReview}
           isAuthenticated={isAuthenticated}
