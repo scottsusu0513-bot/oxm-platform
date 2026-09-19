@@ -29,14 +29,18 @@ export const LIBRARY_CATEGORIES: LibraryCategory[] = ["代工基礎", "製程與
 /**
  * OXM 站內真實存在、已驗證有效的文末 CTA 目標（見任務定案「傳產圖書館
  * 內容完成階段」—NEXT STEP CTA 優先導向對應 canonical factory landing
- * page）：cta.href／cta.secondaryHref 都只能使用這裡列出的組合，不得自行
+ * page）：cta.href 只能使用這裡列出的組合，不得自行
  * 發明新的 query param 或 /factories/:slug，見
  * server/libraryContent.test.ts 的 allowlist 驗證。
  * - /search 系列：已在 Search.tsx 驗證支援的 query param 組合。
  * - /factories/:slug 系列：每一個 slug 都已對照
  *   shared/constants.ts 的 SUB_INDUSTRY_SEARCH_ENTRIES 確認真實存在
  *   （/factories/:slug 是 SubIndustryPage 的路由，只認得這份清單裡的
- *   slug），沒有安全對應的 landing 一律 fallback /search，不臆測 slug。 */
+ *   slug），沒有安全對應的 landing 一律 fallback /search，不臆測 slug。
+ * - /search?mfgMode=OEM／ODM 目前沒有任何文章在用（「OEM vs ODM」改成中立
+ *   的單一 /search CTA 後就空出來了），但這兩個 query param 在 Search.tsx
+ *   確實存在，保留在 allowlist 供日後單一 intent 的文章使用；這份清單是
+ *   「允許的目標」，不是「使用中的目標」。 */
 export const LIBRARY_OXM_LINK_HREF_ALLOWLIST: string[] = [
   "/search",
   "/search?smallBatch=true&sample=true",
@@ -100,17 +104,18 @@ export interface LibraryFaqItem {
 }
 
 /**
- * 文章結尾唯一的主要 CTA（見任務定案「每篇文章正文最多 1 個結尾主要 CTA」）。
- * secondaryLabel／secondaryHref 是選填的第二個並列選項，只用在「OEM vs
- * ODM」這種主題本身就是二選一、不能只給單一方向連結的情境（見任務定案
- * 「不要假設所有工廠都支援 OEM/ODM」），不是普遍每篇都要有兩個按鈕。
+ * 文章結尾唯一的 CTA（見任務定案「Library CTA consistency audit」：每篇
+ * 文末 NEXT STEP 最多只能有一個主要 CTA，不再有 secondary CTA）。
+ * 原本的 secondaryLabel／secondaryHref 只被「OEM vs ODM」一篇使用，該篇
+ * 已改成中立的單一 /search CTA——文章本身是 OEM／ODM 比較，不應由 OXM 在
+ * 文末替使用者預選其中一種模式；讀者看完後進 Search，再依自己的需求選
+ * OEM／ODM。全 codebase audit 確認沒有其他 production usage 後，型別欄位／
+ * render 分支／驗證／測試一併移除，不留沒有人用的架構。
  */
 export interface LibraryCta {
   label: string;
   href: string;
   description: string;
-  secondaryLabel?: string;
-  secondaryHref?: string;
 }
 
 export interface LibraryArticle {
@@ -420,11 +425,9 @@ export const LIBRARY_ARTICLES: LibraryArticle[] = [
       { question: "同一家工廠可以同時做 OEM 和 ODM 嗎？", answer: "可以，許多台灣工廠兩種代工模式都提供，實際是否支援仍需在詢價時向個別工廠確認。" },
     ],
     cta: {
-      label: "瀏覽提供 ODM 代工的工廠",
-      href: "/search?mfgMode=ODM",
-      description: "台灣工廠通常各自專精不同代工模式，可以分別查看目前平台上提供 ODM 或 OEM 服務的工廠。",
-      secondaryLabel: "瀏覽提供 OEM 代工的工廠",
-      secondaryHref: "/search?mfgMode=OEM",
+      label: "前往 OXM 找代工廠",
+      href: "/search",
+      description: "這篇只負責把 OEM 與 ODM 的差異講清楚，該走哪一種由你自己決定——直接到 OXM 依產業與地區篩選工廠，再依需求確認對方支援的代工模式。",
     },
   },
   {
@@ -1296,7 +1299,7 @@ export const LIBRARY_ARTICLES: LibraryArticle[] = [
     relatedArticleSlugs: ["what-is-plastic-injection-molding", "how-to-choose-plastic-materials"],
     cta: {
       label: "前往 OXM 找塑膠加工廠",
-      href: "/factories/plastic-injection",
+      href: "/search",
       description: "確認合適的成型方式後，直接到 OXM 查看塑膠相關代工廠，依地區與生產條件篩選詢價。",
     },
   },
@@ -1426,9 +1429,9 @@ export const LIBRARY_ARTICLES: LibraryArticle[] = [
     relatedFactoryLandingSlugs: [],
     relatedArticleSlugs: ["what-is-smt", "pcb-prototyping-process"],
     cta: {
-      label: "前往 OXM 找 PCB／PCBA 廠商",
-      href: "/factories/pcb",
-      description: "確認自己需要的是 PCB 還是 PCBA 服務後，直接到 OXM 篩選合適的廠商並詢價。",
+      label: "前往 OXM 找工廠",
+      href: "/search",
+      description: "確認自己需要的是 PCB、PCBA 還是 SMT 服務後，直接到 OXM 依產業與地區篩選合適的廠商並詢價。",
     },
   },
   {
@@ -2189,9 +2192,9 @@ export const LIBRARY_ARTICLES: LibraryArticle[] = [
     relatedFactoryLandingSlugs: [],
     relatedArticleSlugs: ["how-to-find-packaging-manufacturer", "packaging-printing-methods"],
     cta: {
-      label: "前往 OXM 找紙盒紙袋廠商",
-      href: "/factories/paper-boxes-bags",
-      description: "直接到 OXM 查看可承接紙盒、紙袋生產需求的廠商，依地區篩選並直接詢價。",
+      label: "前往 OXM 找包裝廠商",
+      href: "/search",
+      description: "確認合適的包裝形式後，直接到 OXM 依產業與地區篩選包裝廠商，比較合適的合作對象。",
     },
   },
   {
@@ -2466,9 +2469,9 @@ export const LIBRARY_ARTICLES: LibraryArticle[] = [
     relatedFactoryLandingSlugs: [],
     relatedArticleSlugs: ["what-is-mold-making", "factory-inspection-equipment-and-quality-control"],
     cta: {
-      label: "前往 OXM 找模具廠",
-      href: "/factories/mold-making",
-      description: "直接到 OXM 查看可承接模具、治具製造需求的廠商，依地區篩選並直接詢價。",
+      label: "前往 OXM 找工廠",
+      href: "/search",
+      description: "確認自己需要的是治具、夾具還是模具製造後，直接到 OXM 依產業與地區篩選合適的廠商並詢價。",
     },
   },
   {

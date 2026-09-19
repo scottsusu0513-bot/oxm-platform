@@ -885,14 +885,6 @@
 .library-cta-primary:hover {
   filter: brightness(0.96);
 }
-.library-cta-secondary {
-  border: 1px solid #e5c8e8;
-  background: #fff9ff;
-  color: #704493;
-}
-.library-cta-secondary:hover {
-  background: #f8edfc;
-}
 .library-related ul {
   display: grid;
   gap: 9px;

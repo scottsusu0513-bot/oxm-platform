@@ -12,8 +12,12 @@
  * 層級的 relatedLink／oxmLink 驗證，改成全域測試確認兩者都真的完全消失、
  * 正文只剩 paragraph／heading／list／table 四種區塊。所有 OXM 導流集中到
  * 文末既有的 NEXT STEP CTA，LIBRARY_OXM_LINK_HREF_ALLOWLIST 仍保留、仍在
- * 驗證 cta.href／cta.secondaryHref——這是它現在唯一、但正當持續使用中的
- * 用途，不是死掉的常數。
+ * 驗證 cta.href——這是它現在唯一、但正當持續使用中的用途，不是死掉的常數。
+ *
+ * secondary CTA（原 cta.secondaryLabel／cta.secondaryHref）已整個移除（見
+ * 任務定案「Library CTA consistency audit」：每篇文末最多一個 CTA），不是
+ * 只清資料——型別欄位、LibraryArticle 的 render 分支、CSS class 與這裡的
+ * 驗證都一併刪掉，並改用下面的全域測試確認 production usage 永遠為 0。
  */
 import { describe, expect, it } from "vitest";
 import {
@@ -200,9 +204,25 @@ describe("LIBRARY_ARTICLES：目前共 45 筆（Level 1～2 九篇 + Level 3～6
   it("cta.href 一律是站內相對路徑（以 / 開頭），不是外部網址", () => {
     for (const article of LIBRARY_ARTICLES) {
       expect(article.cta.href.startsWith("/")).toBe(true);
-      if (article.cta.secondaryHref) {
-        expect(article.cta.secondaryHref.startsWith("/")).toBe(true);
-      }
+    }
+  });
+
+  it("全部 45 篇都有 CTA，且 label／href／description 都非空字串", () => {
+    expect(LIBRARY_ARTICLES.length).toBe(45);
+    for (const article of LIBRARY_ARTICLES) {
+      expect(article.cta, article.slug).toBeDefined();
+      expect(article.cta.label.trim().length, article.slug).toBeGreaterThan(0);
+      expect(article.cta.href.trim().length, article.slug).toBeGreaterThan(0);
+      expect(article.cta.description.trim().length, article.slug).toBeGreaterThan(0);
+    }
+  });
+
+  it("secondary CTA 的 production usage 為 0：cta 物件只剩 label／href／description 三個欄位，沒有殘留 secondaryLabel／secondaryHref", () => {
+    for (const article of LIBRARY_ARTICLES) {
+      const cta = article.cta as Record<string, unknown>;
+      expect(Object.keys(cta).sort(), article.slug).toEqual(["description", "href", "label"]);
+      expect("secondaryLabel" in cta, article.slug).toBe(false);
+      expect("secondaryHref" in cta, article.slug).toBe(false);
     }
   });
 
@@ -211,10 +231,22 @@ describe("LIBRARY_ARTICLES：目前共 45 筆（Level 1～2 九篇 + Level 3～6
     expect(moq.cta.href).toBe("/search?smallBatch=true&sample=true");
   });
 
-  it("OEM/ODM 文章的 CTA 同時提供 ODM／OEM 兩個並列選項，不假設所有工廠都支援同一種代工模式", () => {
+  it("OEM/ODM 文章只有一顆中立的 /search CTA：這篇本身是 OEM／ODM 比較，不由 OXM 在文末替使用者預選其中一種代工模式", () => {
     const oemOdm = LIBRARY_ARTICLE_BY_SLUG["oem-vs-odm"];
-    expect(oemOdm.cta.href).toBe("/search?mfgMode=ODM");
-    expect(oemOdm.cta.secondaryHref).toBe("/search?mfgMode=OEM");
+    expect(oemOdm.cta.label).toBe("前往 OXM 找代工廠");
+    expect(oemOdm.cta.href).toBe("/search");
+    expect(Object.keys(oemOdm.cta).sort()).toEqual(["description", "href", "label"]);
+  });
+
+  it("多選項比較型文章不強迫導到其中一個子產業，沒有真正中立的 factory landing 時一律 fallback /search", () => {
+    for (const slug of [
+      "oem-vs-odm", "casting-forging-cnc-comparison", "plastic-molding-process-comparison",
+      "paper-box-bag-soft-packaging-comparison", "surface-finishing-comparison",
+      "rubber-silicone-pu-comparison", "biodegradable-vs-compostable",
+      "pcb-pcba-smt-comparison", "jig-fixture-mold-comparison",
+    ]) {
+      expect(LIBRARY_ARTICLE_BY_SLUG[slug].cta.href, slug).toBe("/search");
+    }
   });
 
   it("第一次找代工廠文章的 CTA 指向 /search（一般搜尋入口）", () => {
@@ -236,11 +268,22 @@ describe("LIBRARY_ARTICLES：目前共 45 筆（Level 1～2 九篇 + Level 3～6
     expect(LIBRARY_ARTICLE_BY_SLUG["what-is-prototyping"].cta.href).toBe("/search?sample=true");
   });
 
-  it("所有文章的 cta.href／cta.secondaryHref 都在 LIBRARY_OXM_LINK_HREF_ALLOWLIST 內，不得自行發明新的 query param", () => {
+  it("所有文章的 cta.href 都在 LIBRARY_OXM_LINK_HREF_ALLOWLIST 內，不得自行發明新的 query param", () => {
     for (const article of LIBRARY_ARTICLES) {
-      expect(LIBRARY_OXM_LINK_HREF_ALLOWLIST).toContain(article.cta.href);
-      if (article.cta.secondaryHref) {
-        expect(LIBRARY_OXM_LINK_HREF_ALLOWLIST).toContain(article.cta.secondaryHref);
+      expect(LIBRARY_OXM_LINK_HREF_ALLOWLIST, article.slug).toContain(article.cta.href);
+    }
+  });
+
+  it("cta.href 用到的 /search query param 都是 Search.tsx 真實支援的參數（smallBatch／sample／mfgMode），不是臆造", () => {
+    const SUPPORTED_SEARCH_PARAMS = new Set([
+      "mfgMode", "industry", "subIndustry", "region", "keyword", "q",
+      "aiSearch", "businessType", "smallBatch", "sample", "sortBy",
+    ]);
+    for (const article of LIBRARY_ARTICLES) {
+      const [path, query] = article.cta.href.split("?");
+      if (path !== "/search") continue;
+      for (const key of new URLSearchParams(query ?? "").keys()) {
+        expect(SUPPORTED_SEARCH_PARAMS.has(key), `${article.slug} 的 CTA 用了 Search.tsx 不支援的 query param：${key}`).toBe(true);
       }
     }
   });
@@ -550,11 +593,10 @@ describe("全 Library：CTA 的 /factories/:slug 都是 SUB_INDUSTRY_SEARCH_ENTR
 
   it("/factories/:slug 這個路由格式的 CTA href，slug 部分都能在 SUB_INDUSTRY_SEARCH_ENTRIES 查到", () => {
     for (const article of LIBRARY_ARTICLES) {
-      for (const href of [article.cta.href, article.cta.secondaryHref].filter((h): h is string => !!h)) {
-        if (!href.startsWith("/factories/")) continue;
-        const slug = href.replace("/factories/", "");
-        expect(validSubIndustrySlugs.has(slug), `${article.slug} 的 CTA href ${href} 對應的 slug 不存在於 SUB_INDUSTRY_SEARCH_ENTRIES`).toBe(true);
-      }
+      const href = article.cta.href;
+      if (!href.startsWith("/factories/")) continue;
+      const slug = href.replace("/factories/", "");
+      expect(validSubIndustrySlugs.has(slug), `${article.slug} 的 CTA href ${href} 對應的 slug 不存在於 SUB_INDUSTRY_SEARCH_ENTRIES`).toBe(true);
     }
   });
 

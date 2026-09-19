@@ -305,15 +305,6 @@ export default function LibraryArticle() {
                     {article.cta.label}
                     <ArrowUpRight size={18} />
                   </Link>
-                  {article.cta.secondaryLabel && article.cta.secondaryHref && (
-                    <Link
-                      href={article.cta.secondaryHref}
-                      className="library-cta-secondary"
-                    >
-                      {article.cta.secondaryLabel}
-                      <ArrowUpRight size={18} />
-                    </Link>
-                  )}
                 </div>
               </section>
               {article.relatedArticleSlugs.length > 0 && (

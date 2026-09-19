@@ -88,13 +88,13 @@ describe("LibraryArticle — 合法 slug：MOQ 文章", () => {
   });
 });
 
-describe("LibraryArticle — OEM/ODM 文章：雙 CTA 與 FAQ", () => {
-  it("主要與次要 CTA 都渲染，各自指向 ODM／OEM 篩選", () => {
+describe("LibraryArticle — OEM/ODM 文章：單一中立 CTA 與 FAQ", () => {
+  it("只渲染一顆 CTA，指向中立的 /search，不預選 OEM 或 ODM", () => {
     renderAt("/library/oem-vs-odm");
-    const odmLink = screen.getByRole("link", { name: "瀏覽提供 ODM 代工的工廠" });
-    const oemLink = screen.getByRole("link", { name: "瀏覽提供 OEM 代工的工廠" });
-    expect(odmLink.getAttribute("href")).toBe("/search?mfgMode=ODM");
-    expect(oemLink.getAttribute("href")).toBe("/search?mfgMode=OEM");
+    const ctaLink = screen.getByRole("link", { name: "前往 OXM 找代工廠" });
+    expect(ctaLink.getAttribute("href")).toBe("/search");
+    expect(document.querySelectorAll("section.library-next-step a").length).toBe(1);
+    expect(screen.queryByRole("link", { name: /瀏覽提供 (OEM|ODM) 代工的工廠/ })).toBeNull();
   });
 
   it("有「常見問題」區塊，且每一題的文字與 article.faq 逐字一致", () => {
@@ -280,6 +280,17 @@ describe("LibraryArticle — 全 45 篇 UI render 與正文不再有任何 OXM �
       const ctaLinks = document.querySelectorAll("a.library-cta-primary");
       expect(ctaLinks.length, slug).toBe(1);
       expect(ctaLinks[0].getAttribute("href"), slug).toBe(LIBRARY_ARTICLE_BY_SLUG[slug].cta.href);
+      cleanup();
+    }
+  });
+
+  it("全部 45 篇 NEXT STEP 區塊都只 render 一顆 CTA，沒有任何 secondary CTA（library-cta-secondary 已整個移除）", () => {
+    for (const slug of allSlugs) {
+      renderAt(`/library/${slug}`);
+      const nextStep = document.querySelector("section.library-next-step");
+      expect(nextStep, slug).toBeTruthy();
+      expect(nextStep!.querySelectorAll("a").length, slug).toBe(1);
+      expect(document.querySelectorAll("a.library-cta-secondary").length, slug).toBe(0);
       cleanup();
     }
   });
