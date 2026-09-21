@@ -73,7 +73,13 @@ async function deleteTestUser(id: number | undefined): Promise<void> {
 }
 async function createTestFactory(ownerId: number, name: string, extra: Record<string, unknown> = {}): Promise<number> {
   const id = await db.createFactory({
-    ownerId, name, industry: ["紡織"], mfgModes: ["ODM"], region: "台北市", capitalLevel: "100萬以下", address: "",
+    ownerId, name, industry: ["紡織"], mfgModes: ["ODM"], region: "台北市", capitalLevel: "100萬以下",
+    // 送審完整度（見任務定案「工廠上架／送審必填欄位 audit」／收斂輪）：
+    // submitRevision 現在會驗證 ownerName／address 等欄位的 effective 值不可
+    // 空白，這個檔案測的是徽章擁有權，不是這幾個欄位，補上合法預設值避免
+    // 無關的必填檢查擋下這裡的斷言（原本 address 是 ""，這裡改成非空值）。
+    address: "測試地址",
+    ownerName: "測試負責人",
     ...extra,
   } as any);
   return id as number;

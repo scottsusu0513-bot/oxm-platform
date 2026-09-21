@@ -569,6 +569,67 @@ async function assertFactoryManager(factoryId: number, userId: number) {
   return factory;
 }
 
+// 工廠「送審完整度」的最低共用規則（見任務定案「工廠上架／送審必填欄位
+// audit（收斂輪）」）。
+//
+// 背景：負責人被回報「完全空白仍可送出審核」，audit 後發現 region／
+// capitalLevel／mfgModes／address 是同一種漏洞形狀——UI 都已標示必填、
+// client 都真的會擋，但至少有一層 server zod（create 和／或 update）沒有
+// 擋空白／空陣列，導致「合法建立 → 用 update 清空 → submitForReview／
+// submitRevision 沒有重新檢查」這條路徑存在。
+//
+// 設計原則（「可以儲存草稿，但不能用不完整資料送審」）：
+// - factory.create／factory.update 的 zod schema 刻意不在這裡列出的欄位
+//   加 .min(1)——那是「草稿」的資料層，該讓使用者能分次、不完整地填寫、
+//   儲存。完整度要求只應該出現在「送審」那一刻。
+// - 因此這個函式只被 factory.submitForReview（draft/rejected → pending，
+//   也涵蓋「rejected 後重送」）與 factory.submitRevision（approved 工廠
+//   修改申請，即「approved 修改後重新送審」）呼叫，不會出現在
+//   create／update 裡。
+// - submitForReview 要驗證的是「當下 DB 裡即將送審的整份 factory
+//   record」，不是 mutation input（這支 mutation 本來就不接受欄位輸入）；
+//   submitRevision 要驗證的是「original（已上線資料）疊上 proposedData
+//   之後，核准當下真正會生效的 effective 值」，兩者都不能只驗證使用者
+//   這次送出的 delta。
+//
+// 範圍限定在這五個欄位：name／industry／taxId 已確認 create／update 兩層
+// 都有 min(1) 或專屬格式驗證保護、無法被清空（taxId 更是刻意設計成「送審
+// 不要求」，見 shared/taxId.ts），不需要放進來、放了也是永遠不會觸發的
+// 死程式碼；ownerName／region／capitalLevel／mfgModes／address 才是目前
+// 真正有缺口的欄位。
+type FactorySubmissionFieldKey = "ownerName" | "region" | "capitalLevel" | "mfgModes" | "address";
+
+function isNonBlankString(value: unknown): boolean {
+  return typeof value === "string" && value.trim().length > 0;
+}
+function isNonEmptyStringArray(value: unknown): boolean {
+  return Array.isArray(value) && value.some((v) => typeof v === "string" && v.trim().length > 0);
+}
+
+// 訊息文字沿用 FactoryRegister.tsx validate() 既有的措辭（「請選擇」用於
+// 下拉選單／複選、「請填寫」用於文字輸入），維持前後端使用者看到的提示
+// 一致，不是另外發明一套新文案。
+const FACTORY_SUBMISSION_FIELD_CHECKS: Record<FactorySubmissionFieldKey, { check: (value: unknown) => boolean; message: string }> = {
+  ownerName: { check: isNonBlankString, message: "請填寫負責人" },
+  region: { check: isNonBlankString, message: "請選擇地區" },
+  capitalLevel: { check: isNonBlankString, message: "請選擇資本額" },
+  mfgModes: { check: isNonEmptyStringArray, message: "請至少選擇一種代工模式" },
+  address: { check: isNonBlankString, message: "請填寫地址" },
+};
+const FACTORY_SUBMISSION_FIELD_ORDER: FactorySubmissionFieldKey[] = ["ownerName", "region", "capitalLevel", "mfgModes", "address"];
+
+// 傳入「即將生效」的資料（submitForReview 傳當下 DB 值；submitRevision 傳
+// original 疊上 proposedData 後的 effective 值），回傳第一個沒通過的欄位
+// 對應錯誤訊息；全部通過回傳 null。只回報第一個缺漏欄位，維持跟既有
+// taxId／表單驗證一致的「單一明確訊息」風格，不是一次列出整包錯誤。
+function getFactorySubmissionError(data: Partial<Record<FactorySubmissionFieldKey, unknown>>): string | null {
+  for (const key of FACTORY_SUBMISSION_FIELD_ORDER) {
+    const { check, message } = FACTORY_SUBMISSION_FIELD_CHECKS[key];
+    if (!check(data[key])) return message;
+  }
+  return null;
+}
+
 // Validates proposedData field types — enforces correct types at submission and approve time.
 // All fields are partial since proposedData only includes the fields being changed.
 const FactoryBasicDataSchema = z.object({
@@ -1558,6 +1619,14 @@ export const appRouter = router({
       foundedYear: z.number().min(1800).max(2100).optional().nullable(),
       avatarUrl: z.string().regex(/^https?:\/\//, "avatarUrl 必須為 http/https URL").optional().nullable(),
       businessType: z.enum(["factory", "studio"]).default("factory"),
+      // 負責人（見任務定案「工廠上架／送審必填欄位 audit（收斂輪）」）：
+      // factory.create 實際建立的是 status='draft'（見 db.createFactoryAtomic），
+      // 不是送審——「可以儲存草稿，但不能用不完整資料送審」，所以完整度
+      // 要求不放在這裡（上一輪在這裡加 .min(1) 是過度緊縮，已 revert），
+      // 改成只在真正的送審關卡（factory.submitForReview／submitRevision）
+      // 用 getFactorySubmissionError() 重新驗證 DB 當下的實際值。前端
+      // FactoryRegister 仍保留「負責人 *」與送出前驗證，那是 UX 引導，
+      // 不是安全邊界。
       ownerName: z.string().optional(),
       contactPersonName: z.string().optional(),
       phone: z.string().optional(),
@@ -1752,6 +1821,26 @@ export const appRouter = router({
       const typeCheck = FactoryBasicDataSchema.safeParse(proposedData);
       if (!typeCheck.success) {
         throw new TRPCError({ code: 'BAD_REQUEST', message: '修改申請包含無效欄位值，請重新整理頁面後再試' });
+      }
+
+      // 送審完整度驗證（見任務定案「工廠上架／送審必填欄位 audit（收斂
+      // 輪）」）：FactoryBasicDataSchema 整個是 .partial()，只驗證「有帶到
+      // 的欄位型別對不對」，不驗證完整度，所以型別檢查本身擋不住「這次
+      // 修改申請核准後，負責人／地區／資本額／代工模式／地址會變成空白」。
+      // 這裡用核准時實際會套用的同一套邏輯（見 db.approveRevisionAtomic 的
+      // `field in proposed` 合併規則）算出「這筆申請一旦核准，最終生效的
+      // 每個欄位會是什麼值」——proposedData 有帶該欄位就用那個值，沒帶就
+      // 沿用目前已上線的值，effective 值都不可以是空白／空陣列。既有已上線
+      // 工廠若本來就有欄位空白（這次修法之前建立的舊資料），不會被追溯
+      // 下架或竄改，但只要工廠主動送出任何修改申請，就必須順便補上，不能
+      // 無限期繞過這個規則。
+      const effectiveSubmissionData: Partial<Record<FactorySubmissionFieldKey, unknown>> = {};
+      for (const key of FACTORY_SUBMISSION_FIELD_ORDER) {
+        effectiveSubmissionData[key] = key in proposedData ? proposedData[key] : originalData[key];
+      }
+      const submissionError = getFactorySubmissionError(effectiveSubmissionData);
+      if (submissionError) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: submissionError });
       }
 
       // 徽章系統：白名單清洗必須在寫入 factoryRevisions 之前就完成，不能只靠
@@ -2185,6 +2274,18 @@ export const appRouter = router({
       const factory = await db.getFactoryByOwnerId(ctx.user.id);
       if (!factory) throw new Error("找不到工廠");
       if (factory.status !== 'draft' && factory.status !== 'rejected') throw new Error("只有未送審或已拒絕的工廠才能送出審核");
+      // 送審完整度驗證（見任務定案「工廠上架／送審必填欄位 audit（收斂
+      // 輪）」）：這裡是 draft／rejected 工廠真正「送出審核」的唯一入口，
+      // factory.create／factory.update 都只負責儲存資料（含「草稿」），不會
+      // 把工廠變成 pending——過去 create／update 的 zod schema 對這幾個欄位
+      // 各自有不同程度的空白防線，但這裡完全沒有重新驗證，導致先合法建立、
+      // 再用 update 清空負責人／地區／資本額／代工模式／地址的工廠，一樣
+      // 能送出審核。用當下 DB 實際存的整份 factory record 驗證（不是任何
+      // client 傳入的值，這支 mutation 本來就不接受輸入）。
+      const submissionError = getFactorySubmissionError(factory);
+      if (submissionError) {
+        throw new Error(submissionError);
+      }
       // 管理員不受產品數量限制
       if (ctx.user.role !== 'admin') {
         const products = await db.getProductsByFactoryId(factory.id);

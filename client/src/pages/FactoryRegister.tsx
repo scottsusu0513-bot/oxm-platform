@@ -30,6 +30,7 @@ type FormErrors = {
   address?: string;
   foundedYear?: string;
   taxId?: string;
+  ownerName?: string;
 };
 
 export default function FactoryRegister() {
@@ -139,6 +140,9 @@ export default function FactoryRegister() {
     if (!region) newErrors.region = "請選擇地區";
     if (!capitalLevel) newErrors.capitalLevel = "請選擇資本額";
     if (!address.trim()) newErrors.address = "請輸入地址";
+    // 負責人（見任務定案「工廠上架／送審必填欄位 audit」）：原本完全沒有
+    // 驗證，即使空白也能送出建立，是後端同一個漏洞在前端的對應缺口。
+    if (!ownerName.trim()) newErrors.ownerName = "請填寫負責人";
     if (foundedYear && foundedYear.length !== 4) newErrors.foundedYear = "請輸入4位數西元年（例：2010）";
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
@@ -154,7 +158,9 @@ export default function FactoryRegister() {
         mfgModes, region, description, capitalLevel, address,
         businessType,
         foundedYear: foundedYear ? parseInt(foundedYear) : undefined,
-        ownerName: ownerName || undefined,
+        // validate() 已確認 trim 後非空，這裡不能再用 `|| undefined`——負責人
+        // 現在是必填欄位，undefined 不是合法值（見 server/routers.ts factory.create）。
+        ownerName,
         contactPersonName: contactPersonName || undefined,
         phone: phone || undefined,
         website: website || undefined,
@@ -577,8 +583,15 @@ export default function FactoryRegister() {
                   {errors.foundedYear && <p className="text-xs text-red-500 mt-1">{errors.foundedYear}</p>}
                 </div>
                 <div>
-                  <Label htmlFor="owner">負責人姓名</Label>
-                  <Input id="owner" value={ownerName} onChange={e => setOwnerName(e.target.value)} placeholder="負責人姓名" />
+                  <Label htmlFor="owner">負責人姓名 *</Label>
+                  <Input
+                    id="owner"
+                    value={ownerName}
+                    onChange={e => { setOwnerName(e.target.value); if (errors.ownerName) setErrors(p => ({ ...p, ownerName: undefined })); }}
+                    placeholder="負責人姓名"
+                    className={errors.ownerName ? "border-red-500 focus-visible:ring-red-500" : ""}
+                  />
+                  {errors.ownerName && <p className="text-xs text-red-500 mt-1">{errors.ownerName}</p>}
                   <p className="text-xs text-muted-foreground mt-1">負責人通常為工廠老闆、創辦人或實際經營者。</p>
                 </div>
               </div>

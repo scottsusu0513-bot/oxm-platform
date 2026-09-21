@@ -57,6 +57,10 @@ const MINIMAL_FACTORY_INPUT = {
   // migration 0092／shared/taxId.ts），這個 fixture 是舊版遺留，補上一個
   // 檢查碼合法、其他測試檔（factoryTaxId.test.ts）已經在用的有效值。
   taxId: "00000016",
+  // 同上：factory.create 新增負責人為必填欄位（見任務定案「工廠上架／
+  // 送審必填欄位 audit」），這裡只是驗證主信箱防線，不是負責人驗證的
+  // 測試範圍，補上合法值避免這個 fixture 因為缺負責人而先被 zod 擋下。
+  ownerName: "測試負責人",
 };
 
 describe("factory.create 拒絕路徑：後端 primaryEmailVerifiedAt 硬性防線仍然有效", () => {

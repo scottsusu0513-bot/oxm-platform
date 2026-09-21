@@ -359,6 +359,22 @@ const OPERATION_STATUS_OPTIONS = [
   { value: "full",   label: "產線滿載", dot: "bg-red-500" },
 ] as const;
 
+// 送審完整度前端把關（見任務定案「工廠上架／送審必填欄位 audit（收斂
+// 輪）」）：跟 server 端 server/routers.ts 的 getFactorySubmissionError()
+// 同一組欄位、同一種訊息文案，「送出審核」與「提交修改申請」共用這一個
+// 函式判斷，避免又散落成一堆各自的 if。server 端仍是真正的安全邊界，這裡
+// 只是提前給使用者提示，不能只依賴這裡（也不能只依賴 HTML required）。
+function getFactorySubmissionError(data: {
+  ownerName: string; region: string; capitalLevel: string; mfgModes: string[]; address: string;
+}): string | null {
+  if (!data.ownerName.trim()) return "請填寫負責人";
+  if (!data.region.trim()) return "請選擇地區";
+  if (!data.capitalLevel.trim()) return "請選擇資本額";
+  if (!data.mfgModes.some(m => m.trim().length > 0)) return "請至少選擇一種代工模式";
+  if (!data.address.trim()) return "請填寫地址";
+  return null;
+}
+
 function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDirtyChange }: { factory: any; isOwner?: boolean; latestRevision?: any; onDirtyChange?: (dirty: boolean) => void }) {
   const [name, setName] = useState(factory.name);
   const [industry, setIndustry] = useState<string[]>(() => {
@@ -511,6 +527,10 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
 
   const [revisionDialogOpen, setRevisionDialogOpen] = useState(false);
   const [revisionReason, setRevisionReason] = useState("");
+  // 「送出審核」確認 dialog 改為受控狀態（見任務定案「工廠上架／送審必填
+  // 欄位 audit」）：原本用 AlertDialogTrigger 直接開啟，沒有機會在開啟確認
+  // 視窗前先擋下負責人空白的情況，改成先驗證、通過才 setSubmitReviewOpen(true)。
+  const [submitReviewOpen, setSubmitReviewOpen] = useState(false);
 
   const utils = trpc.useUtils();
   const updateFactory = trpc.factory.update.useMutation({
@@ -835,6 +855,19 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
   const { data: previewCategories = [] } = trpc.category.getByFactory.useQuery({ factoryId: factory.id }, { enabled: previewOpen });
   const { data: previewReviewData } = trpc.review.getByFactory.useQuery({ factoryId: factory.id, page: 1, pageSize: 10 }, { enabled: previewOpen });
 
+  // 「送出審核」按鈕點擊時的前端把關（見任務定案「工廠上架／送審必填欄位
+  // audit」）：draft／rejected 工廠按下這顆按鈕會直接把工廠變成 pending，
+  // 過去完全沒有任何前端／後端欄位完整度檢查，只檢查是否至少有一項產品。
+  // 這裡先驗證通過才打開確認 dialog，未通過只顯示錯誤、不開啟 dialog。
+  const handleOpenSubmitForReview = () => {
+    const submissionError = getFactorySubmissionError({ ownerName, region, capitalLevel, mfgModes, address });
+    if (submissionError) {
+      toast.error(submissionError);
+      return;
+    }
+    setSubmitReviewOpen(true);
+  };
+
   const handleSubmitRevision = () => {
     const trimmed = revisionReason.trim();
     if (trimmed.length < 2) {
@@ -843,6 +876,16 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
     }
     if (trimmed.length > 200) {
       toast.error("修改原因不可超過 200 個字");
+      return;
+    }
+    // 送審完整度前端把關（見任務定案「工廠上架／送審必填欄位 audit（收斂
+    // 輪）」）：buildProposedData 無條件帶上這幾個欄位目前的表單值（跟
+    // taxId 同一個道理），這裡先在前端擋一次，避免使用者送出後才在 server
+    // 端被拒絕；server 端 factory.submitRevision 仍會用同一套規則重新驗證
+    // 一次（effective 合併值），不可只依賴這裡。
+    const submissionError = getFactorySubmissionError({ ownerName, region, capitalLevel, mfgModes, address });
+    if (submissionError) {
+      toast.error(submissionError);
       return;
     }
     submitRevisionMut.mutate({
@@ -1248,7 +1291,7 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
               <Input disabled={isLocked} inputMode="numeric" value={foundedYear} onChange={e => handleYearChange(e.target.value)} placeholder="西元（例：2010）" maxLength={4} />
             </div>
             <div className="space-y-2">
-              <Label>負責人姓名</Label>
+              <Label>負責人姓名 *</Label>
               <Input disabled={isLocked} value={ownerName} onChange={e => setOwnerName(e.target.value)} />
               <p className="text-xs text-muted-foreground">負責人通常為工廠老闆、創辦人或實際經營者。</p>
             </div>
@@ -1398,12 +1441,15 @@ function FactoryInfoForm({ factory, isOwner = true, latestRevision = null, onDir
               <Eye className="w-4 h-4 mr-1" />預覽工廠頁面
             </Button>
             {isOwner && (factory.status === 'draft' || factory.status === 'rejected') && (
-              <AlertDialog>
-                <AlertDialogTrigger asChild>
-                  <Button variant="outline" className="border-blue-300 text-blue-600 hover:bg-blue-50">
-                    <Send className="w-4 h-4 mr-1" />送出審核
-                  </Button>
-                </AlertDialogTrigger>
+              <AlertDialog open={submitReviewOpen} onOpenChange={setSubmitReviewOpen}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="border-blue-300 text-blue-600 hover:bg-blue-50"
+                  onClick={handleOpenSubmitForReview}
+                >
+                  <Send className="w-4 h-4 mr-1" />送出審核
+                </Button>
                 <AlertDialogContent>
                   <AlertDialogHeader>
                     <AlertDialogTitle>確認送出審核？</AlertDialogTitle>

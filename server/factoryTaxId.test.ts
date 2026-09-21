@@ -65,6 +65,10 @@ const BASE_FACTORY_INPUT = {
   capitalLevel: "<1000萬",
   address: "新竹市",
   businessType: "factory" as const,
+  // Test fixture 缺口修正：factory.create 新增負責人為必填欄位（見任務定案
+  // 「工廠上架／送審必填欄位 audit」），這個檔案只測 taxId，補上合法值避免
+  // 這裡的斷言被無關的負責人必填錯誤蓋過去。
+  ownerName: `${runId} 負責人`,
 };
 
 async function cleanup() {
