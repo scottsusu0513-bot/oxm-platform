@@ -57,14 +57,14 @@ describe("getQuickNavSubIndustries：資料來源正確性", () => {
     expect(result.length).toBe(5);
   });
 
-  it("涵蓋全部 13 個主產業 slug，總筆數等於 SUB_INDUSTRY_SEARCH_ENTRIES 全部 72 筆，且不排除任何一個主產業", () => {
+  it("涵蓋全部 13 個主產業 slug，總筆數等於 SUB_INDUSTRY_SEARCH_ENTRIES 全部 74 筆（電子零件「線束 / 連接器」拆分為三類後淨增 2 筆），且不排除任何一個主產業", () => {
     const allSlugs = Object.values(INDUSTRY_SLUGS);
     expect(allSlugs.length).toBe(13);
     let total = 0;
     for (const slug of allSlugs) {
       total += getQuickNavSubIndustries(slug).length;
     }
-    expect(total).toBe(72);
+    expect(total).toBe(74);
     expect(total).toBe(SUB_INDUSTRY_SEARCH_ENTRIES.length);
   });
 

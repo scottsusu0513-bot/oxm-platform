@@ -10,7 +10,7 @@ export const INDUSTRIES = [
   },
   {
     name: "電子零件",
-    sub: ["PCB / 電路板", "電子組裝 / SMT", "線束 / 連接器", "感測器 / 模組", "半導體封裝", "照明模組 / 工業照明", "其他"],
+    sub: ["PCB / 電路板", "電子組裝 / SMT", "線材 / 電纜", "線束 / 線組加工", "連接器 / 端子", "感測器 / 模組", "半導體封裝", "照明模組 / 工業照明", "其他"],
   },
   {
     name: "塑膠",
@@ -458,14 +458,37 @@ export const SUB_INDUSTRY_SEARCH_ENTRIES: SubIndustrySearchEntry[] = [
     metaDescriptionOverride: "尋找台灣 SMT 代工廠？OXM 整理可承接 SMT 貼片、打件與電子組裝需求的工廠，可依地區、代工模式、可接小量與可打樣等條件篩選詢價。",
     seoIntroOverride: "SMT 代工是電子零件底下的子產業，涵蓋貼片與電子組裝服務。OXM 整理台灣相關工廠資訊，可依地區與生產條件篩選，直接送出詢價。",
   },
+  // 電子零件／線束 / 連接器 拆分（見任務定案「線束 / 連接器拆分為三類」）：
+  // 舊 slug wire-harness-connectors 混合了線材、線束組裝、連接器端子三種不同
+  // 能力，拆成以下三筆獨立 entry；舊 slug 不再是可選子分類，改由
+  // shared/seo/subIndustryPages.ts 的 resolveSplitSubIndustryNotice() 接手，
+  // 顯示過渡頁並連到這三筆新 entry（本表本身不再收舊 slug）。
   {
-    slug: "wire-harness-connectors", label: "線束 / 連接器", displayName: "線束連接器",
+    slug: "wire-cable", label: "線材 / 電纜", displayName: "線材電纜",
     parentIndustry: "電子零件", parentIndustrySlug: "electronics",
-    primarySeoKeyword: "線束加工",
-    secondaryKeywords: ["線束代工", "連接器代工", "線材加工廠", "端子加工"],
-    seoTitleOverride: "線束加工｜台灣連接器代工廠商搜尋與詢價｜OXM",
-    metaDescriptionOverride: "尋找台灣線束加工廠？OXM 整理可承接線束代工、連接器組裝需求的廠商，可依地區查看相關廠商並直接詢價。",
-    seoIntroOverride: "OXM 整理台灣線束加工廠資訊，涵蓋線束代工與連接器組裝需求，可依地區瀏覽相關工廠並直接詢價。",
+    primarySeoKeyword: "電子線材工廠",
+    secondaryKeywords: ["電子線材", "電源線工廠", "訊號線工廠", "同軸線材", "排線加工", "線材代工"],
+    seoTitleOverride: "電子線材工廠｜台灣電源線、訊號線與線材代工廠商｜OXM",
+    metaDescriptionOverride: "尋找台灣電子線材工廠？OXM 整理可承接電源線、訊號線、同軸線、排線等線材代工需求的廠商，可依地區、代工模式、可接小量與可打樣等條件篩選詢價。",
+    seoIntroOverride: "線材／電纜是電子零件底下的子產業，涵蓋電源線、訊號線、同軸線、排線等各類線材本體製造。OXM 整理台灣相關工廠資訊，可依地區與生產條件篩選，直接送出詢價。",
+  },
+  {
+    slug: "wire-harness-assembly", label: "線束 / 線組加工", displayName: "線束加工",
+    parentIndustry: "電子零件", parentIndustrySlug: "electronics",
+    primarySeoKeyword: "線束加工廠",
+    secondaryKeywords: ["線束加工", "線束代工", "Wire Harness", "Cable Assembly", "端子壓接", "客製線組加工"],
+    seoTitleOverride: "線束加工廠｜台灣線束代工與線組加工廠商｜OXM",
+    metaDescriptionOverride: "尋找台灣線束加工廠？OXM 整理可承接裁線、剝皮、端子壓接、客製線組組裝需求的廠商，可依地區、代工模式、可接小量與可打樣等條件篩選詢價。",
+    seoIntroOverride: "線束／線組加工是電子零件底下的子產業，涵蓋 Wire Harness、Cable Assembly 等線組組裝需求。OXM 整理台灣相關工廠資訊，可依地區篩選並直接詢價。",
+  },
+  {
+    slug: "connector-terminal", label: "連接器 / 端子", displayName: "連接器端子",
+    parentIndustry: "電子零件", parentIndustrySlug: "electronics",
+    primarySeoKeyword: "連接器工廠",
+    secondaryKeywords: ["連接器製造", "端子製造", "接插件工廠", "接頭代工", "插座製造"],
+    seoTitleOverride: "連接器工廠｜台灣連接器與端子製造廠商｜OXM",
+    metaDescriptionOverride: "尋找台灣連接器工廠？OXM 整理可承接連接器、端子、接插件與插座製造需求的廠商，可依地區、代工模式、可接小量與可打樣等條件篩選詢價。",
+    seoIntroOverride: "連接器／端子是電子零件底下的子產業，涵蓋 Connector、Terminal 等接插件與插座製造需求。OXM 整理台灣相關工廠資訊，可依地區與生產條件篩選，直接送出詢價。",
   },
   { slug: "sensors-modules", label: "感測器 / 模組", displayName: "感測器模組", parentIndustry: "電子零件", parentIndustrySlug: "electronics" },
   { slug: "semiconductor-packaging", label: "半導體封裝", displayName: "半導體封裝", parentIndustry: "電子零件", parentIndustrySlug: "electronics" },
@@ -780,6 +803,34 @@ export const SUB_INDUSTRY_SEARCH_SLUG_TO_ENTRY: Record<string, SubIndustrySearch
  */
 export const SUB_INDUSTRY_SEARCH_ENTRY_BY_PARENT_AND_LABEL: Record<string, SubIndustrySearchEntry> =
   Object.fromEntries(SUB_INDUSTRY_SEARCH_ENTRIES.map(e => [`${e.parentIndustry}|||${e.label}`, e]));
+
+/**
+ * 舊子產業 slug 被拆成多個新 slug 時的過渡頁資料（目前唯一項目：電子零件
+ * 「線束 / 連接器」拆成 wire-harness-assembly + connector-terminal，見任務
+ * 定案「線束 / 連接器拆分為三類」）。跟 LEGACY_SUB_INDUSTRY_SLUG_TO_NEW_SLUG
+ * 是不同機制：後者是「舊 URL 格式 → 新 slug」的單一對應（301 等價內容），
+ * 這裡是「一個舊 slug 的語意被拆成多個新 slug」，沒有單一等價頁面可以
+ * 301，因此不做自動轉址，改由 shared/seo/subIndustryPages.ts 的
+ * resolveSplitSubIndustryNotice() 產生一個列出所有新分類連結的過渡頁
+ * （200 + noindex，避免跟新分類頁產生重複內容）。
+ *
+ * successorSlugs 只存 slug，label／displayName 等一律透過
+ * SUB_INDUSTRY_SEARCH_SLUG_TO_ENTRY 反查，避免文案在兩處各自維護、日後改字
+ * 時漏改其中一邊。
+ */
+export const SPLIT_SUB_INDUSTRY_NOTICES: Record<string, {
+  label: string;
+  parentIndustry: string;
+  parentIndustrySlug: string;
+  successorSlugs: string[];
+}> = {
+  "wire-harness-connectors": {
+    label: "線束 / 連接器",
+    parentIndustry: "電子零件",
+    parentIndustrySlug: "electronics",
+    successorSlugs: ["wire-harness-assembly", "connector-terminal"],
+  },
+};
 
 // 子產業頁 SEO 內容（Phase 1）
 export const SUB_INDUSTRY_SEO_CONTENT: Record<string, {

@@ -6,6 +6,7 @@ import { buildIndustryPageMeta, buildIndustryBreadcrumbJsonLd } from "@shared/se
 import {
   resolveSubIndustry, buildSubIndustryPageContent, buildSubIndustryBreadcrumbJsonLd,
   resolveRegionSubIndustry, buildRegionSubIndustryPageContent, buildRegionSubIndustryBreadcrumbJsonLd,
+  resolveSplitSubIndustryNotice, buildSplitSubIndustryNoticeContent, buildSplitSubIndustryNoticeBreadcrumbJsonLd,
 } from "@shared/seo/subIndustryPages";
 import {
   buildLibraryIndexContent, buildLibraryIndexBreadcrumbJsonLd,
@@ -460,6 +461,25 @@ const SUB_INDUSTRY_GENERIC_FALLBACK = {
  */
 export async function buildSubIndustryMeta(subIndustrySlug: string, pathname: string): Promise<FactoryMeta> {
   const url = `${SITE_BASE_URL}${pathname}`;
+
+  // 舊 slug 被拆分成多個新 slug（見 SPLIT_SUB_INDUSTRY_NOTICES 說明）：不是
+  // 404，也不 301 到單一新分類，回 200 + 過渡頁內容，但 noindex——避免這頁
+  // 跟底下拆出來的新分類頁（各自都有自己的 200 + index 頁）產生重複內容，
+  // 不查 DB existence（這頁本身不代表任何單一子產業，没有「查無工廠」這種
+  // 狀態）。
+  const splitNotice = resolveSplitSubIndustryNotice(subIndustrySlug);
+  if (splitNotice) {
+    const content = buildSplitSubIndustryNoticeContent(splitNotice);
+    return {
+      title: content.title,
+      description: content.description,
+      image: DEFAULT_OG_IMAGE,
+      url: content.canonical,
+      status: 200,
+      noindex: true,
+      jsonLd: buildSplitSubIndustryNoticeBreadcrumbJsonLd(splitNotice),
+    };
+  }
 
   const resolved = resolveSubIndustry(subIndustrySlug);
   if (!resolved) {

@@ -1,14 +1,15 @@
 /**
  * 子產業 SEO Keyword Mapping 基礎架構 + 第一批 6 頁 + 第二批 8 頁 + 第三批
- * 24 頁（剩餘 58 筆全量審核後的安全上線項目）優化（見任務定案）。
+ * 26 頁（原 24 頁 + 電子零件「線束 / 連接器」拆分新增的 wire-cable／
+ * wire-harness-assembly／connector-terminal，見任務定案「線束 / 連接器拆分
+ * 為三類」）優化（見任務定案）。
  *
  * 涵蓋：
  *   - 第一批 6 個子產業（cnc-machining／sheet-metal／smt-assembly／
  *     plastic-injection／packaging-print／cosmetic-odm）+ 第二批 8 個子產業
  *     （apparel-manufacturing／mold-making／metal-materials／
  *     eco-packaging／beverage-oem／frozen-food／large-format-printing／
- *     sticker-label）+ 第三批 24 個子產業（見 BATCH_3_SLUGS，剩餘 58 筆
- *     逐一做 confidence／cannibalization／doorway 審核後通過的項目）共 38
+ *     sticker-label）+ 第三批 26 個子產業（見 BATCH_3_SLUGS）共 40
  *     筆的 title／description／H1／intro override 正確套用
  *   - pcb 本輪重新審核（PCB代工／PCB板廠／PCB電路板廠／PCB製造／PCB打樣
  *     等候選 primary）後仍無法高信心收斂成單一 primary，維持沒有 override
@@ -42,7 +43,7 @@ function readSource(...segments: string[]): string {
 const BATCH_1_SLUGS = ["cnc-machining", "sheet-metal", "smt-assembly", "plastic-injection", "packaging-print", "cosmetic-odm"];
 const BATCH_2_SLUGS = ["apparel-manufacturing", "mold-making", "metal-materials", "eco-packaging", "beverage-oem", "frozen-food", "large-format-printing", "sticker-label"];
 const BATCH_3_SLUGS = [
-  "fabric-materials", "functional-textiles", "welding-assembly", "wire-harness-connectors", "lighting-modules",
+  "fabric-materials", "functional-textiles", "welding-assembly", "wire-cable", "wire-harness-assembly", "connector-terminal", "lighting-modules",
   "plastic-containers-bottles", "plastic-pipes-sheets", "rubber-silicone-seals", "pu-products", "furniture-making",
   "gift-specialty-packaging", "protective-packaging", "bakery-pastry", "snacks", "seasonings-sauces",
   "cleaning-products", "fragrance-essential-oils", "lighting-fixtures", "stationery-office-supplies",
@@ -154,11 +155,23 @@ const EXPECTED = {
     description: "尋找台灣焊接加工廠？OXM 整理可承接焊接代工、金屬組裝需求的廠商，可依地區查看相關廠商並直接詢價。",
     intro: "OXM 整理台灣焊接加工廠資訊，涵蓋焊接代工與金屬組裝需求，可依地區瀏覽相關工廠並直接詢價。",
   },
-  "wire-harness-connectors": {
-    h1: "線束加工",
-    title: "線束加工｜台灣連接器代工廠商搜尋與詢價｜OXM",
-    description: "尋找台灣線束加工廠？OXM 整理可承接線束代工、連接器組裝需求的廠商，可依地區查看相關廠商並直接詢價。",
-    intro: "OXM 整理台灣線束加工廠資訊，涵蓋線束代工與連接器組裝需求，可依地區瀏覽相關工廠並直接詢價。",
+  "wire-cable": {
+    h1: "電子線材工廠",
+    title: "電子線材工廠｜台灣電源線、訊號線與線材代工廠商｜OXM",
+    description: "尋找台灣電子線材工廠？OXM 整理可承接電源線、訊號線、同軸線、排線等線材代工需求的廠商，可依地區、代工模式、可接小量與可打樣等條件篩選詢價。",
+    intro: "線材／電纜是電子零件底下的子產業，涵蓋電源線、訊號線、同軸線、排線等各類線材本體製造。OXM 整理台灣相關工廠資訊，可依地區與生產條件篩選，直接送出詢價。",
+  },
+  "wire-harness-assembly": {
+    h1: "線束加工廠",
+    title: "線束加工廠｜台灣線束代工與線組加工廠商｜OXM",
+    description: "尋找台灣線束加工廠？OXM 整理可承接裁線、剝皮、端子壓接、客製線組組裝需求的廠商，可依地區、代工模式、可接小量與可打樣等條件篩選詢價。",
+    intro: "線束／線組加工是電子零件底下的子產業，涵蓋 Wire Harness、Cable Assembly 等線組組裝需求。OXM 整理台灣相關工廠資訊，可依地區篩選並直接詢價。",
+  },
+  "connector-terminal": {
+    h1: "連接器工廠",
+    title: "連接器工廠｜台灣連接器與端子製造廠商｜OXM",
+    description: "尋找台灣連接器工廠？OXM 整理可承接連接器、端子、接插件與插座製造需求的廠商，可依地區、代工模式、可接小量與可打樣等條件篩選詢價。",
+    intro: "連接器／端子是電子零件底下的子產業，涵蓋 Connector、Terminal 等接插件與插座製造需求。OXM 整理台灣相關工廠資訊，可依地區與生產條件篩選，直接送出詢價。",
   },
   "lighting-modules": {
     h1: "LED照明代工",
@@ -347,7 +360,7 @@ describe("沒有設定 override 的子產業：完全沿用既有固定 template
     .map(e => e.slug)
     .filter(slug => !OVERRIDDEN_SLUGS.includes(slug));
 
-  it("除了三批共 38 筆，其餘全部 34 筆都沒有設定任何 override 欄位（本輪審核後刻意保留 fallback，不是遺漏）", () => {
+  it("除了三批共 40 筆，其餘全部 34 筆都沒有設定任何 override 欄位（本輪審核後刻意保留 fallback，不是遺漏）", () => {
     expect(nonOverriddenSlugs.length).toBe(34);
     for (const slug of nonOverriddenSlugs) {
       const entry = SUB_INDUSTRY_SEARCH_SLUG_TO_ENTRY[slug];
@@ -406,7 +419,7 @@ describe("沒有設定 override 的子產業：完全沿用既有固定 template
 });
 
 describe("secondaryKeywords：純 SEO 研究資料，禁止任何形式直接 render 到前台", () => {
-  it("38 個 override 頁都有設定 secondaryKeywords（SEO 策略資料存在，供文案研究參考）", () => {
+  it("40 個 override 頁都有設定 secondaryKeywords（SEO 策略資料存在，供文案研究參考）", () => {
     for (const slug of OVERRIDDEN_SLUGS) {
       const entry = SUB_INDUSTRY_SEARCH_SLUG_TO_ENTRY[slug];
       expect(entry.secondaryKeywords).toBeDefined();
@@ -493,20 +506,20 @@ describe("region × subIndustry（buildRegionSubIndustryPageContent）完全不�
 });
 
 describe("shared/constants.ts：SubIndustrySearchEntry 的 SEO 欄位是唯一 source，沒有第二份 slug 對照表", () => {
-  it("38 個 override 頁的 key 都是既有 canonical slug（沒有另外新增 key 命名法）", () => {
+  it("40 個 override 頁的 key 都是既有 canonical slug（沒有另外新增 key 命名法）", () => {
     for (const slug of OVERRIDDEN_SLUGS) {
       expect(SUB_INDUSTRY_SEARCH_SLUG_TO_ENTRY[slug]).toBeDefined();
       expect(SUB_INDUSTRY_SEARCH_SLUG_TO_ENTRY[slug].slug).toBe(slug);
     }
   });
 
-  it("SubIndustrySearchEntry 陣列總筆數仍是 72（本輪沒有新增／刪除任何 entry，只在既有 24 筆上加欄位）", () => {
-    expect(SUB_INDUSTRY_SEARCH_ENTRIES.length).toBe(72);
+  it("SubIndustrySearchEntry 陣列總筆數是 74（電子零件「線束 / 連接器」拆分為 wire-cable／wire-harness-assembly／connector-terminal 三筆，見任務定案「線束 / 連接器拆分為三類」，淨增 2 筆）", () => {
+    expect(SUB_INDUSTRY_SEARCH_ENTRIES.length).toBe(74);
   });
 
-  it("OVERRIDDEN_SLUGS 精確等於 38 筆（14 筆既有 + 本輪新增 24 筆），沒有重複也沒有遺漏", () => {
-    expect(OVERRIDDEN_SLUGS.length).toBe(38);
-    expect(new Set(OVERRIDDEN_SLUGS).size).toBe(38);
+  it("OVERRIDDEN_SLUGS 精確等於 40 筆（14 筆既有 + 本輪新增 24 筆 + 拆分子分類新增 2 筆），沒有重複也沒有遺漏", () => {
+    expect(OVERRIDDEN_SLUGS.length).toBe(40);
+    expect(new Set(OVERRIDDEN_SLUGS).size).toBe(40);
   });
 
   it("pcb 明確沒有被加進 OVERRIDDEN_SLUGS（本輪暫緩）", () => {

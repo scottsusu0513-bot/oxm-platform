@@ -13,7 +13,7 @@
 // shared/constants.ts 的 SubIndustrySearchEntry 說明。
 import {
   SUB_INDUSTRY_SEARCH_SLUG_TO_ENTRY, SUB_INDUSTRY_SEARCH_ENTRIES, type SubIndustrySearchEntry,
-  REGION_SLUG_TO_NAME, REGION_DISPLAY_NAMES,
+  REGION_SLUG_TO_NAME, REGION_DISPLAY_NAMES, SPLIT_SUB_INDUSTRY_NOTICES,
 } from "../constants";
 import { BRAND } from "./brand";
 import { getBreadcrumbSchema, type JsonLdObject } from "./schema";
@@ -114,6 +114,80 @@ export function buildSubIndustryBreadcrumbJsonLd(resolved: ResolvedSubIndustry):
     { name: "找工廠", path: "/search" },
     { name: entry.parentIndustry, path: `/industry/${entry.parentIndustrySlug}` },
     { name: entry.displayName, path: `/factories/${subIndustrySlug}` },
+  ]);
+}
+
+// ===== 舊子產業 slug 拆分過渡頁：/factories/:subIndustrySlug（slug 在
+// SPLIT_SUB_INDUSTRY_NOTICES 裡）=====
+//
+// 這組跟上面的 resolveSubIndustry／buildSubIndustryPageContent 是平行的兩條
+// 路徑，呼叫端（SubIndustryPage.tsx、server/_core/ogMeta.ts）必須先試這裡、
+// 沒有才 fallback 試 resolveSubIndustry——SPLIT_SUB_INDUSTRY_NOTICES 的 key
+// 已經從 SUB_INDUSTRY_SEARCH_ENTRIES 移除，resolveSubIndustry 對它們一律
+// 回 null。
+
+export interface ResolvedSplitSubIndustryNotice {
+  subIndustrySlug: string;
+  label: string;
+  parentIndustry: string;
+  parentIndustrySlug: string;
+  /** 拆分後的新分類 entry（已從 SUB_INDUSTRY_SEARCH_SLUG_TO_ENTRY 反查出完整資料）。 */
+  successors: SubIndustrySearchEntry[];
+}
+
+/** slug 不是已知的「拆分過渡」slug 時回傳 null。 */
+export function resolveSplitSubIndustryNotice(subIndustrySlug: string): ResolvedSplitSubIndustryNotice | null {
+  const notice = SPLIT_SUB_INDUSTRY_NOTICES[subIndustrySlug];
+  if (!notice) return null;
+  const successors = notice.successorSlugs
+    .map(slug => SUB_INDUSTRY_SEARCH_SLUG_TO_ENTRY[slug])
+    .filter((e): e is SubIndustrySearchEntry => Boolean(e));
+  return {
+    subIndustrySlug,
+    label: notice.label,
+    parentIndustry: notice.parentIndustry,
+    parentIndustrySlug: notice.parentIndustrySlug,
+    successors,
+  };
+}
+
+export interface SplitSubIndustryNoticeContent {
+  title: string;
+  description: string;
+  canonical: string;
+  h1: string;
+  intro: string;
+}
+
+/**
+ * 固定 template：明確告知舊分類已拆分成哪些新分類，不 301（舊分類同時涵蓋
+ * 多個新分類的語意，沒有單一等價頁面可以轉址），canonical 自我指向（不指向
+ * 任一個新分類頁，避免暗示其中一個是「正確」的那個）。呼叫端另外要自行加
+ * noindex（見 server/_core/ogMeta.ts buildSubIndustryMeta 的說明）避免跟新
+ * 分類頁產生重複內容。
+ */
+export function buildSplitSubIndustryNoticeContent(resolved: ResolvedSplitSubIndustryNotice): SplitSubIndustryNoticeContent {
+  const { subIndustrySlug, label, parentIndustry, successors } = resolved;
+  const successorNames = successors.map(s => s.displayName).join("、");
+  const h1 = `「${label}」分類已重新整理`;
+  const title = `${h1}｜${parentIndustry}｜OXM`;
+  const description = `「${label}」子分類已拆分為${successorNames}，請至新的分類頁面查看廠商並直接詢價。`;
+  const intro = `「${label}」原本同時涵蓋不同的能力範圍，OXM 已將它拆分為${successorNames}，方便更精準地依需求篩選與詢價。`;
+  const canonical = `${BRAND.url}/factories/${subIndustrySlug}`;
+  return { title, description, canonical, h1, intro };
+}
+
+/**
+ * BreadcrumbList：跟 buildSubIndustryBreadcrumbJsonLd 同一種角色分工，最後一
+ * 段用過渡頁自己的 h1（而不是任一個新分類的 displayName），因為這頁本身不
+ * 代表任何單一子產業。
+ */
+export function buildSplitSubIndustryNoticeBreadcrumbJsonLd(resolved: ResolvedSplitSubIndustryNotice): JsonLdObject {
+  const { subIndustrySlug, label, parentIndustry, parentIndustrySlug } = resolved;
+  return getBreadcrumbSchema([
+    { name: "找工廠", path: "/search" },
+    { name: parentIndustry, path: `/industry/${parentIndustrySlug}` },
+    { name: `「${label}」分類已重新整理`, path: `/factories/${subIndustrySlug}` },
   ]);
 }
 

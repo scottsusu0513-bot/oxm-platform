@@ -53,7 +53,7 @@ export const LIBRARY_OXM_LINK_HREF_ALLOWLIST: string[] = [
   "/factories/plastic-injection",
   "/factories/smt-assembly",
   "/factories/pcb",
-  "/factories/wire-harness-connectors",
+  "/factories/wire-harness-assembly",
   "/factories/cosmetic-odm",
   "/factories/food-medical-silicone",
   "/factories/metal-materials",
@@ -1469,8 +1469,8 @@ export const LIBRARY_ARTICLES: LibraryArticle[] = [
     relatedArticleSlugs: ["what-is-smt", "what-is-rfq"],
     cta: {
       label: "前往 OXM 找線束加工廠",
-      href: "/factories/wire-harness-connectors",
-      description: "直接到 OXM 查看可承接線束代工與連接器組裝需求的廠商，依地區篩選並直接詢價。",
+      href: "/factories/wire-harness-assembly",
+      description: "直接到 OXM 查看可承接線束加工、客製線組組裝需求的廠商，依地區篩選並直接詢價。",
     },
   },
   {

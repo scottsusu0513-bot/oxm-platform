@@ -6,7 +6,10 @@ import { Breadcrumb, BreadcrumbList, BreadcrumbItem, BreadcrumbLink, BreadcrumbP
 import NotFound from "./NotFound";
 import { trpc } from "@/lib/trpc";
 import { useRoute, Link } from "wouter";
-import { resolveSubIndustry, buildSubIndustryPageContent, buildSubIndustryBreadcrumbJsonLd } from "@shared/seo/subIndustryPages";
+import {
+  resolveSubIndustry, buildSubIndustryPageContent, buildSubIndustryBreadcrumbJsonLd,
+  resolveSplitSubIndustryNotice, buildSplitSubIndustryNoticeContent, buildSplitSubIndustryNoticeBreadcrumbJsonLd,
+} from "@shared/seo/subIndustryPages";
 import { toSafeJsonLdString } from "@shared/seo/schema";
 import { FactoriesLandingResults } from "@/components/seo/FactoriesLandingResults";
 import { NEW_SUB_INDUSTRY_SLUG_TO_LEGACY_SEO_CONTENT } from "@shared/constants";
@@ -30,6 +33,14 @@ export default function SubIndustryPage() {
   const [, params] = useRoute("/factories/:slug");
   const subIndustrySlug = params?.slug ?? "";
 
+  // 舊 slug 被拆分成多個新 slug（見 shared/constants.ts 的
+  // SPLIT_SUB_INDUSTRY_NOTICES）：優先於一般 resolveSubIndustry 判斷，顯示
+  // 過渡頁而不是 404 或直接轉址到其中一個新分類。
+  const splitNotice = resolveSplitSubIndustryNotice(subIndustrySlug);
+  if (splitNotice) {
+    return <SplitSubIndustryNoticeContent resolved={splitNotice} />;
+  }
+
   const resolved = resolveSubIndustry(subIndustrySlug);
 
   if (!resolved) {
@@ -37,6 +48,66 @@ export default function SubIndustryPage() {
   }
 
   return <SubIndustryContent resolved={resolved} />;
+}
+
+function SplitSubIndustryNoticeContent({ resolved }: { resolved: NonNullable<ReturnType<typeof resolveSplitSubIndustryNotice>> }) {
+  const content = buildSplitSubIndustryNoticeContent(resolved);
+  const breadcrumbJsonLd = buildSplitSubIndustryNoticeBreadcrumbJsonLd(resolved);
+  const parentIndustryHref = `/industry/${resolved.parentIndustrySlug}`;
+
+  return (
+    <div className="min-h-screen bg-background">
+      <Helmet>
+        <title>{content.title}</title>
+        <meta name="description" content={content.description} />
+        <link rel="canonical" href={content.canonical} />
+        <meta name="robots" content="noindex,follow" />
+        <meta property="og:type" content="website" />
+        <meta property="og:site_name" content="OXM" />
+        <meta property="og:url" content={content.canonical} />
+        <meta property="og:title" content={content.title} />
+        <meta property="og:description" content={content.description} />
+        <script type="application/ld+json">{toSafeJsonLdString(breadcrumbJsonLd)}</script>
+      </Helmet>
+
+      <Navbar />
+
+      <div className="container py-6">
+        <FloatingBackButton fallbackHref="/search" label="返回搜尋" />
+
+        <Breadcrumb className="mb-4">
+          <BreadcrumbList>
+            <BreadcrumbItem>
+              <BreadcrumbLink asChild><Link href="/">OXM</Link></BreadcrumbLink>
+            </BreadcrumbItem>
+            <BreadcrumbSeparator />
+            <BreadcrumbItem>
+              <BreadcrumbLink asChild><Link href={parentIndustryHref}>{resolved.parentIndustry}</Link></BreadcrumbLink>
+            </BreadcrumbItem>
+            <BreadcrumbSeparator />
+            <BreadcrumbItem>
+              <BreadcrumbPage>{content.h1}</BreadcrumbPage>
+            </BreadcrumbItem>
+          </BreadcrumbList>
+        </Breadcrumb>
+
+        <div className="mb-8 max-w-2xl">
+          <h1 className="text-3xl font-extrabold text-foreground mb-2">{content.h1}</h1>
+          <p className="text-muted-foreground">{content.intro}</p>
+        </div>
+
+        <div className="flex flex-wrap gap-3">
+          {resolved.successors.map(successor => (
+            <Link key={successor.slug} href={`/factories/${successor.slug}`}>
+              <span className="inline-flex items-center rounded-lg border border-border bg-card px-4 py-3 text-sm font-medium text-foreground hover:border-orange-400 hover:text-orange-600 cursor-pointer">
+                {successor.displayName}
+              </span>
+            </Link>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function SubIndustryContent({ resolved }: { resolved: NonNullable<ReturnType<typeof resolveSubIndustry>> }) {
