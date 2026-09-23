@@ -64,6 +64,7 @@ import {
 import { sortBadgeIds, sanitizeBadgeAssignment, appendCertificationEvidenceImage } from "../shared/badges";
 import { CERTIFICATION_SERVICE_CATEGORY_SEEDS, CERTIFICATION_SERVICE_ITEM_SEEDS } from "../shared/certificationServices";
 import type { AISearchIntent } from './semantic-search';
+import { resolveSubIndustryKeywordMatches } from '../shared/subIndustryKeywordMatch';
 
 let _db: ReturnType<typeof drizzle> | null = null;
 let _pool: mysql.Pool | null = null;
@@ -927,6 +928,17 @@ export async function searchFactories(params: {
 
   console.log(`[AISearch] keyword="${keyword ?? ''}" useAIMode=${useAIMode} confidence=${intent?.confidence ?? 0} keywordProductIds=[${keywordProductIds.join(',')}]`);
 
+  // 精準 subIndustry taxonomy keyword match（見對話中「subIndustry 應用層
+  // taxonomy mapping」）：AI mode 與 non-AI mode 共用同一份，計算一次即可，
+  // 避免兩邊各自加、其中一邊漏掉。只有 keyword 完全等於某個 subIndustry
+  // 原子詞（或極少數明確 alias，例如「CNC」）時才會有值，不是 substring 比對
+  // ——見 shared/subIndustryKeywordMatch.ts 的說明。
+  const subIndustryTaxonomyConds = keyword
+    ? resolveSubIndustryKeywordMatches(keyword).map(fullValue =>
+        sql`JSON_CONTAINS(${factories.subIndustry}, ${JSON.stringify([fullValue])})`
+      )
+    : [];
+
   if (useAIMode) {
     const productMatchedIds = Array.from(new Set([...keywordProductIds, ...aiProductIds])).slice(0, 200);
     console.log(`[AISearch] productMatchedIds=[${productMatchedIds.join(',')}] (keyword:${keywordProductIds.length} ai:${aiProductIds.length})`);
@@ -940,6 +952,7 @@ export async function searchFactories(params: {
         like(factories.name,        `%${keyword}%`),
         like(factories.description, `%${keyword}%`),
         sql`JSON_SEARCH(${factories.industry}, 'one', ${`%${keyword}%`}) IS NOT NULL`,
+        ...subIndustryTaxonomyConds,
       );
     }
     if (!userHasSelectedIndustry && intent!.mainIndustries.length > 0) {
@@ -949,7 +962,7 @@ export async function searchFactories(params: {
       contentConds.push(inArray(factories.id, productMatchedIds));
     }
 
-    const keywordCondCount   = keyword ? 3 : 0;
+    const keywordCondCount   = keyword ? 3 + subIndustryTaxonomyConds.length : 0;
     const industryCondCount  = (!userHasSelectedIndustry && intent!.mainIndustries.length > 0) ? 1 : 0;
     const productIdCondCount = productMatchedIds.length > 0 ? 1 : 0;
     console.log(`[AISearch] contentConds count=${contentConds.length} (keyword:${keywordCondCount} industry:${industryCondCount} product_ids:${productIdCondCount})`);
@@ -1015,6 +1028,7 @@ export async function searchFactories(params: {
       like(factories.name,        `%${keyword}%`),
       like(factories.description, `%${keyword}%`),
       sql`JSON_SEARCH(${factories.industry}, 'one', ${`%${keyword}%`}) IS NOT NULL`,
+      ...subIndustryTaxonomyConds,
     ];
     if (keywordProductIds.length > 0) {
       nonAiConds.push(inArray(factories.id, keywordProductIds));
