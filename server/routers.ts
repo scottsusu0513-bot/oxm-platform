@@ -1968,14 +1968,23 @@ export const appRouter = router({
     ? (intent ? input.keyword : await enhanceSearchKeyword(input.keyword))
     : undefined;
 
-  const result = await db.searchFactories({
-    ...input,
-    industry, subIndustry, region, capitalLevel, businessType,
-    keyword,
-    intent,
-    userHasSelectedIndustry,
-    rankingSignals,
-  });
+  // searchFactories 與 getActiveAds 彼此沒有 dependency：ads 只讀 input 本身
+  // （industry/capitalLevel/region），不讀 searchFactories 的回傳值；兩者的
+  // 結果要合併（ads 重新排序 result.items）的地方在下面，維持在兩者都完成
+  // 之後才做，平行只是省掉一次循序 round trip，不影響合併邏輯。
+  const [result, ads] = await Promise.all([
+    db.searchFactories({
+      ...input,
+      industry, subIndustry, region, capitalLevel, businessType,
+      keyword,
+      intent,
+      userHasSelectedIndustry,
+      rankingSignals,
+    }),
+    input.page === 1
+      ? db.getActiveAds({ industry: input.industry?.[0], capitalLevel: input.capitalLevel?.[0], region: input.region?.[0] })
+      : Promise.resolve([] as Awaited<ReturnType<typeof db.getActiveAds>>),
+  ]);
 
   // 見「哪些工廠會被套上橘框、依據是什麼」：只有真的通過上面 ownership 驗證、
   // 進入 AI Search Mode 時才計算，一般搜尋／訪客／q 手動排序一律是 undefined，
@@ -1986,10 +1995,7 @@ export const appRouter = router({
     ? result.items.filter((_, i) => result.tiers![i] === 2).map(f => f.id)
     : undefined;
 
-  let ads: Awaited<ReturnType<typeof db.getActiveAds>> = [];
-
   if (input.page === 1) {
-    ads = await db.getActiveAds({ industry: input.industry?.[0], capitalLevel: input.capitalLevel?.[0], region: input.region?.[0] });
     const adFactoryIds = new Set(ads.slice(0, 5).map(a => a.factoryId));
     const promoted = result.items.filter(f => adFactoryIds.has(f.id));
     const regular = result.items.filter(f => !adFactoryIds.has(f.id));

@@ -876,47 +876,58 @@ export async function searchFactories(params: {
   const hasIntent = !!intent && intent.confidence >= 0.5;
   const useAIMode = hasIntent && (!sortBy || sortBy === 'rating');
 
-  // === 共用：不論 AI 是否成功，只要有 keyword 就先查 products（原始 keyword only）===
-  // AI timeout 時走 non-AI mode 仍能把商品命中的工廠拉進候選集
-  let keywordProductIds: number[] = [];
-  if (keyword) {
-    try {
-      const rows = await db
-        .select({ factoryId: products.factoryId })
-        .from(products)
-        .where(or(
-          like(products.name,        `%${keyword}%`),
-          like(products.description, `%${keyword}%`),
-        )!);
-      keywordProductIds = Array.from(new Set(rows.map(r => r.factoryId))).slice(0, 200);
-    } catch (e) {
-      console.error('[AISearch] keyword product prequery FAILED:', e);
-    }
-  }
+  // === 共用：keyword product 搜尋（原始 keyword）與 AI synonym/semantic
+  // product 搜尋各自只讀自己的輸入（keyword／intent），彼此沒有 dependency，
+  // 平行執行以省一次循序 round trip；合併結果（productMatchedIds）維持在
+  // 兩者都完成之後才做，語意與原本循序版本完全相同。
+  // AI timeout 時走 non-AI mode 仍能把商品命中的工廠拉進候選集。
+  const keywordProductIdsPromise: Promise<number[]> = keyword
+    ? (async () => {
+        try {
+          const rows = await db
+            .select({ factoryId: products.factoryId })
+            .from(products)
+            .where(or(
+              like(products.name,        `%${keyword}%`),
+              like(products.description, `%${keyword}%`),
+            )!);
+          return Array.from(new Set(rows.map(r => r.factoryId))).slice(0, 200);
+        } catch (e) {
+          console.error('[AISearch] keyword product prequery FAILED:', e);
+          return [];
+        }
+      })()
+    : Promise.resolve([]);
+
+  // useAIMode=false 時完全不執行這個 query（維持原本行為：aiProductIds 只在
+  // AI mode 內才查）。
+  const aiProductIdsPromise: Promise<number[]> = useAIMode
+    ? (async () => {
+        try {
+          const aiTerms = [...intent!.productKeywords, ...intent!.searchSynonyms]
+            .filter((t): t is string => !!t && t.trim().length > 0);
+          if (aiTerms.length === 0) return [];
+          const aiConds = aiTerms.flatMap(term => [
+            like(products.name,        `%${term}%`),
+            like(products.description, `%${term}%`),
+          ]);
+          const rows = await db
+            .select({ factoryId: products.factoryId })
+            .from(products)
+            .where(or(...aiConds)!);
+          return Array.from(new Set(rows.map(r => r.factoryId))).slice(0, 200);
+        } catch (e) {
+          console.error('[AISearch] AI product prequery FAILED:', e);
+          return [];
+        }
+      })()
+    : Promise.resolve([]);
+
+  const [keywordProductIds, aiProductIds] = await Promise.all([keywordProductIdsPromise, aiProductIdsPromise]);
 
   console.log(`[AISearch] keyword="${keyword ?? ''}" useAIMode=${useAIMode} confidence=${intent?.confidence ?? 0} keywordProductIds=[${keywordProductIds.join(',')}]`);
 
   if (useAIMode) {
-    // AI mode Step 1: 額外查 intent.productKeywords / searchSynonyms 命中的 products
-    let aiProductIds: number[] = [];
-    try {
-      const aiTerms = [...intent!.productKeywords, ...intent!.searchSynonyms]
-        .filter((t): t is string => !!t && t.trim().length > 0);
-      if (aiTerms.length > 0) {
-        const aiConds = aiTerms.flatMap(term => [
-          like(products.name,        `%${term}%`),
-          like(products.description, `%${term}%`),
-        ]);
-        const rows = await db
-          .select({ factoryId: products.factoryId })
-          .from(products)
-          .where(or(...aiConds)!);
-        aiProductIds = Array.from(new Set(rows.map(r => r.factoryId))).slice(0, 200);
-      }
-    } catch (e) {
-      console.error('[AISearch] AI product prequery FAILED:', e);
-    }
-
     const productMatchedIds = Array.from(new Set([...keywordProductIds, ...aiProductIds])).slice(0, 200);
     console.log(`[AISearch] productMatchedIds=[${productMatchedIds.join(',')}] (keyword:${keywordProductIds.length} ai:${aiProductIds.length})`);
 
@@ -947,12 +958,14 @@ export async function searchFactories(params: {
 
     const whereClause = and(...conditions);
 
-    const [countResult] = await db.select({ count: sql<number>`COUNT(*)` }).from(factories).where(whereClause);
+    // count 與 candidates 用同一個 whereClause，彼此沒有 dependency，平行執行。
+    const [[countResult], candidates] = await Promise.all([
+      db.select({ count: sql<number>`COUNT(*)` }).from(factories).where(whereClause),
+      db.select().from(factories).where(whereClause)
+        .orderBy(desc(factories.avgRating), desc(factories.reviewCount))
+        .limit(AI_CANDIDATE_LIMIT),
+    ]);
     const total = Number(countResult?.count ?? 0);
-
-    const candidates = await db.select().from(factories).where(whereClause)
-      .orderBy(desc(factories.avgRating), desc(factories.reviewCount))
-      .limit(AI_CANDIDATE_LIMIT);
 
     console.log(`[AISearch] total=${total} candidates=${candidates.length}`);
 
@@ -1010,8 +1023,6 @@ export async function searchFactories(params: {
   }
 
   const whereClause = conditions.length > 1 ? and(...conditions) : conditions[0];
-  const [countResult] = await db.select({ count: sql<number>`COUNT(*)` }).from(factories).where(whereClause);
-  const total = Number(countResult?.count ?? 0);
 
   let orderClauses;
   switch (sortBy) {
@@ -1032,9 +1043,15 @@ export async function searchFactories(params: {
       orderClauses = [desc(factories.avgRating), desc(factories.reviewCount)];
   }
 
-  const items = await db.select().from(factories).where(whereClause)
-    .orderBy(...orderClauses)
-    .limit(pageSize).offset((page - 1) * pageSize);
+  // count 與 items 用同一個 whereClause，彼此沒有 dependency，平行執行。
+  const [[countResult], items] = await Promise.all([
+    db.select({ count: sql<number>`COUNT(*)` }).from(factories).where(whereClause),
+    db.select().from(factories).where(whereClause)
+      .orderBy(...orderClauses)
+      .limit(pageSize).offset((page - 1) * pageSize),
+  ]);
+  const total = Number(countResult?.count ?? 0);
+
   return { items, total };
 }
 
