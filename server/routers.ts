@@ -6,6 +6,7 @@ import { userNeedsOnboarding } from "@shared/onboarding";
 import { normalizeTaxId, isValidTaiwanTaxId } from "@shared/taxId";
 import { sdk } from "./_core/sdk";
 import { enhanceSearchKeyword, getSearchIntent } from './semantic-search';
+import { classifySearchQuery } from './search-query-router';
 import { sendNewInquiryEmail, sendFactoryApprovedEmail, sendFactoryRejectedEmail, sendFactorySubmittedEmail, sendReportEmail, sendSupportTicketEmail, sendReviewReplyEmail, sendNewMessageNotificationEmail, sendReportStatusUpdateEmail, sendTicketStatusUpdateEmail, sendMessageReplyNotificationEmail, sendEmailVerificationEmail, sendAdminBroadcastEmail, sendRevisionSubmittedEmail, sendRevisionApprovedEmail, sendRevisionRejectedEmail, sendUpgradeApplicationEmail, sendUpgradeNewCaseConsultantEmail, sendPlatformAnnouncementEmail, sendFirstContactEmail, sendNewsEmail, sendIndustryRequestReceivedEmail, sendIndustryRequestAdminEmail } from './email';
 import { resolveAdminSenderIdentity } from './_core/officialIdentity';
 import { sha256Hex, generateRawToken } from './_core/oauthHelpers';
@@ -1958,15 +1959,35 @@ export const appRouter = router({
     }
   }
 
-  // 取得 AI 搜尋意圖（keyword 有值時嘗試；有 industry 時仍呼叫，用於 productKeywords 加權）
-  // 只在沒有 rankingSignals（也就是不是走 Phase 6A ranking-only 路徑）時才用
-  // keyword 觸發，維持既有手動關鍵字框行為不變。
-  const intent = (!rankingSignals && input.keyword) ? await getSearchIntent(input.keyword) : null;
+  // Query Router（Phase 2 — 見 server/search-query-router.ts「Strong Factory
+  // Name Match」）：只在沒有 rankingSignals（不是走 Phase 6A ranking-only
+  // 路徑）且真的有 keyword 時才分類——這條路徑本來就是唯一會呼叫
+  // getSearchIntent 的地方，維持既有 hard filter／rankingSignals 行為完全
+  // 不變。分類本身是 async（DIRECT 判定需要對 factories.name 做一次極輕量
+  // DB 查詢），必須在決定要不要呼叫 getSearchIntent「之前」就 await 完成，
+  // 不能跟 getSearchIntent 平行——DIRECT 的價值就是「保證不打 OpenAI」，
+  // 如果兩者同時起跑，就算最後判定是 DIRECT，OpenAI 呼叫也已經發出去了。
+  const searchRoute = (!rankingSignals && input.keyword) ? await classifySearchQuery(input.keyword) : null;
+  if (searchRoute) {
+    console.log(`[SearchRouter] query="${input.keyword}" route=${searchRoute.route} reason=${searchRoute.reason}`);
+  }
 
-  // fallback keyword：intent 無法使用時沿用舊有 enhanceSearchKeyword
-  const keyword = (!rankingSignals && input.keyword)
-    ? (intent ? input.keyword : await enhanceSearchKeyword(input.keyword))
-    : undefined;
+  let intent: Awaited<ReturnType<typeof getSearchIntent>> = null;
+  let keyword: string | undefined;
+  if (!rankingSignals && input.keyword) {
+    if (searchRoute?.route === 'DIRECT') {
+      // DIRECT：完全略過 getSearchIntent（不打 OpenAI），也不用
+      // enhanceSearchKeyword 的舊版 AI fallback——直接用原始 keyword 走
+      // searchFactories 既有的一般關鍵字搜尋（intent=null 時 useAIMode 本來
+      // 就是 false，等同既有 fallback 行為，見 server/db.ts searchFactories）。
+      intent = null;
+      keyword = input.keyword;
+    } else {
+      // HYBRID／SEMANTIC：維持原本既有的 AI-assisted 流程，行為完全不變。
+      intent = await getSearchIntent(input.keyword);
+      keyword = intent ? input.keyword : await enhanceSearchKeyword(input.keyword);
+    }
+  }
 
   // searchFactories 與 getActiveAds 彼此沒有 dependency：ads 只讀 input 本身
   // （industry/capitalLevel/region），不讀 searchFactories 的回傳值；兩者的

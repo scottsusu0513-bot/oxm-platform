@@ -1055,6 +1055,21 @@ export async function searchFactories(params: {
   return { items, total };
 }
 
+/**
+ * 給 server/factory-name-index.ts 用的整批載入——只給 id／name，供 in-memory
+ * Query Router 名稱索引使用（見對話中「in-memory factory name index」，
+ * 取代原本每次 request 都打一次 DB 的 findStrongFactoryNameMatch 設計）。
+ * 只查 status='approved'，跟公開搜尋的候選集合一致；不選 description／
+ * industry／products 等欄位，索引只需要 routing 必需資料。
+ */
+export async function listApprovedFactoryNamesForIndex(): Promise<{ id: number; name: string }[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select({ id: factories.id, name: factories.name })
+    .from(factories)
+    .where(eq(factories.status, "approved"));
+}
+
 // ===== Product helpers =====
 export async function createProduct(data: { factoryId: number; name: string; categoryId?: number | null; priceMin?: string; priceMax?: string; priceType?: "range" | "fixed" | "market"; acceptSmallOrder?: boolean; provideSample?: boolean; description?: string; images?: string[]; imageCrops?: (ImageCropData | null)[] }) {
   const db = await getDb();
