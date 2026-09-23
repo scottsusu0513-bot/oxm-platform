@@ -65,6 +65,7 @@ import { sortBadgeIds, sanitizeBadgeAssignment, appendCertificationEvidenceImage
 import { CERTIFICATION_SERVICE_CATEGORY_SEEDS, CERTIFICATION_SERVICE_ITEM_SEEDS } from "../shared/certificationServices";
 import type { AISearchIntent } from './semantic-search';
 import { resolveSubIndustryKeywordMatches } from '../shared/subIndustryKeywordMatch';
+import { computeSearchMatchSignals, computeGeneralMatchTier, type SearchMatchProductInput } from './search-match-signals';
 
 let _db: ReturnType<typeof drizzle> | null = null;
 let _pool: mysql.Pool | null = null;
@@ -882,17 +883,25 @@ export async function searchFactories(params: {
   // 平行執行以省一次循序 round trip；合併結果（productMatchedIds）維持在
   // 兩者都完成之後才做，語意與原本循序版本完全相同。
   // AI timeout 時走 non-AI mode 仍能把商品命中的工廠拉進候選集。
-  const keywordProductIdsPromise: Promise<number[]> = keyword
+  //
+  // 這裡刻意多 select name／description（不是只要 factoryId）——見對話中
+  // 「General relevance ranking 不要增加額外 DB round trip」：這條 query 的
+  // WHERE 本來就是 `name LIKE %kw% OR description LIKE %kw%`，等於「所有
+  // 可能貢獻 productNameExact／productNameContains／productDescriptionContains
+  // 這三個 literal signal 的 product row」的完整集合（沒命中 keyword 的
+  // product 不可能讓這三個 signal 變成 true，所以不需要另外查）。General
+  // relevance ranking 直接複用這批 row 建 productMap，不用再對 candidates
+  // 多打一次「SELECT products WHERE factoryId IN (candidateIds)」。
+  const keywordProductMatchesPromise: Promise<{ factoryId: number; name: string; description: string | null }[]> = keyword
     ? (async () => {
         try {
-          const rows = await db
-            .select({ factoryId: products.factoryId })
+          return await db
+            .select({ factoryId: products.factoryId, name: products.name, description: products.description })
             .from(products)
             .where(or(
               like(products.name,        `%${keyword}%`),
               like(products.description, `%${keyword}%`),
             )!);
-          return Array.from(new Set(rows.map(r => r.factoryId))).slice(0, 200);
         } catch (e) {
           console.error('[AISearch] keyword product prequery FAILED:', e);
           return [];
@@ -924,7 +933,19 @@ export async function searchFactories(params: {
       })()
     : Promise.resolve([]);
 
-  const [keywordProductIds, aiProductIds] = await Promise.all([keywordProductIdsPromise, aiProductIdsPromise]);
+  const [keywordProductMatches, aiProductIds] = await Promise.all([keywordProductMatchesPromise, aiProductIdsPromise]);
+  const keywordProductIds = Array.from(new Set(keywordProductMatches.map(r => r.factoryId))).slice(0, 200);
+
+  // General relevance ranking 用的 product signal 來源——直接從上面那批
+  // 「已經命中 keyword」的 product rows 分組，不用再對 candidates 多查一次
+  // products（見對話中「keywordProductMatches」）。AI mode 完全不用這個
+  // map，維持原本自己的 productMap（見下方 useAIMode 分支，本輪沒有改）。
+  const keywordProductMap = new Map<number, SearchMatchProductInput[]>();
+  for (const row of keywordProductMatches) {
+    const list = keywordProductMap.get(row.factoryId) ?? [];
+    list.push({ name: row.name, description: row.description });
+    keywordProductMap.set(row.factoryId, list);
+  }
 
   console.log(`[AISearch] keyword="${keyword ?? ''}" useAIMode=${useAIMode} confidence=${intent?.confidence ?? 0} keywordProductIds=[${keywordProductIds.join(',')}]`);
 
@@ -932,12 +953,14 @@ export async function searchFactories(params: {
   // taxonomy mapping」）：AI mode 與 non-AI mode 共用同一份，計算一次即可，
   // 避免兩邊各自加、其中一邊漏掉。只有 keyword 完全等於某個 subIndustry
   // 原子詞（或極少數明確 alias，例如「CNC」）時才會有值，不是 substring 比對
-  // ——見 shared/subIndustryKeywordMatch.ts 的說明。
-  const subIndustryTaxonomyConds = keyword
-    ? resolveSubIndustryKeywordMatches(keyword).map(fullValue =>
-        sql`JSON_CONTAINS(${factories.subIndustry}, ${JSON.stringify([fullValue])})`
-      )
-    : [];
+  // ——見 shared/subIndustryKeywordMatch.ts 的說明。原始 resolved 值（不是
+  // SQL 條件）另外保留一份給 General relevance ranking 的
+  // computeSearchMatchSignals 用（見對話中「General mode relevance
+  // ranking」），避免重複呼叫 resolveSubIndustryKeywordMatches。
+  const subIndustryResolvedValues = keyword ? resolveSubIndustryKeywordMatches(keyword) : [];
+  const subIndustryTaxonomyConds = subIndustryResolvedValues.map(fullValue =>
+    sql`JSON_CONTAINS(${factories.subIndustry}, ${JSON.stringify([fullValue])})`
+  );
 
   if (useAIMode) {
     const productMatchedIds = Array.from(new Set([...keywordProductIds, ...aiProductIds])).slice(0, 200);
@@ -1038,6 +1061,57 @@ export async function searchFactories(params: {
 
   const whereClause = conditions.length > 1 ? and(...conditions) : conditions[0];
 
+  // General relevance ranking（見對話中「General mode relevance ranking」）：
+  // 只有「真的有 keyword」且使用者沒有明確選別的排序方式（sortBy 是預設值
+  // 或 'rating'）時才套用——跟上面 useAIMode 的判斷同一個原則（`!sortBy ||
+  // sortBy === 'rating'`），使用者明確選「評價最多／回覆最快／最新建立」時
+  // 維持原本單純 SQL orderBy 行為，不套用 relevance tier，尊重使用者明確
+  // 選擇。純瀏覽（沒有 keyword）同樣維持原本 SQL orderBy，因為沒有 keyword
+  // 就沒有「相關性」這個概念可算。
+  const shouldRankByRelevance = !!keyword && (!sortBy || sortBy === 'rating');
+
+  if (shouldRankByRelevance) {
+    // 候選池 + JS 排序 + JS 分頁——跟 AI mode 完全同一套架構（見對話中
+    // 「General mode pagination 架構」），避免「SQL LIMIT pageSize 之後才
+    // 排序」導致真正最相關的工廠永遠分頁不回 page 1。候選集合規則完全沿用
+    // 上面已經組好的 whereClause（沒有改變誰進得了候選集合），只改變候選
+    // 集合裡的排序方式。
+    const [[countResult], candidates] = await Promise.all([
+      db.select({ count: sql<number>`COUNT(*)` }).from(factories).where(whereClause),
+      db.select().from(factories).where(whereClause)
+        .orderBy(desc(factories.avgRating), desc(factories.reviewCount))
+        .limit(AI_CANDIDATE_LIMIT),
+    ]);
+    const total = Number(countResult?.count ?? 0);
+
+    // Product signals 直接複用上面已經查過的 keywordProductMap，不再對
+    // candidates 多打一次「SELECT products WHERE factoryId IN (...)」（見
+    // 對話中「不要增加 General 搜尋的 DB round trip dependency depth」）—
+    // keywordProductMap 本來就是「所有命中 keyword 的 product」的完整集合，
+    // 沒命中的 product 不可能讓 productNameExact／productNameContains／
+    // productDescriptionContains 變成 true，所以不需要另外查 candidates 的
+    // 全部 product。
+    const scored = candidates.map(f => {
+      const signals = computeSearchMatchSignals(f, keyword!, keywordProductMap.get(f.id) ?? [], subIndustryResolvedValues);
+      return { factory: f, tier: computeGeneralMatchTier(signals) };
+    });
+
+    scored.sort((a, b) => {
+      if (b.tier !== a.tier)                                   return b.tier - a.tier;
+      const rDiff = Number(b.factory.avgRating ?? 0) - Number(a.factory.avgRating ?? 0);
+      if (rDiff !== 0)                                         return rDiff;
+      const rcDiff = (b.factory.reviewCount ?? 0) - (a.factory.reviewCount ?? 0);
+      if (rcDiff !== 0)                                        return rcDiff;
+      return new Date(b.factory.updatedAt).getTime() - new Date(a.factory.updatedAt).getTime();
+    });
+
+    const offset = (page - 1) * pageSize;
+    const items = scored.slice(offset, offset + pageSize).map(s => s.factory);
+    return { items, total };
+  }
+
+  // 使用者明確選了非 relevance 的排序方式，或根本沒有 keyword（純瀏覽）：
+  // 維持原本單純 SQL orderBy + LIMIT/OFFSET，不套用 relevance tier。
   let orderClauses;
   switch (sortBy) {
     case "reviews":

@@ -102,20 +102,26 @@ describe("searchFactories — non-AI mode 平行化 (keywordProductIds ‖ count
     await conn.execute(sql`UPDATE factories SET name = ${`${KEYWORD}-工廠`} WHERE id = ${byNameId}`);
     await db.createProduct({ factoryId: byProductId, name: `${KEYWORD}零件` });
 
-    // 排序驗證：byProductId 評分較高，應該排在 byNameId 前面。
+    // 排序驗證：byProductId 評分較高，但 byNameId 是 factory name 命中
+    // （relevance tier 5）、byProductId 只是 product name 命中（tier 3）——
+    // 見 server/search-match-signals.ts 的 General relevance ranking，
+    // 「工廠名稱命中」永遠不會因為評分較低被排到「商品名稱命中」後面
+    // （這正是這一輪要修正的錯排案例類型，見對話中的稽核報告）。
     await setAvgRating(byNameId, 3.0);
     await setAvgRating(byProductId, 4.5);
   }, 30000);
 
-  it("回傳靠 factories.name 命中與靠 products.name（factoryId 反查）命中的兩間工廠，排除無關工廠，total 正確，依 avgRating 排序", async () => {
+  it("回傳靠 factories.name 命中與靠 products.name（factoryId 反查）命中的兩間工廠，排除無關工廠，total 正確，依 relevance tier 排序（factory name 命中優先於評分）", async () => {
     const result = await db.searchFactories({ industry: [INDUSTRY], keyword: KEYWORD, pageSize: 50 });
     const ids = result.items.map(f => f.id);
     expect(ids).toContain(byNameId);
     expect(ids).toContain(byProductId);
     expect(ids).not.toContain(noMatchId);
     expect(result.total).toBe(2);
-    // 預設 sortBy=rating：avgRating desc → byProductId(4.5) 排在 byNameId(3.0) 前面
-    expect(ids.indexOf(byProductId)).toBeLessThan(ids.indexOf(byNameId));
+    // General relevance ranking：factory name contains（tier 5）優先於
+    // product name contains（tier 3），不因為 byProductId 評分較高（4.5 vs
+    // 3.0）就排到前面——tier 之間不可能靠評分跨級超車。
+    expect(ids.indexOf(byNameId)).toBeLessThan(ids.indexOf(byProductId));
   });
 
   it("透過 router（factory.search）呼叫同一條路徑，結果一致", async () => {
