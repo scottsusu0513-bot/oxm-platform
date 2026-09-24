@@ -120,3 +120,65 @@ export function computeGeneralMatchTier(signals: SearchMatchSignals): 0 | 1 | 2 
   if (signals.factoryDescriptionContains) return 1;
   return 0;
 }
+
+/**
+ * AI mode 專屬訊號（跟 basic SearchMatchSignals 分開，因為只有 AI mode 有
+ * intent 這個中介層——見對話中「AI ranking read-only audit」發現的三個缺口）。
+ *
+ *   aiMainMatch  ：factory.industry 命中 intent.mainIndustries（AI 推導）。
+ *   aiSubMatch   ：factory.subIndustry 命中 intent.subIndustries（AI 推導）
+ *                  ——注意這跟 basicSignals.subIndustryExact（keyword 字面
+ *                  對照 taxonomy）是兩件事，不能混為一談（見對話中「請區分
+ *                  basicSignals.subIndustryExact 與 aiSubIndustryMatch」）。
+ *   productIntentMatch：product name+description 命中 intent.productKeywords
+ *                  或 intent.searchSynonyms（AI 推導的近義詞）。
+ */
+export interface AIIntentSignals {
+  aiMainMatch: boolean;
+  aiSubMatch: boolean;
+  productIntentMatch: boolean;
+}
+
+/**
+ * AI mode 的 explicit tier（precedence label，不是 numeric score——原則與
+ * computeGeneralMatchTier 相同）。本輪只改「候選進來之後怎麼排序」，候選集合
+ * 規則完全不動（見對話中「不改 candidate WHERE」）。
+ *
+ * 修正上一輪 audit 發現的三個缺口：
+ *   1. factory name literal match 完全不參與排序 → 新增 tier 9/8。
+ *   2. product name／description 合併成同一個字串比對 → 拆成 tier 7（name
+ *      exact，跟 subIndustry exact 同級）／tier 6（name contains）／tier 1
+ *      （description contains，跟舊的 factory description 弱訊號同級）。
+ *   3. productIntentMatch 必須 aiMainMatch && aiSubMatch 才能拿到非零 tier
+ *      → 拆成 tier 5（main+sub 都命中的強 semantic）與 tier 4（純商品層級
+ *      semantic 證據，即使 aiSubMatch=false 也至少排在「只有 mainIndustry
+ *      相同」的 tier 0 之上——見對話中「productIntentMatch > mainIndustry-only」）。
+ *
+ *   Tier 9：factory name exact
+ *   Tier 8：factory name contains
+ *   Tier 7：product name exact，或 subIndustry literal exact taxonomy match
+ *   Tier 6：product name contains
+ *   Tier 5：aiMainMatch && aiSubMatch && productIntentMatch（semantic strong）
+ *   Tier 4：productIntentMatch（即使 aiSubMatch=false，semantic product）
+ *   Tier 3：aiMainMatch && aiSubMatch，無商品證據（semantic taxonomy）
+ *   Tier 2：main industry literal exact（basic structured，跟 aiMainMatch
+ *           是兩件事——這是 keyword 字面剛好等於 taxonomy 主產業詞）
+ *   Tier 1：factory description contains，或 product description contains
+ *           （weak literal——刻意跟 product name 分開，不再同強度，見缺口 2）
+ *   Tier 0：aiMainMatch only（broad），或完全沒有以上任何訊號
+ */
+export function computeAIMatchTier(
+  basic: SearchMatchSignals,
+  ai: AIIntentSignals,
+): 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 {
+  if (basic.factoryNameExact) return 9;
+  if (basic.factoryNameContains) return 8;
+  if (basic.productNameExact || basic.subIndustryExact) return 7;
+  if (basic.productNameContains) return 6;
+  if (ai.aiMainMatch && ai.aiSubMatch && ai.productIntentMatch) return 5;
+  if (ai.productIntentMatch) return 4;
+  if (ai.aiMainMatch && ai.aiSubMatch) return 3;
+  if (basic.mainIndustryExact) return 2;
+  if (basic.factoryDescriptionContains || basic.productDescriptionContains) return 1;
+  return 0;
+}

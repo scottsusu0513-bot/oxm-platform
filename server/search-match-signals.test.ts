@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { computeSearchMatchSignals, computeGeneralMatchTier, type SearchMatchSignals } from "./search-match-signals";
+import {
+  computeSearchMatchSignals, computeGeneralMatchTier, computeAIMatchTier,
+  type SearchMatchSignals, type AIIntentSignals,
+} from "./search-match-signals";
 
 function allFalse(overrides: Partial<SearchMatchSignals> = {}): SearchMatchSignals {
   return {
@@ -11,6 +14,15 @@ function allFalse(overrides: Partial<SearchMatchSignals> = {}): SearchMatchSigna
     mainIndustryExact: false,
     factoryDescriptionContains: false,
     productDescriptionContains: false,
+    ...overrides,
+  };
+}
+
+function allFalseAI(overrides: Partial<AIIntentSignals> = {}): AIIntentSignals {
+  return {
+    aiMainMatch: false,
+    aiSubMatch: false,
+    productIntentMatch: false,
     ...overrides,
   };
 }
@@ -155,5 +167,92 @@ describe("computeGeneralMatchTier（多重命中取最高 tier，不累加）", 
 
   it("完全沒有訊號 → tier 0（fallback）", () => {
     expect(computeGeneralMatchTier(allFalse())).toBe(0);
+  });
+});
+
+describe("computeAIMatchTier（AI mode ranking precision 修正，見對話中三個缺口）", () => {
+  it("factory name exact → tier 9，即使同時有 broad AI 訊號也不會被拉低", () => {
+    const tier = computeAIMatchTier(
+      allFalse({ factoryNameExact: true }),
+      allFalseAI({ aiMainMatch: true }),
+    );
+    expect(tier).toBe(9);
+  });
+
+  it("factory name contains → tier 8，高於任何純 semantic 訊號", () => {
+    const nameContains = computeAIMatchTier(allFalse({ factoryNameContains: true }), allFalseAI());
+    const semanticStrong = computeAIMatchTier(
+      allFalse(), allFalseAI({ aiMainMatch: true, aiSubMatch: true, productIntentMatch: true }),
+    );
+    expect(nameContains).toBe(8);
+    expect(nameContains).toBeGreaterThan(semanticStrong);
+  });
+
+  it("factory name exact 缺口修正：忠興模具企業社案例——名稱命中不會被 AI subMatch／synonym／高評分壓過（排序層面由 db.ts 呼叫端的 rating tie-break 另外保證，這裡只驗證 tier 本身）", () => {
+    const nameMatch = computeAIMatchTier(allFalse({ factoryNameContains: true }), allFalseAI());
+    const aiSubOnly = computeAIMatchTier(
+      allFalse(), allFalseAI({ aiMainMatch: true, aiSubMatch: true, productIntentMatch: true }),
+    );
+    expect(nameMatch).toBeGreaterThan(aiSubOnly);
+  });
+
+  it("product name exact > product description contains（缺口2：name/description 拆開）", () => {
+    const nameExact = computeAIMatchTier(allFalse({ productNameExact: true }), allFalseAI());
+    const descOnly = computeAIMatchTier(allFalse({ productDescriptionContains: true }), allFalseAI());
+    expect(nameExact).toBeGreaterThan(descOnly);
+  });
+
+  it("product name contains > product description contains（否定句「不像塑膠」這類 description literal 不再跟真正 product name 命中同強度）", () => {
+    const nameContains = computeAIMatchTier(allFalse({ productNameContains: true }), allFalseAI());
+    const descOnly = computeAIMatchTier(allFalse({ productDescriptionContains: true }), allFalseAI());
+    expect(nameContains).toBeGreaterThan(descOnly);
+  });
+
+  it("subIndustry literal exact > aiMainMatch only（literal taxonomy 證據優於純 AI 推導的 main industry 泛化）", () => {
+    const subExact = computeAIMatchTier(allFalse({ subIndustryExact: true }), allFalseAI());
+    const mainOnly = computeAIMatchTier(allFalse(), allFalseAI({ aiMainMatch: true }));
+    expect(subExact).toBeGreaterThan(mainOnly);
+  });
+
+  it("subIndustry literal exact 不低於 aiMainMatch && aiSubMatch（basicSignals.subIndustryExact 與 aiSubIndustryMatch 是兩件事，見對話中「不要把兩者視為同一件事」）", () => {
+    const subExact = computeAIMatchTier(allFalse({ subIndustryExact: true }), allFalseAI());
+    const aiTaxonomy = computeAIMatchTier(allFalse(), allFalseAI({ aiMainMatch: true, aiSubMatch: true }));
+    expect(subExact).toBeGreaterThanOrEqual(aiTaxonomy);
+  });
+
+  it("缺口3修正：productIntentMatch=true 但 aiSubMatch=false，仍必須高於純 mainIndustry-only（連接器 id59 案例：有 semantic 商品證據，不該落到跟完全無證據的候選同一 tier）", () => {
+    const productIntentNoSub = computeAIMatchTier(
+      allFalse(), allFalseAI({ aiMainMatch: true, aiSubMatch: false, productIntentMatch: true }),
+    );
+    const mainOnly = computeAIMatchTier(allFalse(), allFalseAI({ aiMainMatch: true }));
+    expect(productIntentNoSub).toBeGreaterThan(mainOnly);
+    expect(productIntentNoSub).toBeGreaterThan(0);
+  });
+
+  it("aiMainMatch && aiSubMatch（semantic taxonomy，無商品證據）> aiMainMatch only（broad）", () => {
+    const taxonomy = computeAIMatchTier(allFalse(), allFalseAI({ aiMainMatch: true, aiSubMatch: true }));
+    const mainOnly = computeAIMatchTier(allFalse(), allFalseAI({ aiMainMatch: true }));
+    expect(taxonomy).toBeGreaterThan(mainOnly);
+  });
+
+  it("aiMainMatch && aiSubMatch && productIntentMatch（semantic strong）> 純 productIntentMatch（aiSubMatch=false）", () => {
+    const strong = computeAIMatchTier(
+      allFalse(), allFalseAI({ aiMainMatch: true, aiSubMatch: true, productIntentMatch: true }),
+    );
+    const productOnly = computeAIMatchTier(allFalse(), allFalseAI({ aiMainMatch: true, productIntentMatch: true }));
+    expect(strong).toBeGreaterThan(productOnly);
+  });
+
+  it("完全沒有訊號 → tier 0（fallback，跟 aiMainMatch only 同一層——candidate 集合裡最低分那層）", () => {
+    expect(computeAIMatchTier(allFalse(), allFalseAI())).toBe(0);
+    expect(computeAIMatchTier(allFalse(), allFalseAI({ aiMainMatch: true }))).toBe(0);
+  });
+
+  it("多重命中取最高 tier，不累加（factory name contains 同時有 productDescriptionContains 仍是 tier 8）", () => {
+    const tier = computeAIMatchTier(
+      allFalse({ factoryNameContains: true, productDescriptionContains: true }),
+      allFalseAI(),
+    );
+    expect(tier).toBe(8);
   });
 });

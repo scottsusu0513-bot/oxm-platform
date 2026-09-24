@@ -65,7 +65,7 @@ import { sortBadgeIds, sanitizeBadgeAssignment, appendCertificationEvidenceImage
 import { CERTIFICATION_SERVICE_CATEGORY_SEEDS, CERTIFICATION_SERVICE_ITEM_SEEDS } from "../shared/certificationServices";
 import type { AISearchIntent } from './semantic-search';
 import { resolveSubIndustryKeywordMatches } from '../shared/subIndustryKeywordMatch';
-import { computeSearchMatchSignals, computeGeneralMatchTier, type SearchMatchProductInput } from './search-match-signals';
+import { computeSearchMatchSignals, computeGeneralMatchTier, computeAIMatchTier, type SearchMatchProductInput } from './search-match-signals';
 
 let _db: ReturnType<typeof drizzle> | null = null;
 let _pool: mysql.Pool | null = null;
@@ -661,43 +661,37 @@ export async function getSimilarFactories(factoryId: number, limit = 12): Promis
 // AI 搜尋候選集上限：避免全表掃後在 JS 排序太多筆
 const AI_CANDIDATE_LIMIT = 300;
 
-function computeMatchTier(
+/**
+ * AI mode 的候選 → tier 計算（見對話中「AI ranking precision 修正」）。純粹
+ * 組裝訊號、呼叫 server/search-match-signals.ts 的 computeSearchMatchSignals
+ * ／computeAIMatchTier——basic signals（factory name／product name vs
+ * description／subIndustry literal exact／main industry literal exact）跟
+ * General mode 共用同一套純函式，不重刻第二套判斷；aiMainMatch／aiSubMatch／
+ * productIntentMatch 是 AI mode 專屬（依賴 intent 這個中介層），另外組裝。
+ * 候選集合規則完全不動，這裡只決定候選進來之後怎麼排序。
+ */
+function computeAIMatchTierForCandidate(
   factory: Factory,
-  productTexts: string[],
+  products: SearchMatchProductInput[],
   intent: AISearchIntent,
   userHasSelectedIndustry: boolean,
+  subIndustryResolvedValues: string[],
   keyword?: string,
-): 0 | 1 | 2 | 3 | 4 {
-  const mainMatch = !userHasSelectedIndustry &&
-    (factory.industry as string[]).some(i => intent.mainIndustries.includes(i));
+): ReturnType<typeof computeAIMatchTier> {
+  const basic = computeSearchMatchSignals(factory, keyword ?? '', products, subIndustryResolvedValues);
 
-  const subMatch = !userHasSelectedIndustry &&
+  const aiMainMatch = !userHasSelectedIndustry &&
+    (factory.industry as string[]).some(i => intent.mainIndustries.includes(i));
+  const aiSubMatch = !userHasSelectedIndustry &&
     ((factory.subIndustry ?? []) as string[]).some(s => intent.subIndustries.includes(s));
 
-  // 商品文字包含原始 keyword（最強訊號）
-  const productExactMatch = !!keyword && productTexts.some(text =>
-    text.toLowerCase().includes(keyword.toLowerCase())
-  );
-
-  // 商品文字包含 AI 推測近義詞
   const intentKws = [...intent.productKeywords, ...intent.searchSynonyms].map(k => k.toLowerCase());
-  const productIntentMatch = intentKws.length > 0 && productTexts.some(text =>
-    intentKws.some(kw => text.toLowerCase().includes(kw))
-  );
+  const productIntentMatch = intentKws.length > 0 && products.some(p => {
+    const text = `${p.name} ${p.description ?? ''}`.toLowerCase();
+    return intentKws.some(kw => text.includes(kw));
+  });
 
-  if (userHasSelectedIndustry) {
-    // 使用者已手動選產業，main/sub 由 SQL 保證，只依商品命中程度排序
-    if (productExactMatch)    return 3;
-    if (productIntentMatch)   return 1;
-    return 0;
-  }
-
-  // 完整 5 tier（0–4）
-  if (mainMatch && subMatch && productExactMatch) return 4;
-  if (productExactMatch)                          return 3;
-  if (mainMatch && subMatch && productIntentMatch) return 2;
-  if (mainMatch && subMatch)                      return 1;
-  return 0;
+  return computeAIMatchTier(basic, { aiMainMatch, aiSubMatch, productIntentMatch });
 }
 
 /**
@@ -1005,8 +999,12 @@ export async function searchFactories(params: {
 
     console.log(`[AISearch] total=${total} candidates=${candidates.length}`);
 
-    // Step 3: 批次查候選工廠的所有商品
-    const productMap = new Map<number, string[]>();
+    // Step 3: 批次查候選工廠的所有商品——結構化保留 name／description
+    // （不要在這裡就合併成單一字串），因為 computeSearchMatchSignals 需要
+    // 分開判斷 productNameExact／productNameContains／productDescriptionContains
+    // （見對話中「product name 與 product description 拆開」），沒有新增查詢，
+    // 跟本輪之前完全同一條 query，只是保留欄位結構。
+    const productMap = new Map<number, SearchMatchProductInput[]>();
     if (candidates.length > 0) {
       const candidateIds = candidates.map(f => f.id);
       const productRows = await db
@@ -1015,15 +1013,17 @@ export async function searchFactories(params: {
         .where(inArray(products.factoryId, candidateIds));
       for (const p of productRows) {
         const list = productMap.get(p.factoryId) ?? [];
-        list.push(`${p.name} ${p.desc ?? ''}`);
+        list.push({ name: p.name, description: p.desc });
         productMap.set(p.factoryId, list);
       }
     }
 
-    // Step 4: 計算 5-tier matchTier 並排序
+    // Step 4: 計算 AI explicit tier 並排序（見 computeAIMatchTierForCandidate）
     const scored = candidates.map(f => ({
       factory: f,
-      tier: computeMatchTier(f, productMap.get(f.id) ?? [], intent!, userHasSelectedIndustry, keyword),
+      tier: computeAIMatchTierForCandidate(
+        f, productMap.get(f.id) ?? [], intent!, userHasSelectedIndustry, subIndustryResolvedValues, keyword,
+      ),
     }));
 
     scored.sort((a, b) => {
