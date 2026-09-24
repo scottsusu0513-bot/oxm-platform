@@ -2,11 +2,11 @@
 export const INDUSTRIES = [
   {
     name: "紡織",
-    sub: ["布料 / 面料", "服飾 / 成衣", "織帶 / 線材", "毛巾 / 家用織品", "功能性紡織品", "其他"],
+    sub: ["布料 / 面料", "服飾 / 成衣", "織帶 / 線材", "毛巾 / 家用織品", "功能性紡織品", "染整 / 後加工", "其他"],
   },
   {
     name: "金屬加工",
-    sub: ["CNC加工 / 精密加工", "鈑金加工", "焊接 / 組裝", "模具製造", "金工飾品 / 金屬設計", "金屬原料", "其他"],
+    sub: ["CNC加工 / 精密加工", "鈑金加工", "焊接 / 組裝", "模具製造", "金工飾品 / 金屬設計", "金屬原料", "沖壓 / 金屬成型", "表面處理", "其他"],
   },
   {
     name: "電子零件",
@@ -14,7 +14,7 @@ export const INDUSTRIES = [
   },
   {
     name: "塑膠",
-    sub: ["塑膠外殼 / 零件", "塑膠容器 / 瓶罐", "塑膠管材 / 板材", "塑膠包裝", "發泡塑膠", "客製塑膠製品", "其他"],
+    sub: ["塑膠外殼 / 零件", "塑膠容器 / 瓶罐", "塑膠管材 / 板材", "塑膠包裝", "發泡塑膠", "客製塑膠製品", "射出成型", "擠出成型", "吹塑成型", "其他"],
   },
   {
     name: "橡膠 / 矽膠",
@@ -26,11 +26,11 @@ export const INDUSTRIES = [
   },
   {
     name: "包裝",
-    sub: ["紙盒 / 紙袋", "塑膠包裝", "環保包裝", "禮盒 / 特殊包裝", "緩衝包材", "其他"],
+    sub: ["紙盒 / 紙袋", "塑膠包裝", "環保包裝", "禮盒 / 特殊包裝", "緩衝包材", "瓦楞紙箱 / 紙箱", "其他"],
   },
   {
     name: "食品",
-    sub: ["烘焙 / 糕點", "飲料 / 飲品", "冷凍食品", "零食 / 點心", "調味料 / 醬料", "其他"],
+    sub: ["烘焙 / 糕點", "飲料 / 飲品", "冷凍食品", "零食 / 點心", "調味料 / 醬料", "調理食品 / 即食食品", "保健食品 / 機能食品", "其他"],
   },
   {
     name: "化工製造",
@@ -344,7 +344,12 @@ export interface SubIndustrySearchEntry {
   // SEO Mapping 全量審核」）。pcb 本輪重新審核後仍無法高信心確定單一
   // primary，維持 fallback；其餘 34 筆因 confidence 低、split-intent、
   // cannibalization 風險高或屬 informational intent，同樣維持 fallback。
-  // 其餘（72-38=）34 個子產業維持 undefined，頁面輸出完全不變。
+  // 其餘 34 筆（本輪之前的 72 筆總數）維持 undefined，頁面輸出完全不變。
+  // 本輪（taxonomy 調整：紡織/金屬加工/塑膠/包裝/食品新增 9 個子分類，見對話
+  // 中「OXM taxonomy 本輪調整」）新增的 9 筆 entry 同樣刻意不設定 SEO
+  // override（沿用 fallback template），SEO 文案屬於獨立的編輯決策，不因為
+  // taxonomy 結構調整就自動生成——現在總數是 74+9=83 個子產業，38 筆有值、
+  // 45 筆（83-38）維持 undefined。
   //
   // 極重要的前台限制（見任務定案「正式站視覺限制」）：primarySeoKeyword／
   // secondaryKeywords 純粹是 SEO 研究資料（判斷 title/H1/description 怎麼
@@ -400,6 +405,7 @@ export const SUB_INDUSTRY_SEARCH_ENTRIES: SubIndustrySearchEntry[] = [
     metaDescriptionOverride: "尋找台灣機能布料代工廠？OXM 整理可承接機能性紡織品需求的製造業者，可依地區瀏覽相關廠商並直接詢價。",
     seoIntroOverride: "OXM 整理台灣機能布料代工廠資訊，涵蓋機能性紡織品生產需求，可依地區瀏覽相關工廠並直接詢價。",
   },
+  { slug: "dyeing-finishing", label: "染整 / 後加工", displayName: "染整後加工", parentIndustry: "紡織", parentIndustrySlug: "textile" },
   // 金屬加工
   {
     slug: "cnc-machining", label: "CNC加工 / 精密加工", displayName: "CNC加工",
@@ -447,6 +453,8 @@ export const SUB_INDUSTRY_SEARCH_ENTRIES: SubIndustrySearchEntry[] = [
     metaDescriptionOverride: "尋找台灣金屬材料供應商？OXM 整理不鏽鋼、鋁材與其他金屬原料供應廠商，可依地區瀏覽相關供應商並直接詢價。",
     seoIntroOverride: "OXM 整理台灣金屬材料與原料供應商資訊，涵蓋不鏽鋼、鋁材等材料來源，可依地區瀏覽相關供應商並直接詢價。",
   },
+  { slug: "metal-stamping-forming", label: "沖壓 / 金屬成型", displayName: "沖壓成型", parentIndustry: "金屬加工", parentIndustrySlug: "metal-processing" },
+  { slug: "surface-treatment", label: "表面處理", displayName: "表面處理", parentIndustry: "金屬加工", parentIndustrySlug: "metal-processing" },
   // 電子零件
   { slug: "pcb", label: "PCB / 電路板", displayName: "PCB", parentIndustry: "電子零件", parentIndustrySlug: "electronics" },
   {
@@ -532,6 +540,9 @@ export const SUB_INDUSTRY_SEARCH_ENTRIES: SubIndustrySearchEntry[] = [
   { slug: "plastic-packaging", label: "塑膠包裝", displayName: "塑膠包裝", parentIndustry: "塑膠", parentIndustrySlug: "plastic" },
   { slug: "foam-plastics", label: "發泡塑膠", displayName: "發泡塑膠", parentIndustry: "塑膠", parentIndustrySlug: "plastic" },
   { slug: "custom-plastic-products", label: "客製塑膠製品", displayName: "客製塑膠", parentIndustry: "塑膠", parentIndustrySlug: "plastic" },
+  { slug: "injection-molding", label: "射出成型", displayName: "射出成型", parentIndustry: "塑膠", parentIndustrySlug: "plastic" },
+  { slug: "extrusion-molding", label: "擠出成型", displayName: "擠出成型", parentIndustry: "塑膠", parentIndustrySlug: "plastic" },
+  { slug: "blow-molding", label: "吹塑成型", displayName: "吹塑成型", parentIndustry: "塑膠", parentIndustrySlug: "plastic" },
   // 橡膠 / 矽膠
   {
     slug: "rubber-silicone-seals", label: "橡膠 / 矽膠密封件", displayName: "橡膠矽膠密封件",
@@ -598,6 +609,7 @@ export const SUB_INDUSTRY_SEARCH_ENTRIES: SubIndustrySearchEntry[] = [
     metaDescriptionOverride: "尋找台灣緩衝包材廠商？OXM 整理可供應緩衝材、氣泡布等包裝防護方案的廠商，可依地區瀏覽相關供應商並直接詢價。",
     seoIntroOverride: "OXM 整理台灣緩衝包材廠商資訊，涵蓋緩衝材、氣泡布等包裝防護方案，可依地區瀏覽相關供應商並直接詢價。",
   },
+  { slug: "corrugated-cartons", label: "瓦楞紙箱 / 紙箱", displayName: "瓦楞紙箱", parentIndustry: "包裝", parentIndustrySlug: "packaging" },
   // 食品
   {
     slug: "bakery-pastry", label: "烘焙 / 糕點", displayName: "烘焙糕點",
@@ -644,6 +656,8 @@ export const SUB_INDUSTRY_SEARCH_ENTRIES: SubIndustrySearchEntry[] = [
     metaDescriptionOverride: "尋找台灣調味料代工廠？OXM 整理可承接調味料、醬料代工需求的製造業者，可依地區瀏覽相關廠商並直接詢價。",
     seoIntroOverride: "OXM 整理台灣調味料代工廠資訊，涵蓋調味料與醬料代工需求，可依地區查看相關工廠並直接詢價。",
   },
+  { slug: "ready-to-eat-food", label: "調理食品 / 即食食品", displayName: "調理即食食品", parentIndustry: "食品", parentIndustrySlug: "food" },
+  { slug: "health-functional-food", label: "保健食品 / 機能食品", displayName: "保健機能食品", parentIndustry: "食品", parentIndustrySlug: "food" },
   // 化工製造
   {
     slug: "cleaning-products", label: "清潔用品", displayName: "清潔用品",

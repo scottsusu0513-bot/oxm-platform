@@ -52,9 +52,20 @@ const ATOMIC_TERM_TO_FULL_VALUES: ReadonlyMap<string, ReadonlySet<string>> = (()
  * 裡「CNC加工 / 精密加工」這筆本身的 `displayName` 就是 `"CNC加工"`
  * （既有 SEO 資料本身就把「CNC」當這個子產業的口語簡稱使用，不是本輪新造
  * 的判斷）。key 用小寫比對，呼叫端會把輸入也轉小寫。
+ *
+ * `射出`→`射出成型`／`擠出`→`擠出成型`／`吹塑`→`吹塑成型`：三個都是本輪
+ * taxonomy 新增的「塑膠」子產業（原子詞本身就是完整值，因為沒有「/」可
+ * 拆），但「射出」「擠出」「吹塑」是台灣製造業搜尋裡極常見、意義單一的
+ * 製程口語簡稱（跟「CNC」→「CNC加工」同一種情況：使用者輸入的是製程慣用
+ * 簡稱，不是完整 taxonomy 值本身）——在 B2B 製造業搜尋語境下沒有其他常見
+ * 歧義（不是一般日常用語，不會跟別的 taxonomy 值混淆），風險低，比照既有
+ * cnc 案例加入。
  */
 const ALIASES: Readonly<Record<string, string>> = {
   cnc: "CNC加工",
+  射出: "射出成型",
+  擠出: "擠出成型",
+  吹塑: "吹塑成型",
 };
 
 /**

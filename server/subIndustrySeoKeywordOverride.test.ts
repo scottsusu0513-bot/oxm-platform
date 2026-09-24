@@ -360,8 +360,8 @@ describe("沒有設定 override 的子產業：完全沿用既有固定 template
     .map(e => e.slug)
     .filter(slug => !OVERRIDDEN_SLUGS.includes(slug));
 
-  it("除了三批共 40 筆，其餘全部 34 筆都沒有設定任何 override 欄位（本輪審核後刻意保留 fallback，不是遺漏）", () => {
-    expect(nonOverriddenSlugs.length).toBe(34);
+  it("除了三批共 40 筆，其餘全部 43 筆都沒有設定任何 override 欄位（本輪審核後刻意保留 fallback + 本輪 taxonomy 調整新增的 9 筆同樣刻意不設定 override，不是遺漏）", () => {
+    expect(nonOverriddenSlugs.length).toBe(43);
     for (const slug of nonOverriddenSlugs) {
       const entry = SUB_INDUSTRY_SEARCH_SLUG_TO_ENTRY[slug];
       expect(entry.primarySeoKeyword).toBeUndefined();
@@ -513,8 +513,8 @@ describe("shared/constants.ts：SubIndustrySearchEntry 的 SEO 欄位是唯一 s
     }
   });
 
-  it("SubIndustrySearchEntry 陣列總筆數是 74（電子零件「線束 / 連接器」拆分為 wire-cable／wire-harness-assembly／connector-terminal 三筆，見任務定案「線束 / 連接器拆分為三類」，淨增 2 筆）", () => {
-    expect(SUB_INDUSTRY_SEARCH_ENTRIES.length).toBe(74);
+  it("SubIndustrySearchEntry 陣列總筆數是 83（電子零件「線束 / 連接器」拆分為 wire-cable／wire-harness-assembly／connector-terminal 三筆淨增 2 筆 + 本輪 taxonomy 調整新增紡織/金屬加工/塑膠/包裝/食品共 9 筆）", () => {
+    expect(SUB_INDUSTRY_SEARCH_ENTRIES.length).toBe(83);
   });
 
   it("OVERRIDDEN_SLUGS 精確等於 40 筆（14 筆既有 + 本輪新增 24 筆 + 拆分子分類新增 2 筆），沒有重複也沒有遺漏", () => {
