@@ -17,6 +17,7 @@ import { NativePullToRefreshLayout } from "@/components/NativePullToRefreshLayou
 import { useState, useCallback } from "react";
 import { CERTIFICATION_BADGE_MAP, sortBadgeIds, type CertificationEvidenceEntry } from "@shared/badges";
 import { useCertificationEvidenceViewUrls } from "@/hooks/useCertificationEvidenceViewUrls";
+import { AnalyticsDashboardCard } from "@/components/admin/AnalyticsDashboardCard";
 
 // 修改申請 diff 用：徽章 id 陣列 → 中文名稱清單
 function BadgeNameList({ badgeIds }: { badgeIds: string[] }) {
@@ -94,7 +95,6 @@ function AdminDashboardContent() {
 
   // 統計數字：一進來就載入
   const statsQuery = trpc.admin.getStats.useQuery(undefined, { enabled: isAdmin });
-  const viewStatsQuery = trpc.analytics.getStats.useQuery(undefined, { enabled: isAdmin });
 
   // 待審核：一進來就載入（重要功能）
   const pendingFactoriesQuery = trpc.admin.getPendingFactories.useQuery(
@@ -150,7 +150,6 @@ function AdminDashboardContent() {
   const { contentRef, indicatorRef, iconRef, phase } = usePullToRefresh({ onRefresh: handleRefresh, disabled: revisionRejectId !== null });
 
   const stats = statsQuery.data;
-  const viewStats = viewStatsQuery.data;
   const hasMessageReplies = !!adminNotifQuery.data?.hasMessageReplies;
   const hasSupportPending = !!adminNotifQuery.data?.hasSupportPending;
   const hasPendingFactories = (pendingFactoriesQuery.data?.items.length ?? 0) > 0;
@@ -450,61 +449,13 @@ function AdminDashboardContent() {
           </div>
         </div>
 
-        {/* 訪客統計圖表 */}
-        <Card className="mb-8">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-gray-600 flex items-center gap-2">
-              <Eye className="h-4 w-4" />全站不重複訪客數
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex gap-6 mb-4">
-              <div className="text-center">
-                <div className="text-2xl font-bold">{viewStats?.today ?? 0}</div>
-                <div className="text-xs text-gray-500">今日</div>
-              </div>
-              <div className="text-center">
-                <div className="text-2xl font-bold">{viewStats?.yesterday ?? 0}</div>
-                <div className="text-xs text-gray-500">昨日</div>
-              </div>
-              <div className="text-center">
-                <div className="text-2xl font-bold">{viewStats?.last7Days ?? 0}</div>
-                <div className="text-xs text-gray-500">近7天</div>
-              </div>
-            </div>
-            {viewStats?.todayHours && (
-              <div>
-                <div className="text-xs text-gray-500 mb-1">今日每小時訪客</div>
-                <div className="flex items-end gap-0.5 h-12">
-                  {(() => {
-                    const max = Math.max(...viewStats.todayHours, 1);
-                    return viewStats.todayHours.map((count: number, hour: number) => {
-                      const height = Math.round((count / max) * 100);
-                      return (
-                        // h-12（同外層）+ justify-end：讓百分比高度有明確的計算基準，
-                        // 否則子層 height:% 會因父層無固定高度而失效，只剩 minHeight 的 2px 墊底
-                        <div key={hour} className="flex-1 flex flex-col items-center justify-end h-12 group relative">
-                          <div
-                            className="w-1.5 bg-orange-400 rounded-t-sm transition-all"
-                            style={{ height: `${height}%`, minHeight: count > 0 ? 2 : 0 }}
-                          />
-                          <div className="absolute -top-6 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-xs px-1 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none z-10">
-                            {hour}時: {count}
-                          </div>
-                        </div>
-                      );
-                    });
-                  })()}
-                </div>
-                <div className="flex justify-between text-xs text-gray-400 mt-1">
-                  <span>0時</span>
-                  <span>12時</span>
-                  <span>23時</span>
-                </div>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+        {/* 全站流量（Analytics 2.0，見對話「三、Dashboard 全站流量卡片重新
+            設計」）——取代原本只有 3 個累計數字＋24 小時柱狀圖、且訪客／
+            session／pageview 沒有真正拆開的舊版「全站不重複訪客數」卡片。
+            舊版底層的 analytics.record 追蹤本身仍繼續運作（見 App.tsx
+            PageViewTracker），只是這裡改成顯示新系統的資料——見對話「安全
+            上線順序」，舊系統驗證穩定後才會另外決定是否要停用。 */}
+        <AnalyticsDashboardCard />
 
         {/* Tab 懶載入 */}
         <Tabs value={activeTab} onValueChange={setActiveTab}>

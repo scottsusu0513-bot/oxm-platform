@@ -10,7 +10,7 @@ import { serveStatic, setupVite } from "./vite";
 import { setupSecurityHeaders, setupOriginCheck, setupNoIndexRoutes } from "./security";
 import { setupGoneRoutes } from "./goneRoutes";
 import { setupLegacyBlogRedirect } from "./legacyBlogRedirect";
-import { apiLimiter, loginLimiter, uploadLimiter, messageLimiter, submitReviewLimiter, adminLimiter, searchLimiter, reportLimiter } from "./rateLimit";
+import { apiLimiter, loginLimiter, uploadLimiter, messageLimiter, submitReviewLimiter, adminLimiter, searchLimiter, reportLimiter, analyticsIngestLimiter } from "./rateLimit";
 import { COOKIE_NAME } from "@shared/const";
 import { INDUSTRY_SLUGS, REGION_SLUGS, SUB_INDUSTRY_SEARCH_ENTRY_BY_PARENT_AND_LABEL } from "../../shared/constants";
 import { LIBRARY_ARTICLES } from "../../shared/content/library";
@@ -85,6 +85,9 @@ async function startServer() {
     }
     if (path.includes("report.create")) {
       return reportLimiter(req, _res, next);
+    }
+    if (path.includes("analyticsV2.trackEvent")) {
+      return analyticsIngestLimiter(req, _res, next);
     }
     next();
   });

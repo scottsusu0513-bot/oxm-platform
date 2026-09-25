@@ -40,6 +40,22 @@ export function getAppPlatform(): AppPlatform {
 }
 
 /**
+ * Analytics 2.0 用的 platform 分類（見對話「APP 必須有可辨識的分類」）：
+ * 三選一固定字串，跟後端 analyticsV2.trackEvent 的 zod enum 完全對應，避免
+ * client 端各自定義字串造成拼字不一致。
+ */
+export function getAnalyticsPlatform(): "web" | "ios_app" | "android_app" {
+  try {
+    const platform = getAppPlatform();
+    if (platform === "ios") return "ios_app";
+    if (platform === "android") return "android_app";
+  } catch {
+    // fall through to web
+  }
+  return "web";
+}
+
+/**
  * Opens an external https:// URL in the system browser on native (Capacitor
  * `@capacitor/browser`, so it doesn't hijack the app's own WebView), or a new
  * tab on web (`noopener,noreferrer`). Same fallback pattern already used by

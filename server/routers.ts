@@ -5,6 +5,9 @@ import { userNeedsConsent, CURRENT_TERMS_VERSION, CURRENT_PRIVACY_VERSION } from
 import { userNeedsOnboarding } from "@shared/onboarding";
 import { normalizeTaxId, isValidTaiwanTaxId } from "@shared/taxId";
 import { sdk } from "./_core/sdk";
+import * as analyticsDb from "./analyticsDb";
+import { getClientIp } from "./_core/requestMeta";
+import { ANALYTICS_MIN_DATE, clampAnalyticsDateRange, isAnalyticsDateAllowed } from "@shared/analyticsTz";
 import { enhanceSearchKeyword, getSearchIntent } from './semantic-search';
 import { classifySearchQuery } from './search-query-router';
 import { sendNewInquiryEmail, sendFactoryApprovedEmail, sendFactoryRejectedEmail, sendFactorySubmittedEmail, sendReportEmail, sendSupportTicketEmail, sendReviewReplyEmail, sendNewMessageNotificationEmail, sendReportStatusUpdateEmail, sendTicketStatusUpdateEmail, sendMessageReplyNotificationEmail, sendEmailVerificationEmail, sendAdminBroadcastEmail, sendRevisionSubmittedEmail, sendRevisionApprovedEmail, sendRevisionRejectedEmail, sendUpgradeApplicationEmail, sendUpgradeNewCaseConsultantEmail, sendPlatformAnnouncementEmail, sendFirstContactEmail, sendNewsEmail, sendIndustryRequestReceivedEmail, sendIndustryRequestAdminEmail } from './email';
@@ -1162,12 +1165,98 @@ export const appRouter = router({
       }),
   }),
 
+  // 舊系統維持完全不動（見對話中「新舊資料切割」——新系統驗證正常前不能
+  // 動舊功能，避免正式站中間出現無統計狀態）。
   analytics: router({
     record: publicProcedure.input(z.object({ visitorId: z.string().regex(/^[a-zA-Z0-9\-_]+$/).min(1).max(64) })).mutation(async ({ input }) => {
       await db.recordPageView(input.visitorId);
     }),
     getStats: adminProcedure.query(async () => {
       return db.getPageViewStats();
+    }),
+  }),
+
+  // Analytics 2.0（見對話中「OXM Analytics 2.0」）。完整資料正式起算日
+  // 2026-09-25 Asia/Taipei，所有 admin 查詢一律夾在 [ANALYTICS_MIN_DATE,
+  // 今天] 範圍內，即使前端被繞過手動送出超出範圍的 request 也一樣——見
+  // validateAndClampRange()。
+  analyticsV2: router({
+    // publicProcedure：任何訪客（含未登入）都需要能回報 pageview/search
+    // event，這是這支功能存在的目的。防灌措施見：event schema 驗證（zod）、
+    // allowed eventType、pathname/keyword 長度上限（zod .max）、
+    // analyticsIngestLimiter（IP-based rate limit，見 server/_core/index.ts）、
+    // 伺服器端 timestamp（忽略任何 client 自報時間）、伺服器端才讀取
+    // IP／User-Agent（不信任 client 自己傳）——見對話中「Analytics API
+    // 防灌」。即使遭到 script 直接 POST 大量事件，也只會被歸類成
+    // suspicious（不計入 human KPI），不會像舊版 analytics.record 那樣
+    // 「POST 一個 visitorId = 訪客 +1」。
+    trackEvent: publicProcedure.input(z.object({
+      visitorId: z.string().regex(/^[a-zA-Z0-9\-_]+$/).min(1).max(64),
+      eventType: z.enum(["pageview", "search"]),
+      pathname: z.string().max(500).optional(),
+      queryString: z.string().max(1000).optional(),
+      pageType: z.enum(analyticsDb.ALLOWED_PAGE_TYPES).optional(),
+      factoryId: z.number().int().positive().optional(),
+      prevPathname: z.string().max(500).optional(),
+      isLandingPage: z.boolean().optional(),
+      keyword: z.string().max(200).optional(),
+      filters: z.record(z.string(), z.unknown()).optional(),
+      useAIMode: z.boolean().optional(),
+      resultCount: z.number().int().min(0).optional(),
+      referrer: z.string().max(2000).optional(),
+      utmSource: z.string().max(255).optional(),
+      utmMedium: z.string().max(255).optional(),
+      utmCampaign: z.string().max(255).optional(),
+      utmContent: z.string().max(255).optional(),
+      utmTerm: z.string().max(255).optional(),
+      platform: z.enum(["web", "ios_app", "android_app"]).optional(),
+    })).mutation(async ({ input, ctx }) => {
+      try {
+        await analyticsDb.recordAnalyticsEvent(input, {
+          ip: getClientIp(ctx.req),
+          userAgent: ctx.req.headers["user-agent"] ?? "",
+        });
+      } catch (err) {
+        // Tracking 失敗絕對不能讓使用者看到錯誤（見對話中「tracking failure
+        // 不可以讓頁面 error」）——記 log 但永遠回傳成功。
+        console.error("[analyticsV2.trackEvent] failed:", err instanceof Error ? err.message : String(err));
+      }
+      return { success: true } as const;
+    }),
+
+    getDashboard: adminProcedure.input(z.object({
+      startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      classFilter: z.enum(["all", "human", "bot_suspicious"]).optional(),
+    })).query(async ({ input }) => {
+      const range = clampAnalyticsDateRange(input.startDate, input.endDate);
+      await analyticsDb.ensureAnomaliesDetected(range.start, range.end);
+      const [kpi, trend, anomalies] = await Promise.all([
+        analyticsDb.getKpiSummary(range.start, range.end),
+        analyticsDb.getTrendSeries(range.start, range.end, input.classFilter ?? "all"),
+        analyticsDb.getAnomalySummary(range.start, range.end),
+      ]);
+      return { ...kpi, trend, anomalies, range, minDate: ANALYTICS_MIN_DATE };
+    }),
+
+    getSlotDetail: adminProcedure.input(z.object({
+      date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      hour: z.number().int().min(0).max(23).nullable(),
+    })).query(async ({ input }) => {
+      if (!isAnalyticsDateAllowed(input.date)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: `Analytics 2.0 只提供 ${ANALYTICS_MIN_DATE} 以後的資料` });
+      }
+      return analyticsDb.getSlotDetail(input.date, input.hour);
+    }),
+
+    getFullReport: adminProcedure.input(z.object({
+      startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    })).query(async ({ input }) => {
+      const range = clampAnalyticsDateRange(input.startDate, input.endDate);
+      await analyticsDb.ensureAnomaliesDetected(range.start, range.end);
+      const report = await analyticsDb.getFullReport(range.start, range.end);
+      return { ...report, range, minDate: ANALYTICS_MIN_DATE };
     }),
   }),
 

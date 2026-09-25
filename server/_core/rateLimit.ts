@@ -70,3 +70,12 @@ export const reportLimiter = createLimiter(60 * 60 * 1000, 5);
 
 // 通用 API: 1000 次/小時
 export const apiLimiter = createLimiter(60 * 60 * 1000, 1000);
+
+// Analytics 2.0 ingest（analyticsV2.trackEvent）: 120 次/分鐘/IP。見對話中
+// 「Analytics API 防灌」——這是硬性 middleware 層防護（同一支 IP 短時間
+// 大量灌 event 直接擋掉），跟 server/analyticsClassify.ts 的 suspicious
+// score（判斷單一 request 是不是可疑，但仍然放行、只是分類成 suspicious
+// 不算 human）是兩層互補機制，不是同一件事。門檻設得比一般頁面瀏覽寬鬆
+// 很多（一般人快速切換頁面/搜尋不可能達到這個量），只用來擋明顯的腳本
+// 灌爆行為。
+export const analyticsIngestLimiter = createLimiter(60 * 1000, 120);

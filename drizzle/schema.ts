@@ -736,6 +736,125 @@ export const pageViews = mysqlTable("pageViews", {
   visitorDateHourIdx: uniqueIndex("visitor_date_hour_idx").on(table.visitorId, table.date, table.hour),
 }));
 
+// ===== Analytics 2.0（見對話中「OXM Analytics 2.0」）=====
+//
+// 完整資料正式起算日固定 2026-09-25 Asia/Taipei（shared/analyticsTz.ts
+// ANALYTICS_MIN_DATE，唯一 source of truth）。舊 pageViews 表繼續保留、
+// 不刪除、不回填、不轉換成這裡的資料——兩套系統本輪並存，見對話中
+// 「新舊資料切割」。
+//
+// 三張表：
+//   analyticsSessions        — 一次連續造訪（30 分鐘無活動視為新 session）。
+//   analyticsEvents          — 每一筆 pageview／search event，掛在某個 session 下。
+//   analyticsSecurityEvents  — 異常/安全事件記錄（見「三十七、Anomaly Event」）。
+//
+// 刻意不建立 analyticsDailyAggregates（regular 表）：目前資料量級足以用
+// analyticsEvents／analyticsSessions 配合下面的複合 index 即時聚合查詢，
+// 避免多維護一張需要另外排程刷新、可能跟原始資料不一致的物化表——等資料量
+// 真的大到即時聚合查詢變慢時，再回頭評估是否需要（見對話中「Retention」
+// 對於「尚不適合自動執行的機制，先設計好並回報」的同一個原則）。
+
+export const analyticsSessions = mysqlTable("analyticsSessions", {
+  id: int("id").autoincrement().primaryKey(),
+  // 對外可見的 session 識別碼（UUID，admin 畫面/未來 debug 用），內部 join
+  // 一律用 id（int，效能較好）。
+  sessionKey: varchar("sessionKey", { length: 36 }).notNull(),
+  visitorId: varchar("visitorId", { length: 64 }).notNull(),
+  ipHash: varchar("ipHash", { length: 64 }),
+  ipPrefix: varchar("ipPrefix", { length: 50 }),
+  userAgent: varchar("userAgent", { length: 500 }),
+  deviceType: varchar("deviceType", { length: 10 }), // desktop/mobile/tablet/other
+  browser: varchar("browser", { length: 20 }),
+  os: varchar("os", { length: 20 }),
+  platform: varchar("platform", { length: 15 }), // web/ios_app/android_app/other
+  referrer: text("referrer"),
+  referrerHost: varchar("referrerHost", { length: 255 }),
+  utmSource: varchar("utmSource", { length: 255 }),
+  utmMedium: varchar("utmMedium", { length: 255 }),
+  utmCampaign: varchar("utmCampaign", { length: 255 }),
+  utmContent: varchar("utmContent", { length: 255 }),
+  utmTerm: varchar("utmTerm", { length: 255 }),
+  sourceClassification: varchar("sourceClassification", { length: 20 }), // direct/app/google_organic/...
+  // human / known_bot / suspicious（Dashboard 三層彙總，見
+  // server/analyticsClassify.ts finalizeClassification）。
+  classification: varchar("classification", { length: 15 }).notNull().default("human"),
+  knownBotName: varchar("knownBotName", { length: 50 }),
+  suspiciousScore: int("suspiciousScore").notNull().default(0),
+  suspiciousSignals: json("suspiciousSignals").$type<string[]>(),
+  eventCount: int("eventCount").notNull().default(0),
+  startedAt: timestamp("startedAt").defaultNow().notNull(),
+  lastEventAt: timestamp("lastEventAt").defaultNow().notNull(),
+  date: varchar("date", { length: 10 }).notNull(), // YYYY-MM-DD，Asia/Taipei，session 起始日
+}, (table) => ({
+  dateIdx: index("analytics_sessions_date_idx").on(table.date),
+  visitorIdx: index("analytics_sessions_visitor_idx").on(table.visitorId),
+  ipHashStartedIdx: index("analytics_sessions_ip_started_idx").on(table.ipHash, table.startedAt),
+  classificationDateIdx: index("analytics_sessions_classification_date_idx").on(table.classification, table.date),
+}));
+
+export type AnalyticsSession = typeof analyticsSessions.$inferSelect;
+
+export const analyticsEvents = mysqlTable("analyticsEvents", {
+  id: int("id").autoincrement().primaryKey(),
+  sessionRowId: int("sessionRowId").notNull().references(() => analyticsSessions.id, { onDelete: "cascade" }),
+  visitorId: varchar("visitorId", { length: 64 }).notNull(), // 冗餘存一份，避免 visitor 維度查詢一定要 join session
+  eventType: varchar("eventType", { length: 15 }).notNull(), // 'pageview' | 'search'
+  pathname: varchar("pathname", { length: 500 }),
+  queryString: varchar("queryString", { length: 1000 }),
+  // home/search/factory/industry/city_industry/library/news/resource/talent/about/other
+  pageType: varchar("pageType", { length: 20 }),
+  factoryId: int("factoryId"), // 只有 pageType='factory' 時有值
+  isLandingPage: boolean("isLandingPage").notNull().default(false),
+  prevPathname: varchar("prevPathname", { length: 500 }), // SPA 內部前一頁（站內導覽鏈）
+  keyword: varchar("keyword", { length: 200 }),
+  keywordNormalized: varchar("keywordNormalized", { length: 200 }), // trim + lowercase，用於熱門搜尋分組
+  filtersJson: json("filtersJson"),
+  useAIMode: boolean("useAIMode"),
+  resultCount: int("resultCount"),
+  // event 當下的分類快照（不是即時讀 session 目前的分類——session 分類可能
+  // 隨後續行為往上調整，事件本身的分類保留當時判定，避免歷史報表隨之變動）。
+  classification: varchar("classification", { length: 15 }).notNull(),
+  date: varchar("date", { length: 10 }).notNull(), // Asia/Taipei
+  hour: int("hour").notNull(), // 0-23，Asia/Taipei
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => ({
+  dateHourIdx: index("analytics_events_date_hour_idx").on(table.date, table.hour),
+  eventTypeDateIdx: index("analytics_events_type_date_idx").on(table.eventType, table.date),
+  sessionIdx: index("analytics_events_session_idx").on(table.sessionRowId),
+  visitorDateIdx: index("analytics_events_visitor_date_idx").on(table.visitorId, table.date),
+  factoryDateIdx: index("analytics_events_factory_date_idx").on(table.factoryId, table.date),
+  keywordDateIdx: index("analytics_events_keyword_date_idx").on(table.keywordNormalized, table.date),
+}));
+
+export type AnalyticsEvent = typeof analyticsEvents.$inferSelect;
+
+export const analyticsSecurityEvents = mysqlTable("analyticsSecurityEvents", {
+  id: int("id").autoincrement().primaryKey(),
+  // NEW_VISITOR_SPIKE / SEARCH_RATE_SPIKE / REPEATED_QUERY /
+  // FACTORY_ENUMERATION / SESSION_CREATION_SPIKE / KNOWN_BOT /
+  // AUTOMATION_UA / LOGIN_BRUTE_FORCE / INQUIRY_SPAM
+  eventType: varchar("eventType", { length: 40 }).notNull(),
+  severity: varchar("severity", { length: 10 }).notNull(), // info/low/medium/high/critical
+  ipHash: varchar("ipHash", { length: 64 }),
+  asn: varchar("asn", { length: 20 }), // 本輪沒有 ASN 資料來源，一律 null（見對話中「不使用未確認的付費 GeoIP」）
+  visitorId: varchar("visitorId", { length: 64 }),
+  sessionRowId: int("sessionRowId"),
+  userAgent: varchar("userAgent", { length: 500 }),
+  path: varchar("path", { length: 500 }),
+  signals: json("signals").$type<string[]>(),
+  suspiciousScore: int("suspiciousScore"),
+  actionTaken: varchar("actionTaken", { length: 30 }), // none/marked_suspicious/throttled/temp_blocked
+  date: varchar("date", { length: 10 }).notNull(),
+  hour: int("hour").notNull(),
+  detectedAt: timestamp("detectedAt").defaultNow().notNull(),
+}, (table) => ({
+  dateHourIdx: index("analytics_security_date_hour_idx").on(table.date, table.hour),
+  eventTypeIdx: index("analytics_security_event_type_idx").on(table.eventType),
+  ipHashIdx: index("analytics_security_ip_hash_idx").on(table.ipHash),
+}));
+
+export type AnalyticsSecurityEvent = typeof analyticsSecurityEvents.$inferSelect;
+
 // ===== 工廠共同管理者邀請表 =====
 export const factoryCoManagerInvitations = mysqlTable("factoryCoManagerInvitations", {
   id: int("id").autoincrement().primaryKey(),
