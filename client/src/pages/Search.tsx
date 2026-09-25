@@ -26,6 +26,7 @@ import { FloatingBackButton } from "@/components/FloatingBackButton";
 import { getVisitorId } from "@/lib/analyticsVisitor";
 import { getAnalyticsPlatform } from "@/lib/platform";
 import { decideSearchTrack, type SearchTrackDecisionState } from "./searchAnalyticsTracker";
+import { buildSearchFingerprint } from "@shared/searchFingerprint";
 import { FactoryCard, type CartItem } from "@/components/FactoryResultCard";
 
 // ── 一鍵詢價購物車 hook ───────────────────────────────────────────────────
@@ -460,20 +461,29 @@ export default function Search() {
     }
   }, [data]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Analytics 2.0 搜尋事件追蹤（見對話「Search Analytics」）：一個「邏輯上的
-  // 搜尋請求」只能產生一筆 analytics search event，不能讓 React Query 的
-  // background refetch／每次 render 都各自算一次。實際的守門／去重判斷抽成
-  // 純函式 decideSearchTrack（見 searchAnalyticsTracker.ts 開頭註解說明的
-  // 根因：trpc.factory.search.useQuery 的 placeholderData 讓 isLoading 在切
-  // 換條件時仍是 false、data 暫時沿用舊結果，必須用 isFetching 當守門條件
-  // ——這裡只負責把目前 render 的 isFetching/data/searchKey 餵給它）。
+  // Analytics 2.0 搜尋事件追蹤（見對話「Search Analytics resultCount 方案
+  // A」）：一個「邏輯上的搜尋請求」只能產生一筆 analytics search event，不能
+  // 讓 React Query 的 background refetch／每次 render 都各自算一次，
+  // resultCount 也絕對不能來自「不屬於目前這次查詢」的舊 response。
+  //
+  // currentSearchFingerprint 用跟 server（factory.search 回應的
+  // searchFingerprint，見 shared/searchFingerprint.ts）完全同一份 canonical
+  // builder，從目前畫面上的搜尋條件算出——只有 data.searchFingerprint 跟這裡
+  // 完全相等時，decideSearchTrack 才會認定 data.total 屬於目前這次查詢，不
+  // 管 isFetching／isPlaceholderData／dataUpdatedAt 這些 react-query 內部
+  // 時序訊號在這個 render 呈現什麼狀態（那些訊號在正式站曾經觀察到跟本機行
+  // 為不一致、且無法在本機重現確切機制，所以不能再當最終正確性依據）。
+  const currentSearchFingerprint = useMemo(() => buildSearchFingerprint({
+    keyword: committedKeyword, industry, subIndustry, region,
+    mfgMode, businessType, smallBatch, sample, sortBy, q, aiSearchConversationId,
+  }), [committedKeyword, industry, subIndustry, region, mfgMode, businessType, smallBatch, sample, sortBy, q, aiSearchConversationId]);
+
   const trackSearchEvent = trpc.analyticsV2.trackEvent.useMutation();
-  const searchTrackStateRef = useRef<SearchTrackDecisionState>({ lastTrackedSearchKey: null });
+  const searchTrackStateRef = useRef<SearchTrackDecisionState>({ lastTrackedFingerprint: null });
   useEffect(() => {
-    const searchKey = `${filterFingerprint}|q=${q}|ai=${aiSearchConversationId ?? ""}`;
-    const decision = decideSearchTrack({ isFetching, data, searchKey }, searchTrackStateRef.current);
+    const decision = decideSearchTrack({ isFetching, data, currentFingerprint: currentSearchFingerprint }, searchTrackStateRef.current);
     if (!decision.shouldRecord) return;
-    searchTrackStateRef.current.lastTrackedSearchKey = searchKey;
+    searchTrackStateRef.current.lastTrackedFingerprint = currentSearchFingerprint;
     try {
       trackSearchEvent.mutate({
         visitorId: getVisitorId(),
@@ -498,7 +508,7 @@ export default function Search() {
       // tracking 失敗不可以影響搜尋頁本身
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isFetching, data, filterFingerprint, q, aiSearchConversationId]);
+  }, [isFetching, data, currentSearchFingerprint]);
 
   const sortedItems = useMemo(() => {
     const items = isMobile ? displayedItems : (data?.items ?? []);

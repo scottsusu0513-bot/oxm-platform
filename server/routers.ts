@@ -8,6 +8,7 @@ import { sdk } from "./_core/sdk";
 import * as analyticsDb from "./analyticsDb";
 import { getClientIp } from "./_core/requestMeta";
 import { ANALYTICS_MIN_DATE, clampAnalyticsDateRange, isAnalyticsDateAllowed } from "@shared/analyticsTz";
+import { buildSearchFingerprint } from "@shared/searchFingerprint";
 import { enhanceSearchKeyword, getSearchIntent } from './semantic-search';
 import { classifySearchQuery } from './search-query-router';
 import { sendNewInquiryEmail, sendFactoryApprovedEmail, sendFactoryRejectedEmail, sendFactorySubmittedEmail, sendReportEmail, sendSupportTicketEmail, sendReviewReplyEmail, sendNewMessageNotificationEmail, sendReportStatusUpdateEmail, sendTicketStatusUpdateEmail, sendMessageReplyNotificationEmail, sendEmailVerificationEmail, sendAdminBroadcastEmail, sendRevisionSubmittedEmail, sendRevisionApprovedEmail, sendRevisionRejectedEmail, sendUpgradeApplicationEmail, sendUpgradeNewCaseConsultantEmail, sendPlatformAnnouncementEmail, sendFirstContactEmail, sendNewsEmail, sendIndustryRequestReceivedEmail, sendIndustryRequestAdminEmail } from './email';
@@ -2117,12 +2118,27 @@ export const appRouter = router({
   // 一律只保留 certificationBadgesVisible（工廠選擇公開顯示的子集合），不得
   // 洩漏擁有但隱藏的徽章（certificationBadges）。
   const stripForSearch = (f: any) => stripHiddenBadgesForPublic(stripCertificationEvidence(f));
+  // Search Analytics resultCount 方案 A（見對話「Search Analytics resultCount
+  // 方案 A」與 shared/searchFingerprint.ts 開頭的完整說明）：這個 fingerprint
+  // 完全從 server 實際收到的 `input`（不是內部經過 AI 增強/解析後的
+  // `keyword`／`intent`／`useAIMode`）算出，client 端才能用它自己當下的搜尋
+  // 條件狀態獨立算出同一份值來比對——藉此讓 client 端不需要、也不可能相信
+  // 任何 react-query 內部時序訊號（isFetching／isPlaceholderData／
+  // dataUpdatedAt）來判斷「這筆 response 到底是不是我目前這次查詢的結果」，
+  // 而是直接比對 response 自己宣告的身分。
+  const searchFingerprint = buildSearchFingerprint({
+    keyword: input.keyword, industry: input.industry, subIndustry: input.subIndustry,
+    region: input.region, capitalLevel: input.capitalLevel, mfgMode: input.mfgMode,
+    businessType: input.businessType, smallBatch: input.smallBatch, sample: input.sample,
+    sortBy: input.sortBy, q: input.q, aiSearchConversationId: input.aiSearchConversationId,
+  });
   return {
     ...result,
     items: result.items.map(stripForSearch),
     ads: ads.map(ad => ad.factory ? { ...ad, factory: stripForSearch(ad.factory) } : ad),
     aiSearchModeEngaged,
     aiHighlightFactoryIds,
+    searchFingerprint,
   };
 }),
 
