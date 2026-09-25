@@ -25,6 +25,7 @@ import { shareContent } from "@/lib/share";
 import { FloatingBackButton } from "@/components/FloatingBackButton";
 import { getVisitorId } from "@/lib/analyticsVisitor";
 import { getAnalyticsPlatform } from "@/lib/platform";
+import { decideSearchTrack, type SearchTrackDecisionState } from "./searchAnalyticsTracker";
 import { FactoryCard, type CartItem } from "@/components/FactoryResultCard";
 
 // ── 一鍵詢價購物車 hook ───────────────────────────────────────────────────
@@ -461,17 +462,18 @@ export default function Search() {
 
   // Analytics 2.0 搜尋事件追蹤（見對話「Search Analytics」）：一個「邏輯上的
   // 搜尋請求」只能產生一筆 analytics search event，不能讓 React Query 的
-  // background refetch／每次 render 都各自算一次——用
-  // lastTrackedSearchKeyRef 記住「上一次已經送出事件的搜尋條件組合」（不含
-  // page，因為換頁載入更多不是新的一次搜尋），只有這組合真的改變、且這次的
-  // 結果已經回來時才送一筆，避免重複計數。
+  // background refetch／每次 render 都各自算一次。實際的守門／去重判斷抽成
+  // 純函式 decideSearchTrack（見 searchAnalyticsTracker.ts 開頭註解說明的
+  // 根因：trpc.factory.search.useQuery 的 placeholderData 讓 isLoading 在切
+  // 換條件時仍是 false、data 暫時沿用舊結果，必須用 isFetching 當守門條件
+  // ——這裡只負責把目前 render 的 isFetching/data/searchKey 餵給它）。
   const trackSearchEvent = trpc.analyticsV2.trackEvent.useMutation();
-  const lastTrackedSearchKeyRef = useRef<string | null>(null);
+  const searchTrackStateRef = useRef<SearchTrackDecisionState>({ lastTrackedSearchKey: null });
   useEffect(() => {
-    if (isLoading || !data) return;
     const searchKey = `${filterFingerprint}|q=${q}|ai=${aiSearchConversationId ?? ""}`;
-    if (lastTrackedSearchKeyRef.current === searchKey) return;
-    lastTrackedSearchKeyRef.current = searchKey;
+    const decision = decideSearchTrack({ isFetching, data, searchKey }, searchTrackStateRef.current);
+    if (!decision.shouldRecord) return;
+    searchTrackStateRef.current.lastTrackedSearchKey = searchKey;
     try {
       trackSearchEvent.mutate({
         visitorId: getVisitorId(),
@@ -489,14 +491,14 @@ export default function Search() {
           sample: sample || undefined,
         },
         useAIMode: !!q || aiSearchConversationId != null,
-        resultCount: data.total ?? data.items?.length ?? 0,
+        resultCount: decision.resultCount,
         platform: getAnalyticsPlatform(),
       });
     } catch {
       // tracking 失敗不可以影響搜尋頁本身
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isLoading, data, filterFingerprint, q, aiSearchConversationId]);
+  }, [isFetching, data, filterFingerprint, q, aiSearchConversationId]);
 
   const sortedItems = useMemo(() => {
     const items = isMobile ? displayedItems : (data?.items ?? []);
