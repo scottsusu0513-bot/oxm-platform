@@ -28,6 +28,7 @@ import { getAnalyticsPlatform } from "@/lib/platform";
 import { decideSearchTrack, type SearchTrackDecisionState } from "./searchAnalyticsTracker";
 import { buildSearchFingerprint } from "@shared/searchFingerprint";
 import { computeResultsScrollTop, shouldScrollToResultsTop, type PendingPageScroll } from "@/lib/searchPaginationScroll";
+import { readSearchRestoreSnapshot, shouldRestoreScroll, withSearchRestoreSnapshot, withoutSearchRestoreSnapshot } from "@/lib/searchNavigationRestore";
 import { FactoryCard, type CartItem } from "@/components/FactoryResultCard";
 
 // ── 一鍵詢價購物車 hook ───────────────────────────────────────────────────
@@ -223,8 +224,14 @@ export default function Search() {
   const [showHistory, setShowHistory] = useState(false);
   // page is transient UI/pagination state, intentionally not read from or
   // synced to the URL — a stray ?page= from an old link should not affect
-  // the initial render.
-  const [page, setPage] = useState(1);
+  // the initial render. 從工廠頁等返回這筆 /search history entry 時，改由
+  // history.state 裡的 snapshot 恢復頁數與閱讀位置（見
+  // client/src/lib/searchNavigationRestore.ts）；snapshot 綁定寫入當下的
+  // location.search 與桌機／手機版面，不符即忽略。
+  const [restoreSnapshot] = useState(() => readSearchRestoreSnapshot(
+    window.history.state, window.location.search, window.matchMedia("(max-width: 768px)").matches,
+  ));
+  const [page, setPage] = useState(() => restoreSnapshot?.page ?? 1);
   const [sortBy, setSortBy] = useState(() => params.get("sortBy") ?? "rating");
 
   const [isMobile, setIsMobile] = useState(() => window.matchMedia("(max-width: 768px)").matches);
@@ -259,6 +266,7 @@ export default function Search() {
       setSmallBatch(p.get("smallBatch") === "true");
       setSample(p.get("sample") === "true");
       setSortBy(p.get("sortBy") ?? "rating");
+      cancelNavigationRestore();
       setPage(1);
     };
     window.addEventListener("popstate", onPopState);
@@ -311,6 +319,18 @@ export default function Search() {
 
   const [favOverrides, setFavOverrides] = useState<Record<number, boolean>>({});
 
+  // 搜尋條件改變時 replace URL：wouter navigate() 預設 state=null 會清掉整個
+  // history.state（含 App.tsx ScrollRestorationManager 的 visited 標記，之後從
+  // 工廠頁返回會被誤判成新導航而強制捲頂），這裡保留其他 key、只移除已失效
+  // 的搜尋恢復 snapshot，並取消尚未完成的返回恢復。
+  const replaceSearchUrl = (qs: string) => {
+    cancelNavigationRestore();
+    navigate(qs ? `/search?${qs}` : "/search", {
+      replace: true,
+      state: withoutSearchRestoreSnapshot(window.history.state),
+    });
+  };
+
   // ── URL 同步 helper（每次 filter 變更都呼叫，使用 replace 避免塞滿 history）
   // overrides 提供本次變更的新值；其餘欄位取自當前 render 的 state closure。
   const syncURL = (overrides: Partial<{
@@ -325,7 +345,7 @@ export default function Search() {
       ...overrides,
     };
     const qs = buildParams(vals).toString();
-    navigate(qs ? `/search?${qs}` : "/search", { replace: true });
+    replaceSearchUrl(qs);
   };
 
   // ── 共用 filter handlers（桌面側欄 + 手機篩選欄共用）──────────────────
@@ -373,6 +393,7 @@ export default function Search() {
     // Intentionally does not touch the URL — pagination is local UI state,
     // and syncing it via navigate() was what caused the scroll-to-top jump
     // on mobile "load more".
+    cancelNavigationRestore();
     setPage(newPage);
   };
   // ─────────────────────────────────────────────────────────────────────────
@@ -420,7 +441,7 @@ export default function Search() {
     else if (key === "sample") { setSample(false); nSample = false; }
     setPage(1);
     const qs = buildParams({ mfgMode: nMfgMode, industry: nIndustry, subIndustry: nSubIndustry, region: nRegion, keyword: nKeyword, businessType: nBT, smallBatch: nSmallBatch, sample: nSample, sortBy, page: 1 }).toString();
-    navigate(qs ? `/search?${qs}` : "/search", { replace: true });
+    replaceSearchUrl(qs);
   };
 
   // page is part of searchInput (the query key), so bumping it for "load
@@ -451,10 +472,46 @@ export default function Search() {
   );
   const [displayedItems, setDisplayedItems] = useState<any[]>([]);
   const prevFingerprintRef = useRef(filterFingerprint);
+
+  // 返回恢復（見 client/src/lib/searchNavigationRestore.ts）：
+  // - scrollRestoreRef：待恢復的閱讀位置，資料就緒後由下方 effect 套用一次；
+  // - mobileRestoring：手機「載入更多」要先把第 1..page-1 批補回來（優先命中
+  //   React Query 快取）才顯示結果，期間沿用 loading skeleton；
+  // - restoreTokenRef：使用者改條件／換頁時作廢進行中的恢復。
+  const utils = trpc.useUtils();
+  const scrollRestoreRef = useRef(restoreSnapshot ? { page: restoreSnapshot.page, scrollY: restoreSnapshot.scrollY } : null);
+  const [mobileRestoring, setMobileRestoring] = useState(() => !!restoreSnapshot?.mobile && restoreSnapshot.page > 1);
+  const restoreTokenRef = useRef(0);
+  const cancelNavigationRestore = () => {
+    restoreTokenRef.current++;
+    scrollRestoreRef.current = null;
+    setMobileRestoring(false);
+  };
+
   useEffect(() => {
     if (!data?.items) return;
     const filterChanged = prevFingerprintRef.current !== filterFingerprint;
     prevFingerprintRef.current = filterFingerprint;
+    if (mobileRestoring) {
+      if (!filterChanged && isMobile && page === restoreSnapshot?.page) {
+        if (isPlaceholderData) return;
+        const token = ++restoreTokenRef.current;
+        const lastPageItems = data.items;
+        Promise.all(Array.from({ length: page - 1 }, (_, i) => utils.factory.search.fetch({ ...searchInput, page: i + 1 })))
+          .then(results => {
+            if (restoreTokenRef.current !== token) return;
+            setDisplayedItems([...results.flatMap(r => r.items), ...lastPageItems]);
+            setMobileRestoring(false);
+          })
+          .catch(() => {
+            if (restoreTokenRef.current !== token) return;
+            cancelNavigationRestore();
+            setPage(1);
+          });
+        return;
+      }
+      cancelNavigationRestore();
+    }
     if (isMobile && page > 1 && !filterChanged) {
       setDisplayedItems(prev => [...prev, ...data.items]);
     } else {
@@ -542,6 +599,61 @@ export default function Search() {
     window.scrollTo({ top, behavior: "auto" });
   }, [data, isPlaceholderData, page, currentSearchFingerprint]);
 
+  // 返回恢復閱讀位置：只在「從 history.state snapshot 恢復」時套用一次，跟上面
+  // 使用者主動換頁的捲頂是兩條獨立路徑（各自的 ref 只由各自的來源寫入），
+  // 恢復頁數不會觸發分頁捲頂。
+  useEffect(() => {
+    if (!shouldRestoreScroll({
+      pending: scrollRestoreRef.current,
+      page,
+      currentFingerprint: currentSearchFingerprint,
+      dataFingerprint: data?.searchFingerprint,
+      isPlaceholderData,
+      mobileSeedPending: mobileRestoring,
+    })) return;
+    const { scrollY } = scrollRestoreRef.current!;
+    scrollRestoreRef.current = null;
+    window.scrollTo({ top: scrollY, behavior: "auto" });
+  }, [data, isPlaceholderData, page, currentSearchFingerprint, mobileRestoring, displayedItems]);
+
+  // 把目前頁數與閱讀位置寫進這筆 /search history entry（合併寫入，保留其他
+  // key）。捲動停止後 debounce 寫入；點擊站內連結（例如工廠卡片）時立即寫入，
+  // 確保離開前最後的位置被記下。只在仍位於 /search 時寫，避免寫到新頁面的
+  // history entry 上。
+  const restoreSnapshotInputRef = useRef({ page, isMobile });
+  restoreSnapshotInputRef.current = { page, isMobile };
+  const saveRestoreSnapshot = () => {
+    if (window.location.pathname !== "/search") return;
+    const { page: p, isMobile: m } = restoreSnapshotInputRef.current;
+    // 返回恢復尚未套用前，保留待恢復的位置，不要用恢復前的暫時 scrollY 覆蓋。
+    const scrollY = scrollRestoreRef.current?.scrollY ?? Math.round(window.scrollY);
+    window.history.replaceState(withSearchRestoreSnapshot(window.history.state, {
+      search: window.location.search, mobile: m, page: p, scrollY,
+    }), "");
+  };
+  useEffect(() => {
+    saveRestoreSnapshot();
+  }, [page, isMobile]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const onScroll = () => {
+      clearTimeout(timer);
+      timer = setTimeout(saveRestoreSnapshot, 200);
+    };
+    const onClickCapture = (e: MouseEvent) => {
+      if (!(e.target instanceof Element) || !e.target.closest("a[href]")) return;
+      clearTimeout(timer);
+      saveRestoreSnapshot();
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    document.addEventListener("click", onClickCapture, true);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener("scroll", onScroll);
+      document.removeEventListener("click", onClickCapture, true);
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const sortedItems = useMemo(() => {
     const items = isMobile ? displayedItems : (data?.items ?? []);
     if (businessType === "all") return items;
@@ -577,14 +689,14 @@ export default function Search() {
     setCommittedKeyword(keyword);
     if (keyword) saveToHistory(keyword);
     const qs = buildParams({ mfgMode, industry, subIndustry, region, keyword, businessType, smallBatch, sample, sortBy, page: 1 }).toString();
-    navigate(qs ? `/search?${qs}` : "/search", { replace: true });
+    replaceSearchUrl(qs);
   };
 
   const clearFilters = () => {
     setMfgMode(""); setIndustry([]); setSubIndustry([]); setRegion([]);
     setKeyword(""); setCommittedKeyword(""); setBusinessType("all");
     setSmallBatch(false); setSample(false); setPage(1);
-    navigate("/search", { replace: true });
+    replaceSearchUrl("");
   };
 
   // 分享目前有效的搜尋條件（不含 page／捲動位置等暫時性 UI state）
@@ -1101,7 +1213,7 @@ export default function Search() {
               </div>
             </div>
 
-            {isLoading ? (
+            {isLoading || mobileRestoring ? (
               <div className="grid md:grid-cols-2 gap-4">
                 {Array.from({ length: 6 }).map((_, i) => (
                   <Card key={i}><CardContent className="p-4"><Skeleton className="h-32" /></CardContent></Card>
@@ -1134,7 +1246,7 @@ export default function Search() {
 
             {/* 手機：載入更多；桌機：分頁按鈕 */}
             {isMobile ? (
-              !isLoading && page < totalPages && (
+              !isLoading && !mobileRestoring && page < totalPages && (
                 <div className="flex justify-center mt-8">
                   <Button
                     type="button"
