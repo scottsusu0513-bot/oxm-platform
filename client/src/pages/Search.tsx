@@ -27,6 +27,7 @@ import { getVisitorId } from "@/lib/analyticsVisitor";
 import { getAnalyticsPlatform } from "@/lib/platform";
 import { decideSearchTrack, type SearchTrackDecisionState } from "./searchAnalyticsTracker";
 import { buildSearchFingerprint } from "@shared/searchFingerprint";
+import { computeResultsScrollTop, shouldScrollToResultsTop, type PendingPageScroll } from "@/lib/searchPaginationScroll";
 import { FactoryCard, type CartItem } from "@/components/FactoryResultCard";
 
 // ── 一鍵詢價購物車 hook ───────────────────────────────────────────────────
@@ -429,7 +430,7 @@ export default function Search() {
   // what was actually causing the jump back to the top. Keeping the previous
   // page's data visible while the next page loads keeps isLoading false for
   // every fetch after the very first one.
-  const { data, isLoading, isFetching } = trpc.factory.search.useQuery(searchInput, {
+  const { data, isLoading, isFetching, isPlaceholderData } = trpc.factory.search.useQuery(searchInput, {
     placeholderData: (prev) => prev,
   });
   const ads = data?.ads ?? [];
@@ -509,6 +510,37 @@ export default function Search() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isFetching, data, currentSearchFingerprint]);
+
+  // 桌機分頁：使用者主動點上一頁／下一頁後，等新頁資料真的成為畫面上的結果
+  // 才捲到搜尋結果頂端（判斷規則見 client/src/lib/searchPaginationScroll.ts）。
+  // 只有這個 click handler 會寫 pending，瀏覽器返回／前進、filter 變更、手機
+  // 「載入更多」都不會觸發捲動。
+  const resultsSectionRef = useRef<HTMLDivElement>(null);
+  const pendingPageScrollRef = useRef<PendingPageScroll | null>(null);
+  const onPaginationClick = (newPage: number) => {
+    pendingPageScrollRef.current = { page: newPage, fingerprint: currentSearchFingerprint };
+    onPageChange(newPage);
+  };
+  useEffect(() => {
+    if (!shouldScrollToResultsTop({
+      pending: pendingPageScrollRef.current,
+      page,
+      currentFingerprint: currentSearchFingerprint,
+      dataFingerprint: data?.searchFingerprint,
+      isPlaceholderData,
+    })) return;
+    pendingPageScrollRef.current = null;
+    const el = resultsSectionRef.current;
+    if (!el) return;
+    // Navbar <header> 是 sticky top-0，實際量測其下緣（含 safe-area inset），
+    // 不寫死 header 高度；gap 與結果卡片之間的 gap-4（1rem）一致。
+    const headerBottom = Math.max(0, document.querySelector("header")?.getBoundingClientRect().bottom ?? 0);
+    const gap = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+    const top = computeResultsScrollTop({ elementTop: el.getBoundingClientRect().top, scrollY: window.scrollY, headerBottom, gap });
+    // 直接定位而非 smooth：smooth 動畫期間卡片圖片載入造成的 layout shift 會
+    // 讓落點偏移，且背景分頁不會執行 smooth 動畫。
+    window.scrollTo({ top, behavior: "auto" });
+  }, [data, isPlaceholderData, page, currentSearchFingerprint]);
 
   const sortedItems = useMemo(() => {
     const items = isMobile ? displayedItems : (data?.items ?? []);
@@ -1043,8 +1075,8 @@ export default function Search() {
               </div>
             )}
 
-            {/* 結果標頭 */}
-            <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
+            {/* 結果標頭（桌機換頁後的捲動目標） */}
+            <div ref={resultsSectionRef} className="flex items-center justify-between mb-4 gap-2 flex-wrap">
               <p className="text-sm text-muted-foreground">
                 {isLoading ? "搜尋中..." : `共找到 ${data?.total ?? 0} 筆結果`}
               </p>
@@ -1122,13 +1154,13 @@ export default function Search() {
             ) : (
               totalPages > 1 && (
                 <div className="flex justify-center gap-2 mt-8">
-                  <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => onPageChange(page - 1)}>
+                  <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => onPaginationClick(page - 1)}>
                     <ChevronLeft className="w-4 h-4" />
                   </Button>
                   <span className="flex items-center px-3 text-sm text-muted-foreground">
                     第 {page} / {totalPages} 頁
                   </span>
-                  <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => onPageChange(page + 1)}>
+                  <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => onPaginationClick(page + 1)}>
                     <ChevronRight className="w-4 h-4" />
                   </Button>
                 </div>
