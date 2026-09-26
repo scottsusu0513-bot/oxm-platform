@@ -15,6 +15,7 @@ import { sortBadgeIds, CERTIFICATION_BADGE_MAP } from "@shared/badges";
 import { BadgeIcon } from "@/components/badges/BadgeIcon";
 import { CroppedImage } from "@/components/CroppedImage";
 import type { ImageCropData } from "@shared/imageCrop";
+import { normalizeWebsiteUrl } from "@shared/websiteUrl";
 import { formatPublicContentUpdatedAt } from "@/lib/factoryDates";
 import { RelatedFactoriesMarquee } from "@/components/RelatedFactoriesMarquee";
 import type { RelatedFactoryCardData } from "@/components/RelatedFactoryCard";
@@ -76,15 +77,6 @@ function ProductImageCarousel({ images, imageCrops, onImageClick }: { images: st
   );
 }
 
-function isValidUrl(url: string): boolean {
-  if (!url || url.trim() === "" || url === "無" || url === "N/A" || url === "-") return false;
-  try {
-    const u = new URL(url.startsWith("http") ? url : `https://${url}`);
-    return u.hostname.includes(".");
-  } catch {
-    return false;
-  }
-}
 function formatPrice(val: string | null | undefined): string {
   if (!val) return "";
   const num = parseFloat(val);
@@ -294,9 +286,13 @@ export function FactoryDetailView({
   const renderTel = (phone: string, className: string) =>
     isPreview ? <span className={className}>{phone}</span>
       : <a href={`tel:${phone.replace(/[\s\-\(\)]/g, "")}`} className={className}>{phone}</a>;
-  const renderWebsite = (site: string, className: string) =>
-    isPreview ? <span className={className}>{site}</span>
-      : <a href={site.startsWith("http") ? site : `https://${site}`} target="_blank" rel="noopener noreferrer" className={className}>{site}</a>;
+  // 官網 href 一律由 shared/websiteUrl.ts 的 normalizeWebsiteUrl 產生（與搜尋
+  // 卡片同一套 placeholder／protocol 規則）；呼叫端已先確認有效。
+  const renderWebsite = (site: string, className: string) => {
+    const href = normalizeWebsiteUrl(site);
+    return isPreview || !href ? <span className={className}>{site}</span>
+      : <a href={href} target="_blank" rel="noopener noreferrer" className={className}>{site}</a>;
+  };
   const renderMailto = (email: string, className: string) =>
     isPreview ? <span className={className}>{email}</span>
       : <a href={`mailto:${email}`} className={className}>{email}</a>;
@@ -566,7 +562,7 @@ export function FactoryDetailView({
                   <InfoRow
                     label1="官方網站"
                     val1={factory.website
-                      ? (isValidUrl(factory.website)
+                      ? (normalizeWebsiteUrl(factory.website)
                           ? renderWebsite(factory.website, "text-primary hover:underline break-all")
                           : factory.website)
                       : undefined}
@@ -642,7 +638,7 @@ export function FactoryDetailView({
                       <Globe className="w-4 h-4 text-muted-foreground mt-0.5 shrink-0" />
                       <div>
                         <p className="text-xs text-muted-foreground">官方網站</p>
-                        {isValidUrl(factory.website) ? (
+                        {normalizeWebsiteUrl(factory.website) ? (
                           renderWebsite(factory.website, "text-sm text-primary hover:underline break-all")
                         ) : (
                           <p className="text-sm">{factory.website}</p>

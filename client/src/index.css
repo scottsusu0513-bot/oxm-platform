@@ -87,6 +87,95 @@
   }
 }
 
+/* 搜尋結果頁 Loading（見 client/src/components/SearchLoadingStatus.tsx）：
+   三顆依序淡入淡出的小圓點＋skeleton 卡片的橫向 shimmer，純 CSS。 */
+@keyframes oxm-loading-dot {
+  0%,
+  80%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
+.oxm-loading-dot {
+  display: inline-block;
+  width: 4px;
+  height: 4px;
+  border-radius: 9999px;
+  background-color: currentColor;
+  animation: oxm-loading-dot 1.2s ease-in-out infinite;
+}
+
+.oxm-loading-dot:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.oxm-loading-dot:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes oxm-shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.oxm-shimmer {
+  position: relative;
+  overflow: hidden;
+}
+
+.oxm-shimmer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.55), transparent);
+  animation: oxm-shimmer 1.4s ease-in-out infinite;
+}
+
+/* 結果區中央 Loading 卡片的柔和擴散光暈；AI 搜尋階段節奏放慢、幅度略大，
+   作為「輕微變化」，不閃爍。 */
+@keyframes oxm-search-halo {
+  0% {
+    transform: scale(0.85);
+    opacity: 0.7;
+  }
+  100% {
+    transform: scale(1.45);
+    opacity: 0;
+  }
+}
+
+.oxm-search-halo {
+  animation: oxm-search-halo 1.8s ease-out infinite;
+}
+
+.oxm-search-halo-ai {
+  animation: oxm-search-halo 2.6s ease-out infinite;
+  transform-origin: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .oxm-search-halo,
+  .oxm-search-halo-ai {
+    animation: none !important;
+  }
+  .oxm-loading-dot {
+    animation: none !important;
+    opacity: 0.6;
+  }
+  .oxm-shimmer::after {
+    animation: none !important;
+    display: none;
+  }
+}
+
 /* ── iOS / Capacitor safe area utilities ──────────────────────────────────────
    viewport-fit=cover (index.html) exposes env(safe-area-inset-*).
    Pages without a sticky Navbar must pad their top container so no interactive

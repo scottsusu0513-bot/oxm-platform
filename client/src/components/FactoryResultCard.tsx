@@ -11,9 +11,18 @@ import { toast } from "sonner";
 import { BadgeRibbon } from "@/components/badges/BadgeRibbon";
 import { CroppedImage } from "@/components/CroppedImage";
 import type { ImageCropData } from "@shared/imageCrop";
+import { normalizeWebsiteUrl } from "@shared/websiteUrl";
 
 // 這個元件是搜尋結果工廠卡片的共用實作，供 Search.tsx／我的收藏／近期瀏覽等頁面使用。
 // （工廠管理後台的「預覽工廠頁面」改為使用 FactoryDetailView 呈現完整公開頁，不再用這個卡片元件。）
+//
+// DOM 結構（見對話「FactoryResultCard nested <a> / href="無"」）：整張卡片不再
+// 包在一個 <a> 裡（那會讓電話／官網 <a> 以及收藏／詢價 <button> 巢狀在 <a>
+// 內，HTML 不合法）。改成只有工廠名稱是導向 /factory/:id 的 <Link>，用
+// after:absolute after:inset-0 把它的點擊範圍撐滿整張卡片（相對最外層
+// relative 容器定位）；其他互動元素（收藏、詢價、電話、官網、徽章）是它的
+// 兄弟節點，用 relative/absolute + z-index 疊在上面，各自獨立互動，不需要
+// preventDefault／stopPropagation 擋住外層連結。
 
 export type CartItem = { id: number; name: string };
 
@@ -39,8 +48,7 @@ function FavButton({ factoryId, initialIsFav, onToggle, previewMode }: {
     onError: () => toast.error("操作失敗"),
   });
 
-  const handleToggleFav = (e: React.MouseEvent) => {
-    e.preventDefault();
+  const handleToggleFav = () => {
     if (previewMode) return;
     if (!isAuthenticated) { performLogin(); return; }
     toggleFav.mutate({ factoryId });
@@ -84,15 +92,13 @@ export function FactoryCard({ factory, getFavState, handleFavToggle, cartHas, ca
   const avatarCrop = (factory.avatarCrop ?? null) as ImageCropData | null;
 
   const cartButton = (
-    <div className="px-4 pt-2 pb-2 shrink-0" onClick={e => e.preventDefault()}>
+    <div className="relative z-10 px-4 pt-2 pb-2 shrink-0">
       <Button
         size="sm"
         variant={cartHas(factory.id) ? "default" : "outline"}
         className="w-full text-sm h-9"
         disabled={previewMode}
-        onClick={e => {
-          e.preventDefault();
-          e.stopPropagation();
+        onClick={() => {
           if (previewMode) return;
           if (cartHas(factory.id)) {
             cartRemove(factory.id);
@@ -134,12 +140,12 @@ export function FactoryCard({ factory, getFavState, handleFavToggle, cartHas, ca
                 : <Factory className="w-12 h-12 text-orange-200" />}
             </div>
           )}
-          <div className="absolute top-2 right-2" onClick={(e) => e.preventDefault()}>
+          <div className="absolute top-2 right-2 z-10">
             <FavButton factoryId={factory.id} initialIsFav={getFavState(factory.id)} onToggle={handleFavToggle} previewMode={previewMode} />
           </div>
         </div>
         <div className="flex-1 min-w-0 min-h-0 p-4 flex flex-col">
-          <FactoryCardContent factory={factory} isMobile={isMobile} aiHighlighted={aiHighlighted} />
+          <FactoryCardContent factory={factory} isMobile={isMobile} aiHighlighted={aiHighlighted} linkToDetail={!previewMode} />
         </div>
       </div>
       {cartButton}
@@ -149,29 +155,21 @@ export function FactoryCard({ factory, getFavState, handleFavToggle, cartHas, ca
   // 外層包一層 relative + 預留上方空間（mt-5／mt-6），緞帶勳章用 absolute
   // 定位在這段預留空間裡並往下壓進卡片一部分，達到「跨越卡片上邊界」的
   // 效果，且不論外部呼叫端的 grid gap 多寬，都不會壓到上一排卡片。
-  const wrapped = (
+  // 這個 relative 容器同時是名稱連結 ::after 點擊範圍的定位基準。
+  return (
     <div className="relative h-full mt-5 sm:mt-6">
       {visibleBadgeIds.length > 0 && (
-        <div className="absolute -top-5 sm:-top-6 left-3 z-20 pointer-events-auto" onClick={(e) => e.preventDefault()}>
+        <div className="absolute -top-5 sm:-top-6 left-3 z-20 pointer-events-auto">
           <BadgeRibbon badgeIds={visibleBadgeIds} size={isMobile ? 32 : 40} maxVisible={isMobile ? 3 : 4} />
         </div>
       )}
       {cardBody}
     </div>
   );
-
-  if (previewMode) {
-    return wrapped;
-  }
-
-  return (
-    <Link href={`/factory/${factory.id}`} className="block h-full">
-      {wrapped}
-    </Link>
-  );
 }
 
-function FactoryCardContent({ factory, isMobile, aiHighlighted }: { factory: any; isMobile: boolean; aiHighlighted?: boolean }) {
+function FactoryCardContent({ factory, isMobile, aiHighlighted, linkToDetail }: { factory: any; isMobile: boolean; aiHighlighted?: boolean; linkToDetail: boolean }) {
+  const websiteHref = normalizeWebsiteUrl(factory.website);
   const phoneClickable = isMobile || isNativeApp();
   const displayContact =
     (factory.contactPersonName as string | null)?.trim() ||
@@ -195,7 +193,16 @@ function FactoryCardContent({ factory, isMobile, aiHighlighted }: { factory: any
       <div className="flex items-start justify-between shrink-0">
         <div className="flex-1 min-w-0 mr-2">
           <div className="flex items-center gap-1.5 flex-wrap">
-            <h3 className="font-semibold text-lg leading-tight">{factory.name}</h3>
+            <h3 className="font-semibold text-lg leading-tight">
+              {linkToDetail ? (
+                <Link
+                  href={`/factory/${factory.id}`}
+                  className="focus-visible:outline-none after:absolute after:inset-0 after:rounded-xl focus-visible:after:ring-2 focus-visible:after:ring-ring"
+                >
+                  {factory.name}
+                </Link>
+              ) : factory.name}
+            </h3>
             {aiHighlighted && (
               <span className="inline-flex items-center gap-1 text-xs text-orange-700 bg-orange-50 border border-orange-200 px-2 py-0.5 rounded-full shrink-0">
                 較符合本次需求
@@ -253,7 +260,7 @@ function FactoryCardContent({ factory, isMobile, aiHighlighted }: { factory: any
         <span className="min-w-0">
           聯絡電話：{factory.phone
             ? (phoneClickable
-              ? <a href={`tel:${(factory.phone as string).replace(/[\s\-\(\)]/g, "")}`} onClick={e => e.stopPropagation()} className="underline underline-offset-2">{factory.phone}</a>
+              ? <a href={`tel:${(factory.phone as string).replace(/[\s\-\(\)]/g, "")}`} className="relative z-10 underline underline-offset-2">{factory.phone}</a>
               : <span>{factory.phone}</span>)
             : "無"
           }
@@ -262,8 +269,8 @@ function FactoryCardContent({ factory, isMobile, aiHighlighted }: { factory: any
         {/* 列4：服務類型 | 官方網站 */}
         <span className="min-w-0">服務類型：{serviceType}</span>
         <span className="min-w-0">
-          官方網站：{factory.website
-            ? <a href={factory.website as string} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline" onClick={e => e.stopPropagation()}>連結</a>
+          官方網站：{websiteHref
+            ? <a href={websiteHref} target="_blank" rel="noopener noreferrer" className="relative z-10 text-blue-500 hover:underline">連結</a>
             : "無"
           }
         </span>

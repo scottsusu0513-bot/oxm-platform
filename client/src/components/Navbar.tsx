@@ -340,7 +340,7 @@ export default function Navbar() {
   // 外部點擊／Escape／路由切換都會關閉；Escape 額外把焦點還給觸發鈕。
   const [openHubKey, setOpenHubKey] = useState<MobileHubKey | null>(null);
   const hubCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const hubTriggerRefs = useRef<Partial<Record<MobileHubKey, HTMLButtonElement | null>>>({});
+  const hubTriggerRefs = useRef<Partial<Record<MobileHubKey, HTMLElement | null>>>({});
   const hubContainerRefs = useRef<Partial<Record<MobileHubKey, HTMLDivElement | null>>>({});
   // 手機版六大入口 Accordion 展開/收合動畫效能修正（第二輪）：第一輪把
   // `grid-template-rows` 換成 `max-height` 動畫，但 max-height 一樣是會觸發
@@ -748,20 +748,19 @@ export default function Navbar() {
             );
 
             const trigger = hub.href ? (
-              // 有合法預設頁面：整顆 pill 用 Link 包住，點擊一律正常導頁；hover 仍可
-              // 額外開啟下拉選單（例如找工廠：點擊導向首頁，hover 顯示「搜尋工廠」）。
-              <Link href={hub.href}>
-                <button
-                  type="button"
-                  ref={(el) => { hubTriggerRefs.current[hub.key] = el; }}
-                  aria-haspopup={hasDropdown ? "menu" : undefined}
-                  aria-expanded={hasDropdown ? isOpen : undefined}
-                  aria-controls={hasDropdown ? contentId : undefined}
-                  onClick={() => setBrandMenuOpen(false)}
-                  className={triggerClassName}
-                >
-                  {triggerInner}
-                </button>
+              // 有合法預設頁面：整顆 pill 就是導頁連結（單一 <a>，不再是 <a> 包
+              // <button> 的不合法巢狀），點擊一律正常導頁；hover 仍可額外開啟下拉
+              // 選單（例如找工廠：點擊導向首頁，hover 顯示「搜尋工廠」）。
+              <Link
+                href={hub.href}
+                ref={(el: HTMLAnchorElement | null) => { hubTriggerRefs.current[hub.key] = el; }}
+                aria-haspopup={hasDropdown ? "menu" : undefined}
+                aria-expanded={hasDropdown ? isOpen : undefined}
+                aria-controls={hasDropdown ? contentId : undefined}
+                onClick={() => setBrandMenuOpen(false)}
+                className={triggerClassName}
+              >
+                {triggerInner}
               </Link>
             ) : (
               // 只是選單父層，沒有自己的頁面：點擊切換下拉選單開關
@@ -838,35 +837,37 @@ export default function Navbar() {
 
           {isAuthenticated && (
             <>
-              {/* 信件 icon */}
-              <Link href="/messages">
-                <Button
-                  variant={location === "/messages" ? "secondary" : "ghost"}
-                  size="sm"
-                  className="relative h-8 w-8 p-0"
-                  title="我的訊息"
-                >
+              {/* 信件 icon：Button asChild → 單一 <a>，保留按鈕外觀（不再 <a> 包 <button>） */}
+              <Button
+                asChild
+                variant={location === "/messages" ? "secondary" : "ghost"}
+                size="sm"
+                className="relative h-8 w-8 p-0"
+                title="我的訊息"
+              >
+                <Link href="/messages">
                   <Mail className="w-4 h-4" />
                   {(userUnread + factoryUnread) > 0 && (
                     <span className="pointer-events-none absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-orange-500 ring-2 ring-background" />
                   )}
-                </Button>
-              </Link>
+                </Link>
+              </Button>
 
               {/* 鈴鐺 icon（已登入即顯示） */}
-              <Link href="/notifications">
-                <Button
-                  variant={location.startsWith("/notifications") ? "secondary" : "ghost"}
-                  size="sm"
-                  className="relative h-8 w-8 p-0"
-                  title="通知中心"
-                >
+              <Button
+                asChild
+                variant={location.startsWith("/notifications") ? "secondary" : "ghost"}
+                size="sm"
+                className="relative h-8 w-8 p-0"
+                title="通知中心"
+              >
+                <Link href="/notifications">
                   <Bell className="w-4 h-4" />
                   {communityUnread > 0 && (
                     <span className="pointer-events-none absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-orange-500 ring-2 ring-background" />
                   )}
-                </Button>
-              </Link>
+                </Link>
+              </Button>
             </>
           )}
 
@@ -956,12 +957,12 @@ export default function Navbar() {
                 <UserPlus className="w-4 h-4 mr-1" />
                 註冊
               </Button>
-              <Link href="/register-factory">
-                <Button variant="outline" size="sm">
+              <Button asChild variant="outline" size="sm">
+                <Link href="/register-factory">
                   <Factory className="w-4 h-4 mr-1" />
                   工廠
-                </Button>
-              </Link>
+                </Link>
+              </Button>
               <Button type="button" size="sm" className="bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white border-0" onClick={(e) => { e.preventDefault(); setLoginDialogOpen(true); }}>
                 登入
               </Button>
@@ -974,22 +975,22 @@ export default function Navbar() {
           {showEmailHint && <UnverifiedEmailHint />}
           {isAuthenticated && (
             <>
-              <Link href="/messages">
-                <Button variant="ghost" size="sm" className="relative h-8 w-8 p-0">
+              <Button asChild variant="ghost" size="sm" className="relative h-8 w-8 p-0">
+                <Link href="/messages">
                   <Mail className="w-4 h-4" />
                   {(userUnread + factoryUnread) > 0 && (
                     <span className="pointer-events-none absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-orange-500 ring-2 ring-background" />
                   )}
-                </Button>
-              </Link>
-              <Link href="/notifications">
-                <Button variant="ghost" size="sm" className="relative h-8 w-8 p-0">
+                </Link>
+              </Button>
+              <Button asChild variant="ghost" size="sm" className="relative h-8 w-8 p-0">
+                <Link href="/notifications">
                   <Bell className="w-4 h-4" />
                   {communityUnread > 0 && (
                     <span className="pointer-events-none absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-orange-500 ring-2 ring-background" />
                   )}
-                </Button>
-              </Link>
+                </Link>
+              </Button>
             </>
           )}
           <Button data-onboarding="services-menu" variant="ghost" size="sm" className="relative" onClick={() => setMobileOpen(!mobileOpen)}>
@@ -1151,52 +1152,55 @@ export default function Navbar() {
             <div className="border-t border-border/50 pt-2 mt-3 space-y-1">
               <p className="text-[10px] font-semibold text-muted-foreground/50 uppercase tracking-widest px-2 pb-0.5">我的帳戶</p>
 
+              {/* 導頁項目用 Button asChild → 單一 <a>（不再 <a> 包 <button>）。
+                  mb-0：原本外層 inline <a> 不吃容器 space-y 的間距，改成 <a> 本身
+                  就是按鈕框之後維持原本的行距。 */}
               {showDashboardBtn ? (
-                <Link data-onboarding="factory-dashboard-mobile-item" href="/dashboard" onClick={() => setMobileOpen(false)}>
-                  <Button variant="ghost" className="w-full justify-start relative">
+                <Button asChild variant="ghost" className="w-full justify-start relative mb-0">
+                  <Link data-onboarding="factory-dashboard-mobile-item" href="/dashboard" onClick={() => setMobileOpen(false)}>
                     <LayoutDashboard className="w-4 h-4 mr-2" />
                     工廠管理
                     {showFactoryBadge && (
                       <span className="ml-auto h-2.5 w-2.5 rounded-full bg-orange-500 shrink-0" />
                     )}
-                  </Button>
-                </Link>
+                  </Link>
+                </Button>
               ) : !coManagedQuery.isLoading ? (
-                <Link data-onboarding="factory-dashboard-mobile-item" href="/register-factory" onClick={() => setMobileOpen(false)}>
-                  <Button variant="ghost" className="w-full justify-start">
+                <Button asChild variant="ghost" className="w-full justify-start mb-0">
+                  <Link data-onboarding="factory-dashboard-mobile-item" href="/register-factory" onClick={() => setMobileOpen(false)}>
                     <Factory className="w-4 h-4 mr-2" />
                     註冊工廠
-                  </Button>
-                </Link>
+                  </Link>
+                </Button>
               ) : null}
 
               {showAnyConsultantCenter && (
-                <Link href={consultantCenterHref} onClick={() => setMobileOpen(false)}>
-                  <Button variant="ghost" className="w-full justify-start text-orange-600">
+                <Button asChild variant="ghost" className="w-full justify-start text-orange-600 mb-0">
+                  <Link href={consultantCenterHref} onClick={() => setMobileOpen(false)}>
                     <Briefcase className="w-4 h-4 mr-2" />
                     顧問中心
-                  </Button>
-                </Link>
+                  </Link>
+                </Button>
               )}
 
               {isAdmin && (
-                <Link href="/admin" onClick={() => setMobileOpen(false)}>
-                  <Button variant="ghost" className="w-full justify-start relative">
+                <Button asChild variant="ghost" className="w-full justify-start relative mb-0">
+                  <Link href="/admin" onClick={() => setMobileOpen(false)}>
                     <Settings className="w-4 h-4 mr-2" />
                     管理員
                     {(pendingCount > 0 || hasAdminNotification) && (
                       <span className="ml-auto h-2.5 w-2.5 rounded-full bg-orange-500 shrink-0" />
                     )}
-                  </Button>
-                </Link>
+                  </Link>
+                </Button>
               )}
 
-              <Link href="/member" onClick={() => setMobileOpen(false)}>
-                <Button variant="ghost" className="w-full justify-start">
+              <Button asChild variant="ghost" className="w-full justify-start mb-0">
+                <Link href="/member" onClick={() => setMobileOpen(false)}>
                   <UserCircle className="w-4 h-4 mr-2" />
                   會員中心
-                </Button>
-              </Link>
+                </Link>
+              </Button>
 
               <Button
                 variant="ghost"
@@ -1215,12 +1219,12 @@ export default function Navbar() {
                 <UserPlus className="w-4 h-4 mr-2" />
                 註冊用戶
               </Button>
-              <Link href="/register-factory" onClick={() => setMobileOpen(false)}>
-                <Button variant="outline" className="w-full justify-center">
+              <Button asChild variant="outline" className="w-full justify-center mb-0">
+                <Link href="/register-factory" onClick={() => setMobileOpen(false)}>
                   <Factory className="w-4 h-4 mr-2" />
                   註冊工廠
-                </Button>
-              </Link>
+                </Link>
+              </Button>
               <Button type="button" className="w-full bg-gradient-to-r from-orange-500 to-amber-500 text-white border-0" onClick={(e) => { e.preventDefault(); closeMobileMenuForDialog(); setLoginDialogOpen(true); }}>
                 登入
               </Button>

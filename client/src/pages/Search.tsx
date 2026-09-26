@@ -30,6 +30,8 @@ import { buildSearchFingerprint } from "@shared/searchFingerprint";
 import { computeResultsScrollTop, shouldScrollToResultsTop, type PendingPageScroll } from "@/lib/searchPaginationScroll";
 import { readSearchRestoreSnapshot, shouldRestoreScroll, withSearchRestoreSnapshot, withoutSearchRestoreSnapshot } from "@/lib/searchNavigationRestore";
 import { FactoryCard, type CartItem } from "@/components/FactoryResultCard";
+import { SearchLoadingOverlay, useSearchLoadingPhase } from "@/components/SearchLoadingStatus";
+import { getSearchLoadingMessage, isActiveSearchPending } from "@/lib/searchLoadingState";
 
 // ── 一鍵詢價購物車 hook ───────────────────────────────────────────────────
 const CART_KEY = "oxm_inquiry_cart";
@@ -535,6 +537,13 @@ export default function Search() {
     keyword: committedKeyword, industry, subIndustry, region,
     mfgMode, businessType, smallBatch, sample, sortBy, q, aiSearchConversationId,
   }), [committedKeyword, industry, subIndustry, region, mfgMode, businessType, smallBatch, sample, sortBy, q, aiSearchConversationId]);
+
+  // 搜尋 Loading UX（見 client/src/lib/searchLoadingState.ts）：只看「目前
+  // active 條件的 fingerprint 是否已有對應 response」，換頁不算新的搜尋。
+  const activeSearchPending = isActiveSearchPending({
+    isLoading, isFetching, dataFingerprint: data?.searchFingerprint, currentFingerprint: currentSearchFingerprint,
+  });
+  const searchLoadingPhase = useSearchLoadingPhase(activeSearchPending, currentSearchFingerprint);
 
   const trackSearchEvent = trpc.analyticsV2.trackEvent.useMutation();
   const searchTrackStateRef = useRef<SearchTrackDecisionState>({ lastTrackedFingerprint: null });
@@ -1189,8 +1198,13 @@ export default function Search() {
 
             {/* 結果標頭（桌機換頁後的捲動目標） */}
             <div ref={resultsSectionRef} className="flex items-center justify-between mb-4 gap-2 flex-wrap">
-              <p className="text-sm text-muted-foreground">
-                {isLoading ? "搜尋中..." : `共找到 ${data?.total ?? 0} 筆結果`}
+              <p className="text-sm text-muted-foreground" role="status" aria-live="polite">
+                {/* Loading 的視覺在結果區中央（SearchLoadingOverlay，aria-hidden），
+                    這裡保留常駐的 live region 只給輔助技術朗讀，畫面上留空以免
+                    顯示上一個搜尋的筆數。 */}
+                {searchLoadingPhase !== "hidden"
+                  ? <><span aria-hidden="true">{"\u00a0"}</span><span className="sr-only">{getSearchLoadingMessage(committedKeyword, searchLoadingPhase)}</span></>
+                  : isLoading ? "\u00a0" : `共找到 ${data?.total ?? 0} 筆結果`}
               </p>
               <div className="flex items-center gap-2 flex-wrap">
                 <Button type="button" variant="outline" size="sm" className="h-8 text-xs px-3" onClick={handleShareSearch}>
@@ -1213,10 +1227,20 @@ export default function Search() {
               </div>
             </div>
 
+            {/* 條件改變、新結果還沒回來時，沿用 placeholderData 的舊結果淡化並
+                設為 inert＋pointer-events-none（不可點擊／聚焦，避免誤點舊結果），不換成 skeleton，
+                避免結果區高度跳動；Loading 卡片疊在結果區可見範圍的中央。
+                min-h 只在 Loading 顯示時生效，確保舊結果很短（例如「沒有找到」）
+                時卡片仍放得下。 */}
+            <div aria-busy={activeSearchPending} className={`relative ${searchLoadingPhase !== "hidden" ? "min-h-56" : ""}`}>
+            <div
+              inert={searchLoadingPhase !== "hidden" && !isLoading ? true : undefined}
+              className={`transition-opacity duration-200 motion-reduce:transition-none ${searchLoadingPhase !== "hidden" && !isLoading ? "opacity-40 pointer-events-none select-none" : ""}`}
+            >
             {isLoading || mobileRestoring ? (
               <div className="grid md:grid-cols-2 gap-4">
                 {Array.from({ length: 6 }).map((_, i) => (
-                  <Card key={i}><CardContent className="p-4"><Skeleton className="h-32" /></CardContent></Card>
+                  <Card key={i}><CardContent className="p-4"><Skeleton className="h-32 oxm-shimmer motion-reduce:animate-none" /></CardContent></Card>
                 ))}
               </div>
             ) : sortedItems.length === 0 ? (
@@ -1226,7 +1250,7 @@ export default function Search() {
                 <Button variant="link" onClick={clearFilters}>清除篩選條件重新搜尋</Button>
               </CardContent></Card>
             ) : (
-              <div className="grid md:grid-cols-2 gap-4 items-stretch">
+              <div className="grid md:grid-cols-2 gap-4 items-stretch animate-in fade-in duration-300 motion-reduce:animate-none">
                 {sortedItems.map((factory) => (
                   <FactoryCard
                     key={factory.id}
@@ -1243,6 +1267,11 @@ export default function Search() {
                 ))}
               </div>
             )}
+            </div>
+            {searchLoadingPhase !== "hidden" && (
+              <SearchLoadingOverlay keyword={committedKeyword} phase={searchLoadingPhase} />
+            )}
+            </div>
 
             {/* 手機：載入更多；桌機：分頁按鈕 */}
             {isMobile ? (

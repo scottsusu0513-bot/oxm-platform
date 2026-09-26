@@ -1660,7 +1660,10 @@ export async function getReviewByUserAndFactory(userId: number, factoryId: numbe
   const result = await db.select().from(reviews)
     .where(and(eq(reviews.userId, userId), eq(reviews.factoryId, factoryId)))
     .limit(1);
-  return result.length > 0 ? result[0] : undefined;
+  // 「尚未評價」回傳 null，不是 undefined：review.getMyReviewForFactory 直接
+  // 回傳這個值，superjson 會把 undefined 原樣傳到 client，React Query v5 視
+  // undefined query data 為錯誤（"Query data cannot be undefined"）。
+  return result.length > 0 ? result[0] : null;
 }
 
 export async function updateReview(id: number, userId: number, data: { rating: number; comment?: string }) {

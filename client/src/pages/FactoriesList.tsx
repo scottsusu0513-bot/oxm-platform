@@ -15,6 +15,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { ArrowLeft, Search, MapPin, Building2, Phone, Globe, Star, Clock, User, Users, X, Pencil } from "lucide-react";
 import { FloatingBackButton } from "@/components/FloatingBackButton";
 import { TAIWAN_REGIONS, INDUSTRY_OPTIONS } from "@shared/constants";
+import { normalizeWebsiteUrl } from "@shared/websiteUrl";
 import { toast } from "sonner";
 
 type ContactStatus = 'not_called' | 'not_interested' | 'follow_up';
@@ -111,6 +112,27 @@ function ContactStatusRow({
         </div>
       </PopoverContent>
     </Popover>
+  );
+}
+
+/**
+ * 後台工廠列表的官網欄：href 一律由 shared/websiteUrl.ts normalizeWebsiteUrl
+ * 產生（與搜尋卡片／工廠頁同一套規則）。空值維持原本「整列不顯示」；有填
+ * 但無效（例如「無」）只顯示原文字、不產生連結，讓管理員仍看得到實際內容。
+ */
+export function AdminFactoryWebsite({ website }: { website: string | null | undefined }) {
+  const raw = typeof website === "string" ? website.trim() : "";
+  if (!raw) return null;
+  const href = normalizeWebsiteUrl(raw);
+  return (
+    <div className="flex items-center gap-1.5">
+      <Globe className="h-3.5 w-3.5 text-gray-400 shrink-0" />
+      {href ? (
+        <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline truncate max-w-[200px]">{website}</a>
+      ) : (
+        <span className="truncate max-w-[200px]">{website}</span>
+      )}
+    </div>
   );
 }
 
@@ -290,12 +312,7 @@ export default function FactoriesList() {
                             <span>{f.phone}</span>
                           </div>
                         )}
-                        {f.website && (
-                          <div className="flex items-center gap-1.5">
-                            <Globe className="h-3.5 w-3.5 text-gray-400 shrink-0" />
-                            <a href={f.website} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline truncate max-w-[200px]">{f.website}</a>
-                          </div>
-                        )}
+                        <AdminFactoryWebsite website={f.website} />
                         {f.foundedYear && (
                           <div className="flex items-center gap-1.5">
                             <span className="text-gray-400 text-xs">成立</span>
