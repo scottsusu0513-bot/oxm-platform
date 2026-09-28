@@ -7,7 +7,11 @@ import { createRoot } from "react-dom/client";
 import superjson from "superjson";
 import App from "./App";
 import { performLogin } from "./const";
+import { installChunkReloadHandler } from "./lib/chunkReload";
 import "./index.css";
+
+// 必須在任何 lazy route 載入前註冊，見 client/src/lib/chunkReload.ts。
+installChunkReloadHandler();
 
 // window.__showOxmApp 定義在 client/index.html（同一份一次性函式也給 5 秒
 // fallback 呼叫），這裡不重複寫一份 DOM 操作，避免兩套流程各自維護、互相

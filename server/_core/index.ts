@@ -9,6 +9,7 @@ import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import { setupSecurityHeaders, setupOriginCheck, setupNoIndexRoutes } from "./security";
 import { setupGoneRoutes } from "./goneRoutes";
+import { ROBOTS_TXT, setupApiNoIndexHeader } from "./robots";
 import { setupLegacyBlogRedirect } from "./legacyBlogRedirect";
 import { apiLimiter, loginLimiter, uploadLimiter, messageLimiter, submitReviewLimiter, adminLimiter, searchLimiter, reportLimiter, analyticsIngestLimiter } from "./rateLimit";
 import { COOKIE_NAME } from "@shared/const";
@@ -35,6 +36,7 @@ async function startServer() {
   console.log("[boot] applying security headers");
   setupSecurityHeaders(app);
   setupNoIndexRoutes(app);
+  setupApiNoIndexHeader(app);
   // 傳產圖書館 Phase 1：舊 /blog/:slug 裡「有對應新 /library 文章」的 3 筆
   // （見 shared/seo/libraryPages.ts 的 resolveLegacyBlogRedirect）301 到新
   // 文章，必須註冊在下面的 setupGoneRoutes 之前——goneRoutes 對整個 /blog
@@ -142,30 +144,11 @@ async function startServer() {
   });
 
   // ── robots.txt ─────────────────────────────────────────────────────────
+  // 內容與「為什麼放行 /api/trpc/」見 server/_core/robots.ts。
   app.get("/robots.txt", (_req, res) => {
     res.type("text/plain");
     res.set("Cache-Control", "public, max-age=86400");
-    res.send(
-      "User-agent: *\n" +
-      "Allow: /\n" +
-      "\n" +
-      "Disallow: /admin\n" +
-      "Disallow: /admin/\n" +
-      "Disallow: /admin-message\n" +
-      "Disallow: /messages\n" +
-      "Disallow: /chat\n" +
-      "Disallow: /dashboard\n" +
-      "Disallow: /register-factory\n" +
-      "Disallow: /favorites\n" +
-      "Disallow: /member\n" +
-      "Disallow: /orders\n" +
-      "Disallow: /notifications\n" +
-      "Disallow: /verify-email\n" +
-      "Disallow: /api\n" +
-      "Disallow: /api/trpc\n" +
-      "\n" +
-      "Sitemap: https://www.oxmmatch.com/sitemap.xml\n"
-    );
+    res.send(ROBOTS_TXT);
   });
 
   // ── sitemap.xml ─────────────────────────────────────────────────────────

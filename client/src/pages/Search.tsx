@@ -31,6 +31,8 @@ import { computeResultsScrollTop, shouldScrollToResultsTop, type PendingPageScro
 import { readSearchRestoreSnapshot, shouldRestoreScroll, withSearchRestoreSnapshot, withoutSearchRestoreSnapshot } from "@/lib/searchNavigationRestore";
 import { FactoryCard, type CartItem } from "@/components/FactoryResultCard";
 import { SearchLoadingOverlay, useSearchLoadingPhase } from "@/components/SearchLoadingStatus";
+import { QueryErrorState } from "@/components/QueryErrorState";
+import { shouldRetryQuery } from "@/lib/queryErrorMessage";
 import { getSearchLoadingMessage, isActiveSearchPending } from "@/lib/searchLoadingState";
 
 // ── 一鍵詢價購物車 hook ───────────────────────────────────────────────────
@@ -453,9 +455,14 @@ export default function Search() {
   // what was actually causing the jump back to the top. Keeping the previous
   // page's data visible while the next page loads keeps isLoading false for
   // every fetch after the very first one.
-  const { data, isLoading, isFetching, isPlaceholderData } = trpc.factory.search.useQuery(searchInput, {
+  const { data, isLoading, isFetching, isPlaceholderData, isError, error: searchError, refetch: refetchSearch } = trpc.factory.search.useQuery(searchInput, {
     placeholderData: (prev) => prev,
+    retry: shouldRetryQuery,
   });
+  // 目前這次搜尋失敗（沒有屬於這個 query key 的真實資料）：顯示錯誤＋重試，
+  // 不能顯示「沒有找到符合條件的結果」、也不能把舊 placeholder／手機累加清單
+  // 當成目前結果、更不能顯示筆數。重試期間維持錯誤畫面（按鈕顯示載入中）。
+  const showSearchError = isError && (!data || isPlaceholderData);
   const ads = data?.ads ?? [];
   // AI Search Mode（見對話中「哪些工廠會被套上橘框、依據是什麼」與「為什麼
   // 一般 /search 永遠不會出現橘框」）：aiHighlightFactoryIds 只有在 server 端
@@ -515,7 +522,12 @@ export default function Search() {
       cancelNavigationRestore();
     }
     if (isMobile && page > 1 && !filterChanged) {
-      setDisplayedItems(prev => [...prev, ...data.items]);
+      // 防禦性去重：後端分頁已保證 deterministic（見 server/db.ts searchFactories
+      // 的唯一 tiebreaker），這裡只避免資料在翻頁之間變動時出現重複 key。
+      setDisplayedItems(prev => {
+        const seen = new Set(prev.map(f => f.id));
+        return [...prev, ...data.items.filter(f => !seen.has(f.id))];
+      });
     } else {
       setDisplayedItems(data.items);
     }
@@ -540,7 +552,7 @@ export default function Search() {
 
   // 搜尋 Loading UX（見 client/src/lib/searchLoadingState.ts）：只看「目前
   // active 條件的 fingerprint 是否已有對應 response」，換頁不算新的搜尋。
-  const activeSearchPending = isActiveSearchPending({
+  const activeSearchPending = !showSearchError && isActiveSearchPending({
     isLoading, isFetching, dataFingerprint: data?.searchFingerprint, currentFingerprint: currentSearchFingerprint,
   });
   const searchLoadingPhase = useSearchLoadingPhase(activeSearchPending, currentSearchFingerprint);
@@ -1204,13 +1216,13 @@ export default function Search() {
                     顯示上一個搜尋的筆數。 */}
                 {searchLoadingPhase !== "hidden"
                   ? <><span aria-hidden="true">{"\u00a0"}</span><span className="sr-only">{getSearchLoadingMessage(committedKeyword, searchLoadingPhase)}</span></>
-                  : isLoading ? "\u00a0" : `共找到 ${data?.total ?? 0} 筆結果`}
+                  : isLoading || showSearchError ? "\u00a0" : `共找到 ${data?.total ?? 0} 筆結果`}
               </p>
               <div className="flex items-center gap-2 flex-wrap">
                 <Button type="button" variant="outline" size="sm" className="h-8 text-xs px-3" onClick={handleShareSearch}>
                   <Share2 className="w-3.5 h-3.5 mr-1" />分享搜尋結果
                 </Button>
-                {!isLoading && (data?.total ?? 0) > 0 && (
+                {!isLoading && !showSearchError && (data?.total ?? 0) > 0 && (
                   <div className="flex items-center gap-2">
                     <span className="text-xs text-muted-foreground">排序：</span>
                     <Select value={sortBy} onValueChange={onSortByChange}>
@@ -1237,7 +1249,11 @@ export default function Search() {
               inert={searchLoadingPhase !== "hidden" && !isLoading ? true : undefined}
               className={`transition-opacity duration-200 motion-reduce:transition-none ${searchLoadingPhase !== "hidden" && !isLoading ? "opacity-40 pointer-events-none select-none" : ""}`}
             >
-            {isLoading || mobileRestoring ? (
+            {showSearchError ? (
+              <Card><CardContent className="p-0">
+                <QueryErrorState error={searchError} onRetry={() => { void refetchSearch(); }} retrying={isFetching} />
+              </CardContent></Card>
+            ) : isLoading || mobileRestoring ? (
               <div className="grid md:grid-cols-2 gap-4">
                 {Array.from({ length: 6 }).map((_, i) => (
                   <Card key={i}><CardContent className="p-4"><Skeleton className="h-32 oxm-shimmer motion-reduce:animate-none" /></CardContent></Card>

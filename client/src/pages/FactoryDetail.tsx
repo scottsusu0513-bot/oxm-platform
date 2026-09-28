@@ -13,6 +13,8 @@ import { shareContent } from "@/lib/share";
 import { usePullToRefresh } from "@/hooks/usePullToRefresh";
 import { NativePullToRefreshLayout } from "@/components/NativePullToRefreshLayout";
 import { FactoryDetailView } from "@/components/FactoryDetailView";
+import { QueryErrorState } from "@/components/QueryErrorState";
+import { shouldRetryQuery } from "@/lib/queryErrorMessage";
 
 export default function FactoryDetail() {
   const [, params] = useRoute("/factory/:id");
@@ -41,7 +43,10 @@ export default function FactoryDetail() {
     window.scrollTo(0, 0);
   }, [factoryId]);
 
-  const { data: factory, isLoading } = trpc.factory.getById.useQuery({ id: factoryId }, { enabled: !!factoryId });
+  const {
+    data: factory, isLoading, isError: isFactoryError, error: factoryError,
+    refetch: refetchFactory, isFetching: isFactoryFetching,
+  } = trpc.factory.getById.useQuery({ id: factoryId }, { enabled: !!factoryId, retry: shouldRetryQuery });
   const { data: reviewData } = trpc.review.getByFactory.useQuery({ factoryId, page: 1, pageSize: 10 }, { enabled: !!factoryId });
   const { data: isFavData } = trpc.favorite.isLiked.useQuery({ factoryId }, { enabled: !!factoryId && isAuthenticated });
   const { data: myReview } = trpc.review.getMyReviewForFactory.useQuery({ factoryId }, { enabled: !!factoryId && isAuthenticated });
@@ -164,6 +169,19 @@ export default function FactoryDetail() {
         <div className="container py-8">
           <Skeleton className="h-8 w-48 mb-4" />
           <Skeleton className="h-64" />
+        </div>
+      </div>
+    );
+  }
+
+  // 查詢失敗（429／500／網路中斷）≠ 工廠不存在：只有成功回應且 factory === null
+  // 才顯示「找不到此工廠」，錯誤一律顯示可重試的載入失敗畫面。
+  if (isFactoryError && !factory) {
+    return (
+      <div className="min-h-screen bg-background">
+        <Navbar />
+        <div className="container py-16">
+          <QueryErrorState error={factoryError} onRetry={() => { void refetchFactory(); }} retrying={isFactoryFetching} />
         </div>
       </div>
     );

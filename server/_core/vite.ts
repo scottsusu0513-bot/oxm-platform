@@ -15,6 +15,8 @@ import { parseLibraryIndexPath, parseLibraryArticlePath } from "@shared/seo/libr
 import { resolveFactoriesTwoSegment } from "@shared/seo/factoriesPathResolver";
 import { buildSearchPageMeta } from "@shared/seo/searchPage";
 import { parsePageParam } from "@shared/industryPagination";
+import { matchesClientRoute } from "@shared/clientRoutes";
+import { setupStaticAssetMiss404, injectNotFoundNoIndex } from "./spaFallback";
 
 export async function setupVite(app: Express, server: Server) {
   const serverOptions = {
@@ -211,6 +213,10 @@ export async function setupVite(app: Express, server: Server) {
           const industryMeta = buildIndustryMeta(industryPath, industryPage, pathname);
           statusCode = industryMeta.status;
           page = injectMetaIntoHtml(page, industryMeta);
+        } else if (!matchesClientRoute(pathname)) {
+          // 未知路由：與 serveStatic 相同，真 404 + noindex,follow。
+          statusCode = 404;
+          page = injectNotFoundNoIndex(page);
         } else {
           // 固定公開頁（目前為 "/"、"/about"、"/upgrade-center"）：不查資料庫，
           // 直接用 shared/seo 常數注入 title／description／canonical／OG／
@@ -236,11 +242,12 @@ export async function setupVite(app: Express, server: Server) {
   });
 }
 
-export function serveStatic(app: Express) {
-  const distPath =
+export function serveStatic(app: Express, distPathOverride?: string) {
+  // distPathOverride 只供測試指向暫存的 build 目錄，正式環境不傳。
+  const distPath = distPathOverride ?? (
     process.env.NODE_ENV === "development"
       ? path.resolve(import.meta.dirname, "../..", "dist", "public")
-      : path.resolve(import.meta.dirname, "public");
+      : path.resolve(import.meta.dirname, "public"));
   if (!fs.existsSync(distPath)) {
     console.error(
       `Could not find the build directory: ${distPath}, make sure to build the client first`
@@ -253,6 +260,8 @@ export function serveStatic(app: Express) {
   // 由我們自己決定要不要注入、並統一走同一份快取字串。其他實際存在的靜態
   // 檔案（JS/CSS/圖片等）不受影響，仍由這個 middleware 正常提供。
   app.use(express.static(distPath, { index: false }));
+  // 找不到的 /assets/* 與靜態副檔名請求：真 404，不落到下面的 SPA fallback。
+  setupStaticAssetMiss404(app);
 
   const indexPath = path.resolve(distPath, "index.html");
 
@@ -505,6 +514,12 @@ export function serveStatic(app: Express) {
     // 才退回 res.sendFile 當最後保底。
     try {
       const template = await getCachedTemplate();
+      // 完全對不上 App.tsx 任何路由的網址：真 404 + noindex,follow（React 端
+      // 照常渲染 NotFound），不再是 200 的 soft 404。清單見 shared/clientRoutes.ts。
+      if (!matchesClientRoute(pathname)) {
+        res.status(404).set({ "Content-Type": "text/html" }).end(injectNotFoundNoIndex(template));
+        return;
+      }
       let page = injectPublicPageSeo(template, pathname) ?? template;
       // GEO 第二階段 B：/about 額外把 build-time 產生的靜態正文片段塞進
       // <div id="root">，讓爬蟲不執行 JS 也能讀到主要正文；片段檔案不存在

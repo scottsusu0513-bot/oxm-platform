@@ -661,6 +661,10 @@ export async function getSimilarFactories(factoryId: number, limit = 12): Promis
 // AI 搜尋候選集上限：避免全表掃後在 JS 排序太多筆
 const AI_CANDIDATE_LIMIT = 300;
 
+// 評分排序（預設）＋唯一 tiebreaker。候選池與 SQL 分頁共用，確保同分工廠
+// 在每次查詢、每一頁的相對順序完全一致。
+const DETERMINISTIC_RATING_ORDER = [desc(factories.avgRating), desc(factories.reviewCount), asc(factories.id)] as const;
+
 /**
  * AI mode 的候選 → tier 計算（見對話中「AI ranking precision 修正」）。純粹
  * 組裝訊號、呼叫 server/search-match-signals.ts 的 computeSearchMatchSignals
@@ -803,7 +807,7 @@ export async function searchFactories(params: {
     const total = Number(countResult?.count ?? 0);
 
     const candidates = await db.select().from(factories).where(whereClause)
-      .orderBy(desc(factories.avgRating), desc(factories.reviewCount))
+      .orderBy(...DETERMINISTIC_RATING_ORDER)
       .limit(AI_CANDIDATE_LIMIT);
 
     const productMap = new Map<number, string[]>();
@@ -847,7 +851,10 @@ export async function searchFactories(params: {
       if (rDiff !== 0)                                         return rDiff;
       const rcDiff = (b.factory.reviewCount ?? 0) - (a.factory.reviewCount ?? 0);
       if (rcDiff !== 0)                                        return rcDiff;
-      return new Date(b.factory.updatedAt).getTime() - new Date(a.factory.updatedAt).getTime();
+      const uDiff = new Date(b.factory.updatedAt).getTime() - new Date(a.factory.updatedAt).getTime();
+      if (uDiff !== 0)                                         return uDiff;
+      // 唯一 tiebreaker：分頁在 JS 端 slice，比較函式必須是全序（total order）。
+      return a.factory.id - b.factory.id;
     });
 
     // Phase 6A.1：這兩個欄位一定要算在「全部」已抓到的候選（scored，最多
@@ -992,7 +999,7 @@ export async function searchFactories(params: {
     const [[countResult], candidates] = await Promise.all([
       db.select({ count: sql<number>`COUNT(*)` }).from(factories).where(whereClause),
       db.select().from(factories).where(whereClause)
-        .orderBy(desc(factories.avgRating), desc(factories.reviewCount))
+        .orderBy(...DETERMINISTIC_RATING_ORDER)
         .limit(AI_CANDIDATE_LIMIT),
     ]);
     const total = Number(countResult?.count ?? 0);
@@ -1032,7 +1039,10 @@ export async function searchFactories(params: {
       if (rDiff !== 0)                                         return rDiff;
       const rcDiff = (b.factory.reviewCount ?? 0) - (a.factory.reviewCount ?? 0);
       if (rcDiff !== 0)                                        return rcDiff;
-      return new Date(b.factory.updatedAt).getTime() - new Date(a.factory.updatedAt).getTime();
+      const uDiff = new Date(b.factory.updatedAt).getTime() - new Date(a.factory.updatedAt).getTime();
+      if (uDiff !== 0)                                         return uDiff;
+      // 唯一 tiebreaker：分頁在 JS 端 slice，比較函式必須是全序（total order）。
+      return a.factory.id - b.factory.id;
     });
 
     const topLog = scored.slice(0, 3).map(s => `{id:${s.factory.id},name:"${s.factory.name}",tier:${s.tier}}`).join(',');
@@ -1079,7 +1089,7 @@ export async function searchFactories(params: {
     const [[countResult], candidates] = await Promise.all([
       db.select({ count: sql<number>`COUNT(*)` }).from(factories).where(whereClause),
       db.select().from(factories).where(whereClause)
-        .orderBy(desc(factories.avgRating), desc(factories.reviewCount))
+        .orderBy(...DETERMINISTIC_RATING_ORDER)
         .limit(AI_CANDIDATE_LIMIT),
     ]);
     const total = Number(countResult?.count ?? 0);
@@ -1102,7 +1112,10 @@ export async function searchFactories(params: {
       if (rDiff !== 0)                                         return rDiff;
       const rcDiff = (b.factory.reviewCount ?? 0) - (a.factory.reviewCount ?? 0);
       if (rcDiff !== 0)                                        return rcDiff;
-      return new Date(b.factory.updatedAt).getTime() - new Date(a.factory.updatedAt).getTime();
+      const uDiff = new Date(b.factory.updatedAt).getTime() - new Date(a.factory.updatedAt).getTime();
+      if (uDiff !== 0)                                         return uDiff;
+      // 唯一 tiebreaker：分頁在 JS 端 slice，比較函式必須是全序（total order）。
+      return a.factory.id - b.factory.id;
     });
 
     const offset = (page - 1) * pageSize;
@@ -1112,23 +1125,27 @@ export async function searchFactories(params: {
 
   // 使用者明確選了非 relevance 的排序方式，或根本沒有 keyword（純瀏覽）：
   // 維持原本單純 SQL orderBy + LIMIT/OFFSET，不套用 relevance tier。
+  // 每一種排序最後都必須有唯一的 factories.id tiebreaker：大量工廠
+  // avgRating／reviewCount／avgResponseHours 相同時，MySQL 對「非唯一 ORDER BY
+  // + LIMIT/OFFSET」不保證各頁順序一致，會造成跨頁重複與遺漏。
   let orderClauses;
   switch (sortBy) {
     case "reviews":
-      orderClauses = [desc(factories.reviewCount), desc(factories.avgRating)];
+      orderClauses = [desc(factories.reviewCount), desc(factories.avgRating), asc(factories.id)];
       break;
     case "response":
       orderClauses = [
         sql`CASE WHEN ${factories.avgResponseHours} IS NULL THEN 1 ELSE 0 END`,
         asc(factories.avgResponseHours),
         desc(factories.avgRating),
+        asc(factories.id),
       ];
       break;
     case "newest":
-      orderClauses = [desc(factories.createdAt)];
+      orderClauses = [desc(factories.createdAt), desc(factories.id)];
       break;
     default:
-      orderClauses = [desc(factories.avgRating), desc(factories.reviewCount)];
+      orderClauses = [...DETERMINISTIC_RATING_ORDER];
   }
 
   // count 與 items 用同一個 whereClause，彼此沒有 dependency，平行執行。
