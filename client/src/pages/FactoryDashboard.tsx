@@ -90,6 +90,11 @@ function StatusBadge({ status }: { status: string }) {
       <XCircle className="w-3 h-3 mr-1" />已拒絕
     </Badge>
   );
+  if (status === 'delisted') return (
+    <Badge className="bg-gray-100 text-gray-700 hover:bg-gray-100 border border-gray-300">
+      <XCircle className="w-3 h-3 mr-1" />已下架
+    </Badge>
+  );
   return null;
 }
 
@@ -99,9 +104,14 @@ export default function FactoryDashboard() {
   const searchString = useSearch();
   const initialTab = new URLSearchParams(searchString).get("tab") ?? "info";
 
-  const { data: ownedFactory, isLoading: ownedLoading } = trpc.factory.getMine.useQuery(undefined, { enabled: isAuthenticated });
+  const { data: ownedFactoryRaw, isLoading: ownedLoading } = trpc.factory.getMine.useQuery(undefined, { enabled: isAuthenticated });
+  // 工廠主自行刪除（封存）的工廠：不當成可營運的工廠顯示完整後台，改顯示
+  // 封存狀態＋「申請重新上架」（見 ArchivedFactoryView）。封存期間仍可能是
+  // 其他工廠的次管理者，此時優先顯示該工廠的後台。
+  const archivedOwnedFactory = ownedFactoryRaw?.isArchived ? ownedFactoryRaw : null;
+  const ownedFactory = ownedFactoryRaw && !ownedFactoryRaw.isArchived ? ownedFactoryRaw : null;
 
-  // 次管理者：若本身不是工廠主，查詢是否有被共同管理的工廠
+  // 次管理者：若本身不是（有效）工廠主，查詢是否有被共同管理的工廠
   const { data: coManagedList, isLoading: coManagedLoading } = trpc.factory.getCoManagedFactories.useQuery(undefined, {
     enabled: isAuthenticated && !ownedLoading && !ownedFactory,
   });
@@ -167,15 +177,24 @@ export default function FactoryDashboard() {
 
   useEffect(() => {
     if (!loading && !isAuthenticated) navigate("/");
-    // 只有在確認不是 owner 且不是 co-manager 時才導向註冊
-    if (!loading && isAuthenticated && !factoryLoading && !factory &&
+    // 只有在確認不是 owner（含已封存工廠的 owner）且不是 co-manager 時才導向註冊
+    if (!loading && isAuthenticated && !factoryLoading && !factory && !archivedOwnedFactory &&
         coManagedList !== undefined && coManagedList.length === 0) {
       navigate("/register-factory");
     }
-  }, [loading, isAuthenticated, factoryLoading, factory, coManagedList, navigate]);
+  }, [loading, isAuthenticated, factoryLoading, factory, archivedOwnedFactory, coManagedList, navigate]);
+
+  if (!loading && !factoryLoading && !factory && archivedOwnedFactory) {
+    return <ArchivedFactoryView factory={archivedOwnedFactory} canRequestRestore />;
+  }
 
   if (loading || factoryLoading || !factory) {
     return <AppLoading />;
+  }
+
+  // 次管理者所屬的工廠已被工廠主封存：只能查看，不能營運，也不能代為申請重新上架。
+  if (!isOwner && (factory as { isArchived?: boolean }).isArchived) {
+    return <ArchivedFactoryView factory={factory as { name: string }} canRequestRestore={false} />;
   }
 
   const isPending = factory.status === 'pending';
@@ -234,6 +253,11 @@ export default function FactoryDashboard() {
         </div>
 
         {/* 狀態提示橫幅 */}
+        {!isOwner && archivedOwnedFactory && (
+          <div className="mb-4 p-4 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-700 break-words">
+            您原本擁有的工廠「{archivedOwnedFactory.name}」目前已下架。如需申請重新上架，請先退出目前共同管理的工廠。
+          </div>
+        )}
         {factory.status === 'draft' && (
           <div className="mb-4 p-4 bg-gray-50 border border-gray-200 rounded-lg flex items-center justify-between">
             <div className="flex items-center gap-2 text-gray-700">
@@ -2264,6 +2288,53 @@ function ReviewList({ reviews, factoryId }: { reviews: any[], factoryId: number 
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+// ===== Archived Factory View =====
+// 工廠主自行刪除（封存）後的後台畫面：不顯示可編輯的後台、不引導建立新工廠，
+// 說明資料與歷史紀錄仍保留，owner 可「申請重新上架」（重新進入管理員審核，
+// 伺服器端見 factory.submitForReview 的 restore 分支）。
+function ArchivedFactoryView({ factory, canRequestRestore }: {
+  factory: { name: string };
+  canRequestRestore: boolean;
+}) {
+  const utils = trpc.useUtils();
+  const [, navigate] = useLocation();
+  const restoreMut = trpc.factory.submitForReview.useMutation({
+    onSuccess: () => {
+      toast.success("已送出重新上架申請，請等待管理員審核");
+      utils.factory.getMine.invalidate();
+    },
+    onError: (err) => toast.error(err.message === "UNVERIFIED_EMAIL" ? "請先完成主信箱驗證" : err.message),
+  });
+
+  return (
+    <div className="min-h-screen bg-background">
+      <Navbar />
+      <div className="container py-10 max-w-2xl">
+        <div className="p-6 bg-gray-50 border border-gray-200 rounded-lg" data-testid="archived-factory-view">
+          <div className="flex items-center gap-2 text-gray-800 mb-3">
+            <AlertTriangle className="w-5 h-5 shrink-0" />
+            <h1 className="text-lg font-semibold break-words min-w-0">{factory.name}：此工廠目前已下架</h1>
+          </div>
+          <p className="text-sm text-gray-700 mb-2">工廠資料與歷史紀錄（對話、合作確認單、評價）仍完整保留，但目前不會出現在搜尋結果，也無法接受新的詢問或修改資料。</p>
+          {canRequestRestore ? (
+            <>
+              <p className="text-sm text-gray-700 mb-5">如需重新使用 OXM，可申請重新上架，送出後將由管理員重新審核。</p>
+              <div className="flex flex-wrap gap-2">
+                <Button onClick={() => restoreMut.mutate()} disabled={restoreMut.isPending}>
+                  {restoreMut.isPending ? "送出中..." : "申請重新上架"}
+                </Button>
+                <Button variant="outline" onClick={() => navigate("/messages")}>查看歷史訊息</Button>
+              </div>
+            </>
+          ) : (
+            <p className="text-sm text-gray-700">此工廠已由工廠主下架，次管理者僅能查看歷史紀錄。</p>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 

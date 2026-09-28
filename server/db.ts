@@ -1853,6 +1853,22 @@ export async function getReviewsByUser(userId: number, page = 1, pageSize = 20) 
  * 單一 UPDATE（原子操作）。WHERE ownerId 限定只能刪自己的工廠；deletedAt IS
  * NULL 確保重複呼叫不會覆蓋第一次刪除的時間戳記。回傳是否真的刪除了一筆。
  */
+/**
+ * 已封存工廠「申請重新上架」：deletedAt 清空、status 回到 'pending'（重新
+ * 進入管理員審核，絕不直接 approved）。單一條件式 UPDATE：只有 owner 本人、
+ * 且目前確實是封存狀態時才會生效，回傳是否真的轉換了一筆（併發重複送出時
+ * 第二次會回 false）。送審完整度等驗證由呼叫端（factory.submitForReview）
+ * 在呼叫前完成。
+ */
+export async function requestFactoryRestore(id: number, ownerId: number): Promise<boolean> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  const [result]: any = await db.update(factories)
+    .set({ status: 'pending', deletedAt: null, submittedAt: new Date() })
+    .where(and(eq(factories.id, id), eq(factories.ownerId, ownerId), isNotNull(factories.deletedAt)));
+  return (result?.affectedRows ?? 0) > 0;
+}
+
 export async function ownerSoftDeleteFactory(id: number, ownerId: number): Promise<boolean> {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
@@ -4995,8 +5011,11 @@ export async function getActiveFactoryAffiliation(
   let coManagerRows: { factoryId: number }[];
 
   if (conn) {
+    // 已封存（owner 自行刪除，deletedAt 有值）的工廠不算「有效的工廠身分」：
+    // 封存工廠的 owner 可以接受其他工廠的次管理者邀請（ownership 仍保留，
+    // 供日後申請重新上架）。
     const [oRows]: any = await conn.execute(
-      "SELECT id FROM factories WHERE ownerId = ?",
+      "SELECT id FROM factories WHERE ownerId = ? AND deletedAt IS NULL",
       [userId]
     );
     const [cRows]: any = await conn.execute(
@@ -5010,7 +5029,7 @@ export async function getActiveFactoryAffiliation(
     if (!db) return null;
     ownerRows = await db.select({ id: factories.id })
       .from(factories)
-      .where(eq(factories.ownerId, userId));
+      .where(and(eq(factories.ownerId, userId), isNull(factories.deletedAt)));
     coManagerRows = await db.select({ factoryId: factoryCoManagers.factoryId })
       .from(factoryCoManagers)
       .where(and(eq(factoryCoManagers.userId, userId), isNull(factoryCoManagers.removedAt)));
@@ -5248,9 +5267,12 @@ export async function acceptInvitation(invitationId: number, inviteeUserId: numb
       throw new Error("使用者不存在");
     }
 
-    // 跨廠唯一性：已擁有任何工廠？
+    // 跨廠唯一性：已擁有任何「有效」工廠？已封存（owner 自行刪除，deletedAt
+    // 有值）的工廠不算——封存工廠的 owner 可以加入其他工廠當次管理者，
+    // 原工廠 ownership 保留（供日後申請重新上架，重新上架時會再檢查不可同時
+    // 身兼次管理者，見 factory.submitForReview）。
     const [ownerRows]: any = await conn.execute(
-      "SELECT id FROM factories WHERE ownerId = ? LIMIT 1",
+      "SELECT id FROM factories WHERE ownerId = ? AND deletedAt IS NULL LIMIT 1",
       [inviteeUserId]
     );
     if (ownerRows && ownerRows.length > 0) {

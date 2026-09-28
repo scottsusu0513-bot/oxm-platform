@@ -8,11 +8,13 @@ import { vi } from "vitest";
  */
 export type QueryResultOverrides = Record<string, Record<string, unknown>>;
 
-const UTILS_METHODS = new Set(["invalidate", "fetch", "prefetch", "setData", "getData", "cancel", "refetch", "reset", "ensureData"]);
+const UTILS_METHODS = new Set(["invalidate", "fetch", "prefetch", "setData", "cancel", "refetch", "reset", "ensureData"]);
 
 function utilsProxy(): any {
   return new Proxy(function noop() {}, {
     get(_target, prop: string) {
+      // getData 在 tRPC 是同步讀取快取，沒有快取時回 undefined。
+      if (prop === "getData") return vi.fn(() => undefined);
       if (UTILS_METHODS.has(prop)) return vi.fn(async () => undefined);
       return utilsProxy();
     },

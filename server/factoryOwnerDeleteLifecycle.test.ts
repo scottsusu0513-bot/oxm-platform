@@ -119,9 +119,11 @@ describe("owner 執行 factory.delete → 軟刪除，歷史資料全部保留",
     expect(await count("products", sql`id = ${productId}`)).toBe(1);
   });
 
-  it("owner 的 isFactoryOwner 旗標照舊清除（既有 owner-facing 行為）", async () => {
+  // Batch 2.5：帳號仍擁有這間（已封存的）工廠，isFactoryOwner 保留，Navbar
+  // 才會繼續顯示「工廠後台」，讓工廠主看到封存狀態與「申請重新上架」。
+  it("owner 的 isFactoryOwner 旗標保留（仍擁有已封存的工廠）", async () => {
     const u = await db.getUserById(ownerId);
-    expect(u?.isFactoryOwner).toBe(false);
+    expect(u?.isFactoryOwner).toBe(true);
   });
 
   it("重複刪除 → 明確錯誤，不覆蓋第一次的 deletedAt", async () => {
@@ -162,9 +164,11 @@ describe("owner 執行 factory.delete → 軟刪除，歷史資料全部保留",
     expect(conv?.id).toBe(conversationId);
   });
 
-  it("買家既有對話：維持既有行為，仍可傳送訊息", async () => {
-    await caller(buyerId).chat.send({ conversationId, content: "工廠下架後的追問" });
-    expect(await count("messages", sql`conversationId = ${conversationId}`)).toBe(messageIds.length + 1);
+  // Batch 2.5 產品規則：已下架／封存工廠的歷史對話可讀、不可再傳訊。
+  it("買家既有對話：只供查看，不能再傳送訊息", async () => {
+    await expect(caller(buyerId).chat.send({ conversationId, content: "工廠下架後的追問" }))
+      .rejects.toThrow(/此對話僅供查看歷史紀錄/);
+    expect(await count("messages", sql`conversationId = ${conversationId}`)).toBe(messageIds.length);
   });
 
   it("其他買家不能對已刪除工廠開新對話", async () => {

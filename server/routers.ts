@@ -102,7 +102,8 @@ import { z } from "zod";
 import * as db from "./db";
 import {
   isFactoryPubliclyVisible, canViewFactoryDataById, assertCanOpenBuyerConversation,
-  assertFactoryAcceptsNewInteraction,
+  assertFactoryAcceptsNewInteraction, isFactoryArchived, assertFactoryNotArchived,
+  canWriteToConversation, assertConversationWritable, assertFactoryAcceptsNewOrder,
 } from "./factoryVisibility";
 import { notifyOwner } from "./_core/notification";
 import { storagePut, storagePresignedUrl, storageDelete } from "./storage";
@@ -575,6 +576,9 @@ async function assertFactoryManager(factoryId: number, userId: number) {
     const isCoMgr = await db.isActiveCoManager(factory.id, userId);
     if (!isCoMgr) throw new TRPCError({ code: "FORBIDDEN", message: "無權限操作此工廠" });
   }
+  // 只被商品／分類的營運 mutation 使用：已封存（工廠主自行刪除）的工廠不得
+  // 繼續新增／修改／刪除商品與分類。
+  assertFactoryNotArchived(factory);
   return factory;
 }
 
@@ -1652,6 +1656,7 @@ export const appRouter = router({
       const result: Record<string, any> = { ...publicSafeFactory, products: prods, latestRevision: safeLatestRevision };
       if (isAuthorized) {
         result.certificationEvidenceStatus = summarizeCertificationEvidenceForOwner(factory.certificationEvidence);
+        result.isArchived = isFactoryArchived(factory);
       }
       return result;
     }),
@@ -1686,6 +1691,9 @@ export const appRouter = router({
         products: prods,
         latestRevision: safeLatestRevision,
         certificationEvidenceStatus: summarizeCertificationEvidenceForOwner(factory.certificationEvidence),
+        // deletedAt 本身會被 stripCertificationEvidence 移除；後台需要知道是否為
+        // 「工廠主已封存」狀態以顯示 archived 畫面與「申請重新上架」。
+        isArchived: isFactoryArchived(factory),
       };
     }),
 
@@ -1796,6 +1804,7 @@ export const appRouter = router({
       const isOwner = factory.ownerId === ctx.user.id;
       const isCoMgr = !isOwner && await db.isActiveCoManager(id, ctx.user.id);
       if (!isOwner && !isCoMgr) throw new TRPCError({ code: 'FORBIDDEN', message: '無權限修改此工廠' });
+      assertFactoryNotArchived(factory);
 
       // Status-based routing
       if (factory.status === 'pending') {
@@ -1854,6 +1863,7 @@ export const appRouter = router({
       const isOwner = factory.ownerId === ctx.user.id;
       const isCoMgr = !isOwner && await db.isActiveCoManager(factory.id, ctx.user.id);
       if (!isOwner && !isCoMgr) throw new TRPCError({ code: 'FORBIDDEN', message: '無權限修改此工廠的徽章顯示設定' });
+      assertFactoryNotArchived(factory);
       const visible = await db.updateVisibleBadges(input.factoryId, input.visibleBadgeIds);
       return { certificationBadgesVisible: visible };
     }),
@@ -2156,7 +2166,9 @@ export const appRouter = router({
       }
       const deleted = await db.ownerSoftDeleteFactory(input.id, ctx.user.id);
       if (!deleted) throw new TRPCError({ code: "BAD_REQUEST", message: "此工廠已刪除" });
-      await db.setFactoryOwner(ctx.user.id, false);
+      // 刻意不再清除 isFactoryOwner：帳號仍擁有這間（已封存的）工廠，Navbar 的
+      // 「工廠後台」入口要繼續顯示，工廠主才能回到後台看到封存狀態與「申請
+      // 重新上架」，而不是被引導去建立一間全新的工廠（會被一人一廠規則擋下）。
       return { success: true };
     }),
 
@@ -2181,6 +2193,7 @@ export const appRouter = router({
         factory = await db.getFactoryByOwnerId(ctx.user.id);
         if (!factory) throw new Error("找不到工廠");
       }
+      assertFactoryNotArchived(factory);
       const base64Data = input.base64.includes(",") ? input.base64.split(",")[1] : input.base64;
       const buffer = Buffer.from(base64Data, "base64");
       const validation = await validateImageUpload(buffer);
@@ -2230,6 +2243,7 @@ export const appRouter = router({
       const isCoMgr = !isOwner && await db.isActiveCoManager(factory.id, ctx.user.id);
       const isAdmin = ctx.user.role === 'admin';
       if (!isOwner && !isCoMgr && !isAdmin) throw new TRPCError({ code: 'FORBIDDEN', message: '無權限調整此工廠大頭貼顯示範圍' });
+      if (!isAdmin) assertFactoryNotArchived(factory);
       if (factory.status === 'pending') {
         throw new TRPCError({ code: 'BAD_REQUEST', message: '首次申請審核中，不可調整大頭貼顯示範圍' });
       }
@@ -2249,6 +2263,7 @@ export const appRouter = router({
       const isCoMgr = !isOwner && await db.isActiveCoManager(factory.id, ctx.user.id);
       const isAdmin = ctx.user.role === 'admin';
       if (!isOwner && !isCoMgr && !isAdmin) throw new TRPCError({ code: 'FORBIDDEN', message: '無權限上傳此工廠封面' });
+      if (!isAdmin) assertFactoryNotArchived(factory);
       const base64Data = input.base64.includes(",") ? input.base64.split(",")[1] : input.base64;
       const buffer = Buffer.from(base64Data, "base64");
       const validation = await validateImageUpload(buffer);
@@ -2272,6 +2287,7 @@ export const appRouter = router({
       const isCoMgr = !isOwner && await db.isActiveCoManager(factory.id, ctx.user.id);
       const isAdmin = ctx.user.role === 'admin';
       if (!isOwner && !isCoMgr && !isAdmin) throw new TRPCError({ code: 'FORBIDDEN', message: '無權限調整此工廠封面顯示範圍' });
+      if (!isAdmin) assertFactoryNotArchived(factory);
       await db.updateFactory(factory.id, isAdmin ? -1 : factory.ownerId, { coverCrop: input.crop ?? null });
       return { crop: input.crop ?? null };
     }),
@@ -2300,6 +2316,7 @@ export const appRouter = router({
       const isOwner = factory.ownerId === ctx.user.id;
       const isCoMgr = !isOwner && await db.isActiveCoManager(factory.id, ctx.user.id);
       if (!isOwner && !isCoMgr) throw new TRPCError({ code: 'FORBIDDEN', message: '無權限上傳此工廠的徽章證明圖片' });
+      assertFactoryNotArchived(factory);
       if (factory.status === 'pending') throw new TRPCError({ code: 'BAD_REQUEST', message: '審核期間無法上傳徽章證明圖片' });
       if (!isValidBadgeId(input.badgeId)) throw new TRPCError({ code: 'BAD_REQUEST', message: '不明的認證項目' });
       if (!isPrivateStorageConfigured()) {
@@ -2415,7 +2432,19 @@ export const appRouter = router({
       requireVerifiedEmail(ctx.user);
       const factory = await db.getFactoryByOwnerId(ctx.user.id);
       if (!factory) throw new Error("找不到工廠");
-      if (factory.status !== 'draft' && factory.status !== 'rejected') throw new Error("只有未送審或已拒絕的工廠才能送出審核");
+      // 已封存工廠（工廠主自行刪除）的「申請重新上架」也走這個入口：同一套
+      // 送審完整度／產品數量驗證、同一封管理員通知，轉換成 pending 重新進入
+      // 管理員審核，絕不直接 approved（見 db.requestFactoryRestore）。
+      const isRestoreRequest = isFactoryArchived(factory);
+      if (!isRestoreRequest && factory.status !== 'draft' && factory.status !== 'rejected') throw new Error("只有未送審或已拒絕的工廠才能送出審核");
+      if (isRestoreRequest) {
+        // 一人一廠：封存期間可以去別的工廠當次管理者（見 acceptInvitation），但
+        // 重新上架後會同時擁有有效工廠，必須先退出次管理者身分。
+        const coManaged = await db.getCoManagedFactories(ctx.user.id);
+        if (coManaged.length > 0) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "您目前是其他工廠的次管理者，請先退出後再申請重新上架" });
+        }
+      }
       // 送審完整度驗證（見任務定案「工廠上架／送審必填欄位 audit（收斂
       // 輪）」）：這裡是 draft／rejected 工廠真正「送出審核」的唯一入口，
       // factory.create／factory.update 都只負責儲存資料（含「草稿」），不會
@@ -2433,7 +2462,12 @@ export const appRouter = router({
         const products = await db.getProductsByFactoryId(factory.id);
         if (products.length === 0) throw new Error("請至少新增一項產品後再送出審核");
       }
-      await db.updateFactory(factory.id, ctx.user.id, { status: 'pending', submittedAt: new Date() });
+      if (isRestoreRequest) {
+        const restored = await db.requestFactoryRestore(factory.id, ctx.user.id);
+        if (!restored) throw new TRPCError({ code: "BAD_REQUEST", message: "此工廠目前無法申請重新上架，請重新整理後再試" });
+      } else {
+        await db.updateFactory(factory.id, ctx.user.id, { status: 'pending', submittedAt: new Date() });
+      }
       sendFactorySubmittedEmail({
         factoryName: factory.name ?? '未命名工廠',
         factoryId: factory.id,
@@ -2460,6 +2494,7 @@ export const appRouter = router({
     })).mutation(async ({ ctx, input }) => {
       const factory = await db.getFactoryByOwnerId(ctx.user.id);
       if (!factory) throw new Error("找不到工廠");
+      assertFactoryNotArchived(factory);
       const base64Data = input.base64.includes(",") ? input.base64.split(",")[1] : input.base64;
       const buffer = Buffer.from(base64Data, "base64");
       const validation = await validateImageUpload(buffer);
@@ -2474,6 +2509,7 @@ export const appRouter = router({
     deletePhoto: protectedProcedure.input(z.object({ photoId: z.number() })).mutation(async ({ ctx, input }) => {
       const factory = await db.getFactoryByOwnerId(ctx.user.id);
       if (!factory) throw new Error("找不到工廠");
+      assertFactoryNotArchived(factory);
       await db.deleteFactoryPhoto(input.photoId, factory.id);
       return { success: true };
     }),
@@ -2484,6 +2520,7 @@ export const appRouter = router({
     })).mutation(async ({ ctx, input }) => {
       const factory = await db.getFactoryByOwnerId(ctx.user.id);
       if (!factory) throw new Error("找不到工廠");
+      assertFactoryNotArchived(factory);
       await db.updateFactoryPhotoCaption(input.photoId, factory.id, input.caption);
       return { success: true };
     }),
@@ -2495,6 +2532,7 @@ export const appRouter = router({
     })).mutation(async ({ ctx, input }) => {
       const factory = await db.getFactoryByOwnerId(ctx.user.id);
       if (!factory) throw new Error("找不到工廠");
+      assertFactoryNotArchived(factory);
       await db.updateFactoryPhotoCrop(input.photoId, factory.id, input.crop ?? null);
       return { success: true, crop: input.crop ?? null };
     }),
@@ -2511,6 +2549,7 @@ export const appRouter = router({
     })).mutation(async ({ ctx, input }) => {
       const factory = await db.getFactoryByOwnerId(ctx.user.id);
       if (!factory) throw new Error("您尚未擁有工廠");
+      assertFactoryNotArchived(factory);
 
       const invitee = await db.getUserByEmail(input.email);
       // Don't reveal whether email is registered — prevents enumeration
@@ -3005,6 +3044,9 @@ export const appRouter = router({
         buyerAffiliation: anonymizeForViewer ? null : (buyerAffiliation
           ? { factoryId: buyerAffiliation.factoryId, factoryName: buyerAffiliation.factoryName, factoryStatus: buyerAffiliation.factoryStatus, role: buyerAffiliation.role }
           : null),
+        // 工廠已下架／封存／非公開時對話只供查看：前端據此停用輸入區。跟
+        // chat.send 等寫入端點使用同一個判斷（canWriteToConversation）。
+        canSendMessages: await canWriteToConversation(conv, factory, ctx.user),
       };
     }),
 
@@ -3083,6 +3125,8 @@ export const appRouter = router({
       const isCoMgr = !isFactoryOwner && !!factory && await db.isActiveCoManager(factory.id, ctx.user.id);
       const isUser = conv.userId === ctx.user.id;
       if (!isFactoryOwner && !isCoMgr && !isUser) throw new Error("無權限");
+      // 工廠已下架／封存／非公開：既有對話只能讀，不能再新增訊息（雙向）。
+      await assertConversationWritable(conv, factory, ctx.user);
       const senderRole = (isFactoryOwner || isCoMgr) ? "factory" as const : "user" as const;
       // 政府補助顧問案件對話：往工廠端（案件申請人）的通知一律隱藏顧問真實姓名
       const isAdvisorConv = senderRole === "user" && await db.isAdvisorConversation(conv.userId, conv.factoryId);
@@ -3176,6 +3220,8 @@ export const appRouter = router({
     })).mutation(async ({ ctx, input }) => {
       requireVerifiedEmail(ctx.user);
       const factory = await assertCanOpenBuyerConversation(ctx.user, input.factoryId);
+      // 既有對話＋工廠已非公開：可以開啟查看，但不能再送出新訊息。
+      await assertConversationWritable({ userId: ctx.user.id, factoryId: input.factoryId }, factory, ctx.user);
 
       const senderUserId = ctx.user.id;
       // 必須在寫入訊息前完成（否則這則訊息本身會讓 hasContactBetweenUsers 誤判為已聯繫過）
@@ -3233,6 +3279,7 @@ export const appRouter = router({
       const isFactoryOwnerSP = factory?.ownerId === ctx.user.id;
       const isCoMgrSP = !isFactoryOwnerSP && !!factory && await db.isActiveCoManager(factory.id, ctx.user.id);
       if (!isFactoryOwnerSP && !isCoMgrSP) throw new TRPCError({ code: "FORBIDDEN", message: "僅工廠管理者可傳送商品" });
+      await assertConversationWritable(conv, factory, ctx.user);
 
       const factoryProducts = await db.getProductsByFactoryId(factory.id);
       const factoryProductMap = new Map(factoryProducts.map(p => [p.id, p]));
@@ -3273,6 +3320,7 @@ export const appRouter = router({
       const isFactoryOwnerPdf = factory?.ownerId === ctx.user.id;
       const isCoMgrPdf = !isFactoryOwnerPdf && !!factory && await db.isActiveCoManager(factory.id, ctx.user.id);
       if (!isFactoryOwnerPdf && !isCoMgrPdf) throw new TRPCError({ code: "FORBIDDEN", message: "僅工廠管理者可上傳型錄" });
+      await assertConversationWritable(conv, factory, ctx.user);
 
       // Strip path traversal and dangerous chars; allow spaces and CJK
       let safeName = input.fileName
@@ -3394,6 +3442,8 @@ export const appRouter = router({
       const isOwner = factory.ownerId === ctx.user.id;
       const isCoMgr = !isOwner && await db.isActiveCoManager(factory.id, ctx.user.id);
       if (!isOwner && !isCoMgr) throw new TRPCError({ code: "FORBIDDEN", message: "僅工廠管理者可建立合作確認單" });
+      // 工廠已下架／封存／非公開：不得建立新合作確認單（既有訂單流程不受影響）。
+      assertFactoryAcceptsNewOrder(factory);
       // 若帶 productId，確認屬於同一工廠
       if (input.productId) {
         const prod = await db.getProductById(input.productId);
@@ -4235,6 +4285,8 @@ export const appRouter = router({
       const order = await db.getCollaborationOrderById(input.orderId);
       if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "找不到合作確認單" });
       if (order.status !== "completed") throw new TRPCError({ code: "BAD_REQUEST", message: "只有已完成的訂單可重複下訂" });
+      // 重複下訂會產生新的合作確認單：供應工廠必須仍公開營運。
+      assertFactoryAcceptsNewOrder(await db.getFactoryById(order.factoryId));
 
       if (input.asFactoryId) {
         const factory = await db.getFactoryById(input.asFactoryId);
@@ -4324,6 +4376,8 @@ export const appRouter = router({
       const isOwner = factory.ownerId === ctx.user.id;
       const isCoMgr = !isOwner && await db.isActiveCoManager(factory.id, ctx.user.id);
       if (!isOwner && !isCoMgr) throw new TRPCError({ code: "FORBIDDEN", message: "只有供應工廠方可回覆" });
+      // 接受＝建立新的合作確認單，工廠必須仍公開營運；拒絕不受限。
+      if (input.action === "accept") assertFactoryAcceptsNewOrder(factory);
 
       if (input.action === "reject") {
         await db.respondRepeatOrderRequest(input.requestId, "rejected");
@@ -4617,7 +4671,14 @@ export const appRouter = router({
     const result = await db.getFavoritesByUser(ctx.user.id, input.page, input.pageSize);
     // 收藏清單裡的工廠對這位使用者來說只是一般會員視角，不是 owner／共管者／admin，
     // 一律不得看到 certificationEvidence，徽章也只能看到公開顯示的子集合。
-    return { ...result, items: result.items.map(f => stripHiddenBadgesForPublic(stripCertificationEvidence(f))) };
+    // 收藏之後才下架／封存的工廠：保留收藏紀錄（可取消收藏），但只回傳 id／
+    // 名稱＋isUnavailable，不再帶出任何工廠資料，前端顯示「目前已下架」。
+    return {
+      ...result,
+      items: result.items.map(f => isFactoryPubliclyVisible(f)
+        ? stripHiddenBadgesForPublic(stripCertificationEvidence(f))
+        : { id: f.id, name: f.name, isUnavailable: true as const }),
+    };
   }),
 }),
 

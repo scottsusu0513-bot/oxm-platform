@@ -324,7 +324,10 @@ describe("server/routers.ts 靜態安全合約 —— 四條回傳工廠資料�
       "getByUser: protectedProcedure.input(z.object({",
       "// ===== 管理員儀表板 =====",
     );
-    expect(block).toMatch(/items: result\.items\.map\(f => stripHiddenBadgesForPublic\(stripCertificationEvidence\(f\)\)\)/);
+    // Batch 2.5：公開工廠照舊消毒；之後才下架／封存的工廠只回傳 id／名稱＋
+    // isUnavailable，完全不帶工廠資料（更嚴格，不需要消毒）。
+    expect(block).toMatch(/isFactoryPubliclyVisible\(f\)\s*\?\s*stripHiddenBadgesForPublic\(stripCertificationEvidence\(f\)\)/);
+    expect(block).toMatch(/:\s*\{ id: f\.id, name: f\.name, isUnavailable: true as const \}/);
   });
 
   it("ad.getActive：nested factory 呼叫 stripCertificationEvidence 與 stripHiddenBadgesForPublic", () => {

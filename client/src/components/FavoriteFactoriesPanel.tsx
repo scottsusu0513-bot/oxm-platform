@@ -20,6 +20,28 @@ export function FactoryCard({ factory, onRemove, removeIcon }: {
   removeIcon: React.ReactNode;
 }) {
   const [, navigate] = useLocation();
+  // 收藏後才下架／封存的工廠（favorite.getByUser 回傳 isUnavailable）：保留
+  // 收藏紀錄、可取消收藏，但不可點進公開工廠頁。
+  if (factory.isUnavailable) {
+    return (
+      <Card className="opacity-70" data-testid="favorite-unavailable">
+        <CardContent className="p-4">
+          <div className="flex justify-between items-start gap-2">
+            <div className="flex items-center gap-2 flex-1 min-w-0">
+              <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center shrink-0">
+                <Factory className="w-4 h-4 text-gray-400" />
+              </div>
+              <h3 className="font-semibold text-base truncate">{factory.name}</h3>
+            </div>
+            <Button size="sm" variant="ghost" onClick={onRemove} aria-label="取消收藏">
+              {removeIcon}
+            </Button>
+          </div>
+          <Badge variant="outline" className="mt-2 text-xs text-muted-foreground">目前已下架</Badge>
+        </CardContent>
+      </Card>
+    );
+  }
   return (
     <Card
       className="cursor-pointer hover:shadow-lg transition-shadow"

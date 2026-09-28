@@ -71,6 +71,66 @@ export async function assertCanOpenBuyerConversation(
   throw new TRPCError({ code: "FORBIDDEN", message: FACTORY_UNAVAILABLE_FOR_NEW_INTERACTION });
 }
 
+// ===== 工廠主封存（Owner Archived）=====
+//
+// deletedAt != null ＝ 工廠主主動刪除／封存工廠（status 同時為 delisted）。
+// 跟管理員下架（status=delisted、deletedAt=null）是不同情境：封存的工廠
+// 不得繼續營運（編輯資料、商品、照片、邀請次管理者、新合作確認單…），
+// 只能查看歷史紀錄與「申請重新上架」（factory.submitForReview，重新進入
+// 管理員審核，見 db.requestFactoryRestore）。
+
+export const ARCHIVED_FACTORY_MESSAGE = "此工廠目前已下架，無法修改資料；如需重新使用 OXM，請申請重新上架";
+
+export function isFactoryArchived(factory: Pick<Factory, "deletedAt"> | null | undefined): boolean {
+  return !!factory?.deletedAt;
+}
+
+/** 營運類 mutation（編輯資料、商品、照片、邀請…）一律先呼叫。 */
+export function assertFactoryNotArchived(factory: Pick<Factory, "deletedAt"> | null | undefined): void {
+  if (isFactoryArchived(factory)) {
+    throw new TRPCError({ code: "FORBIDDEN", message: ARCHIVED_FACTORY_MESSAGE });
+  }
+}
+
+// ===== 歷史對話：可讀，不可寫 =====
+
+export const CONVERSATION_READ_ONLY_MESSAGE = "此工廠目前已停止服務，此對話僅供查看歷史紀錄";
+
+/**
+ * 使用者主動在既有對話新增訊息（文字、商品卡、PDF…）是否允許：工廠必須
+ * 仍公開營運（approved 且未封存）。例外：admin 發送、或企業升級顧問對話
+ * （內部／顧問流程可能在工廠上架前就需要聯繫）。系統為既有合作確認單流程
+ * 寫入的訊息不經過這裡。
+ */
+export async function canWriteToConversation(
+  conversation: { userId: number; factoryId: number },
+  factory: VisibilityFactory | null | undefined,
+  sender: { isAdmin?: boolean } | null | undefined,
+): Promise<boolean> {
+  if (isFactoryPubliclyVisible(factory)) return true;
+  if (sender?.isAdmin) return true;
+  return db.isAdvisorConversation(conversation.userId, conversation.factoryId);
+}
+
+export async function assertConversationWritable(
+  conversation: { userId: number; factoryId: number },
+  factory: VisibilityFactory | null | undefined,
+  sender: { isAdmin?: boolean } | null | undefined,
+): Promise<void> {
+  if (!(await canWriteToConversation(conversation, factory, sender))) {
+    throw new TRPCError({ code: "FORBIDDEN", message: CONVERSATION_READ_ONLY_MESSAGE });
+  }
+}
+
+export const FACTORY_NOT_OPERATIONAL_FOR_ORDER_MESSAGE = "此工廠目前已停止服務，無法建立新的合作確認單";
+
+/** 建立新合作確認單（含重複下訂）前：工廠必須公開營運。既有訂單流程不經過這裡。 */
+export function assertFactoryAcceptsNewOrder(factory: VisibilityFactory | null | undefined): void {
+  if (!isFactoryPubliclyVisible(factory)) {
+    throw new TRPCError({ code: "FORBIDDEN", message: FACTORY_NOT_OPERATIONAL_FOR_ORDER_MESSAGE });
+  }
+}
+
 /**
  * 建立「新的」買方 → 工廠互動前的檢查（新對話、一鍵詢價、新評價、新收藏／
  * 追蹤）。工廠不存在與非公開回同一個訊息，不透露狀態。

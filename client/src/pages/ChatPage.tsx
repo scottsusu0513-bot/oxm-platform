@@ -1190,6 +1190,8 @@ export default function ChatPage() {
     { conversationId: conversationId! },
     { enabled: !!conversationId && isAuthenticated }
   );
+  // 既有對話、但工廠已下架／停止服務：只供查看，停用輸入區。
+  const readOnlyConversation = !!conversationId && meta?.canSendMessages === false;
   const { data: msgs, isLoading: msgsLoading, isError: msgsError, refetch: refetchMsgs } = trpc.chat.getMessages.useQuery(
     { conversationId: conversationId!, page: 1 },
     { enabled: !!conversationId && isAuthenticated, refetchInterval: 5000 }
@@ -1537,7 +1539,13 @@ export default function ChatPage() {
               )}
             </div>
 
-            {/* Input area */}
+            {/* Input area：工廠已下架／停止服務時，對話只供查看歷史紀錄（伺服器端
+                chat.send 等也會拒絕，見 server/factoryVisibility.ts canWriteToConversation） */}
+            {readOnlyConversation ? (
+              <div className="border-t p-4 bg-muted/40 text-sm text-muted-foreground text-center break-words" role="status" data-testid="chat-read-only-notice">
+                此工廠目前已停止服務，此對話僅供查看歷史紀錄。
+              </div>
+            ) : (
             <div className="border-t p-4">
               <div className="flex gap-2 items-center">
                 {/* "+" 附件按鈕（工廠 owner 與 co-manager 可見） */}
@@ -1636,6 +1644,7 @@ export default function ChatPage() {
                 <p className="text-xs text-muted-foreground mt-2 text-center">正在上傳 PDF，請稍候…</p>
               )}
             </div>
+            )}
           </CardContent>
         </Card>
       </div>
