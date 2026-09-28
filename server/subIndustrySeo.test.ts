@@ -264,7 +264,7 @@ describe("getApprovedIndustrySubIndustryCombosForSitemap／getApprovedRegionIndu
     expect(fnSource.length).toBeGreaterThan(0);
     const selectCalls = fnSource.match(/db\.select\(/g) ?? [];
     expect(selectCalls.length).toBe(1);
-    expect(fnSource).toMatch(/eq\(factories\.status,\s*'approved'\)/);
+    expect(fnSource).toMatch(/publicFactoryCondition\(\)/); // approved 且 deletedAt IS NULL（server/db.ts 共用條件）
   });
 
   it("getApprovedRegionIndustrySubIndustryCombosForSitemap 只有一次 db.select 呼叫", () => {
@@ -273,7 +273,7 @@ describe("getApprovedIndustrySubIndustryCombosForSitemap／getApprovedRegionIndu
     expect(fnSource.length).toBeGreaterThan(0);
     const selectCalls = fnSource.match(/db\.select\(/g) ?? [];
     expect(selectCalls.length).toBe(1);
-    expect(fnSource).toMatch(/eq\(factories\.status,\s*'approved'\)/);
+    expect(fnSource).toMatch(/publicFactoryCondition\(\)/); // approved 且 deletedAt IS NULL（server/db.ts 共用條件）
   });
 
   it("hasApprovedFactoryForSubIndustry／hasApprovedFactoryForRegionSubIndustry 都用 LIMIT 1", () => {

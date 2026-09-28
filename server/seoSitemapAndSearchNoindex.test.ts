@@ -104,11 +104,11 @@ describe("sitemap.xml 產生邏輯（server/_core/index.ts）", () => {
     expect(factoryLoopMatch![0]).toContain("f.updatedAt");
   });
 
-  it("已審核工廠清單只查 status='approved'（server/db.ts getApprovedFactoriesForSitemap）", () => {
+  it("已審核工廠清單只查公開工廠（approved 且未刪除，server/db.ts getApprovedFactoriesForSitemap）", () => {
     const dbSource = readSource("server", "db.ts");
     const fnMatch = dbSource.match(/export async function getApprovedFactoriesForSitemap[\s\S]*?\n\}/);
     expect(fnMatch).toBeTruthy();
-    expect(fnMatch![0]).toMatch(/eq\(factories\.status,\s*'approved'\)/);
+    expect(fnMatch![0]).toMatch(/publicFactoryCondition\(\)/); // approved 且 deletedAt IS NULL（server/db.ts 共用條件）
   });
 });
 

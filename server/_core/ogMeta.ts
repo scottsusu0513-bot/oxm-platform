@@ -1,4 +1,5 @@
 import * as db from "../db";
+import { isFactoryPubliclyVisible } from "../factoryVisibility";
 import { BRAND } from "@shared/seo/brand";
 import { toSafeJsonLdString, getBreadcrumbSchema, type JsonLdObject } from "@shared/seo/schema";
 import { resolveRegionIndustry, buildRegionIndustryPageContent } from "@shared/seo/regionIndustryPages";
@@ -276,7 +277,7 @@ export async function buildFactoryMeta(rawId: string, pathname: string): Promise
 
   try {
     const factory = await db.getFactoryById(id);
-    if (!factory || factory.status !== "approved") {
+    if (!isFactoryPubliclyVisible(factory)) {
       return { ...GENERIC_FALLBACK, url, status: 404, noindex: true };
     }
 

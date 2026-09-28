@@ -100,6 +100,10 @@ import { publicProcedure, protectedProcedure, adminProcedure, badgeEvidenceUploa
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import * as db from "./db";
+import {
+  isFactoryPubliclyVisible, canViewFactoryDataById, assertCanOpenBuyerConversation,
+  assertFactoryAcceptsNewInteraction,
+} from "./factoryVisibility";
 import { notifyOwner } from "./_core/notification";
 import { storagePut, storagePresignedUrl, storageDelete } from "./storage";
 import { validateImageUpload } from "./_core/security";
@@ -1603,8 +1607,8 @@ export const appRouter = router({
       if (!factory) return null;
       const authedUser = ctx.user;
       let isAuthorized = false;
-      // Non-approved factories are only visible to their owner, co-managers, and admins
-      if (factory.status !== "approved") {
+      // Non-public factories (not approved, or soft-deleted) are only visible to their owner, co-managers, and admins
+      if (!isFactoryPubliclyVisible(factory)) {
         if (!authedUser) return null;
         if (authedUser.isAdmin) {
           isAuthorized = true;
@@ -2143,9 +2147,15 @@ export const appRouter = router({
 }),
 
     delete: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+      // 只有 owner 可以刪除（co-manager 不行，維持既有權限設計）。刪除＝軟刪除：
+      // 工廠停止公開，但買家的對話／訊息、合作確認單、評價等歷史資料全部保留，
+      // 見 db.ownerSoftDeleteFactory。
       const factory = await db.getFactoryById(input.id);
-      if (!factory || factory.ownerId !== ctx.user.id) throw new Error("無權限刪除此工廠");
-      await db.deleteFactory(input.id, ctx.user.id);
+      if (!factory || factory.ownerId !== ctx.user.id) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "無權限刪除此工廠" });
+      }
+      const deleted = await db.ownerSoftDeleteFactory(input.id, ctx.user.id);
+      if (!deleted) throw new TRPCError({ code: "BAD_REQUEST", message: "此工廠已刪除" });
       await db.setFactoryOwner(ctx.user.id, false);
       return { success: true };
     }),
@@ -2435,7 +2445,10 @@ export const appRouter = router({
       return { success: true };
     }),
 
-    getPhotos: publicProcedure.input(z.object({ factoryId: z.number() })).query(async ({ input }) => {
+    // 從屬資料一律先確認工廠公開可見（或呼叫者可管理），否則回空陣列——跟
+    // 「工廠不存在」同一個結果，不透露 draft／rejected／已刪除狀態。
+    getPhotos: publicProcedure.input(z.object({ factoryId: z.number() })).query(async ({ input, ctx }) => {
+      if (!(await canViewFactoryDataById(input.factoryId, ctx.user))) return [];
       return db.getPhotosByFactoryId(input.factoryId);
     }),
 
@@ -2659,7 +2672,8 @@ export const appRouter = router({
 
   // ===== 產品分類 =====
   category: router({
-    getByFactory: publicProcedure.input(z.object({ factoryId: z.number() })).query(async ({ input }) => {
+    getByFactory: publicProcedure.input(z.object({ factoryId: z.number() })).query(async ({ input, ctx }) => {
+      if (!(await canViewFactoryDataById(input.factoryId, ctx.user))) return [];
       return db.getCategoriesByFactoryId(input.factoryId);
     }),
 
@@ -2704,12 +2718,18 @@ export const appRouter = router({
 
   // ===== 產品 =====
   product: router({
-    getByFactory: publicProcedure.input(z.object({ factoryId: z.number() })).query(async ({ input }) => {
+    getByFactory: publicProcedure.input(z.object({ factoryId: z.number() })).query(async ({ input, ctx }) => {
+      if (!(await canViewFactoryDataById(input.factoryId, ctx.user))) return [];
       return db.getProductsByFactoryId(input.factoryId);
     }),
 
-    getById: publicProcedure.input(z.object({ id: z.number() })).query(async ({ input }) => {
-      return db.getProductById(input.id);
+    // 直接用 productId 查詢也必須反查所屬工廠的可見性，否則可以繞過
+    // factory.getById／product.getByFactory 列舉非公開工廠的商品。
+    getById: publicProcedure.input(z.object({ id: z.number() })).query(async ({ input, ctx }) => {
+      const product = await db.getProductById(input.id);
+      if (!product) return undefined;
+      if (!(await canViewFactoryDataById(product.factoryId, ctx.user))) return undefined;
+      return product;
     }),
 
     create: protectedProcedure.input(z.object({
@@ -2797,6 +2817,7 @@ export const appRouter = router({
       productId: z.number().optional(),
     })).mutation(async ({ ctx, input }) => {
       requireVerifiedEmail(ctx.user);
+      await assertCanOpenBuyerConversation(ctx.user, input.factoryId);
       const conv = await db.getOrCreateConversation(ctx.user.id, input.factoryId, input.productId);
       return conv;
     }),
@@ -3154,8 +3175,7 @@ export const appRouter = router({
       content: z.string().min(1).max(2000),
     })).mutation(async ({ ctx, input }) => {
       requireVerifiedEmail(ctx.user);
-      const factory = await db.getFactoryById(input.factoryId);
-      if (!factory) throw new TRPCError({ code: "NOT_FOUND", message: "工廠不存在" });
+      const factory = await assertCanOpenBuyerConversation(ctx.user, input.factoryId);
 
       const senderUserId = ctx.user.id;
       // 必須在寫入訊息前完成（否則這則訊息本身會讓 hasContactBetweenUsers 誤判為已聯繫過）
@@ -4449,7 +4469,8 @@ export const appRouter = router({
       factoryId: z.number(),
       page: z.number().int().min(1).default(1),
       pageSize: z.number().int().min(1).max(100).default(20),
-    })).query(async ({ input }) => {
+    })).query(async ({ input, ctx }) => {
+      if (!(await canViewFactoryDataById(input.factoryId, ctx.user))) return { items: [], total: 0 };
       return db.getReviewsByFactory(input.factoryId, input.page, input.pageSize);
     }),
 
@@ -4459,6 +4480,7 @@ export const appRouter = router({
       comment: z.string().max(1000).optional(),
     })).mutation(async ({ ctx, input }) => {
       requireVerifiedEmail(ctx.user);
+      assertFactoryAcceptsNewInteraction(await db.getFactoryById(input.factoryId));
       const existing = await db.getReviewByUserAndFactory(ctx.user.id, input.factoryId);
       if (existing) throw new TRPCError({ code: "BAD_REQUEST", message: "您已為此工廠留過評價" });
       await db.createReview({ ...input, userId: ctx.user.id });
@@ -4564,6 +4586,10 @@ export const appRouter = router({
   // ===== 工廠收藏 =====
   favorite: router({
   toggle: protectedProcedure.input(z.object({ factoryId: z.number() })).mutation(async ({ ctx, input }) => {
+    // 新增收藏只允許公開工廠；已收藏的（即使工廠之後下架）仍可取消收藏。
+    if (!(await db.isFavorited(ctx.user.id, input.factoryId))) {
+      assertFactoryAcceptsNewInteraction(await db.getFactoryById(input.factoryId));
+    }
     const isFavorited = await db.toggleFavorite(ctx.user.id, input.factoryId);
     return { isFavorited };
   }),
@@ -4679,6 +4705,11 @@ export const appRouter = router({
     }),
 
     approveFactory: adminProcedure.input(z.object({ factoryId: z.number() })).mutation(async ({ input }) => {
+  // 已軟刪除的工廠不得直接被核准回 approved（會產生 approved＋deletedAt 的
+  // 矛盾狀態）。恢復已刪除工廠的流程尚未定義，需另行決定。
+  const target = await db.getFactoryById(input.factoryId);
+  if (!target) throw new TRPCError({ code: 'NOT_FOUND', message: '找不到此工廠' });
+  if (target.deletedAt) throw new TRPCError({ code: 'BAD_REQUEST', message: '此工廠已刪除，無法直接核准上架' });
   await db.approveFactoryWithBadgeSync(input.factoryId);
   const factory = await db.getFactoryById(input.factoryId);
   if (factory?.contactEmail) {
@@ -6339,8 +6370,10 @@ export const appRouter = router({
       const factoryList = await Promise.all(uniqueIds.map(id => db.getFactoryById(id)));
       for (let i = 0; i < uniqueIds.length; i++) {
         const f = factoryList[i];
-        if (!f) throw new TRPCError({ code: "BAD_REQUEST", message: `工廠 #${uniqueIds[i]} 不存在` });
-        if (f.status !== "approved") throw new TRPCError({ code: "BAD_REQUEST", message: `工廠「${f.name}」尚未上架` });
+        // 不存在與非公開（未上架／下架／已刪除）回同一個訊息，不透露工廠名稱或狀態。
+        if (!isFactoryPubliclyVisible(f)) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "部分工廠目前無法接受新詢問，請重新整理後再試" });
+        }
         if (f.ownerId === ctx.user.id) throw new TRPCError({ code: "BAD_REQUEST", message: `不可對自己的工廠送一鍵詢價` });
       }
 
@@ -6616,7 +6649,13 @@ export const appRouter = router({
         }
         const comments = await db.getCommunityCommentsByPost(input.postId);
         const pinnedProductIds = (post.pinnedProductIds ?? []) as number[];
-        const pinnedProducts = await db.getProductsByIds(pinnedProductIds);
+        // 釘選商品所屬工廠之後若下架／刪除，商品不得再透過貼文公開（管理者除外）。
+        const pinnedProductRows = await db.getProductsByIds(pinnedProductIds);
+        const visibleFactoryIds = new Set<number>();
+        for (const factoryId of Array.from(new Set(pinnedProductRows.map(p => p.factoryId)))) {
+          if (await canViewFactoryDataById(factoryId, ctx.user)) visibleFactoryIds.add(factoryId);
+        }
+        const pinnedProducts = pinnedProductRows.filter(p => visibleFactoryIds.has(p.factoryId));
         const mentionRows = await db.getMentionsBySource("post", input.postId);
         const postMentions = mentionRows.map(m => ({
           type: m.mentionedUserId != null ? ("user" as const) : ("factory" as const),
@@ -7262,7 +7301,7 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         checkCommunityWrite(ctx.user);
         const factory = await db.getFactoryById(input.factoryId);
-        if (!factory || factory.status !== "approved") {
+        if (!isFactoryPubliclyVisible(factory)) {
           throw new TRPCError({ code: "NOT_FOUND", message: "找不到此工廠" });
         }
         await db.followFactory(ctx.user.id, input.factoryId, input.notifyNewDiscussions);

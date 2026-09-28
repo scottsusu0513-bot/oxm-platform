@@ -1,7 +1,7 @@
 /**
  * Phase 11.2「三十一：Cross-factory Leakage Tests」驗證——P1、P3、P4、P5。
  *
- * 走真實本機測試資料庫、真實 membership-transition code path（db.deleteFactory／
+ * 走真實本機測試資料庫、真實 membership-transition code path（db.ownerSoftDeleteFactory／
  * db.acceptInvitation／db.delistFactory／db.approveFactoryWithBadgeSync），
  * 只 mock diagnosis／routing／provider（不打真實 OpenAI API），用
  * appRouter.createCaller(ctx) 直接呼叫 tRPC procedure，沿用
@@ -19,7 +19,7 @@
  */
 import { describe, expect, it, vi, afterEach, afterAll } from "vitest";
 import { sql, eq } from "drizzle-orm";
-import { getDb, deleteFactory, acceptInvitation, delistFactory, approveFactoryWithBadgeSync } from "./db";
+import { getDb, ownerSoftDeleteFactory, acceptInvitation, delistFactory, approveFactoryWithBadgeSync } from "./db";
 import { aiEnterpriseMemories } from "../drizzle/schema";
 import { createTestFactory, deleteTestFactory } from "./_core/financeTestFixtures";
 
@@ -139,7 +139,7 @@ afterAll(async () => {
   const conn = await getDb();
   if (!conn) return;
   for (const factoryId of createdFactoryIds) {
-    await deleteTestFactory(factoryId).catch(() => {}); // 有些工廠已經在測試中被 deleteFactory() 真的刪除過，重複刪除是安全 no-op
+    await deleteTestFactory(factoryId).catch(() => {}); // 測試中軟刪除過的工廠列仍存在，這裡實際清除測試資料
   }
   if (createdUserIds.length > 0) {
     await conn.execute(sql`DELETE FROM users WHERE id IN (${sql.join(createdUserIds, sql`, `)})`);
@@ -151,8 +151,8 @@ afterAll(() => {
   else process.env.OXM_AI_RELEASE_MODE = ORIGINAL_AI_RELEASE_MODE;
 });
 
-describe("P1：Factory A owner 建立 A memory → 離開 A → 加入 B → B 對話讀不到 A 的記憶", () => {
-  it("實際傳進 Layer 1 Diagnosis 的 enterpriseMemory 在換工廠後是 null，不是 Factory A 的舊內容", async () => {
+describe("P1：Factory A owner 建立 A memory → owner 自助刪除 A（軟刪除）→ A 的記憶不再被注入", () => {
+  it("刪除後 ai.chat 在 entitlement 就被擋下，Diagnosis 不會被呼叫、A 的舊記憶不會被餵給 LLM", async () => {
     const userId = await mkUser();
     const factoryA = await mkFactory(userId, "A-p1");
 
@@ -170,30 +170,23 @@ describe("P1：Factory A owner 建立 A memory → 離開 A → 加入 B → B �
     const [memoryA] = await db!.select().from(aiEnterpriseMemories).where(eq(aiEnterpriseMemories.factoryId, factoryA));
     expect(memoryA?.summaryText).toBe("CNC 車銑複合；主力產品為精密零件。");
 
-    // U 離開 Factory A（owner 自助刪除，唯一真實存在的「離開」路徑，見
-    // Phase 11.1 Audit）。
-    await deleteFactory(factoryA, userId);
+    // U 離開 Factory A（owner 自助刪除）。Production Hardening Batch 2 起，
+    // owner 刪除改為軟刪除（status=delisted + deletedAt，工廠列保留，見
+    // db.ownerSoftDeleteFactory）。工廠列仍以 U 為 ownerId，一人一間工廠的
+    // 唯一性限制（uq_factory_owner_id／acceptInvitation 的 ownerId 檢查）會讓
+    // U 無法再加入其他工廠——這是待產品決定的 lifecycle 問題，不在本測試
+    // 斷言範圍；這裡只驗證核心安全性質：刪除後 A 的記憶不會再被餵給 LLM。
+    await ownerSoftDeleteFactory(factoryA, userId);
 
-    // U 加入 Factory B（全新、業務完全不同的工廠）。
-    const otherOwnerId = await mkUser();
-    const factoryB = await mkFactory(otherOwnerId, "B-p1");
-    const invitationId = await mkInvitation(factoryB, otherOwnerId, userId);
-    await acceptInvitation(invitationId, userId);
-
-    // U 在 Factory B context 下開新對話。
     mockRunEnterpriseDiagnosis.mockClear();
     mockAiReply("好的，請問目前遇到什麼狀況？");
-    const callerOnB = appRouter.createCaller(ctxForUser(userId));
-    await callerOnB.ai.chat({ message: "你還記得我是做什麼的嗎？", clientTurnId: nextClientTurnId() });
+    const callerAfterDelete = appRouter.createCaller(ctxForUser(userId));
+    const result = await callerAfterDelete.ai.chat({ message: "你還記得我是做什麼的嗎？", clientTurnId: nextClientTurnId() });
 
-    // 核心斷言：這次真正傳給 Diagnosis 的 enterpriseMemory 必須是 null，
-    // 不能是 Factory A 的舊記憶——這是唯一有意義的驗證方式（不是只驗 DB row
-    // 還在不在，是驗證會不會被餵給 LLM）。
-    expect(mockRunEnterpriseDiagnosis).toHaveBeenCalledTimes(1);
-    expect(mockRunEnterpriseDiagnosis.mock.calls[0][0].enterpriseMemory).toBeNull();
-
-    // Factory A 的舊記憶本身可能還留在 DB（factoryId 被 FK SET NULL，不是本測
-    // 試關心的重點），但已經不會再被任何人讀到。
+    // 核心斷言：已軟刪除的 Factory A 不再是 U 的有效企業身分，entitlement 在最前面
+    // 就擋下（跟 P4 delisted 相同），Diagnosis 完全不會被呼叫，A 的記憶不可能被注入。
+    expect(result).toMatchObject({ status: "denied", reason: "no_factory" });
+    expect(mockRunEnterpriseDiagnosis).not.toHaveBeenCalled();
   });
 });
 
@@ -269,8 +262,8 @@ describe("P4：Factory A 下架（delisted）→ entitlement denied、memory 不
   });
 });
 
-describe("P5：Factory A 被 owner 自助真的物理刪除 → Enterprise Memory 一併 CASCADE 刪除，不留無主記憶", () => {
-  it("deleteFactory 後 aiEnterpriseMemories 對應 row 消失（schema FK CASCADE）", async () => {
+describe("P5：Factory A 被 owner 自助刪除（軟刪除）→ Enterprise Memory 跟著工廠列保留，不成為無主記憶，也不再被讀取", () => {
+  it("ownerSoftDeleteFactory 後工廠列與 memory 都保留（memory 仍指向 A，不是 orphan），且 AI 不再讀取", async () => {
     const ownerId = await mkUser();
     const factoryA = await mkFactory(ownerId, "A-p5");
 
@@ -285,12 +278,20 @@ describe("P5：Factory A 被 owner 自助真的物理刪除 → Enterprise Memor
     const [before] = await db!.select().from(aiEnterpriseMemories).where(eq(aiEnterpriseMemories.factoryId, factoryA));
     expect(before).toBeTruthy();
 
-    await deleteFactory(factoryA, ownerId);
-    // 從 createdFactoryIds 移除，避免 afterEach 之外的清理流程重複刪除已經不存在的工廠。
-    const idx = createdFactoryIds.indexOf(factoryA);
-    if (idx >= 0) createdFactoryIds.splice(idx, 1);
+    // Production Hardening Batch 2：owner 刪除改為軟刪除，不再物理刪除工廠列，
+    // 所以 FK CASCADE 不會觸發——memory 跟工廠的其他歷史資料一樣保留。
+    expect(await ownerSoftDeleteFactory(factoryA, ownerId)).toBe(true);
+
+    const [factoryRow] = await db!.execute(sql`SELECT status, deletedAt FROM factories WHERE id = ${factoryA}`) as unknown as [{ status: string; deletedAt: Date | null }[], unknown];
+    expect(factoryRow[0]).toMatchObject({ status: "delisted" });
+    expect(factoryRow[0].deletedAt).not.toBeNull();
 
     const [after] = await db!.select().from(aiEnterpriseMemories).where(eq(aiEnterpriseMemories.factoryId, factoryA));
-    expect(after).toBeUndefined(); // FK ON DELETE CASCADE，不是無主殘留資料
+    expect(after?.summaryText).toBe("塑膠射出成型；主力為汽車零件。"); // 仍指向存在的工廠列，不是 orphan
+
+    mockRunEnterpriseDiagnosis.mockClear();
+    const denied = await caller.ai.chat({ message: "還記得嗎？", clientTurnId: nextClientTurnId() });
+    expect(denied).toMatchObject({ status: "denied", reason: "no_factory" });
+    expect(mockRunEnterpriseDiagnosis).not.toHaveBeenCalled();
   });
 });

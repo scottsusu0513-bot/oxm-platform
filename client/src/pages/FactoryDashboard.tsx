@@ -2288,7 +2288,7 @@ function DeleteFactoryButton({ factoryId }: { factoryId: number }) {
           <AlertDialogTitle className="flex items-center gap-2">
             <AlertTriangle className="w-5 h-5 text-destructive" />確認刪除工廠
           </AlertDialogTitle>
-          <AlertDialogDescription>此操作將永久刪除您的工廠資料及所有產品資訊，且無法復原。確定要繼續嗎？</AlertDialogDescription>
+          <AlertDialogDescription>刪除後工廠將立即從平台下架，且無法自行復原。為保障交易雙方權益，既有的對話、合作確認單與評價紀錄會保留。確定要繼續嗎？</AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel>取消</AlertDialogCancel>

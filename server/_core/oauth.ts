@@ -2,7 +2,7 @@ import type { CookieOptions, Express, Request, Response } from "express";
 import * as db from "../db";
 import { ENV } from "./env";
 import { randomBytes } from "crypto";
-import { handleOAuthCallback, issueSessionOrTicket } from "./oauthHelpers";
+import { handleOAuthCallback, issueSessionOrTicket, isGoogleEmailVerified } from "./oauthHelpers";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 
 // Cached Apple JWKS (fetched lazily on first Apple login)
@@ -155,7 +155,8 @@ export function registerOAuthRoutes(app: Express) {
         provider: "google",
         providerAccountId: userInfo.id,
         providerEmail: userInfo.email ?? null,
-        providerEmailVerified: true, // Google always verifies email
+        // 以 Google 實際回傳的 verified_email 為準，缺欄位視為未驗證。
+        providerEmailVerified: isGoogleEmailVerified(userInfo),
         displayName: userInfo.name ?? null,
       });
 

@@ -375,12 +375,22 @@ export async function appendFactoryCertificationEvidenceImage(
   }
 }
 
+/**
+ * 公開可見工廠的唯一 SQL 條件：status='approved' 且未軟刪除（deletedAt IS
+ * NULL）。所有公開發現入口（搜尋、SEO landing page existence、sitemap、相關
+ * 工廠、名稱索引）一律使用這個條件；應用層對單筆工廠的等價判斷見
+ * server/factoryVisibility.ts 的 isFactoryPubliclyVisible。
+ */
+export function publicFactoryCondition() {
+  return and(eq(factories.status, 'approved'), isNull(factories.deletedAt))!;
+}
+
 export async function getApprovedFactoriesForSitemap(): Promise<{ id: number; updatedAt: Date }[]> {
   const db = await getDb();
   if (!db) return [];
   return db.select({ id: factories.id, updatedAt: factories.updatedAt })
     .from(factories)
-    .where(eq(factories.status, 'approved'));
+    .where(publicFactoryCondition());
 }
 
 /**
@@ -388,9 +398,8 @@ export async function getApprovedFactoriesForSitemap(): Promise<{ id: number; up
  * 至少有 1 家 approved 公開工廠。刻意用 SELECT ... LIMIT 1，不是完整
  * searchFactories（不需要分頁、排序、AI ranking 這些額外成本）。approved
  * 條件與 searchFactories／getApprovedFactoriesForSitemap 完全一致
- * （eq(factories.status, 'approved')），不重新定義 public／approved 規則——
- * 軟刪除一律連帶把 status 改成 'delisted'（見 server/db.ts 下架邏輯），approved
- * 工廠不可能同時 deletedAt 有值，不需要額外的 isNull(deletedAt) 條件。
+ * （publicFactoryCondition()：approved 且 deletedAt IS NULL），不重新定義
+ * public／approved 規則。
  * industry 比對用 JSON_OVERLAPS，語意與 searchFactories 的 industry 篩選
  * 完全相同（factories.industry 是 JSON 陣列欄位，一家工廠可能有多個主產業）。
  */
@@ -400,7 +409,7 @@ export async function hasApprovedFactoryForRegionIndustry(region: string, indust
   const rows = await db.select({ id: factories.id })
     .from(factories)
     .where(and(
-      eq(factories.status, 'approved'),
+      publicFactoryCondition(),
       eq(factories.region, region),
       sql`JSON_OVERLAPS(${factories.industry}, ${JSON.stringify([industry])})`,
     ))
@@ -421,7 +430,7 @@ export async function getApprovedRegionIndustryCombosForSitemap(): Promise<{ reg
   if (!db) return [];
   const rows = await db.select({ region: factories.region, industry: factories.industry })
     .from(factories)
-    .where(eq(factories.status, 'approved'));
+    .where(publicFactoryCondition());
 
   const seen = new Set<string>();
   const combos: { region: string; industry: string }[] = [];
@@ -461,7 +470,7 @@ export async function hasApprovedFactoryForSubIndustry(industry: string, subIndu
   const rows = await db.select({ id: factories.id })
     .from(factories)
     .where(and(
-      eq(factories.status, 'approved'),
+      publicFactoryCondition(),
       sql`JSON_OVERLAPS(${factories.industry}, ${JSON.stringify([industry])})`,
       sql`JSON_CONTAINS(${factories.subIndustry}, ${JSON.stringify([subIndustry])})`,
     ))
@@ -480,7 +489,7 @@ export async function hasApprovedFactoryForRegionSubIndustry(region: string, ind
   const rows = await db.select({ id: factories.id })
     .from(factories)
     .where(and(
-      eq(factories.status, 'approved'),
+      publicFactoryCondition(),
       eq(factories.region, region),
       sql`JSON_OVERLAPS(${factories.industry}, ${JSON.stringify([industry])})`,
       sql`JSON_CONTAINS(${factories.subIndustry}, ${JSON.stringify([subIndustry])})`,
@@ -509,7 +518,7 @@ export async function getApprovedIndustrySubIndustryCombosForSitemap(): Promise<
   if (!db) return [];
   const rows = await db.select({ industry: factories.industry, subIndustry: factories.subIndustry })
     .from(factories)
-    .where(eq(factories.status, 'approved'));
+    .where(publicFactoryCondition());
 
   const seen = new Set<string>();
   const combos: { industry: string; subIndustry: string }[] = [];
@@ -538,7 +547,7 @@ export async function getApprovedRegionIndustrySubIndustryCombosForSitemap(): Pr
   if (!db) return [];
   const rows = await db.select({ region: factories.region, industry: factories.industry, subIndustry: factories.subIndustry })
     .from(factories)
-    .where(eq(factories.status, 'approved'));
+    .where(publicFactoryCondition());
 
   const seen = new Set<string>();
   const combos: { region: string; industry: string; subIndustry: string }[] = [];
@@ -604,7 +613,7 @@ export async function getSimilarFactories(factoryId: number, limit = 12): Promis
   if (!db) return [];
 
   const current = await getFactoryById(factoryId);
-  if (!current || current.status !== 'approved') return [];
+  if (!current || current.status !== 'approved' || current.deletedAt) return [];
 
   const currentIndustry = Array.isArray(current.industry) ? (current.industry as string[]) : [];
   const currentSubIndustry = Array.isArray(current.subIndustry) ? (current.subIndustry as string[]) : [];
@@ -620,7 +629,7 @@ export async function getSimilarFactories(factoryId: number, limit = 12): Promis
   const CANDIDATE_LIMIT = 30;
   const candidates = await db.select().from(factories)
     .where(and(
-      eq(factories.status, 'approved'),
+      publicFactoryCondition(),
       ne(factories.id, factoryId),
       or(...matchConditions)!,
     ))
@@ -778,7 +787,7 @@ export async function searchFactories(params: {
   } = params;
 
   // 使用者手動篩選條件（最高優先，永遠在 SQL WHERE 層處理）
-  const conditions = [eq(factories.status, 'approved')];
+  const conditions = [publicFactoryCondition()];
   if (industry && industry.length > 0)
     conditions.push(sql`JSON_OVERLAPS(${factories.industry}, ${JSON.stringify(industry)})`);
   if (subIndustry && subIndustry.length > 0) {
@@ -1172,7 +1181,7 @@ export async function listApprovedFactoryNamesForIndex(): Promise<{ id: number; 
   if (!db) return [];
   return db.select({ id: factories.id, name: factories.name })
     .from(factories)
-    .where(eq(factories.status, "approved"));
+    .where(publicFactoryCondition());
 }
 
 // ===== Product helpers =====
@@ -1219,6 +1228,16 @@ export async function getProductById(id: number) {
 }
 
 // ===== Conversation / Message helpers =====
+/** 使用者與工廠之間是否已經有對話（不分 productId）。 */
+export async function hasConversationBetween(userId: number, factoryId: number): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const rows = await db.select({ id: conversations.id }).from(conversations)
+    .where(and(eq(conversations.userId, userId), eq(conversations.factoryId, factoryId)))
+    .limit(1);
+  return rows.length > 0;
+}
+
 export async function getOrCreateConversation(userId: number, factoryId: number, productId?: number) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
@@ -1776,11 +1795,16 @@ export async function getActiveAds(params: { industry?: string; capitalLevel?: s
   // 取得對應的工廠資料
   if (ads.length === 0) return [];
   const factoryIds = ads.map(a => a.factoryId);
-  const factoryList = await db.select().from(factories).where(inArray(factories.id, factoryIds));
-  return ads.map(ad => ({
-    ...ad,
-    factory: factoryList.find(f => f.id === ad.factoryId),
-  }));
+  // 廣告只能曝光「目前公開」的工廠：工廠被下架／軟刪除／退件後，即使廣告
+  // 本身仍在期間內也不得再回傳（否則公開 API 會帶出非公開工廠的完整資料）。
+  const factoryList = await db.select().from(factories)
+    .where(and(inArray(factories.id, factoryIds), publicFactoryCondition()));
+  return ads
+    .filter(ad => factoryList.some(f => f.id === ad.factoryId))
+    .map(ad => ({
+      ...ad,
+      factory: factoryList.find(f => f.id === ad.factoryId),
+    }));
 }
 
 export async function createAd(data: { factoryId: number; industry: string; capitalLevel: string; region: string; extraRegions?: string[]; startDate: Date; endDate: Date }) {
@@ -1815,37 +1839,27 @@ export async function getReviewsByUser(userId: number, page = 1, pageSize = 20) 
   return { items, total };
 }
 
-// ===== 刪除工廠 =====
-export async function deleteFactory(id: number, ownerId: number) {
+// ===== 刪除工廠（工廠主自行刪除）=====
+/**
+ * 工廠主「刪除工廠」＝軟刪除：status='delisted' + deletedAt=now，工廠列與所有
+ * 關聯資料（買家的對話／訊息、合作確認單、評價、商品、照片、廣告紀錄）一律
+ * 保留，只是從此不再公開（見 publicFactoryCondition／isFactoryPubliclyVisible）。
+ *
+ * 過去這裡是逐表 DELETE（訊息 → 對話 → 商品 → 評價 → 廣告 → 工廠本體），
+ * 沒有 transaction，而且 factories 被 collaborationOrders／reviews 等以
+ * ON DELETE CASCADE 參照——工廠主刪除工廠會連帶抹掉買家的交易與對話紀錄，
+ * 也能藉此洗掉評價。語意改為與管理員刪除（adminSoftDeleteFactory）相同。
+ *
+ * 單一 UPDATE（原子操作）。WHERE ownerId 限定只能刪自己的工廠；deletedAt IS
+ * NULL 確保重複呼叫不會覆蓋第一次刪除的時間戳記。回傳是否真的刪除了一筆。
+ */
+export async function ownerSoftDeleteFactory(id: number, ownerId: number): Promise<boolean> {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
-
-  // 1. 先取得所有對話 ID
-  const convRows = await db
-    .select({ id: conversationsTable.id })
-    .from(conversationsTable)
-    .where(eq(conversationsTable.factoryId, id));
-
-  // 2. 批次刪除訊息（一次 DELETE，不用 for 迴圈）
-  if (convRows.length > 0) {
-    const convIds = convRows.map(c => c.id);
-    await db.delete(messagesTable).where(inArray(messagesTable.conversationId, convIds));
-  }
-
-  // 3. 刪除所有對話
-  await db.delete(conversationsTable).where(eq(conversationsTable.factoryId, id));
-
-  // 4. 刪除所有產品
-  await db.delete(products).where(eq(products.factoryId, id));
-
-  // 5. 刪除所有評價
-  await db.delete(reviewsTable).where(eq(reviewsTable.factoryId, id));
-
-  // 6. 刪除所有廣告
-  await db.delete(advertisementsTable).where(eq(advertisementsTable.factoryId, id));
-
-  // 7. 刪除工廠本體
-  await db.delete(factories).where(and(eq(factories.id, id), eq(factories.ownerId, ownerId)));
+  const [result]: any = await db.update(factories)
+    .set({ status: 'delisted', deletedAt: new Date() })
+    .where(and(eq(factories.id, id), eq(factories.ownerId, ownerId), isNull(factories.deletedAt)));
+  return (result?.affectedRows ?? 0) > 0;
 }
 
 // ===== 全站瀏覽統計 =====

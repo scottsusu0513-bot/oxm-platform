@@ -354,7 +354,7 @@ describe("getApprovedRegionIndustryCombosForSitemap：單一查詢，不對每�
   });
 
   it("只查 status='approved'，沿用既有 public/approved 規則，不重新定義", () => {
-    expect(fnSource).toMatch(/eq\(factories\.status,\s*'approved'\)/);
+    expect(fnSource).toMatch(/publicFactoryCondition\(\)/); // approved 且 deletedAt IS NULL（server/db.ts 共用條件）
   });
 
   it("只有一次 db.select 呼叫（不是在迴圈裡逐一查詢）", () => {
@@ -374,7 +374,7 @@ describe("hasApprovedFactoryForRegionIndustry：輕量 existence 查詢，沿用
   });
 
   it("approved 條件與 searchFactories／getApprovedFactoriesForSitemap 完全一致", () => {
-    expect(fnSource).toMatch(/eq\(factories\.status,\s*'approved'\)/);
+    expect(fnSource).toMatch(/publicFactoryCondition\(\)/); // approved 且 deletedAt IS NULL（server/db.ts 共用條件）
   });
 });
 

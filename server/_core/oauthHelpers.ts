@@ -18,6 +18,16 @@ export function isApplePrivateRelayEmail(email: string | null | undefined): bool
   return email.toLowerCase().endsWith("@privaterelay.appleid.com");
 }
 
+/**
+ * Google userinfo（oauth2/v2/userinfo）的 email 驗證訊號：只有
+ * `verified_email === true` 才算已驗證。欄位缺失、false、字串 "true" 等一律
+ * 視為未驗證——不可因為 provider 沒回傳就預設為 true。未驗證的 email 不能
+ * 當作可信 primaryEmail、不能觸發 email 帳號合併、也不能參與 admin 白名單。
+ */
+export function isGoogleEmailVerified(userInfo: { verified_email?: unknown } | null | undefined): boolean {
+  return userInfo?.verified_email === true;
+}
+
 export function sha256Hex(input: string): string {
   return createHash("sha256").update(input).digest("hex");
 }
@@ -100,7 +110,9 @@ export async function handleOAuthCallback(
   // 3. Create new user
   const openId = `${provider}_${providerAccountId}`;
   const name = displayName ?? null;
-  const loginEmail = provider === "google" && !isApplePrivateRelayEmail(providerEmail)
+  // users.email 會參與 admin email 白名單判斷（server/_core/admin.ts、
+  // db.upsertUser），所以只寫入「已驗證」的 Google email。
+  const loginEmail = provider === "google" && providerEmailVerified && !isApplePrivateRelayEmail(providerEmail)
     ? providerEmail
     : null;
 
@@ -139,8 +151,11 @@ async function applyPrimaryEmailRules(
   if (!providerEmail) return;
 
   if (provider === "google") {
-    // Google emails are always considered verified
-    await db.setPrimaryEmailVerified(userId, providerEmail);
+    // 只有 Google 明確回傳 verified_email === true 才設為可信 primaryEmail
+    // （見 isGoogleEmailVerified）。
+    if (providerEmailVerified) {
+      await db.setPrimaryEmailVerified(userId, providerEmail);
+    }
     return;
   }
 
