@@ -30,6 +30,7 @@ export const ROBOTS_TXT =
   "Disallow: /orders\n" +
   "Disallow: /notifications\n" +
   "Disallow: /verify-email\n" +
+  "Disallow: /account-link\n" +
   "Allow: /api/trpc/\n" +
   "Disallow: /api\n" +
   "\n" +

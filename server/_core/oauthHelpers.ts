@@ -47,7 +47,7 @@ export function generateRawToken(): string {
   return randomBytes(32).toString("hex");
 }
 
-async function setSessionCookieForUser(
+export async function setSessionCookieForUser(
   req: Request,
   res: Response,
   openId: string,

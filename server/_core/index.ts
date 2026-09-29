@@ -76,6 +76,10 @@ async function startServer() {
     if (/factory\.uploadAvatar|factory\.uploadPhoto|product\.uploadImage/.test(path)) {
       return uploadLimiter(req, _res, next);
     }
+    // Verified Account Linking：驗證／重寄／取消沿用登入的限流額度（每 IP 15 分鐘 15 次）。
+    if (path.includes("accountLink.")) {
+      return loginLimiter(req, _res, next);
+    }
     if (path.includes("chat.send")) {
       return messageLimiter(req, _res, next);
     }

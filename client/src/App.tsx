@@ -48,6 +48,8 @@ const FactoryPhotography    = lazy(() => import("./pages/FactoryPhotography"));
 const PrivacyPolicyPage     = lazy(() => import("./pages/PrivacyPolicyPage"));
 const TermsPage             = lazy(() => import("./pages/TermsPage"));
 const VerifyEmailPage       = lazy(() => import("./pages/VerifyEmailPage"));
+const AccountLinkPage       = lazy(() => import("./pages/AccountLinkPage"));
+const AccountLinkVerifyPage = lazy(() => import("./pages/AccountLinkVerifyPage"));
 const UserManual            = lazy(() => import("./pages/UserManual"));
 const Community             = lazy(() => import("./pages/Community"));
 const Notifications         = lazy(() => import("./pages/Notifications"));
@@ -237,10 +239,20 @@ function AppDeepLinkHandler() {
         if (!url.startsWith("oxm://oauth/callback")) return;
 
         let ticket: string | null = null;
+        let oauthError: string | null = null;
         try {
-          ticket = new URL(url).searchParams.get("ticket");
+          const parsed = new URL(url);
+          ticket = parsed.searchParams.get("ticket");
+          oauthError = parsed.searchParams.get("error");
         } catch {
           console.warn("[AppDeepLinkHandler] failed to parse url");
+          return;
+        }
+        // Verified Account Linking：LINE 的 email 屬於既有 OXM 帳號，需要在同一個
+        // 瀏覽器完成 Email 驗證後才能連結，App 內無法完成（見 server/_core/oauth.ts）。
+        if (oauthError === "account_link_required") {
+          await Browser.close();
+          toast.error("此 LINE 帳號的 Email 已有 OXM 帳號，請改用網頁版以 LINE 登入並完成 Email 驗證連結。", { duration: 8000 });
           return;
         }
         if (!ticket) {
@@ -475,6 +487,8 @@ function Router() {
         <Route path="/privacy" component={PrivacyPolicyPage} />
         <Route path="/terms" component={TermsPage} />
         <Route path="/verify-email" component={VerifyEmailPage} />
+        <Route path="/account-link/verify" component={AccountLinkVerifyPage} />
+        <Route path="/account-link" component={AccountLinkPage} />
         <Route path="/notifications" component={Notifications} />
         <Route path="/community/*?" component={Community} />
         <Route path="/orders/:orderId" component={OrderDetail} />

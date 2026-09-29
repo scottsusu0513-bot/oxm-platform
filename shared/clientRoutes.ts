@@ -71,6 +71,8 @@ export const CLIENT_ROUTE_PATTERNS = [
   "/privacy",
   "/terms",
   "/verify-email",
+  "/account-link/verify",
+  "/account-link",
   "/notifications",
   "/community/*?",
   "/orders/:orderId",

@@ -618,6 +618,50 @@ export async function sendEmailVerificationEmail(params: {
   console.log('[Email] 已寄送驗證信到:', params.toEmail);
 }
 
+/**
+ * 帳號連結驗證信（Verified Account Linking）：寄到「既有 OXM 帳號」的可信
+ * primaryEmail（由伺服器從目標帳號重新讀取，不是 OAuth callback 回傳的
+ * email）。不包含任何 provider token、session 或內部 user ID，只有驗證連結。
+ */
+export async function sendAccountLinkVerificationEmail(params: {
+  toEmail: string;
+  userName: string | null;
+  providerLabel: string;
+  verifyUrl: string;
+  expiresInHours: number;
+}) {
+  if (!isEmailEnabled()) {
+    console.log(`[Email] ${getEmailDisabledReason()}，跳過寄送帳號連結驗證信`);
+    return;
+  }
+  const resend = getResend();
+  if (!resend) return;
+  const provider = escapeHtml(params.providerLabel);
+  await resend.emails.send({
+    from: FROM_EMAIL,
+    to: params.toEmail,
+    subject: `【OXM】確認將 ${params.providerLabel} 登入連結至您的帳號`,
+    html: `
+      <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #f97316;">確認連結 ${provider} 登入</h2>
+        <p>親愛的 ${params.userName ? `<strong>${escapeHtml(params.userName)}</strong>` : '用戶'} 您好，</p>
+        <p>有人正在嘗試將 ${provider} 登入連結至您的 OXM 帳號。如果是您本人，請<strong>在發起 ${provider} 登入的同一個瀏覽器</strong>點擊下方按鈕完成連結；完成後即可使用 ${provider} 登入同一個 OXM 帳號。</p>
+        <div style="text-align: center; margin: 32px 0;">
+          <a href="${params.verifyUrl}"
+             style="background: #f97316; color: white; padding: 14px 32px; border-radius: 8px; text-decoration: none; font-size: 16px; font-weight: bold;">
+            確認連結 ${provider} 登入
+          </a>
+        </div>
+        <p style="color: #666; font-size: 14px;">此連結將在 ${params.expiresInHours} 小時後失效，且只能使用一次。</p>
+        <p style="color: #666; font-size: 14px;">若這不是您本人的操作，請忽略此信，您的帳號不會有任何變更。OXM 不會向您索取密碼或驗證碼，請勿將此信轉寄給他人。</p>
+        <hr style="border: none; border-top: 1px solid #eee; margin: 24px 0;" />
+        <p style="color: #999; font-size: 12px;">OXM 製造業媒合平台 | <a href="https://www.oxmmatch.com">www.oxmmatch.com</a></p>
+      </div>
+    `,
+  });
+  console.log('[Email] 已寄送帳號連結驗證信到:', params.toEmail);
+}
+
 // ===== 工廠基本資料修改申請 Email =====
 
 function escapeHtml(str: string | null | undefined): string {

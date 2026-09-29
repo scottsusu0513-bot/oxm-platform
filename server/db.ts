@@ -6204,11 +6204,47 @@ export async function consumeEmailVerificationToken(tokenHash: string): Promise<
     .limit(1);
   const row = rows[0];
   if (!row) return { valid: false };
-  await db
+  // 條件式 UPDATE（usedAt IS NULL）＋檢查 affectedRows：兩個併發請求同時拿
+  // 到同一個 token 時，只有一個能真的標記為已使用，另一個視為無效——避免同一
+  // 個 token 被重放兩次（原本 SELECT 後無條件 UPDATE，兩個請求都會成功）。
+  const [result]: any = await db
     .update(emailVerificationTokens)
     .set({ usedAt: now })
-    .where(eq(emailVerificationTokens.id, row.id));
+    .where(and(eq(emailVerificationTokens.id, row.id), sql`${emailVerificationTokens.usedAt} IS NULL`));
+  if ((result?.affectedRows ?? 0) !== 1) return { valid: false };
   return { valid: true, userId: row.userId, email: row.email };
+}
+
+/**
+ * Verified Account Linking：把 provider identity 綁到既有 OXM user。純
+ * INSERT（不是 upsert）——(provider, providerAccountId) 的唯一索引
+ * uq_provider_account 保證同一個 provider identity 最終只能屬於一個 user；
+ * 已被綁定（包含併發的另一個請求搶先綁定）時回傳 "taken"，絕不改寫既有
+ * 綁定的 userId。
+ */
+export async function linkProviderIdentityToUser(params: {
+  userId: number;
+  provider: string;
+  providerAccountId: string;
+  displayName?: string | null;
+}): Promise<"linked" | "taken"> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  try {
+    await db.insert(userAuthAccounts).values({
+      userId: params.userId,
+      provider: params.provider,
+      providerAccountId: params.providerAccountId,
+      providerEmail: null,
+      providerEmailVerified: false,
+      displayName: params.displayName ?? null,
+    });
+    return "linked";
+  } catch (err: any) {
+    const code = err?.code ?? err?.cause?.code;
+    if (code === "ER_DUP_ENTRY") return "taken";
+    throw err;
+  }
 }
 
 export async function createAppLoginTicket(params: {

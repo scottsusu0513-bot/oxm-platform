@@ -3,6 +3,7 @@ import * as db from "../db";
 import { ENV } from "./env";
 import { randomBytes } from "crypto";
 import { handleOAuthCallback, issueSessionOrTicket, isGoogleEmailVerified, isLineEmailVerified } from "./oauthHelpers";
+import { resolveProviderLoginAction, startPendingAccountLink } from "./accountLink";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 
 // Cached Apple JWKS (fetched lazily on first Apple login)
@@ -268,6 +269,25 @@ export function registerOAuthRoutes(app: Express) {
 
       if (!lineUserId) {
         res.status(400).json({ error: "Failed to get LINE user ID" });
+        return;
+      }
+
+      // Verified Account Linking：LINE identity 尚未綁定、但 email 撞到可信的
+      // 既有 OXM 帳號時，不自動合併、也不先建立第二個帳號，改走「寄驗證信到
+      // 既有帳號 → 同一瀏覽器點連結 → 才綁定」（見 server/_core/accountLink.ts）。
+      const loginAction = await resolveProviderLoginAction({ provider: "line", providerAccountId: lineUserId, providerEmail: lineEmail });
+      if (loginAction.kind === "link_required") {
+        if (dbResult.source === "app") {
+          // App 的 OAuth 在獨立的系統瀏覽器進行，驗證信連結會在另一個瀏覽器開啟，
+          // 無法滿足「同一瀏覽器」的 session binding——請使用者改在網頁版完成連結。
+          res.redirect(302, "oxm://oauth/callback?error=account_link_required");
+          return;
+        }
+        await startPendingAccountLink({
+          req, res, target: loginAction.target, provider: "line",
+          providerAccountId: lineUserId, displayName: lineName,
+        });
+        res.redirect(302, "/account-link");
         return;
       }
 

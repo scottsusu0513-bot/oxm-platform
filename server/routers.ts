@@ -13,7 +13,12 @@ import { enhanceSearchKeyword, getSearchIntent } from './semantic-search';
 import { classifySearchQuery } from './search-query-router';
 import { sendNewInquiryEmail, sendFactoryApprovedEmail, sendFactoryRejectedEmail, sendFactorySubmittedEmail, sendReportEmail, sendSupportTicketEmail, sendReviewReplyEmail, sendNewMessageNotificationEmail, sendReportStatusUpdateEmail, sendTicketStatusUpdateEmail, sendMessageReplyNotificationEmail, sendEmailVerificationEmail, sendAdminBroadcastEmail, sendRevisionSubmittedEmail, sendRevisionApprovedEmail, sendRevisionRejectedEmail, sendUpgradeApplicationEmail, sendUpgradeNewCaseConsultantEmail, sendPlatformAnnouncementEmail, sendFirstContactEmail, sendNewsEmail, sendIndustryRequestReceivedEmail, sendIndustryRequestAdminEmail } from './email';
 import { resolveAdminSenderIdentity } from './_core/officialIdentity';
-import { sha256Hex, generateRawToken } from './_core/oauthHelpers';
+import { sha256Hex, generateRawToken, setSessionCookieForUser } from './_core/oauthHelpers';
+import {
+  describePendingAccountLink, resendPendingAccountLink, completePendingAccountLink,
+  cancelPendingAccountLink, ACCOUNT_LINK_FAILED_MESSAGE,
+} from './_core/accountLink';
+import { EMAIL_VERIFICATION_TOKEN_TTL_MS, EMAIL_VERIFICATION_RESEND_COOLDOWN_MS, emailVerificationBaseUrl } from './emailVerificationPolicy';
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { upgradeProgramsRouter } from "./upgradeProgramsRouter";
@@ -1376,17 +1381,16 @@ export const appRouter = router({
       if (user.primaryEmailVerifiedAt) {
         return { success: true, alreadyVerified: true };
       }
-      // Cooldown: prevent re-sending within 5 minutes
+      // Cooldown: prevent re-sending within 5 minutes（見 server/emailVerificationPolicy.ts）
       const recent = await db.getLatestEmailVerificationToken(user.id, user.primaryEmail);
-      if (recent && recent.createdAt > new Date(Date.now() - 5 * 60 * 1000)) {
+      if (recent && recent.createdAt > new Date(Date.now() - EMAIL_VERIFICATION_RESEND_COOLDOWN_MS)) {
         throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: "驗證信已寄出，請稍後再試" });
       }
       const rawToken = generateRawToken();
       const tokenHash = sha256Hex(rawToken);
-      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+      const expiresAt = new Date(Date.now() + EMAIL_VERIFICATION_TOKEN_TTL_MS);
       await db.createEmailVerificationToken({ userId: user.id, tokenHash, email: user.primaryEmail, expiresAt });
-      const baseUrl = process.env.OAUTH_SERVER_URL || "https://www.oxmmatch.com";
-      const verifyUrl = `${baseUrl}/verify-email?token=${rawToken}`;
+      const verifyUrl = `${emailVerificationBaseUrl()}/verify-email?token=${rawToken}`;
       try {
         await sendEmailVerificationEmail({
           toEmail: user.primaryEmail,
@@ -1455,6 +1459,36 @@ export const appRouter = router({
     myLinkedProviders: protectedProcedure.query(async ({ ctx }) => {
       const accounts = await db.getAuthAccountsByUserId(ctx.user.id);
       return accounts.map(a => ({ provider: a.provider, providerEmail: a.providerEmail ?? null }));
+    }),
+  }),
+
+  // ===== Verified Account Linking（見 server/_core/accountLink.ts）=====
+  // 這幾支都不接受 target user／email 等輸入：目標帳號、provider identity、寄件
+  // email 一律由「OAuth callback 成功後設定的簽章 cookie」＋資料庫決定。沒有
+  // pending cookie 時一律回 null／失敗，不存在「輸入 email 查帳號」的入口。
+  accountLink: router({
+    pending: publicProcedure.query(async ({ ctx }) => {
+      return describePendingAccountLink(ctx.req);
+    }),
+    resend: publicProcedure.mutation(async ({ ctx }) => {
+      const result = await resendPendingAccountLink(ctx.req, ctx.res);
+      if (result === "cooldown") throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: "驗證信已寄出，請稍後再試" });
+      if (result === "invalid") throw new TRPCError({ code: "BAD_REQUEST", message: ACCOUNT_LINK_FAILED_MESSAGE });
+      return { success: true };
+    }),
+    verify: publicProcedure.input(z.object({
+      token: z.string().min(1).max(128),
+    })).mutation(async ({ ctx, input }) => {
+      const result = await completePendingAccountLink(ctx.req, ctx.res, input.token);
+      if (!result.ok) throw new TRPCError({ code: "BAD_REQUEST", message: result.message });
+      // 連結成功：用既有正常登入流程建立 session（跟 OAuth 登入同一個 cookie
+      // 設定），不沿用 pending cookie、token 或任何 provider credential。
+      await setSessionCookieForUser(ctx.req, ctx.res, result.user.openId, result.user.name ?? "");
+      return { success: true };
+    }),
+    cancel: publicProcedure.mutation(async ({ ctx }) => {
+      await cancelPendingAccountLink(ctx.req, ctx.res);
+      return { success: true };
     }),
   }),
 
