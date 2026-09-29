@@ -62,6 +62,7 @@ import {
   type ChatHumanMessageCounts,
 } from "../shared/chatEducation";
 import { sortBadgeIds, sanitizeBadgeAssignment, appendCertificationEvidenceImage } from "../shared/badges";
+import { isLegacyDataUrl, PERSISTENT_FACTORY_IMAGE_FIELDS } from "../shared/persistentImageUrl";
 import { CERTIFICATION_SERVICE_CATEGORY_SEEDS, CERTIFICATION_SERVICE_ITEM_SEEDS } from "../shared/certificationServices";
 import type { AISearchIntent } from './semantic-search';
 import { resolveSubIndustryKeywordMatches } from '../shared/subIndustryKeywordMatch';
@@ -248,6 +249,10 @@ export async function updateFactory(id: number, ownerId: number, data: Partial<I
     if (typeof v === "string" && v) return [v];
     return [];
   };
+  // 工廠正式圖片不得寫入 legacy data: URL（見 shared/persistentImageUrl.ts）。
+  for (const field of PERSISTENT_FACTORY_IMAGE_FIELDS) {
+    if (isLegacyDataUrl((data as any)[field])) throw new Error(`${field} 不可為 data URL`);
+  }
   const normalized: Partial<InsertFactory> = { ...data };
   if ("industry" in data) (normalized as any).industry = toArray((data as any).industry);
   if ("mfgModes" in data) (normalized as any).mfgModes = toArray((data as any).mfgModes);
@@ -7512,9 +7517,17 @@ export async function approveRevisionAtomic(revisionId: number, adminId: number)
       setClauses.push("`certificationBadgesVisible` = ?");
       setValues.push(JSON.stringify(mergedVisible));
     }
+    const skippedLegacyImageFields = new Set<string>();
     for (const field of allowedFields) {
       if (field in proposed) {
         const val = proposed[field];
+        // 歷史／過期的修改申請可能帶著 legacy data: URL 頭貼（見
+        // shared/persistentImageUrl.ts）：不寫回正式資料，保留目前值，其他欄位照常套用。
+        if ((PERSISTENT_FACTORY_IMAGE_FIELDS as readonly string[]).includes(field) && isLegacyDataUrl(val)) {
+          console.warn(`[revision] approveRevisionAtomic: skipped legacy data URL for ${field} (revisionId=${revisionId})`);
+          skippedLegacyImageFields.add(field);
+          continue;
+        }
         // JSON fields
         if (field === "certificationBadges") {
           setClauses.push(`\`${field}\` = ?`);
@@ -7544,7 +7557,8 @@ export async function approveRevisionAtomic(revisionId: number, adminId: number)
     // PUBLIC_CONTENT_FACTORY_FIELDS 白名單判斷 proposedData 有沒有帶到任何
     // 公開欄位——certificationBadges／certificationEvidence 不算在內（見
     // 該常數定義處的排除理由）。
-    const touchesPublicContent = Object.keys(proposed).some(field => PUBLIC_CONTENT_FACTORY_FIELDS.has(field as keyof InsertFactory));
+    const touchesPublicContent = Object.keys(proposed).some(field =>
+      !skippedLegacyImageFields.has(field) && PUBLIC_CONTENT_FACTORY_FIELDS.has(field as keyof InsertFactory));
     if (touchesPublicContent) {
       setClauses.push("`publicContentUpdatedAt` = NOW()");
     }

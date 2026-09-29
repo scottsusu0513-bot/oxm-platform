@@ -130,6 +130,7 @@ import {
 } from "../shared/erpOptimization";
 import { clampImageCrop } from "../shared/imageCrop";
 import { toPublicFactoryDetail, toPublicFactorySearchResult } from "./publicFactoryDto";
+import { isLegacyDataUrl } from "../shared/persistentImageUrl";
 import { stripCertificationEvidence, stripCertificationEvidenceFromRevision, stripHiddenBadgesForPublic, isValidCertificationEvidenceKey, isValidBadgeId, CERTIFICATION_EVIDENCE_KEY_PREFIX, applyCertificationEvidenceDescriptions, summarizeCertificationEvidenceForOwner, sortBadgeIds } from "../shared/badges";
 import { nanoid } from "nanoid";
 import { factories, conversations, reviews, reports, factoryCoManagers, users, upgradeConsultants, type Factory, type AiHandoffContext } from "../drizzle/schema";
@@ -710,7 +711,7 @@ const FactoryBasicDataSchema = z.object({
   weekdayHours: z.string().nullable(),
   weekendHours: z.string().nullable(),
   businessNote: z.string().nullable(),
-  avatarUrl: z.string().nullable(),
+  avatarUrl: z.string().nullable().refine(v => !isLegacyDataUrl(v), "頭貼不可為 data URL"),
   avatarCrop: z.object({ zoom: z.number(), posX: z.number(), posY: z.number() }).nullable(),
   // 統一編號：approved 工廠改走既有修改申請流程（見 submitRevision 的
   // taxId 空字串防護），proposedData 裡若帶了 taxId 這個 key，一定已經是
@@ -2040,6 +2041,14 @@ export const appRouter = router({
       // db.approveRevisionAtomic 的 `field in proposed` 套用邏輯）。
       if (proposedData.taxId === "") {
         delete proposedData.taxId;
+      }
+
+      // 頭貼：正常上傳一律回傳 S3 URL，proposedData 裡的 data: URL 只可能是
+      // 開著舊頁面時殘留的 legacy Base64（已搬到 S3，見 shared/persistentImageUrl.ts）。
+      // 視為「這次沒有要改頭貼」直接略過，不讓它進入修改申請、核准後寫回正式資料；
+      // 其他欄位的修改照常送出。
+      if (isLegacyDataUrl(proposedData.avatarUrl)) {
+        delete proposedData.avatarUrl;
       }
 
       if (Object.keys(proposedData).length === 0) {
