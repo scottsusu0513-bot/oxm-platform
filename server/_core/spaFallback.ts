@@ -24,6 +24,28 @@ export function isStaticAssetRequestPath(pathname: string): boolean {
   return STATIC_ASSET_EXTENSIONS.has(lastSegment.slice(dot + 1).toLowerCase());
 }
 
+/**
+ * 靜態檔快取政策（Batch 3.1）：
+ * - dist/public/assets/ 底下只有 Vite build 輸出，檔名一律是 `<name>-<8 碼 content
+ *   hash>.<ext>`（JS／CSS／字型／import 的圖片）。內容一改檔名就改，可以安全地
+ *   快取一年＋immutable。
+ * - index.html 與所有 SPA document 回應：no-cache（每次向伺服器確認），部署後
+ *   使用者一定拿到引用新 hash 的 HTML。
+ * - 其他 public/ 固定檔名（logo-oxm.png、favicon.png、og-image.png…）：沒有 hash，
+ *   不能快取一年，維持 express.static 預設（max-age=0＋ETag）。
+ */
+export const IMMUTABLE_ASSET_CACHE_CONTROL = "public, max-age=31536000, immutable";
+export const DOCUMENT_CACHE_CONTROL = "no-cache";
+const HASHED_BUILD_ASSET = /^assets\/[^/]+-[A-Za-z0-9_-]{8}\.[A-Za-z0-9]+$/;
+
+/** relativePath：相對於 dist/public、以 / 分隔的檔案路徑。回傳 undefined＝沿用預設。 */
+export function staticCacheControlFor(relativePath: string): string | undefined {
+  const normalized = relativePath.split("\\").join("/").replace(/^\/+/, "");
+  if (HASHED_BUILD_ASSET.test(normalized)) return IMMUTABLE_ASSET_CACHE_CONTROL;
+  if (normalized === "index.html") return DOCUMENT_CACHE_CONTROL;
+  return undefined;
+}
+
 /** 必須註冊在 express.static 之後、SPA catch-all 之前。 */
 export function setupStaticAssetMiss404(app: Express) {
   app.use((req: Request, res: Response, next: NextFunction) => {

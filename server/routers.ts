@@ -129,6 +129,7 @@ import {
   erpNeedTypeLabel,
 } from "../shared/erpOptimization";
 import { clampImageCrop } from "../shared/imageCrop";
+import { toPublicFactoryDetail, toPublicFactorySearchResult } from "./publicFactoryDto";
 import { stripCertificationEvidence, stripCertificationEvidenceFromRevision, stripHiddenBadgesForPublic, isValidCertificationEvidenceKey, isValidBadgeId, CERTIFICATION_EVIDENCE_KEY_PREFIX, applyCertificationEvidenceDescriptions, summarizeCertificationEvidenceForOwner, sortBadgeIds } from "../shared/badges";
 import { nanoid } from "nanoid";
 import { factories, conversations, reviews, reports, factoryCoManagers, users, upgradeConsultants, type Factory, type AiHandoffContext } from "../drizzle/schema";
@@ -1754,9 +1755,11 @@ export const appRouter = router({
       // 可能含工廠自己隱藏的徽章）一律不可見，只留 certificationBadgesVisible。
       // 有權限管理這筆工廠時才能看到完整的 certificationBadges（管理頁需要
       // 用它跟 certificationBadgesVisible 比對，畫出「已獲得徽章」勾選清單）。
+      // 公開視角另外移除 ownerId／rejectionReason／submittedAt／updatedAt 等
+      // 內部欄位（見 server/publicFactoryDto.ts）；owner／共管者／admin 維持原樣。
       const publicSafeFactory = isAuthorized
         ? stripCertificationEvidence(factory)
-        : stripHiddenBadgesForPublic(stripCertificationEvidence(factory));
+        : toPublicFactoryDetail(factory);
       const safeLatestRevision = latestRevision ? stripCertificationEvidenceFromRevision(latestRevision) : null;
       const result: Record<string, any> = { ...publicSafeFactory, products: prods, latestRevision: safeLatestRevision };
       if (isAuthorized) {
@@ -1778,7 +1781,8 @@ export const appRouter = router({
       const similar = await db.getSimilarFactories(input.factoryId, input.limit);
       // 跟 search／getById 未授權視角同一套消毒：絕不外流 certificationEvidence
       // ／adminNote／contactStatus／deletedAt，徽章只回傳公開顯示的子集合。
-      return similar.map(f => stripHiddenBadgesForPublic(stripCertificationEvidence(f)));
+      // 相關工廠卡片與搜尋卡片共用同一個公開白名單形狀（見 server/publicFactoryDto.ts）。
+      return similar.map(toPublicFactorySearchResult);
     }),
 
     getMine: protectedProcedure.query(async ({ ctx }) => {
@@ -2251,7 +2255,9 @@ export const appRouter = router({
   // 公開搜尋結果一律不含 certificationEvidence（工廠私密證明資料），徽章也
   // 一律只保留 certificationBadgesVisible（工廠選擇公開顯示的子集合），不得
   // 洩漏擁有但隱藏的徽章（certificationBadges）。
-  const stripForSearch = (f: any) => stripHiddenBadgesForPublic(stripCertificationEvidence(f));
+  // Batch 3.1：輸出改用明確白名單 DTO（server/publicFactoryDto.ts），資料庫層
+  // 也只 SELECT 公開搜尋需要的欄位（server/db.ts PUBLIC_FACTORY_SEARCH_COLUMNS）。
+  const stripForSearch = toPublicFactorySearchResult;
   // Search Analytics resultCount 方案 A（見對話「Search Analytics resultCount
   // 方案 A」與 shared/searchFingerprint.ts 開頭的完整說明）：這個 fingerprint
   // 完全從 server 實際收到的 `input`（不是內部經過 AI 增強/解析後的

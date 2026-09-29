@@ -670,6 +670,50 @@ export async function getSimilarFactories(factoryId: number, limit = 12): Promis
 // AI 搜尋候選集上限：避免全表掃後在 JS 排序太多筆
 const AI_CANDIDATE_LIMIT = 300;
 
+/**
+ * 公開搜尋（factory.search／AI 找工廠）候選與結果的明確欄位清單——Batch 3.1
+ * 起不再 `SELECT factories.*`。只包含：
+ *   1. 公開搜尋卡片／產業與地區 SEO 頁／AI 找工廠附件實際顯示的欄位
+ *   2. 候選排序需要的欄位（description／industry／subIndustry 給 match signal，
+ *      updatedAt 給 JS 排序 tiebreak）
+ *   3. certificationBadges：僅供 routers.ts 與 certificationBadgesVisible 取交集
+ *      （公開端最後一道防線），輸出前由 toPublicFactorySearchResult 移除
+ * 刻意不含 ownerId／contactEmail／taxId／status／rejectionReason／submittedAt／
+ * adminNote／contactStatus／certificationEvidence／deletedAt／封面圖等搜尋卡片
+ * 用不到或屬於內部的欄位。新增搜尋卡片欄位時，這裡與 server/publicFactoryDto.ts
+ * 要一起加。
+ */
+const PUBLIC_FACTORY_SEARCH_COLUMNS = {
+  id: factories.id,
+  name: factories.name,
+  industry: factories.industry,
+  subIndustry: factories.subIndustry,
+  mfgModes: factories.mfgModes,
+  region: factories.region,
+  description: factories.description,
+  capitalLevel: factories.capitalLevel,
+  foundedYear: factories.foundedYear,
+  ownerName: factories.ownerName,
+  contactPersonName: factories.contactPersonName,
+  phone: factories.phone,
+  website: factories.website,
+  address: factories.address,
+  avgRating: factories.avgRating,
+  reviewCount: factories.reviewCount,
+  avatarUrl: factories.avatarUrl,
+  avatarCrop: factories.avatarCrop,
+  businessType: factories.businessType,
+  operationStatus: factories.operationStatus,
+  certified: factories.certified,
+  certificationBadges: factories.certificationBadges,
+  certificationBadgesVisible: factories.certificationBadgesVisible,
+  weekdayHours: factories.weekdayHours,
+  weekendHours: factories.weekendHours,
+  updatedAt: factories.updatedAt,
+};
+
+export type FactorySearchRow = Pick<Factory, keyof typeof PUBLIC_FACTORY_SEARCH_COLUMNS>;
+
 // 評分排序（預設）＋唯一 tiebreaker。候選池與 SQL 分頁共用，確保同分工廠
 // 在每次查詢、每一頁的相對順序完全一致。
 const DETERMINISTIC_RATING_ORDER = [desc(factories.avgRating), desc(factories.reviewCount), asc(factories.id)] as const;
@@ -684,7 +728,7 @@ const DETERMINISTIC_RATING_ORDER = [desc(factories.avgRating), desc(factories.re
  * 候選集合規則完全不動，這裡只決定候選進來之後怎麼排序。
  */
 function computeAIMatchTierForCandidate(
-  factory: Factory,
+  factory: FactorySearchRow,
   products: SearchMatchProductInput[],
   intent: AISearchIntent,
   userHasSelectedIndustry: boolean,
@@ -724,7 +768,7 @@ function computeAIMatchTierForCandidate(
  *    保留在結果內，不得被刪除（見「不要顯示不適合，只是資料不足以判斷」）。
  */
 function computeRankingTier(
-  factory: Factory,
+  factory: FactorySearchRow,
   productTexts: string[],
   rankingSignals: string[],
   relatedSubIndustries: string[],
@@ -769,7 +813,7 @@ export async function searchFactories(params: {
    */
   rankingSignals?: string[];
 }): Promise<{
-  items: Factory[];
+  items: FactorySearchRow[];
   total: number;
   tiers?: (0 | 1 | 2)[];
   /** 候選集合（未分頁前，最多 AI_CANDIDATE_LIMIT 筆）中，公開資料明確符合
@@ -815,7 +859,7 @@ export async function searchFactories(params: {
     const [countResult] = await db.select({ count: sql<number>`COUNT(*)` }).from(factories).where(whereClause);
     const total = Number(countResult?.count ?? 0);
 
-    const candidates = await db.select().from(factories).where(whereClause)
+    const candidates = await db.select(PUBLIC_FACTORY_SEARCH_COLUMNS).from(factories).where(whereClause)
       .orderBy(...DETERMINISTIC_RATING_ORDER)
       .limit(AI_CANDIDATE_LIMIT);
 
@@ -1007,7 +1051,7 @@ export async function searchFactories(params: {
     // count 與 candidates 用同一個 whereClause，彼此沒有 dependency，平行執行。
     const [[countResult], candidates] = await Promise.all([
       db.select({ count: sql<number>`COUNT(*)` }).from(factories).where(whereClause),
-      db.select().from(factories).where(whereClause)
+      db.select(PUBLIC_FACTORY_SEARCH_COLUMNS).from(factories).where(whereClause)
         .orderBy(...DETERMINISTIC_RATING_ORDER)
         .limit(AI_CANDIDATE_LIMIT),
     ]);
@@ -1097,7 +1141,7 @@ export async function searchFactories(params: {
     // 集合裡的排序方式。
     const [[countResult], candidates] = await Promise.all([
       db.select({ count: sql<number>`COUNT(*)` }).from(factories).where(whereClause),
-      db.select().from(factories).where(whereClause)
+      db.select(PUBLIC_FACTORY_SEARCH_COLUMNS).from(factories).where(whereClause)
         .orderBy(...DETERMINISTIC_RATING_ORDER)
         .limit(AI_CANDIDATE_LIMIT),
     ]);
@@ -1160,7 +1204,7 @@ export async function searchFactories(params: {
   // count 與 items 用同一個 whereClause，彼此沒有 dependency，平行執行。
   const [[countResult], items] = await Promise.all([
     db.select({ count: sql<number>`COUNT(*)` }).from(factories).where(whereClause),
-    db.select().from(factories).where(whereClause)
+    db.select(PUBLIC_FACTORY_SEARCH_COLUMNS).from(factories).where(whereClause)
       .orderBy(...orderClauses)
       .limit(pageSize).offset((page - 1) * pageSize),
   ]);

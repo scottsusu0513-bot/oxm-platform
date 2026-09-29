@@ -35,7 +35,13 @@ export interface AiFactorySearchResultItem {
   avatarUrl: string | null;
 }
 
-export function toAiFactorySearchResultItem(f: Factory): AiFactorySearchResultItem {
+/** 只需要白名單用到的欄位：db.searchFactories 已改成明確欄位 SELECT（Batch 3.1）。 */
+type AiFactorySearchSource = Pick<Factory,
+  "id" | "name" | "industry" | "subIndustry" | "region" | "businessType" | "foundedYear" | "capitalLevel" |
+  "mfgModes" | "description" | "avgRating" | "reviewCount" | "certified" | "certificationBadgesVisible" |
+  "operationStatus" | "avatarUrl">;
+
+export function toAiFactorySearchResultItem(f: AiFactorySearchSource): AiFactorySearchResultItem {
   return {
     id: f.id,
     companyName: f.name,

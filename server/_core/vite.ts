@@ -16,7 +16,7 @@ import { resolveFactoriesTwoSegment } from "@shared/seo/factoriesPathResolver";
 import { buildSearchPageMeta } from "@shared/seo/searchPage";
 import { parsePageParam } from "@shared/industryPagination";
 import { matchesClientRoute } from "@shared/clientRoutes";
-import { setupStaticAssetMiss404, injectNotFoundNoIndex } from "./spaFallback";
+import { setupStaticAssetMiss404, injectNotFoundNoIndex, staticCacheControlFor, DOCUMENT_CACHE_CONTROL } from "./spaFallback";
 
 export async function setupVite(app: Express, server: Server) {
   const serverOptions = {
@@ -259,7 +259,15 @@ export function serveStatic(app: Express, distPathOverride?: string) {
   // "/" 永遠拿不到 SEO 注入。停用自動 index 後，"/" 一律落到 catch-all，
   // 由我們自己決定要不要注入、並統一走同一份快取字串。其他實際存在的靜態
   // 檔案（JS/CSS/圖片等）不受影響，仍由這個 middleware 正常提供。
-  app.use(express.static(distPath, { index: false }));
+  app.use(express.static(distPath, {
+    index: false,
+    // content-hash 檔名的 build 產物快取一年＋immutable；index.html no-cache；
+    // 其他固定檔名維持預設（見 spaFallback.ts staticCacheControlFor）。
+    setHeaders(res, filePath) {
+      const cacheControl = staticCacheControlFor(path.relative(distPath, filePath));
+      if (cacheControl) res.setHeader("Cache-Control", cacheControl);
+    },
+  }));
   // 找不到的 /assets/* 與靜態副檔名請求：真 404，不落到下面的 SPA fallback。
   setupStaticAssetMiss404(app);
 
@@ -278,6 +286,9 @@ export function serveStatic(app: Express, distPathOverride?: string) {
 
   // fall through to index.html if the file doesn't exist
   app.use("*", async (req, res) => {
+    // SPA document（含 meta 注入、404 shell、301 以外的所有回應）一律
+    // no-cache：部署後一定重新取得引用新 hash 的 HTML，絕不 immutable。
+    res.setHeader("Cache-Control", DOCUMENT_CACHE_CONTROL);
     // req.path is unusable under app.use("*", ...) — Express folds the
     // whole matched path into req.baseUrl, leaving req.path as "/". Derive
     // the pathname from req.originalUrl instead.

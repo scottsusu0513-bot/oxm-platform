@@ -152,11 +152,13 @@ function vitePluginManusDebugCollector(): Plugin {
 
 export default defineConfig(({ command }) => {
 const isDev = command === 'serve';
+// jsxLocPlugin 會在每個 JSX 元素加上 data-loc="檔案路徑:行號"（開發工具用來
+// 從畫面元素跳回原始碼）。只有 dev server 需要；production build 載入它只會
+// 讓 bundle 多出上萬個 data-loc 屬性並公開原始碼路徑（Batch 3.1）。
 const plugins = [
   react(),
   tailwindcss(),
-  jsxLocPlugin(),
-  ...(isDev ? [vitePluginManusDebugCollector()] : []),
+  ...(isDev ? [jsxLocPlugin(), vitePluginManusDebugCollector()] : []),
 ];
 
 return {

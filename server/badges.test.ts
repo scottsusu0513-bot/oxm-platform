@@ -311,11 +311,26 @@ describe("server/routers.ts 靜態安全合約 —— 四條回傳工廠資料�
       "search: publicProcedure.input(z.object({",
       "delete: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {",
     );
-    expect(block).toMatch(/const stripForSearch = \(f: any\) => stripHiddenBadgesForPublic\(stripCertificationEvidence\(f\)\);/);
+    // Batch 3.1：改成明確白名單 DTO（server/publicFactoryDto.ts）——白名單本身
+    // 不含 certificationEvidence／adminNote／contactStatus／deletedAt，徽章仍經
+    // stripHiddenBadgesForPublic 取交集（見下方 publicFactoryDto 合約）。
+    expect(block).toMatch(/const stripForSearch = toPublicFactorySearchResult;/);
     expect(block).toContain("items: result.items.map(stripForSearch)");
     expect(block).toMatch(
       /ads: ads\.map\(ad => ad\.factory \? \{ \.\.\.ad, factory: stripForSearch\(ad\.factory\) \} : ad\)/,
     );
+  });
+
+  it("server/publicFactoryDto.ts：搜尋 DTO 是明確白名單且徽章走 stripHiddenBadgesForPublic；公開詳情走 stripCertificationEvidence＋stripHiddenBadgesForPublic", () => {
+    const dtoSource = readFileSync(path.join(__dirname, "publicFactoryDto.ts"), "utf-8");
+    const searchBlock = extractBlock(dtoSource, "export function toPublicFactorySearchResult(", "export const PUBLIC_DETAIL_OMITTED_FIELDS");
+    expect(searchBlock).toContain("stripHiddenBadgesForPublic({");
+    expect(searchBlock).not.toMatch(/\.\.\.f|\.\.\.rest/); // 白名單，不展開整個 row
+    for (const k of ["certificationEvidence", "adminNote", "contactStatus", "deletedAt", "ownerId", "rejectionReason"]) {
+      expect(searchBlock).not.toContain(`${k}:`);
+    }
+    const detailBlock = dtoSource.slice(dtoSource.indexOf("export function toPublicFactoryDetail("));
+    expect(detailBlock).toMatch(/stripHiddenBadgesForPublic\(stripCertificationEvidence\(factory\)\)/);
   });
 
   it("favorite.getByUser：回傳的 items 呼叫 stripCertificationEvidence 與 stripHiddenBadgesForPublic（收藏清單的使用者不是 owner／共管者／admin）", () => {
@@ -347,7 +362,10 @@ describe("server/routers.ts 靜態安全合約 —— 四條回傳工廠資料�
       "getById: publicProcedure.input(z.object({\r\n      id: z.number(),",
       "getMine: protectedProcedure.query(async ({ ctx }) => {",
     );
-    expect(block).toMatch(/const publicSafeFactory = isAuthorized\s*\? stripCertificationEvidence\(factory\)\s*: stripHiddenBadgesForPublic\(stripCertificationEvidence\(factory\)\);/);
+    // Batch 3.1：非授權視角改用 toPublicFactoryDetail（內部仍是
+    // stripHiddenBadgesForPublic(stripCertificationEvidence(factory))，另外再
+    // 移除 ownerId／rejectionReason／submittedAt／updatedAt，見下方合約）。
+    expect(block).toMatch(/const publicSafeFactory = isAuthorized\s*\? stripCertificationEvidence\(factory\)\s*: toPublicFactoryDetail\(factory\);/);
     expect(block).toMatch(/latestRevision \? stripCertificationEvidenceFromRevision\(latestRevision\) : null/);
     // 反向確認：不能還殘留舊版「isAuthorized ? factory : ...」這種依身份決定
     // 是否裁剪的寫法。
