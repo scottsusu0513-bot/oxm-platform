@@ -78,6 +78,40 @@ describe("FactoryDashboard：封存工廠", () => {
     expect(submitForReviewMutate).toHaveBeenCalledTimes(1);
   });
 
+  it("資料完整（canSubmit=true）→ 按「申請重新上架」直接送出", () => {
+    queryResults["factory.getMine"] = { data: { id: 42, name: "封存測試工廠", status: "delisted", isArchived: true, products: [] } };
+    queryResults["factory.getCoManagedFactories"] = { data: [] };
+    queryResults["factory.getResubmissionRequirements"] = { data: { factoryId: 42, canSubmit: true, missing: [], emailVerified: true } };
+    renderDashboard();
+    fireEvent.click(screen.getByRole("button", { name: "申請重新上架" }));
+    expect(submitForReviewMutate).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("resubmission-completion-banner")).toBeNull();
+  });
+
+  it("資料不完整 → 按「申請重新上架」進入重新上架資料補全：中文缺漏清單、下架提示、只有必填欄位與商品，不直接送出", () => {
+    queryResults["factory.getMine"] = { data: { id: 42, name: "封存測試工廠", status: "delisted", isArchived: true, ownerName: null, region: "新竹市", capitalLevel: "100萬以下", mfgModes: ["ODM"], address: "地址", products: [] } };
+    queryResults["factory.getCoManagedFactories"] = { data: [] };
+    queryResults["factory.getResubmissionRequirements"] = {
+      data: { factoryId: 42, canSubmit: false, missing: [{ key: "ownerName", label: "負責人" }, { key: "products", label: "產品（至少一項）" }], emailVerified: true },
+    };
+    renderDashboard();
+    fireEvent.click(screen.getByRole("button", { name: "申請重新上架" }));
+
+    expect(submitForReviewMutate).not.toHaveBeenCalled();
+    expect(screen.getByTestId("resubmission-completion-banner").textContent).toMatch(/重新上架資料補全/);
+    expect(screen.getByText("目前工廠仍處於下架狀態，完成資料並送出審核前，不會出現在 OXM 公開頁面。")).toBeTruthy();
+    expect(screen.getByText("重新上架前，請先補齊以下資料：")).toBeTruthy();
+    const list = screen.getByTestId("resubmission-missing-list").textContent ?? "";
+    expect(list).toContain("負責人");
+    expect(list).toContain("產品（至少一項）");
+    expect(list).not.toMatch(/ownerName|capitalLevel|mfgMode/);   // 不顯示內部欄位名稱
+    expect(screen.getByText("送審必要資料")).toBeTruthy();         // 必填欄位表單
+    expect(screen.getByText("產品管理")).toBeTruthy();             // 沿用既有商品管理
+    expect(screen.queryByText("基本資料")).toBeNull();             // 沒有完整編輯後台
+    expect(screen.queryByText("照片集")).toBeNull();
+    expect((screen.getByRole("button", { name: "送出重新上架申請" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it("次管理者所屬的工廠被封存 → 只顯示封存狀態，不提供申請重新上架", () => {
     queryResults["factory.getMine"] = { data: null };
     queryResults["factory.getCoManagedFactories"] = { data: [{ factoryId: 7 }] };

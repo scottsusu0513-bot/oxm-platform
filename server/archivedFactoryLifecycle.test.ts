@@ -273,13 +273,15 @@ describe("C. 重新上架驗證：送審完整度與產品數量照常適用", (
   });
 
   it("缺必填（負責人）→ 拒絕，維持封存狀態", async () => {
-    await expect(caller(incompleteOwner).factory.submitForReview()).rejects.toThrow(/負責人/);
+    await expect(caller(incompleteOwner).factory.submitForReview()).rejects.toThrow(/請先補齊以下資料：負責人/);
     const row = await db.getFactoryById(incompleteFactory);
     expect(row?.deletedAt).not.toBeNull();
   });
 
+  // Batch 2.6：重新上架改為一次列出所有缺漏項目（「重新上架前，請先補齊以下
+  // 資料：…」），產品缺漏的標籤是「產品（至少一項）」，規則本身不變。
   it("沒有商品 → 依既有規則拒絕，維持封存狀態", async () => {
-    await expect(caller(noProductOwner).factory.submitForReview()).rejects.toThrow(/至少新增一項產品/);
+    await expect(caller(noProductOwner).factory.submitForReview()).rejects.toThrow(/請先補齊以下資料：產品（至少一項）/);
     const row = await db.getFactoryById(noProductFactory);
     expect(row?.deletedAt).not.toBeNull();
   });

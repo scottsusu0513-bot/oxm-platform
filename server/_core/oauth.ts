@@ -2,7 +2,7 @@ import type { CookieOptions, Express, Request, Response } from "express";
 import * as db from "../db";
 import { ENV } from "./env";
 import { randomBytes } from "crypto";
-import { handleOAuthCallback, issueSessionOrTicket, isGoogleEmailVerified } from "./oauthHelpers";
+import { handleOAuthCallback, issueSessionOrTicket, isGoogleEmailVerified, isLineEmailVerified } from "./oauthHelpers";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 
 // Cached Apple JWKS (fetched lazily on first Apple login)
@@ -275,8 +275,9 @@ export function registerOAuthRoutes(app: Express) {
         provider: "line",
         providerAccountId: lineUserId,
         providerEmail: lineEmail,
-        // LINE email from id_token verify is considered verified by LINE
-        providerEmailVerified: lineEmail !== null,
+        // LINE 官方沒有可供 OXM 驗證的 email_verified 訊號：email 只作為非可信
+        // metadata，不能觸發 email 帳號合併（見 isLineEmailVerified）。
+        providerEmailVerified: isLineEmailVerified(),
         displayName: lineName,
       });
 

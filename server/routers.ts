@@ -104,6 +104,7 @@ import {
   isFactoryPubliclyVisible, canViewFactoryDataById, assertCanOpenBuyerConversation,
   assertFactoryAcceptsNewInteraction, isFactoryArchived, assertFactoryNotArchived,
   canWriteToConversation, assertConversationWritable, assertFactoryAcceptsNewOrder,
+  assertArchivedResubmissionCompletion,
 } from "./factoryVisibility";
 import { notifyOwner } from "./_core/notification";
 import { storagePut, storagePresignedUrl, storageDelete } from "./storage";
@@ -569,7 +570,11 @@ function getVisibleTypesForUser(role: string): string[] | null {
     : Array.from(PLATFORM_NOTIFICATION_TYPES);
 }
 
-async function assertFactoryManager(factoryId: number, userId: number) {
+async function assertFactoryManager(
+  factoryId: number,
+  userId: number,
+  opts: { resubmissionCompletion?: boolean } = {},
+) {
   const factory = await db.getFactoryById(factoryId);
   if (!factory) throw new TRPCError({ code: "NOT_FOUND", message: "找不到工廠" });
   if (factory.ownerId !== userId) {
@@ -577,8 +582,15 @@ async function assertFactoryManager(factoryId: number, userId: number) {
     if (!isCoMgr) throw new TRPCError({ code: "FORBIDDEN", message: "無權限操作此工廠" });
   }
   // 只被商品／分類的營運 mutation 使用：已封存（工廠主自行刪除）的工廠不得
-  // 繼續新增／修改／刪除商品與分類。
-  assertFactoryNotArchived(factory);
+  // 繼續新增／修改／刪除商品與分類。唯一例外是 product.create／update／delete
+  // 明確帶 resubmissionCompletion（「重新上架資料補全」：送審至少需要一項
+  // 產品），且呼叫者必須是 owner 本人（co-manager 不行），見
+  // assertArchivedResubmissionCompletion。分類與商品圖片上傳不帶這個選項。
+  if (opts.resubmissionCompletion && isFactoryArchived(factory)) {
+    assertArchivedResubmissionCompletion(factory, userId);
+  } else {
+    assertFactoryNotArchived(factory);
+  }
   return factory;
 }
 
@@ -622,12 +634,12 @@ function isNonEmptyStringArray(value: unknown): boolean {
 // 訊息文字沿用 FactoryRegister.tsx validate() 既有的措辭（「請選擇」用於
 // 下拉選單／複選、「請填寫」用於文字輸入），維持前後端使用者看到的提示
 // 一致，不是另外發明一套新文案。
-const FACTORY_SUBMISSION_FIELD_CHECKS: Record<FactorySubmissionFieldKey, { check: (value: unknown) => boolean; message: string }> = {
-  ownerName: { check: isNonBlankString, message: "請填寫負責人" },
-  region: { check: isNonBlankString, message: "請選擇地區" },
-  capitalLevel: { check: isNonBlankString, message: "請選擇資本額" },
-  mfgModes: { check: isNonEmptyStringArray, message: "請至少選擇一種代工模式" },
-  address: { check: isNonBlankString, message: "請填寫地址" },
+const FACTORY_SUBMISSION_FIELD_CHECKS: Record<FactorySubmissionFieldKey, { check: (value: unknown) => boolean; message: string; label: string }> = {
+  ownerName: { check: isNonBlankString, message: "請填寫負責人", label: "負責人" },
+  region: { check: isNonBlankString, message: "請選擇地區", label: "地區" },
+  capitalLevel: { check: isNonBlankString, message: "請選擇資本額", label: "資本額" },
+  mfgModes: { check: isNonEmptyStringArray, message: "請至少選擇一種代工模式", label: "代工模式" },
+  address: { check: isNonBlankString, message: "請填寫地址", label: "地址" },
 };
 const FACTORY_SUBMISSION_FIELD_ORDER: FactorySubmissionFieldKey[] = ["ownerName", "region", "capitalLevel", "mfgModes", "address"];
 
@@ -642,6 +654,33 @@ function getFactorySubmissionError(data: Partial<Record<FactorySubmissionFieldKe
   }
   return null;
 }
+
+// ===== 封存工廠重新上架：一次列出所有缺漏項目 =====
+// 跟 submitForReview 用同一份 FACTORY_SUBMISSION_FIELD_CHECKS／ORDER（不另外
+// 維護第二份必填清單），再加上送審既有的「至少一項產品」規則（管理員不受限，
+// 同 submitForReview）。重新上架資料補全模式據此顯示缺漏清單，送出時
+// submitForReview 再用同一個函式做最終 server-side 驗證。
+type ResubmissionMissingKey = FactorySubmissionFieldKey | "products";
+type ResubmissionMissingItem = { key: ResubmissionMissingKey; label: string };
+
+async function getArchivedResubmissionMissingItems(
+  factory: Factory,
+  user: { role: string },
+): Promise<ResubmissionMissingItem[]> {
+  const missing: ResubmissionMissingItem[] = [];
+  for (const key of FACTORY_SUBMISSION_FIELD_ORDER) {
+    const { check, label } = FACTORY_SUBMISSION_FIELD_CHECKS[key];
+    if (!check((factory as Record<string, unknown>)[key])) missing.push({ key, label });
+  }
+  if (user.role !== "admin") {
+    const products = await db.getProductsByFactoryId(factory.id);
+    if (products.length === 0) missing.push({ key: "products", label: "產品（至少一項）" });
+  }
+  return missing;
+}
+
+/** 重新上架資料補全模式唯一可修改的工廠欄位：送審必填欄位（同一份清單）。 */
+const RESUBMISSION_COMPLETION_EDITABLE_FIELDS: readonly string[] = FACTORY_SUBMISSION_FIELD_ORDER;
 
 // Validates proposedData field types — enforces correct types at submission and approve time.
 // All fields are partial since proposedData only includes the fields being changed.
@@ -1796,15 +1835,30 @@ export const appRouter = router({
         badgeId: z.string().max(50),
         description: z.string().max(500).optional().default(""),
       })).max(30).optional(),
+      // 已封存工廠「重新上架資料補全」：明確標記才走補全白名單，見下方。
+      resubmissionCompletion: z.boolean().optional(),
     })).mutation(async ({ ctx, input }) => {
       requireVerifiedEmail(ctx.user);
-      const { id, ...data } = input;
+      const { id, resubmissionCompletion, ...data } = input;
       const factory = await db.getFactoryById(id);
       if (!factory) throw new TRPCError({ code: 'NOT_FOUND', message: '工廠不存在' });
       const isOwner = factory.ownerId === ctx.user.id;
       const isCoMgr = !isOwner && await db.isActiveCoManager(id, ctx.user.id);
       if (!isOwner && !isCoMgr) throw new TRPCError({ code: 'FORBIDDEN', message: '無權限修改此工廠' });
-      assertFactoryNotArchived(factory);
+      if (resubmissionCompletion && isFactoryArchived(factory)) {
+        // 補全模式：只有 owner 本人、只能改送審必填欄位（跟 submitForReview
+        // 同一份清單）。其他欄位（簡介、聯絡方式、徽章…）一律拒絕，不是
+        // 「封存 + owner = 全部可改」。工廠維持 delisted + deletedAt。
+        assertArchivedResubmissionCompletion(factory, ctx.user.id);
+        const disallowed = Object.entries(data)
+          .filter(([key, value]) => value !== undefined && !RESUBMISSION_COMPLETION_EDITABLE_FIELDS.includes(key))
+          .map(([key]) => key);
+        if (disallowed.length > 0) {
+          throw new TRPCError({ code: 'FORBIDDEN', message: '重新上架資料補全只能修改送審必要資料' });
+        }
+      } else {
+        assertFactoryNotArchived(factory);
+      }
 
       // Status-based routing
       if (factory.status === 'pending') {
@@ -2428,6 +2482,20 @@ export const appRouter = router({
       return { urls };
     }),
 
+    // 封存工廠「申請重新上架」前的檢查：列出所有缺漏項目（中文標籤）。只對
+    // 呼叫者本人擁有、且目前已封存的工廠回傳；其他情況一律 null。純讀取。
+    getResubmissionRequirements: protectedProcedure.query(async ({ ctx }) => {
+      const factory = await db.getFactoryByOwnerId(ctx.user.id);
+      if (!factory || !isFactoryArchived(factory) || factory.status !== 'delisted') return null;
+      const missing = await getArchivedResubmissionMissingItems(factory, ctx.user);
+      return {
+        factoryId: factory.id,
+        missing,
+        canSubmit: missing.length === 0,
+        emailVerified: !!ctx.user.primaryEmailVerifiedAt,
+      };
+    }),
+
     submitForReview: protectedProcedure.mutation(async ({ ctx }) => {
       requireVerifiedEmail(ctx.user);
       const factory = await db.getFactoryByOwnerId(ctx.user.id);
@@ -2443,6 +2511,16 @@ export const appRouter = router({
         const coManaged = await db.getCoManagedFactories(ctx.user.id);
         if (coManaged.length > 0) {
           throw new TRPCError({ code: "BAD_REQUEST", message: "您目前是其他工廠的次管理者，請先退出後再申請重新上架" });
+        }
+        // 重新上架：一次回報所有缺漏項目（同一份必填清單＋產品規則，見
+        // getArchivedResubmissionMissingItems），前端據此進入「重新上架資料補全」。
+        // 不通過時工廠維持 delisted + deletedAt，不做任何轉換。
+        const missing = await getArchivedResubmissionMissingItems(factory, ctx.user);
+        if (missing.length > 0) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `重新上架前，請先補齊以下資料：${missing.map(m => m.label).join("、")}`,
+          });
         }
       }
       // 送審完整度驗證（見任務定案「工廠上架／送審必填欄位 audit（收斂
@@ -2784,15 +2862,19 @@ export const appRouter = router({
       images: z.array(z.string()).max(3).optional(),
       // 與 images 陣列順序對齊的顯示範圍，見 shared/imageCrop.ts。
       imageCrops: z.array(imageCropArrayItemSchema).max(3).optional(),
+      // 已封存工廠「重新上架資料補全」：明確標記才允許（且只限 owner），見
+      // assertFactoryManager。一般呼叫不帶，封存工廠照常拒絕。
+      resubmissionCompletion: z.boolean().optional(),
     })).mutation(async ({ ctx, input }) => {
-      await assertFactoryManager(input.factoryId, ctx.user.id);
-      if (input.categoryId != null) {
-        const cats = await db.getCategoriesByFactoryId(input.factoryId);
-        if (!cats.some((c) => c.id === input.categoryId)) {
+      const { resubmissionCompletion, ...productInput } = input;
+      await assertFactoryManager(input.factoryId, ctx.user.id, { resubmissionCompletion });
+      if (productInput.categoryId != null) {
+        const cats = await db.getCategoriesByFactoryId(productInput.factoryId);
+        if (!cats.some((c) => c.id === productInput.categoryId)) {
           throw new TRPCError({ code: "BAD_REQUEST", message: "分類不屬於此工廠" });
         }
       }
-      const id = await db.createProduct(input);
+      const id = await db.createProduct(productInput);
       return { id };
     }),
 
@@ -2809,9 +2891,10 @@ export const appRouter = router({
       description: z.string().optional(),
       images: z.array(z.string()).max(3).optional(),
       imageCrops: z.array(imageCropArrayItemSchema).max(3).optional(),
+      resubmissionCompletion: z.boolean().optional(),
     })).mutation(async ({ ctx, input }) => {
-      await assertFactoryManager(input.factoryId, ctx.user.id);
-      const { id, factoryId, ...data } = input;
+      const { id, factoryId, resubmissionCompletion, ...data } = input;
+      await assertFactoryManager(factoryId, ctx.user.id, { resubmissionCompletion });
       if (data.categoryId != null) {
         const cats = await db.getCategoriesByFactoryId(factoryId);
         if (!cats.some((c) => c.id === data.categoryId)) {
@@ -2825,8 +2908,9 @@ export const appRouter = router({
     delete: protectedProcedure.input(z.object({
       id: z.number(),
       factoryId: z.number(),
+      resubmissionCompletion: z.boolean().optional(),
     })).mutation(async ({ ctx, input }) => {
-      await assertFactoryManager(input.factoryId, ctx.user.id);
+      await assertFactoryManager(input.factoryId, ctx.user.id, { resubmissionCompletion: input.resubmissionCompletion });
       await db.deleteProduct(input.id, input.factoryId);
       return { success: true };
     }),

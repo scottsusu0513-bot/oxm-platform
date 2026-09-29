@@ -28,6 +28,17 @@ export function isGoogleEmailVerified(userInfo: { verified_email?: unknown } | n
   return userInfo?.verified_email === true;
 }
 
+/**
+ * LINE Login v2.1 的 email（/oauth2/v2.1/verify 回傳的 ID token `email`
+ * claim）：LINE 官方文件沒有提供 email_verified 之類可供 OXM 驗證的訊號，
+ * 因此一律視為「未驗證」的非可信 metadata——不能觸發 email 帳號合併、不能
+ * 成為可信 primaryEmail、不能參與 admin 白名單。LINE 使用者身分只以 LINE
+ * provider user ID（sub）識別。未來 LINE 若提供官方可驗證的訊號，再改這裡。
+ */
+export function isLineEmailVerified(_claims?: unknown): false {
+  return false;
+}
+
 export function sha256Hex(input: string): string {
   return createHash("sha256").update(input).digest("hex");
 }
@@ -85,7 +96,10 @@ export async function handleOAuthCallback(
   }
 
   // 2. Conservative auto-merge: all 4 conditions must hold
+  // LINE 的 email 沒有可信的驗證訊號（見 isLineEmailVerified）：不論呼叫端
+  // 傳入什麼，都不得依 email 自動合併到既有帳號（縱深防禦）。
   const canMerge =
+    provider !== "line" &&
     providerEmail !== null &&
     !isApplePrivateRelayEmail(providerEmail) &&
     providerEmailVerified;

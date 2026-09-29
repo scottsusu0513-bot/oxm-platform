@@ -1710,7 +1710,10 @@ function PhotoManager({ factoryId, onDirtyChange }: { factoryId: number; onDirty
 }
 
 // ===== Product Manager =====
-function ProductManager({ factoryId, products, isPending, onDirtyChange }: { factoryId: number; products: any[]; isPending: boolean; onDirtyChange?: (dirty: boolean) => void }) {
+// resubmissionCompletion：已封存工廠「重新上架資料補全」模式，所有商品寫入
+// 都帶這個旗標（伺服器端只允許 owner 本人），並隱藏非送審必要的分類建立與
+// 圖片上傳（伺服器端同樣拒絕）。
+function ProductManager({ factoryId, products, isPending, onDirtyChange, resubmissionCompletion = false }: { factoryId: number; products: any[]; isPending: boolean; onDirtyChange?: (dirty: boolean) => void; resubmissionCompletion?: boolean }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState<number | null>(null);
   useEffect(() => { onDirtyChange?.(showAdd || editId !== null); }, [showAdd, editId, onDirtyChange]);
@@ -1723,6 +1726,7 @@ function ProductManager({ factoryId, products, isPending, onDirtyChange }: { fac
       toast.success("產品已刪除");
       utils.factory.getMine.invalidate();
       utils.product.getByFactory.invalidate({ factoryId });
+      if (resubmissionCompletion) utils.factory.getResubmissionRequirements.invalidate();
     },
     onError: (err) => toast.error(err.message),
   });
@@ -1767,7 +1771,7 @@ function ProductManager({ factoryId, products, isPending, onDirtyChange }: { fac
           </div>
         )}
         {showAdd && !isPending && (
-          <ProductForm factoryId={factoryId} onDone={() => { setShowAdd(false); utils.factory.getMine.invalidate(); utils.product.getByFactory.invalidate({ factoryId }); }} />
+          <ProductForm factoryId={factoryId} resubmissionCompletion={resubmissionCompletion} onDone={() => { setShowAdd(false); utils.factory.getMine.invalidate(); utils.product.getByFactory.invalidate({ factoryId }); utils.factory.getResubmissionRequirements.invalidate(); }} />
         )}
         {visibleProducts.length === 0 && !showAdd ? (
           <p className="text-center text-muted-foreground py-8">
@@ -1778,7 +1782,7 @@ function ProductManager({ factoryId, products, isPending, onDirtyChange }: { fac
             {visibleProducts.map(p => (
               <div key={p.id}>
                 {editId === p.id ? (
-                  <ProductForm factoryId={factoryId} product={p} onDone={() => { setEditId(null); utils.factory.getMine.invalidate(); utils.product.getByFactory.invalidate({ factoryId }); }} />
+                  <ProductForm factoryId={factoryId} product={p} resubmissionCompletion={resubmissionCompletion} onDone={() => { setEditId(null); utils.factory.getMine.invalidate(); utils.product.getByFactory.invalidate({ factoryId }); }} />
                 ) : (
                   <div className="flex items-center justify-between p-4 rounded-lg border">
                     <div className="flex gap-3 items-start flex-1">
@@ -1810,7 +1814,7 @@ function ProductManager({ factoryId, products, isPending, onDirtyChange }: { fac
                     {!isPending && (
                       <div className="flex gap-1 shrink-0">
                         <Button variant="ghost" size="sm" onClick={() => setEditId(p.id)}><Pencil className="w-4 h-4" /></Button>
-                        <Button variant="ghost" size="sm" className="text-destructive" onClick={() => deleteMut.mutate({ id: p.id, factoryId })}>
+                        <Button variant="ghost" size="sm" className="text-destructive" onClick={() => deleteMut.mutate({ id: p.id, factoryId, ...(resubmissionCompletion ? { resubmissionCompletion: true } : {}) })}>
                           <Trash2 className="w-4 h-4" />
                         </Button>
                       </div>
@@ -1827,7 +1831,7 @@ function ProductManager({ factoryId, products, isPending, onDirtyChange }: { fac
 }
 
 // ===== Product Form =====
-function ProductForm({ factoryId, product, onDone }: { factoryId: number; product?: any; onDone: () => void }) {
+function ProductForm({ factoryId, product, onDone, resubmissionCompletion = false }: { factoryId: number; product?: any; onDone: () => void; resubmissionCompletion?: boolean }) {
   const utils = trpc.useUtils();
   const { data: categories = [] } = trpc.category.getByFactory.useQuery({ factoryId });
 
@@ -1963,6 +1967,7 @@ function ProductForm({ factoryId, product, onDone }: { factoryId: number; produc
       description: description || undefined,
       images,
       imageCrops,
+      ...(resubmissionCompletion ? { resubmissionCompletion: true } : {}),
     };
     if (product) updateMut.mutate({ ...data, id: product.id });
     else createMut.mutate(data);
@@ -1984,10 +1989,14 @@ function ProductForm({ factoryId, product, onDone }: { factoryId: number; produc
             {(categories as any[]).map((cat) => (
               <SelectItem key={cat.id} value={String(cat.id)}>{cat.name}</SelectItem>
             ))}
-            <SelectSeparator />
-            <SelectItem value="__new__" className="text-primary font-medium">
-              ＋ 新增商品分類
-            </SelectItem>
+            {!resubmissionCompletion && (
+              <>
+                <SelectSeparator />
+                <SelectItem value="__new__" className="text-primary font-medium">
+                  ＋ 新增商品分類
+                </SelectItem>
+              </>
+            )}
           </SelectContent>
         </Select>
 
@@ -2090,7 +2099,7 @@ function ProductForm({ factoryId, product, onDone }: { factoryId: number; produc
               </button>
             </div>
           ))}
-          {images.length < 3 && (
+          {images.length < 3 && !resubmissionCompletion && (
             <button type="button" onClick={() => fileInputRef.current?.click()} disabled={uploading}
               className="w-20 h-20 rounded-lg border-2 border-dashed border-muted-foreground/30 flex flex-col items-center justify-center text-muted-foreground hover:border-primary hover:text-primary transition-colors">
               {uploading ? <span className="text-xs">上傳中</span> : <><ImagePlus className="w-5 h-5" /><span className="text-xs mt-1">上傳</span></>}
@@ -2295,19 +2304,81 @@ function ReviewList({ reviews, factoryId }: { reviews: any[], factoryId: number 
 // 工廠主自行刪除（封存）後的後台畫面：不顯示可編輯的後台、不引導建立新工廠，
 // 說明資料與歷史紀錄仍保留，owner 可「申請重新上架」（重新進入管理員審核，
 // 伺服器端見 factory.submitForReview 的 restore 分支）。
+//
+// 送審資料不完整時，「申請重新上架」會進入「重新上架資料補全」：只顯示送審
+// 必填欄位＋商品管理（沿用 ProductManager），所有寫入都帶
+// resubmissionCompletion，伺服器端只允許 owner 本人修改白名單內的資料；
+// 工廠在正式送出前維持下架狀態，不會公開。
 function ArchivedFactoryView({ factory, canRequestRestore }: {
-  factory: { name: string };
+  factory: { id?: number; name: string; products?: any[]; ownerName?: string | null; region?: string | null; capitalLevel?: string | null; mfgModes?: unknown; address?: string | null };
   canRequestRestore: boolean;
 }) {
   const utils = trpc.useUtils();
   const [, navigate] = useLocation();
+  const [completionMode, setCompletionMode] = useState(false);
+  const requirementsQuery = trpc.factory.getResubmissionRequirements.useQuery(undefined, { enabled: canRequestRestore });
+  const requirements = requirementsQuery.data;
   const restoreMut = trpc.factory.submitForReview.useMutation({
     onSuccess: () => {
       toast.success("已送出重新上架申請，請等待管理員審核");
       utils.factory.getMine.invalidate();
+      utils.factory.getResubmissionRequirements.invalidate();
     },
-    onError: (err) => toast.error(err.message === "UNVERIFIED_EMAIL" ? "請先完成主信箱驗證" : err.message),
+    onError: (err) => {
+      if (err.message === "UNVERIFIED_EMAIL") { toast.error("請先完成主信箱驗證"); return; }
+      // 伺服器端最終驗證仍不通過（例如資料在別處被改動）：進入補全模式並更新缺漏清單。
+      if (err.message.startsWith("重新上架前，請先補齊以下資料")) {
+        setCompletionMode(true);
+        utils.factory.getResubmissionRequirements.invalidate();
+      }
+      toast.error(err.message);
+    },
   });
+
+  const handleRequestRestore = () => {
+    if (requirements && !requirements.canSubmit) {
+      setCompletionMode(true);
+      return;
+    }
+    restoreMut.mutate();
+  };
+
+  if (canRequestRestore && completionMode && factory.id) {
+    const missing = requirements?.missing ?? [];
+    return (
+      <div className="min-h-screen bg-background">
+        <Navbar />
+        <div className="container py-8 max-w-3xl space-y-4">
+          <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg" data-testid="resubmission-completion-banner">
+            <h1 className="text-lg font-semibold text-amber-900 break-words">重新上架資料補全</h1>
+            <p className="text-sm text-amber-800 mt-1">目前工廠仍處於下架狀態，完成資料並送出審核前，不會出現在 OXM 公開頁面。</p>
+          </div>
+          <Card>
+            <CardContent className="pt-6">
+              {missing.length > 0 ? (
+                <>
+                  <p className="text-sm font-medium mb-2">重新上架前，請先補齊以下資料：</p>
+                  <ul className="list-disc pl-5 text-sm text-gray-700 space-y-1" data-testid="resubmission-missing-list">
+                    {missing.map(m => <li key={m.key}>{m.label}</li>)}
+                  </ul>
+                </>
+              ) : (
+                <p className="text-sm text-green-700">送審資料已完整，可以送出重新上架申請。</p>
+              )}
+            </CardContent>
+          </Card>
+          <ResubmissionRequiredFieldsForm factory={{ ...factory, id: factory.id }} />
+          <ProductManager factoryId={factory.id} products={factory.products ?? []} isPending={false} resubmissionCompletion />
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={() => restoreMut.mutate()} disabled={restoreMut.isPending || missing.length > 0}>
+              {restoreMut.isPending ? "送出中..." : "送出重新上架申請"}
+            </Button>
+            <Button variant="outline" onClick={() => setCompletionMode(false)}>返回</Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background">
@@ -2323,7 +2394,7 @@ function ArchivedFactoryView({ factory, canRequestRestore }: {
             <>
               <p className="text-sm text-gray-700 mb-5">如需重新使用 OXM，可申請重新上架，送出後將由管理員重新審核。</p>
               <div className="flex flex-wrap gap-2">
-                <Button onClick={() => restoreMut.mutate()} disabled={restoreMut.isPending}>
+                <Button onClick={handleRequestRestore} disabled={restoreMut.isPending || requirementsQuery.isLoading}>
                   {restoreMut.isPending ? "送出中..." : "申請重新上架"}
                 </Button>
                 <Button variant="outline" onClick={() => navigate("/messages")}>查看歷史訊息</Button>
@@ -2335,6 +2406,84 @@ function ArchivedFactoryView({ factory, canRequestRestore }: {
         </div>
       </div>
     </div>
+  );
+}
+
+// 重新上架資料補全：只編輯送審必填欄位（負責人／地區／資本額／代工模式／
+// 地址，跟伺服器端 FACTORY_SUBMISSION_FIELD_CHECKS 同一組），其他工廠資料
+// 在補全模式一律不可修改（伺服器端也會拒絕）。
+function ResubmissionRequiredFieldsForm({ factory }: {
+  factory: { id: number; ownerName?: string | null; region?: string | null; capitalLevel?: string | null; mfgModes?: unknown; address?: string | null };
+}) {
+  const utils = trpc.useUtils();
+  const [ownerName, setOwnerName] = useState(factory.ownerName ?? "");
+  const [region, setRegion] = useState(factory.region ?? "");
+  const [capitalLevel, setCapitalLevel] = useState(factory.capitalLevel ?? "");
+  const [mfgModes, setMfgModes] = useState<string[]>(Array.isArray(factory.mfgModes) ? (factory.mfgModes as string[]) : []);
+  const [address, setAddress] = useState(factory.address ?? "");
+  const saveMut = trpc.factory.update.useMutation({
+    onSuccess: () => {
+      toast.success("資料已儲存");
+      utils.factory.getMine.invalidate();
+      utils.factory.getResubmissionRequirements.invalidate();
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const handleSave = () => {
+    saveMut.mutate({
+      id: factory.id,
+      ownerName: ownerName.trim(),
+      region,
+      capitalLevel,
+      mfgModes,
+      address: address.trim(),
+      resubmissionCompletion: true,
+    });
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>送審必要資料</CardTitle>
+        <CardDescription>補齊後按下「儲存」，再送出重新上架申請</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div><Label>負責人 *</Label><Input value={ownerName} onChange={e => setOwnerName(e.target.value)} maxLength={100} /></div>
+        <div className="grid sm:grid-cols-2 gap-4">
+          <div>
+            <Label>地區 *</Label>
+            <Select value={region} onValueChange={setRegion}>
+              <SelectTrigger className="mt-1"><SelectValue placeholder="請選擇地區" /></SelectTrigger>
+              <SelectContent>{TAIWAN_REGIONS.map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
+          <div>
+            <Label>資本額 *</Label>
+            <Select value={capitalLevel} onValueChange={setCapitalLevel}>
+              <SelectTrigger className="mt-1"><SelectValue placeholder="請選擇資本額" /></SelectTrigger>
+              <SelectContent>{CAPITAL_OPTIONS.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
+        </div>
+        <div>
+          <Label>代工模式 *</Label>
+          <div className="flex flex-wrap gap-4 mt-2">
+            {MFG_MODE_OPTIONS.map(mode => (
+              <label key={mode} className="flex items-center gap-2 text-sm">
+                <Checkbox
+                  checked={mfgModes.includes(mode)}
+                  onCheckedChange={(checked) => setMfgModes(prev => checked ? [...prev, mode] : prev.filter(m => m !== mode))}
+                />
+                {mode}
+              </label>
+            ))}
+          </div>
+        </div>
+        <div><Label>地址 *</Label><Input value={address} onChange={e => setAddress(e.target.value)} maxLength={500} /></div>
+        <Button onClick={handleSave} disabled={saveMut.isPending}>{saveMut.isPending ? "儲存中..." : "儲存"}</Button>
+      </CardContent>
+    </Card>
   );
 }
 

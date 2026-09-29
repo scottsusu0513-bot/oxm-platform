@@ -92,6 +92,28 @@ export function assertFactoryNotArchived(factory: Pick<Factory, "deletedAt"> | n
   }
 }
 
+// ===== 重新上架資料補全（Resubmission Completion）=====
+//
+// 封存工廠送審資料不完整時，owner 可以在「補全模式」只補齊重新送審必要的
+// 資料（必填欄位＋商品），補完後用 factory.submitForReview 送出。這不是
+// 新的 lifecycle 狀態：資料庫在送出前一律維持 delisted + deletedAt（仍不公開），
+// 只是少數 mutation 在明確帶 resubmissionCompletion 時，允許 owner 本人對
+// 自己的封存工廠做白名單內的修改；其他所有營運 mutation 照舊拒絕。
+
+export const RESUBMISSION_COMPLETION_OWNER_ONLY_MESSAGE = "只有工廠主可以補全重新上架資料";
+
+export function assertArchivedResubmissionCompletion(
+  factory: Pick<Factory, "ownerId" | "status" | "deletedAt">,
+  userId: number,
+): void {
+  if (!isFactoryArchived(factory) || factory.status !== "delisted") {
+    throw new TRPCError({ code: "FORBIDDEN", message: ARCHIVED_FACTORY_MESSAGE });
+  }
+  if (factory.ownerId !== userId) {
+    throw new TRPCError({ code: "FORBIDDEN", message: RESUBMISSION_COMPLETION_OWNER_ONLY_MESSAGE });
+  }
+}
+
 // ===== 歷史對話：可讀，不可寫 =====
 
 export const CONVERSATION_READ_ONLY_MESSAGE = "此工廠目前已停止服務，此對話僅供查看歷史紀錄";
