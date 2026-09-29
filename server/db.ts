@@ -17,7 +17,7 @@ import {
   messageCampaigns, messageRecipients, messageReplies,
   industryRequests, industryRequestStatusHistory,
   oauthStates, appLoginTickets, collaborationOrders, collaborationOrderChangeRequests, collaborationOrderOverdueNotifications, collaborationOrderRepeatRequests, collaborationOrderStageHistory,
-  userAuthAccounts, emailVerificationTokens,
+  userAuthAccounts, emailVerificationTokens, accountLinkChallenges, type AccountLinkChallenge,
   pushNotificationTokens,
   factoryRevisions,
   communityPosts, communityComments,
@@ -6198,8 +6198,11 @@ export async function consumeEmailVerificationToken(tokenHash: string): Promise<
     .from(emailVerificationTokens)
     .where(and(
       eq(emailVerificationTokens.tokenHash, tokenHash),
-      sql`${emailVerificationTokens.usedAt} IS NULL`,
-      sql`${emailVerificationTokens.expiresAt} > ${now}`,
+      isNull(emailVerificationTokens.usedAt),
+      // 用 drizzle 的 typed 比較（依欄位 mapToDriverValue 轉成 UTC 字串），不用
+      // raw sql 夾帶 Date——後者由 mysql2 依 process 時區格式化，跟 drizzle 以
+      // UTC 寫入的 expiresAt 在非 UTC 環境會差出時區位移。
+      gt(emailVerificationTokens.expiresAt, now),
     ))
     .limit(1);
   const row = rows[0];
@@ -6210,9 +6213,127 @@ export async function consumeEmailVerificationToken(tokenHash: string): Promise<
   const [result]: any = await db
     .update(emailVerificationTokens)
     .set({ usedAt: now })
-    .where(and(eq(emailVerificationTokens.id, row.id), sql`${emailVerificationTokens.usedAt} IS NULL`));
+    .where(and(eq(emailVerificationTokens.id, row.id), isNull(emailVerificationTokens.usedAt)));
   if ((result?.affectedRows ?? 0) !== 1) return { valid: false };
   return { valid: true, userId: row.userId, email: row.email };
+}
+
+// ===== Account Link Challenges（App OTP，Batch 2.8，migration 0102）=====
+// 所有「是否仍有效」的判斷一律在 UPDATE 的 WHERE 條件裡原子性完成（未使用、
+// 未作廢、未過期、錯誤次數未達上限），不做「SELECT 後 JS 判斷再 UPDATE」，
+// 多個請求／多個 instance 同時處理同一個挑戰時仍然正確。時間一律由呼叫端
+// 傳入 JS Date（配合 drizzle typed 比較，時區一致、測試可控）。
+
+export async function createAccountLinkChallenge(values: {
+  challengeId: string;
+  targetUserId: number;
+  provider: string;
+  providerAccountId: string;
+  displayName: string | null;
+  targetEmail: string;
+  channel: string;
+  secretHash: string;
+  maxAttempts: number;
+  expiresAt: Date;
+  /** 明確由應用層傳入（跟到期／冷卻判斷使用同一個時鐘），不依賴 MySQL NOW()。 */
+  createdAt: Date;
+}): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  await db.insert(accountLinkChallenges).values(values);
+}
+
+export async function getAccountLinkChallenge(challengeId: string): Promise<AccountLinkChallenge | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db.select().from(accountLinkChallenges)
+    .where(eq(accountLinkChallenges.challengeId, challengeId)).limit(1);
+  return rows[0];
+}
+
+/** 目標帳號最近一次建立的挑戰（重寄冷卻用，不論狀態）。 */
+export async function getLatestAccountLinkChallengeForTarget(targetUserId: number): Promise<AccountLinkChallenge | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db.select().from(accountLinkChallenges)
+    .where(eq(accountLinkChallenges.targetUserId, targetUserId))
+    .orderBy(desc(accountLinkChallenges.createdAt), desc(accountLinkChallenges.id)).limit(1);
+  return rows[0];
+}
+
+/** 作廢同一個 (目標帳號, provider identity) 所有仍在使用中的挑戰——重寄後只有最新一組有效。 */
+export async function invalidateActiveAccountLinkChallenges(params: {
+  targetUserId: number; provider: string; providerAccountId: string; now: Date;
+}): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  const [result]: any = await db.update(accountLinkChallenges)
+    .set({ invalidatedAt: params.now })
+    .where(and(
+      eq(accountLinkChallenges.targetUserId, params.targetUserId),
+      eq(accountLinkChallenges.provider, params.provider),
+      eq(accountLinkChallenges.providerAccountId, params.providerAccountId),
+      isNull(accountLinkChallenges.consumedAt),
+      isNull(accountLinkChallenges.invalidatedAt),
+    ));
+  return result?.affectedRows ?? 0;
+}
+
+export async function invalidateAccountLinkChallenge(id: number, now: Date): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  await db.update(accountLinkChallenges)
+    .set({ invalidatedAt: now })
+    .where(and(eq(accountLinkChallenges.id, id), isNull(accountLinkChallenges.consumedAt), isNull(accountLinkChallenges.invalidatedAt)));
+}
+
+function activeChallengeConditions(id: number, now: Date) {
+  return and(
+    eq(accountLinkChallenges.id, id),
+    isNull(accountLinkChallenges.consumedAt),
+    isNull(accountLinkChallenges.invalidatedAt),
+    gt(accountLinkChallenges.expiresAt, now),
+    sql`${accountLinkChallenges.failedAttempts} < ${accountLinkChallenges.maxAttempts}`,
+  );
+}
+
+/**
+ * 記錄一次錯誤嘗試：`failedAttempts = failedAttempts + 1` 由 DB 原子性累加，
+ * 而且只在挑戰仍有效（含錯誤次數未達上限）時才會累加；達到上限後立刻把挑戰
+ * 標記作廢。回傳累加後的錯誤次數與上限；挑戰已經無效時回傳 null。
+ */
+export async function recordAccountLinkChallengeFailure(id: number, now: Date): Promise<{ failedAttempts: number; maxAttempts: number } | null> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  const [inc]: any = await db.update(accountLinkChallenges)
+    .set({ failedAttempts: sql`${accountLinkChallenges.failedAttempts} + 1` })
+    .where(activeChallengeConditions(id, now));
+  if ((inc?.affectedRows ?? 0) !== 1) return null;
+  await db.update(accountLinkChallenges)
+    .set({ invalidatedAt: now })
+    .where(and(
+      eq(accountLinkChallenges.id, id),
+      isNull(accountLinkChallenges.invalidatedAt),
+      sql`${accountLinkChallenges.failedAttempts} >= ${accountLinkChallenges.maxAttempts}`,
+    ));
+  const [row] = await db.select({ failedAttempts: accountLinkChallenges.failedAttempts, maxAttempts: accountLinkChallenges.maxAttempts })
+    .from(accountLinkChallenges).where(eq(accountLinkChallenges.id, id)).limit(1);
+  return row ?? null;
+}
+
+/**
+ * 驗證碼正確時消耗挑戰：單一條件式 UPDATE（未使用、未作廢、未過期、錯誤次數
+ * 未達上限）＋ affectedRows 檢查。第 5 次錯誤與正確驗證碼幾乎同時到達時，
+ * InnoDB 列鎖讓兩個 UPDATE 依序執行：錯誤先到 → 錯誤次數已達上限，這裡的條件
+ * 不成立；正確先到 → 已消耗，錯誤累加的條件不成立。不可能兩者都「成功」。
+ */
+export async function consumeAccountLinkChallenge(id: number, now: Date): Promise<boolean> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  const [result]: any = await db.update(accountLinkChallenges)
+    .set({ consumedAt: now })
+    .where(activeChallengeConditions(id, now));
+  return (result?.affectedRows ?? 0) === 1;
 }
 
 /**

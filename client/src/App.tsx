@@ -9,6 +9,7 @@ import { HelmetProvider } from "react-helmet-async";
 import { toast } from "sonner";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { setBadgeCount, clearBadge } from "@/lib/appBadge";
+import { setAppAccountLinkState } from "@/lib/appAccountLink";
 import { getAnalyticsPlatform } from "@/lib/platform";
 import { getVisitorId } from "@/lib/analyticsVisitor";
 import { classifyPathname } from "@shared/analyticsPageType";
@@ -50,6 +51,7 @@ const TermsPage             = lazy(() => import("./pages/TermsPage"));
 const VerifyEmailPage       = lazy(() => import("./pages/VerifyEmailPage"));
 const AccountLinkPage       = lazy(() => import("./pages/AccountLinkPage"));
 const AccountLinkVerifyPage = lazy(() => import("./pages/AccountLinkVerifyPage"));
+const AccountLinkAppPage    = lazy(() => import("./pages/AccountLinkAppPage"));
 const UserManual            = lazy(() => import("./pages/UserManual"));
 const Community             = lazy(() => import("./pages/Community"));
 const Notifications         = lazy(() => import("./pages/Notifications"));
@@ -220,6 +222,7 @@ function AppBadgeSyncer() {
 // Handles oxm://oauth/callback?ticket=... deep links on iOS and Android
 function AppDeepLinkHandler() {
   const utils = trpc.useUtils();
+  const [, navigateTo] = useLocation();
 
   useEffect(() => {
     let cleanup: (() => void) | undefined;
@@ -234,25 +237,35 @@ function AppDeepLinkHandler() {
       console.log("[AppDeepLinkHandler] mounted, listening for appUrlOpen");
 
       const handle = await CapApp.addListener("appUrlOpen", async ({ url }) => {
-        console.log("[AppDeepLinkHandler] appUrlOpen:", url.slice(0, 60));
+        // 只記錄 query 之前的部分：ticket／帳號連結 state 都不得進 log
+        console.log("[AppDeepLinkHandler] appUrlOpen:", url.split("?")[0]);
 
         if (!url.startsWith("oxm://oauth/callback")) return;
 
         let ticket: string | null = null;
         let oauthError: string | null = null;
+        let accountLinkState: string | null = null;
         try {
           const parsed = new URL(url);
           ticket = parsed.searchParams.get("ticket");
           oauthError = parsed.searchParams.get("error");
+          accountLinkState = parsed.searchParams.get("link");
         } catch {
           console.warn("[AppDeepLinkHandler] failed to parse url");
           return;
         }
-        // Verified Account Linking：LINE 的 email 屬於既有 OXM 帳號，需要在同一個
-        // 瀏覽器完成 Email 驗證後才能連結，App 內無法完成（見 server/_core/oauth.ts）。
-        if (oauthError === "account_link_required") {
+        // Verified Account Linking（App OTP）：LINE 的 email 屬於既有 OXM 帳號，
+        // 伺服器已寄 6 位數驗證碼到既有帳號信箱。不透明 state 只放在記憶體
+        // （不寫 localStorage），不重新載入頁面，直接進入輸入驗證碼畫面。
+        if (accountLinkState) {
           await Browser.close();
-          toast.error("此 LINE 帳號的 Email 已有 OXM 帳號，請改用網頁版以 LINE 登入並完成 Email 驗證連結。", { duration: 8000 });
+          setAppAccountLinkState(accountLinkState);
+          navigateTo("/account-link/app");
+          return;
+        }
+        if (oauthError === "account_link_cooldown") {
+          await Browser.close();
+          toast.error("驗證碼已寄出，請稍後再試。", { duration: 6000 });
           return;
         }
         if (!ticket) {
@@ -488,6 +501,7 @@ function Router() {
         <Route path="/terms" component={TermsPage} />
         <Route path="/verify-email" component={VerifyEmailPage} />
         <Route path="/account-link/verify" component={AccountLinkVerifyPage} />
+        <Route path="/account-link/app" component={AccountLinkAppPage} />
         <Route path="/account-link" component={AccountLinkPage} />
         <Route path="/notifications" component={Notifications} />
         <Route path="/community/*?" component={Community} />

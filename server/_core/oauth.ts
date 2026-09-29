@@ -3,7 +3,7 @@ import * as db from "../db";
 import { ENV } from "./env";
 import { randomBytes } from "crypto";
 import { handleOAuthCallback, issueSessionOrTicket, isGoogleEmailVerified, isLineEmailVerified } from "./oauthHelpers";
-import { resolveProviderLoginAction, startPendingAccountLink } from "./accountLink";
+import { resolveProviderLoginAction, startPendingAccountLink, startAppAccountLinkChallenge } from "./accountLink";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 
 // Cached Apple JWKS (fetched lazily on first Apple login)
@@ -278,9 +278,19 @@ export function registerOAuthRoutes(app: Express) {
       const loginAction = await resolveProviderLoginAction({ provider: "line", providerAccountId: lineUserId, providerEmail: lineEmail });
       if (loginAction.kind === "link_required") {
         if (dbResult.source === "app") {
-          // App 的 OAuth 在獨立的系統瀏覽器進行，驗證信連結會在另一個瀏覽器開啟，
-          // 無法滿足「同一瀏覽器」的 session binding——請使用者改在網頁版完成連結。
-          res.redirect(302, "oxm://oauth/callback?error=account_link_required");
+          // App 的 OAuth 在獨立的系統瀏覽器進行，信中連結會在另一個瀏覽器開啟，
+          // 無法滿足 Web 的同一瀏覽器 cookie 綁定——改用寄到既有帳號可信信箱的
+          // 6 位數驗證碼（accountLinkChallenges）。App 只拿到簽章過的不透明
+          // state（只含 challengeId），目標帳號／信箱／LINE identity 全在伺服器端。
+          const started = await startAppAccountLinkChallenge({
+            target: loginAction.target, provider: "line",
+            providerAccountId: lineUserId, displayName: lineName,
+          });
+          if (started.kind === "cooldown") {
+            res.redirect(302, "oxm://oauth/callback?error=account_link_cooldown");
+            return;
+          }
+          res.redirect(302, `oxm://oauth/callback?link=${encodeURIComponent(started.state)}`);
           return;
         }
         await startPendingAccountLink({

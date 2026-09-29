@@ -75,10 +75,10 @@ export async function sendNewInquiryEmail(params: {
       html: `
         <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
           <h2 style="color: #f97316;">${isBatch ? '您收到一則一鍵詢價' : '您有一則新的客戶詢問'}</h2>
-          <p>親愛的 <strong>${params.factoryName}</strong> 您好，</p>
+          <p>親愛的 <strong>${escapeHtml(params.factoryName)}</strong> 您好，</p>
           ${batchBadge}
-          <p>您在 OXM 平台收到一則來自 <strong>${params.userName}</strong> 的詢問訊息。</p>
-          ${params.productName ? `<p>詢問產品：<strong>${params.productName}</strong></p>` : ''}
+          <p>您在 OXM 平台收到一則來自 <strong>${escapeHtml(params.userName)}</strong> 的詢問訊息。</p>
+          ${params.productName ? `<p>詢問產品：<strong>${escapeHtml(params.productName)}</strong></p>` : ''}
           <div style="background: #f5f5f5; padding: 16px; border-radius: 8px; margin: 16px 0;">
             <p style="margin: 0;">${params.message}</p>
           </div>
@@ -118,7 +118,7 @@ export async function sendFactoryRejectedEmail(params: {
       html: `
         <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
           <h2 style="color: #f97316;">您的工廠審核未通過</h2>
-          <p>親愛的 <strong>${params.factoryName}</strong> 您好，</p>
+          <p>親愛的 <strong>${escapeHtml(params.factoryName)}</strong> 您好，</p>
           <p>感謝您在 OXM 平台送出工廠審核申請，經審核後目前您的工廠資料尚未通過審核。</p>
           ${params.reason ? `
           <div style="background: #f5f5f5; padding: 16px; border-radius: 8px; margin: 16px 0;">
@@ -160,7 +160,7 @@ export async function sendFactoryApprovedEmail(params: {
       html: `
         <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
           <h2 style="color: #f97316;">恭喜！您的工廠已通過審核</h2>
-          <p>親愛的 <strong>${params.factoryName}</strong> 您好，</p>
+          <p>親愛的 <strong>${escapeHtml(params.factoryName)}</strong> 您好，</p>
           <p>您的工廠已通過 OXM 平台審核，即日起買家可以在搜尋頁找到您！</p>
           <a href="${process.env.VITE_APP_URL ?? 'http://localhost:3000'}/dashboard"
             style="background: #f97316; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none; display: inline-block;">
@@ -203,8 +203,8 @@ export async function sendFactorySubmittedEmail(params: {
       html: `
         <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
           <h2 style="color: #f97316;">有新工廠送出審核申請</h2>
-          <p>工廠名稱：<strong>${params.factoryName}</strong></p>
-          <p>負責人：<strong>${params.ownerName}</strong>${params.ownerEmail ? `（${params.ownerEmail}）` : ''}</p>
+          <p>工廠名稱：<strong>${escapeHtml(params.factoryName)}</strong></p>
+          <p>負責人：<strong>${escapeHtml(params.ownerName)}</strong>${params.ownerEmail ? `（${params.ownerEmail}）` : ''}</p>
           <a href="${appUrl}/admin/factories/${params.factoryId}"
             style="background: #f97316; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none; display: inline-block;">
             前往審核
@@ -246,8 +246,8 @@ export async function sendReportEmail(params: {
       html: `
         <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
           <h2 style="color: #f97316;">收到新的工廠檢舉</h2>
-          <p>檢舉者：<strong>${params.reporterName}</strong></p>
-          <p>被檢舉工廠：<strong>${params.factoryName}</strong></p>
+          <p>檢舉者：<strong>${escapeHtml(params.reporterName)}</strong></p>
+          <p>被檢舉工廠：<strong>${escapeHtml(params.factoryName)}</strong></p>
           <div style="background: #f5f5f5; padding: 16px; border-radius: 8px; margin: 16px 0;">
             <p style="margin: 0; font-weight: bold;">檢舉原因：</p>
             <p style="margin: 8px 0 0;">${params.reason}</p>
@@ -293,7 +293,7 @@ export async function sendSupportTicketEmail(params: {
       html: `
         <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
           <h2 style="color: #f97316;">收到新的客服投訴</h2>
-          <p>提交者：<strong>${params.userName}</strong>${params.userEmail ? `（${params.userEmail}）` : ''}</p>
+          <p>提交者：<strong>${escapeHtml(params.userName)}</strong>${params.userEmail ? `（${params.userEmail}）` : ''}</p>
           <p>問題類型：<strong>${params.type}</strong></p>
           <p>主旨：<strong>${params.subject}</strong></p>
           <div style="background: #f5f5f5; padding: 16px; border-radius: 8px; margin: 16px 0;">
@@ -334,9 +334,9 @@ export async function sendReviewReplyEmail(params: {
       subject: `【OXM】${params.factoryName} 回覆了您的評價`,
       html: `
         <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2 style="color: #f97316;">${params.factoryName} 回覆了您的評價</h2>
-          <p>親愛的 <strong>${params.userName}</strong> 您好，</p>
-          <p>您對 <strong>${params.factoryName}</strong> 的評價已收到工廠回覆。</p>
+          <h2 style="color: #f97316;">${escapeHtml(params.factoryName)} 回覆了您的評價</h2>
+          <p>親愛的 <strong>${escapeHtml(params.userName)}</strong> 您好，</p>
+          <p>您對 <strong>${escapeHtml(params.factoryName)}</strong> 的評價已收到工廠回覆。</p>
           <div style="background: #f5f5f5; padding: 16px; border-radius: 8px; margin: 16px 0;">
             <p style="margin: 0; font-size: 12px; color: #666;">您的評價</p>
             <p style="margin: 8px 0 0;">${params.originalComment}</p>
@@ -382,9 +382,9 @@ export async function sendNewMessageNotificationEmail(params: {
       subject: `【OXM】${params.factoryName} 回覆了您的詢問`,
       html: `
         <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2 style="color: #f97316;">${params.factoryName} 回覆了您的詢問</h2>
-          <p>親愛的 <strong>${params.userName}</strong> 您好，</p>
-          <p>您在 OXM 平台的詢問收到了來自 <strong>${params.factoryName}</strong> 的回覆。</p>
+          <h2 style="color: #f97316;">${escapeHtml(params.factoryName)} 回覆了您的詢問</h2>
+          <p>親愛的 <strong>${escapeHtml(params.userName)}</strong> 您好，</p>
+          <p>您在 OXM 平台的詢問收到了來自 <strong>${escapeHtml(params.factoryName)}</strong> 的回覆。</p>
           <div style="background: #f5f5f5; padding: 16px; border-radius: 8px; margin: 16px 0;">
             <p style="margin: 0;">${params.messagePreview}</p>
           </div>
@@ -434,8 +434,8 @@ export async function sendReportStatusUpdateEmail(params: {
       html: `
         <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
           <h2 style="color: #f97316;">您的檢舉案件狀態已更新</h2>
-          <p>親愛的 <strong>${params.userName}</strong> 您好，</p>
-          <p>您對 <strong>${params.factoryName}</strong> 的檢舉案件狀態已更新為：</p>
+          <p>親愛的 <strong>${escapeHtml(params.userName)}</strong> 您好，</p>
+          <p>您對 <strong>${escapeHtml(params.factoryName)}</strong> 的檢舉案件狀態已更新為：</p>
           <div style="background: #f5f5f5; padding: 16px; border-radius: 8px; margin: 16px 0; text-align: center;">
             <strong style="font-size: 18px; color: #f97316;">${statusLabel}</strong>
           </div>
@@ -477,7 +477,7 @@ export async function sendTicketStatusUpdateEmail(params: {
       html: `
         <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
           <h2 style="color: #f97316;">您的客服投訴狀態已更新</h2>
-          <p>親愛的 <strong>${params.userName}</strong> 您好，</p>
+          <p>親愛的 <strong>${escapeHtml(params.userName)}</strong> 您好，</p>
           <p>您提交的客服投訴「<strong>${params.subject}</strong>」狀態已更新為：</p>
           <div style="background: #f5f5f5; padding: 16px; border-radius: 8px; margin: 16px 0; text-align: center;">
             <strong style="font-size: 18px; color: #f97316;">${statusLabel}</strong>
@@ -525,7 +525,7 @@ export async function sendMessageReplyNotificationEmail(params: {
         <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
           <h2 style="color: #f97316;">使用者回覆了站內信</h2>
           <p>站內信主題：<strong>${params.campaignTitle}</strong></p>
-          <p>回覆者：<strong>${params.userName}</strong>${params.userEmail ? `（${params.userEmail}）` : ''}</p>
+          <p>回覆者：<strong>${escapeHtml(params.userName)}</strong>${params.userEmail ? `（${params.userEmail}）` : ''}</p>
           <div style="background: #f5f5f5; padding: 16px; border-radius: 8px; margin: 16px 0;">
             <p style="margin: 0; font-weight: bold;">回覆內容：</p>
             <p style="margin: 8px 0 0;">${params.replyContent}</p>
@@ -564,7 +564,7 @@ export async function sendAdminBroadcastEmail(params: {
       html: `
         <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
           <h2 style="color: #f97316;">您有一封來自 OXM 平台的站內信</h2>
-          <p>親愛的 ${params.toName ?? '用戶'}，您好：</p>
+          <p>親愛的 ${escapeHtml(params.toName ?? '用戶')}，您好：</p>
           <div style="background: #f5f5f5; padding: 16px; border-radius: 8px; margin: 16px 0; white-space: pre-wrap;">
             ${params.campaignContent.replace(/\n/g, '<br>')}
           </div>
@@ -601,7 +601,7 @@ export async function sendEmailVerificationEmail(params: {
     html: `
       <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
         <h2 style="color: #f97316;">驗證您的電子郵件</h2>
-        <p>親愛的 ${params.userName ? `<strong>${params.userName}</strong>` : '用戶'} 您好，</p>
+        <p>親愛的 ${params.userName ? `<strong>${escapeHtml(params.userName)}</strong>` : '用戶'} 您好，</p>
         <p>感謝您使用 OXM 製造業媒合平台。請點擊下方按鈕驗證您的電子郵件地址：</p>
         <div style="text-align: center; margin: 32px 0;">
           <a href="${params.verifyUrl}"
@@ -628,7 +628,7 @@ export async function sendAccountLinkVerificationEmail(params: {
   userName: string | null;
   providerLabel: string;
   verifyUrl: string;
-  expiresInHours: number;
+  expiresInMinutes: number;
 }) {
   if (!isEmailEnabled()) {
     console.log(`[Email] ${getEmailDisabledReason()}，跳過寄送帳號連結驗證信`);
@@ -652,7 +652,7 @@ export async function sendAccountLinkVerificationEmail(params: {
             確認連結 ${provider} 登入
           </a>
         </div>
-        <p style="color: #666; font-size: 14px;">此連結將在 ${params.expiresInHours} 小時後失效，且只能使用一次。</p>
+        <p style="color: #666; font-size: 14px;">此連結將於 ${params.expiresInMinutes} 分鐘後失效，且只能使用一次。</p>
         <p style="color: #666; font-size: 14px;">若這不是您本人的操作，請忽略此信，您的帳號不會有任何變更。OXM 不會向您索取密碼或驗證碼，請勿將此信轉寄給他人。</p>
         <hr style="border: none; border-top: 1px solid #eee; margin: 24px 0;" />
         <p style="color: #999; font-size: 12px;">OXM 製造業媒合平台 | <a href="https://www.oxmmatch.com">www.oxmmatch.com</a></p>
@@ -660,6 +660,46 @@ export async function sendAccountLinkVerificationEmail(params: {
     `,
   });
   console.log('[Email] 已寄送帳號連結驗證信到:', params.toEmail);
+}
+
+/**
+ * App 帳號連結驗證碼信（Batch 2.8）：6 位數 OTP 寄到既有 OXM 帳號的可信
+ * primaryEmail（伺服器從目標帳號讀取）。驗證碼只出現在信件內容，絕不寫入 log。
+ */
+export async function sendAccountLinkOtpEmail(params: {
+  toEmail: string;
+  userName: string | null;
+  providerLabel: string;
+  code: string;
+  expiresInMinutes: number;
+}) {
+  if (!isEmailEnabled()) {
+    console.log(`[Email] ${getEmailDisabledReason()}，跳過寄送帳號連結驗證碼`);
+    return;
+  }
+  const resend = getResend();
+  if (!resend) return;
+  const provider = escapeHtml(params.providerLabel);
+  await resend.emails.send({
+    from: FROM_EMAIL,
+    to: params.toEmail,
+    subject: `【OXM】${params.providerLabel} 帳號連結驗證碼`,
+    html: `
+      <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #f97316;">OXM ${provider} 帳號連結驗證碼</h2>
+        <p>親愛的 ${params.userName ? `<strong>${escapeHtml(params.userName)}</strong>` : '用戶'} 您好，</p>
+        <p>有人正在嘗試將 ${provider} 登入連結至您的 OXM 帳號。如果是您本人，請在 OXM App 輸入以下 6 位數驗證碼：</p>
+        <div style="text-align: center; margin: 32px 0;">
+          <span style="display: inline-block; font-size: 32px; font-weight: bold; letter-spacing: 8px; padding: 12px 24px; background: #fff7ed; border-radius: 8px; color: #9a3412;">${escapeHtml(params.code)}</span>
+        </div>
+        <p style="color: #666; font-size: 14px;">此驗證碼將於 ${params.expiresInMinutes} 分鐘後失效，且僅能使用一次。</p>
+        <p style="color: #666; font-size: 14px;">若這不是您本人的操作，請忽略此信，您的帳號不會有任何變更。OXM 不會要求您把驗證碼提供給其他人，請勿告訴任何人。</p>
+        <hr style="border: none; border-top: 1px solid #eee; margin: 24px 0;" />
+        <p style="color: #999; font-size: 12px;">OXM 製造業媒合平台 | <a href="https://www.oxmmatch.com">www.oxmmatch.com</a></p>
+      </div>
+    `,
+  });
+  console.log('[Email] 已寄送帳號連結驗證碼到:', params.toEmail);
 }
 
 // ===== 工廠基本資料修改申請 Email =====
@@ -813,12 +853,12 @@ export async function sendUpgradeNewCaseConsultantEmail(params: {
       html: `
         <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
           <h2 style="color: #f97316;">您有一筆新的企業升級案件待查收</h2>
-          <p>親愛的 <strong>${params.consultantName}</strong> 您好，</p>
+          <p>親愛的 <strong>${escapeHtml(params.consultantName)}</strong> 您好，</p>
           <p>您有一筆新的企業升級案件待查收，請登入 OXM 顧問中心查看案件內容並進行後續評估。</p>
           <table style="border-collapse:collapse; width:100%; margin: 16px 0;">
-            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">公司名稱</td><td style="padding:8px;">${params.companyName}</td></tr>
+            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">公司名稱</td><td style="padding:8px;">${escapeHtml(params.companyName)}</td></tr>
             <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">所在地區</td><td style="padding:8px;">${params.location}</td></tr>
-            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">聯絡人</td><td style="padding:8px;">${params.contactName}</td></tr>
+            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">聯絡人</td><td style="padding:8px;">${escapeHtml(params.contactName)}</td></tr>
             <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">聯絡 Email</td><td style="padding:8px;">${params.email}</td></tr>
             <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">聯絡電話</td><td style="padding:8px;">${params.phone}</td></tr>
             <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">資本額</td><td style="padding:8px;">${capitalLabel}</td></tr>
@@ -869,8 +909,8 @@ export async function sendUpgradeApplicationEmail(params: {
           <h2 style="color: #f97316;">企業升級中心 — 新申請</h2>
           <p>有一筆新的企業升級評估申請待審核。</p>
           <table style="border-collapse:collapse; width:100%; margin: 16px 0;">
-            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">公司名稱</td><td style="padding:8px;">${params.companyName}</td></tr>
-            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">聯絡人</td><td style="padding:8px;">${params.contactName}</td></tr>
+            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">公司名稱</td><td style="padding:8px;">${escapeHtml(params.companyName)}</td></tr>
+            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">聯絡人</td><td style="padding:8px;">${escapeHtml(params.contactName)}</td></tr>
             <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">電話</td><td style="padding:8px;">${params.phone}</td></tr>
             <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">Email</td><td style="padding:8px;">${params.email}</td></tr>
             <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">所在地</td><td style="padding:8px;">${params.location}</td></tr>
@@ -990,7 +1030,7 @@ export async function sendOrderOverdueEmail(params: {
     const resend = getResend();
     if (!resend) return;
     const appUrl = process.env.VITE_APP_URL ?? 'http://localhost:3000';
-    const greeting = params.recipientName ? `親愛的 <strong>${params.recipientName}</strong> 您好，` : '您好，';
+    const greeting = params.recipientName ? `親愛的 <strong>${escapeHtml(params.recipientName)}</strong> 您好，` : '您好，';
     await resend.emails.send({
       from: FROM_EMAIL,
       to: params.to,
@@ -1001,8 +1041,8 @@ export async function sendOrderOverdueEmail(params: {
           <p>${greeting}</p>
           <p>您在 OXM 平台的合作訂單有一個日期節點已逾期，請盡快確認進度。</p>
           <table style="border-collapse:collapse; width:100%; margin: 16px 0;">
-            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold; width:40%;">訂單名稱</td><td style="padding:8px;">${params.projectName}</td></tr>
-            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">供應工廠</td><td style="padding:8px;">${params.factoryName}</td></tr>
+            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold; width:40%;">訂單名稱</td><td style="padding:8px;">${escapeHtml(params.projectName)}</td></tr>
+            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">供應工廠</td><td style="padding:8px;">${escapeHtml(params.factoryName)}</td></tr>
             <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">逾期節點</td><td style="padding:8px; color:#dc2626; font-weight:bold;">${params.dateLabel}</td></tr>
             <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">原定日期</td><td style="padding:8px; color:#dc2626;">${params.dueDate}</td></tr>
             <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">您的角色</td><td style="padding:8px;">${params.side}</td></tr>
@@ -1044,7 +1084,7 @@ export async function sendFirstContactEmail(params: {
       html: `
         <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
           <h2 style="color: #f97316;">有新的使用者透過 OXM 聯繫你</h2>
-          <p>您好${params.toName ? `，<strong>${params.toName}</strong>` : ''}，</p>
+          <p>您好${params.toName ? `，<strong>${escapeHtml(params.toName)}</strong>` : ''}，</p>
           <p>您在 OXM 收到一位新使用者的聯繫。</p>
           <p>對方已透過平台向您發送訊息，這可能是新的詢價、合作需求或媒合機會。</p>
           <p>請回到 OXM 查看並回覆，避免錯過新的合作機會。</p>

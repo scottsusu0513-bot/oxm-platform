@@ -17,6 +17,7 @@ import { sha256Hex, generateRawToken, setSessionCookieForUser } from './_core/oa
 import {
   describePendingAccountLink, resendPendingAccountLink, completePendingAccountLink,
   cancelPendingAccountLink, ACCOUNT_LINK_FAILED_MESSAGE,
+  describeAppAccountLink, resendAppAccountLinkChallenge, verifyAppAccountLinkChallenge, cancelAppAccountLinkChallenge,
 } from './_core/accountLink';
 import { EMAIL_VERIFICATION_TOKEN_TTL_MS, EMAIL_VERIFICATION_RESEND_COOLDOWN_MS, emailVerificationBaseUrl } from './emailVerificationPolicy';
 import { getSessionCookieOptions } from "./_core/cookies";
@@ -1488,6 +1489,37 @@ export const appRouter = router({
     }),
     cancel: publicProcedure.mutation(async ({ ctx }) => {
       await cancelPendingAccountLink(ctx.req, ctx.res);
+      return { success: true };
+    }),
+
+    // ── App（Capacitor）：6 位數 OTP ─────────────────────────────────────
+    // App 只傳伺服器簽章的不透明 state（只含 challengeId）與驗證碼；目標帳號、
+    // 收件信箱、LINE identity 全部由 accountLinkChallenges 決定。錯誤次數、
+    // 到期、單次使用都由 DB 原子性條件寫入保證，不依賴 IP 限流（那只是第二層）。
+    appPending: publicProcedure.input(z.object({ state: z.string().min(1).max(2048) })).query(async ({ input }) => {
+      return describeAppAccountLink(input.state);
+    }),
+    appResend: publicProcedure.input(z.object({ state: z.string().min(1).max(2048) })).mutation(async ({ input }) => {
+      const result = await resendAppAccountLinkChallenge(input.state);
+      if (result.kind === "cooldown") throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: "驗證碼已寄出，請稍後再試" });
+      if (result.kind === "invalid") throw new TRPCError({ code: "BAD_REQUEST", message: ACCOUNT_LINK_FAILED_MESSAGE });
+      return { state: result.state };
+    }),
+    appVerify: publicProcedure.input(z.object({
+      state: z.string().min(1).max(2048),
+      code: z.string().min(1).max(12),
+    })).mutation(async ({ ctx, input }) => {
+      const result = await verifyAppAccountLinkChallenge(input.state, input.code);
+      if (!result.ok) {
+        return { success: false as const, reason: result.reason, message: result.message, remainingAttempts: result.remainingAttempts ?? null };
+      }
+      // 連結成功：用既有正常登入流程在 App WebView 建立 session（跟
+      // /api/oauth/app-complete 同一個 cookie 設定），不沿用 state 或 OTP。
+      await setSessionCookieForUser(ctx.req, ctx.res, result.user.openId, result.user.name ?? "");
+      return { success: true as const };
+    }),
+    appCancel: publicProcedure.input(z.object({ state: z.string().min(1).max(2048) })).mutation(async ({ input }) => {
+      await cancelAppAccountLinkChallenge(input.state);
       return { success: true };
     }),
   }),

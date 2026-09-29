@@ -1066,6 +1066,37 @@ export const emailVerificationTokens = mysqlTable("emailVerificationTokens", {
 
 export type EmailVerificationToken = typeof emailVerificationTokens.$inferSelect;
 
+// Verified Account Linking 的 App OTP 挑戰（Production Hardening Batch 2.8，
+// migration 0102）。一列＝一組寄到目標帳號可信 primaryEmail 的 6 位數驗證碼：
+// 只存 HMAC-SHA256（JWT_SECRET，內容綁 challengeId／targetUserId／provider／
+// providerAccountId）不存原文；錯誤次數、單次使用、作廢全部以 DB 原子性條件
+// 寫入保證（多 instance 下仍正確）。provider identity 的最終唯一性仍由
+// userAuthAccounts 的 uq_provider_account 保證，這張表不取代它。
+export const accountLinkChallenges = mysqlTable("accountLinkChallenges", {
+  id: int("id").autoincrement().primaryKey(),
+  challengeId: varchar("challengeId", { length: 64 }).notNull(),
+  targetUserId: int("targetUserId").notNull().references(() => users.id, { onDelete: "cascade" }),
+  provider: varchar("provider", { length: 30 }).notNull(),
+  providerAccountId: varchar("providerAccountId", { length: 256 }).notNull(),
+  displayName: varchar("displayName", { length: 200 }),
+  // 寄出當下目標帳號的已驗證 primaryEmail；驗證時重新比對，途中被改掉就拒絕。
+  targetEmail: varchar("targetEmail", { length: 320 }).notNull(),
+  channel: varchar("channel", { length: 20 }).notNull(), // 'app_otp'
+  secretHash: varchar("secretHash", { length: 128 }).notNull(),
+  failedAttempts: int("failedAttempts").default(0).notNull(),
+  maxAttempts: int("maxAttempts").default(5).notNull(),
+  expiresAt: timestamp("expiresAt").notNull(),
+  consumedAt: timestamp("consumedAt"),
+  invalidatedAt: timestamp("invalidatedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => ({
+  challengeIdUq: uniqueIndex("uq_account_link_challenge").on(table.challengeId),
+  // 重寄冷卻／作廢舊挑戰都以目標帳號查詢；也作為 targetUserId FK 的索引。
+  targetCreatedIdx: index("alc_target_created_idx").on(table.targetUserId, table.createdAt),
+}));
+
+export type AccountLinkChallenge = typeof accountLinkChallenges.$inferSelect;
+
 // ===== 工廠基本資料修改申請表 =====
 export const factoryRevisions = mysqlTable("factoryRevisions", {
   id: int("id").autoincrement().primaryKey(),

@@ -10,15 +10,17 @@
  * 瀏覽器以 cookie jar 模擬：每個 jar 就是一個獨立的瀏覽器。寄信函式被
  * mock，以取得信中的 token（等同使用者收信）。
  */
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sql } from "drizzle-orm";
 
-const sentLinkEmails = vi.hoisted(() => [] as { toEmail: string; verifyUrl: string; providerLabel: string }[]);
+const sentLinkEmails = vi.hoisted(() => [] as { toEmail: string; verifyUrl: string; providerLabel: string; expiresInMinutes?: number }[]);
+const sentVerifyEmails = vi.hoisted(() => [] as { toEmail: string; verifyUrl: string }[]);
 vi.mock("./email", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./email")>();
   return {
     ...actual,
-    sendAccountLinkVerificationEmail: vi.fn(async (p: { toEmail: string; verifyUrl: string; providerLabel: string }) => { sentLinkEmails.push(p); }),
+    sendAccountLinkVerificationEmail: vi.fn(async (p: { toEmail: string; verifyUrl: string; providerLabel: string; expiresInMinutes?: number }) => { sentLinkEmails.push(p); }),
+    sendEmailVerificationEmail: vi.fn(async (p: { toEmail: string; verifyUrl: string }) => { sentVerifyEmails.push(p); }),
   };
 });
 
@@ -214,7 +216,7 @@ describe("失敗情境：不連結、不修改既有帳號", () => {
     const b = newBrowser();
     await lineCallback(b, lineSub("p"), email);
     const r = await completePendingAccountLink(req(b), res(b), "0".repeat(64));
-    expect(r).toEqual({ ok: false, message: "驗證失敗或已過期，請重新驗證。" });
+    expect(r).toEqual({ ok: false, reason: "invalid", message: "驗證失敗或已過期，請重新驗證。" });
     expect(await db.getUserByAuthAccount("line", lineSub("p"))).toBeUndefined();
     expect((await completePendingAccountLink(req(b), res(b), tokenFromLastEmail())).ok).toBe(true);
     expect((await db.getUserByAuthAccount("line", lineSub("p")))?.id).toBe(user.id);
@@ -229,6 +231,61 @@ describe("失敗情境：不連結、不修改既有帳號", () => {
     await conn.execute(sql`UPDATE emailVerificationTokens SET expiresAt = ${utcSql(Date.now() - 60 * 1000)} WHERE email = ${email}`);
     expect((await completePendingAccountLink(req(b), res(b), token)).ok).toBe(false);
     expect(await db.getUserByAuthAccount("line", lineSub("q"))).toBeUndefined();
+  });
+
+  describe("Batch 2.8：Web 帳號連結期限 15 分鐘（fake time，不 sleep）", () => {
+    afterEach(() => { vi.useRealTimers(); });
+
+    it("信件文案為 15 分鐘；14 分 59 秒時點連結仍有效", async () => {
+      const { user, email } = await mkVerifiedUser("web1459");
+      const t0 = Date.now();
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(t0);
+      const b = newBrowser();
+      await lineCallback(b, lineSub("web1459"), email);
+      expect(sentLinkEmails.at(-1)?.expiresInMinutes).toBe(15);
+      vi.setSystemTime(t0 + 14 * 60 * 1000 + 59 * 1000);
+      expect((await completePendingAccountLink(req(b), res(b), tokenFromLastEmail())).ok).toBe(true);
+      expect((await db.getUserByAuthAccount("line", lineSub("web1459")))?.id).toBe(user.id);
+    });
+
+    it("15 分 01 秒後點連結 → 過期失敗、沒有綁定", async () => {
+      const { email } = await mkVerifiedUser("web1501");
+      const t0 = Date.now();
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(t0);
+      const b = newBrowser();
+      await lineCallback(b, lineSub("web1501"), email);
+      vi.setSystemTime(t0 + 15 * 60 * 1000 + 1000);
+      expect((await completePendingAccountLink(req(b), res(b), tokenFromLastEmail())).ok).toBe(false);
+      expect(await db.getUserByAuthAccount("line", lineSub("web1501"))).toBeUndefined();
+    });
+
+    it("一般 Email 驗證仍是 24 小時：23 小時 59 分有效、24 小時 01 分過期（兩個 policy 分開）", async () => {
+      const mk = async (label: string) => {
+        const id = await ensureTestUser(`al-${label}-${runId}`, `一般驗證 ${label}`);
+        createdUserIds.push(id);
+        await db.setPrimaryEmail(id, `al-${label}-${runId}@example.test`);
+        return (await db.getUserById(id))!;
+      };
+      const t0 = Date.now();
+      vi.useFakeTimers({ toFake: ["Date"] });
+      for (const [label, offset, ok] of [["ev2359", 23 * 3600e3 + 59 * 60e3, true], ["ev2401", 24 * 3600e3 + 60e3, false]] as const) {
+        vi.setSystemTime(t0);
+        const u = await mk(label);
+        const caller = appRouter.createCaller({ user: u, req: req(newBrowser()), res: res(newBrowser()) } as unknown as TrpcContext);
+        await caller.auth.sendVerificationEmail();
+        const token = new URL(sentVerifyEmails.at(-1)!.verifyUrl).searchParams.get("token")!;
+        vi.setSystemTime(t0 + offset);
+        if (ok) {
+          await expect(caller.auth.verifyEmail({ token })).resolves.toMatchObject({ success: true });
+          expect((await db.getUserById(u.id))?.primaryEmailVerifiedAt).not.toBeNull();
+        } else {
+          await expect(caller.auth.verifyEmail({ token })).rejects.toMatchObject({ message: "TOKEN_INVALID_OR_EXPIRED" });
+          expect((await db.getUserById(u.id))?.primaryEmailVerifiedAt).toBeNull();
+        }
+      }
+    });
   });
 
   it("R：同一個 token 第二次使用 → 失敗（單次使用），併發兩次只會有一次成功", async () => {
@@ -342,7 +399,7 @@ describe("重寄：只寄到伺服器決定的目標信箱，沿用冷卻時間"
 });
 
 describe("LINE callback 接線", () => {
-  it("oauth.ts 的 LINE callback 在 handleOAuthCallback（會建立 user）之前先判斷是否需要連結；App 來源改請使用者到網頁版完成", async () => {
+  it("oauth.ts 的 LINE callback 在 handleOAuthCallback（會建立 user）之前先判斷是否需要連結；App 來源改走 OTP（Batch 2.8，見 appAccountLinking.test.ts）", async () => {
     const fs = await import("node:fs");
     const path = await import("node:path");
     const source = fs.readFileSync(path.resolve(import.meta.dirname, "_core", "oauth.ts"), "utf-8");
@@ -354,7 +411,7 @@ describe("LINE callback 接線", () => {
     expect(startAt).toBeGreaterThan(decideAt);
     expect(handleAt).toBeGreaterThan(startAt);
     expect(lineCallbackSrc).toContain('res.redirect(302, "/account-link")');
-    expect(lineCallbackSrc).toContain('"oxm://oauth/callback?error=account_link_required"');
+    expect(lineCallbackSrc).toContain("startAppAccountLinkChallenge(");
   });
 });
 

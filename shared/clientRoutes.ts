@@ -72,6 +72,7 @@ export const CLIENT_ROUTE_PATTERNS = [
   "/terms",
   "/verify-email",
   "/account-link/verify",
+  "/account-link/app",
   "/account-link",
   "/notifications",
   "/community/*?",
