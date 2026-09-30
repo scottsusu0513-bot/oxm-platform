@@ -131,6 +131,8 @@ import {
 import { clampImageCrop } from "../shared/imageCrop";
 import { toPublicFactoryDetail, toPublicFactorySearchResult } from "./publicFactoryDto";
 import { isLegacyDataUrl } from "../shared/persistentImageUrl";
+import { looksLikeTemporaryFactoryAvatarUrl } from "./factoryAvatarUrl";
+import { promoteTemporaryFactoryAvatar, FactoryAvatarPromotionError } from "./factoryAvatarPromotion";
 import { stripCertificationEvidence, stripCertificationEvidenceFromRevision, stripHiddenBadgesForPublic, isValidCertificationEvidenceKey, isValidBadgeId, CERTIFICATION_EVIDENCE_KEY_PREFIX, applyCertificationEvidenceDescriptions, summarizeCertificationEvidenceForOwner, sortBadgeIds } from "../shared/badges";
 import { nanoid } from "nanoid";
 import { factories, conversations, reviews, reports, factoryCoManagers, users, upgradeConsultants, type Factory, type AiHandoffContext } from "../drizzle/schema";
@@ -5068,6 +5070,7 @@ export const appRouter = router({
     approveRevision: adminProcedure.input(z.object({ revisionId: z.number() })).mutation(async ({ ctx, input }) => {
       // Pre-validate proposedData types before applying (defense-in-depth; submitRevision also validates)
       const revision = await db.getRevisionById(input.revisionId);
+      let avatarPromotion: db.RevisionAvatarPromotion | undefined;
       if (revision && revision.status === 'pending') {
         const proposed = typeof revision.proposedData === 'string'
           ? JSON.parse(revision.proposedData as string)
@@ -5076,8 +5079,26 @@ export const appRouter = router({
         if (!check.success) {
           throw new TRPCError({ code: 'BAD_REQUEST', message: '修改申請資料格式有誤，無法套用，請要求工廠重新提交' });
         }
+        // Batch 3.3.1：頭貼改的是 factory-avatars-temp/ 暫存檔時，先在 DB transaction
+        // 之前把它複製到正式 key 並驗證（server/factoryAvatarPromotion.ts）；失敗就不核准，
+        // 申請維持待審、工廠資料不變。approveRevisionAtomic 會在鎖住的 transaction 內
+        // 再確認申請內容仍是同一個暫存網址。
+        const proposedAvatar = (proposed as Record<string, unknown> | null)?.avatarUrl;
+        if (looksLikeTemporaryFactoryAvatarUrl(proposedAvatar)) {
+          try {
+            const persistentUrl = await promoteTemporaryFactoryAvatar({ factoryId: revision.factoryId, temporaryAvatarUrl: proposedAvatar });
+            avatarPromotion = { factoryId: revision.factoryId, sourceUrl: proposedAvatar, persistentUrl };
+          } catch (err) {
+            const reason = err instanceof FactoryAvatarPromotionError ? err.reason : 'unknown';
+            console.error(`[revision] avatar promotion failed revisionId=${input.revisionId} reason=${reason}`);
+            throw new TRPCError({
+              code: reason === 'invalid_source_url' || reason === 'source_missing' || reason === 'invalid_content_type' || reason === 'invalid_source_object' ? 'BAD_REQUEST' : 'INTERNAL_SERVER_ERROR',
+              message: '頭貼圖片無法搬移到正式儲存空間，申請仍維持待審，請稍後再試或請工廠重新上傳頭貼',
+            });
+          }
+        }
       }
-      const result = await db.approveRevisionAtomic(input.revisionId, ctx.user!.id);
+      const result = await db.approveRevisionAtomic(input.revisionId, ctx.user!.id, { avatarPromotion });
       // Notifications to owner + all active co-managers — fire-and-forget after successful transaction
       db.getCoManagersByFactory(result.factoryId).then(coMgrs => {
         // Email: deduplicated recipients (avoid Map/Set iteration; use array + includes check)

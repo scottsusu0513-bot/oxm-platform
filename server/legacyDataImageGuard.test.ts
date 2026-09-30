@@ -110,16 +110,21 @@ describe("submitRevision", () => {
     expect(await latestRevision(id)).toBeNull();
   });
 
-  it("C／D：一般 S3 頭貼、factory-avatars-temp URL 照常送出並可核准套用", async () => {
+  it("C／D：factory-avatars-temp URL 照常送出；核准必須帶暫存→正式的搬移結果，工廠寫入正式網址、申請保留暫存網址（Batch 3.3.1）", async () => {
     const { id, ownerId } = await mkApprovedFactory("cd");
+    const tempUrl = TEMP_AVATAR.replace("/factory-avatars-temp/1/", `/factory-avatars-temp/${id}/`);
+    const permanentUrl = tempUrl.replace("/factory-avatars-temp/", "/factory-avatars/");
     const caller = appRouter.createCaller(await ownerCtx(ownerId));
-    await caller.factory.submitRevision({ factoryId: id, proposedData: { avatarUrl: TEMP_AVATAR, avatarCrop: { zoom: 1.2, posX: 40, posY: 60 } }, revisionReason: "new logo" });
+    await caller.factory.submitRevision({ factoryId: id, proposedData: { avatarUrl: tempUrl, avatarCrop: { zoom: 1.2, posX: 40, posY: 60 } }, revisionReason: "new logo" });
     const rev = (await latestRevision(id))!;
-    expect(rev.proposed.avatarUrl).toBe(TEMP_AVATAR);
-    await db.approveRevisionAtomic(rev.id, -1);
+    expect(rev.proposed.avatarUrl).toBe(tempUrl);
+    // 沒有搬移結果就直接核准 → fail closed（暫存網址不能寫進正式資料）
+    await expect(db.approveRevisionAtomic(rev.id, -1)).rejects.toThrow(/AVATAR_PROMOTION_MISMATCH/);
+    await db.approveRevisionAtomic(rev.id, -1, { avatarPromotion: { factoryId: id, sourceUrl: tempUrl, persistentUrl: permanentUrl } });
     const f = (await db.getFactoryById(id))!;
-    expect(f.avatarUrl).toBe(TEMP_AVATAR);
+    expect(f.avatarUrl).toBe(permanentUrl);
     expect(f.avatarCrop).toEqual({ zoom: 1.2, posX: 40, posY: 60 });
+    expect((await latestRevision(id))!.proposed.avatarUrl).toBe(tempUrl);
   });
 });
 

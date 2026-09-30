@@ -1,5 +1,6 @@
-import { S3Client, PutObjectCommand, DeleteObjectCommand, HeadObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, DeleteObjectCommand, HeadObjectCommand, GetObjectCommand, CopyObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { publicImageUrl } from "./factoryAvatarUrl";
 
 function getClient(): S3Client {
   return new S3Client({
@@ -11,12 +12,9 @@ function getClient(): S3Client {
   });
 }
 
+// 公開網址規則集中在 factoryAvatarUrl.ts（頭貼搬移的 parser 也用同一套），行為不變。
 function getPublicUrl(key: string): string {
-  const base = process.env.AWS_S3_PUBLIC_BASE_URL?.replace(/\/+$/, "");
-  if (base) return `${base}/${key}`;
-  const bucket = process.env.AWS_S3_BUCKET ?? "";
-  const region = process.env.AWS_REGION ?? "ap-southeast-1";
-  return `https://${bucket}.s3.${region}.amazonaws.com/${key}`;
+  return publicImageUrl(key);
 }
 
 export async function storagePut(
@@ -80,4 +78,36 @@ export async function storageGet(relKey: string): Promise<{ key: string; url: st
     }
   }
   return { key: relKey, url: getPublicUrl(relKey) };
+}
+
+export type StorageObjectHead = { contentLength: number; contentType: string | null; etag: string | null };
+
+/** HeadObject：物件不存在回傳 null；其他錯誤（權限、網路）照常拋出，不當成「不存在」。 */
+export async function storageHead(relKey: string): Promise<StorageObjectHead | null> {
+  const bucket = process.env.AWS_S3_BUCKET;
+  if (!bucket) throw new Error("AWS_S3_BUCKET is not set");
+  try {
+    const h = await getClient().send(new HeadObjectCommand({ Bucket: bucket, Key: relKey }));
+    return { contentLength: h.ContentLength ?? 0, contentType: h.ContentType ?? null, etag: h.ETag ?? null };
+  } catch (err: any) {
+    if (err?.name === "NotFound" || err?.$metadata?.httpStatusCode === 404) return null;
+    throw err;
+  }
+}
+
+/**
+ * 同一個 bucket 內的伺服器端複製（bytes 逐位元相同，不經過本機）。
+ * MetadataDirective: "COPY"（AWS 預設值，這裡明寫）：Content-Type 與 user metadata
+ * 沿用來源物件，不會變成 application/octet-stream，也不額外加 Cache-Control。
+ */
+export async function storageCopy(sourceKey: string, destinationKey: string): Promise<void> {
+  const bucket = process.env.AWS_S3_BUCKET;
+  if (!bucket) throw new Error("AWS_S3_BUCKET is not set");
+  const encodedSource = sourceKey.split("/").map(encodeURIComponent).join("/");
+  await getClient().send(new CopyObjectCommand({
+    Bucket: bucket,
+    Key: destinationKey,
+    CopySource: `${bucket}/${encodedSource}`,
+    MetadataDirective: "COPY",
+  }));
 }

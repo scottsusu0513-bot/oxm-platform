@@ -63,6 +63,7 @@ import {
 } from "../shared/chatEducation";
 import { sortBadgeIds, sanitizeBadgeAssignment, appendCertificationEvidenceImage } from "../shared/badges";
 import { isLegacyDataUrl, PERSISTENT_FACTORY_IMAGE_FIELDS } from "../shared/persistentImageUrl";
+import { looksLikeTemporaryFactoryAvatarUrl } from "./factoryAvatarUrl";
 import { CERTIFICATION_SERVICE_CATEGORY_SEEDS, CERTIFICATION_SERVICE_ITEM_SEEDS } from "../shared/certificationServices";
 import type { AISearchIntent } from './semantic-search';
 import { resolveSubIndustryKeywordMatches } from '../shared/subIndustryKeywordMatch';
@@ -7459,7 +7460,19 @@ export async function createRevision(
   }
 }
 
-export async function approveRevisionAtomic(revisionId: number, adminId: number): Promise<{
+/**
+ * 頭貼搬移結果（見 server/factoryAvatarPromotion.ts）：route 在進入 transaction 前把
+ * 暫存頭貼複製到正式 key，這裡在鎖住的 transaction 內再次確認申請內容沒變。
+ */
+export type RevisionAvatarPromotion = {
+  factoryId: number;
+  /** 申請裡的暫存網址（搬移當下讀到的 proposedData.avatarUrl） */
+  sourceUrl: string;
+  /** 已驗證存在的正式網址（factory-avatars/…） */
+  persistentUrl: string;
+};
+
+export async function approveRevisionAtomic(revisionId: number, adminId: number, options: { avatarPromotion?: RevisionAvatarPromotion } = {}): Promise<{
   factoryId: number;
   ownerId: number;
   factoryName: string;
@@ -7485,6 +7498,28 @@ export async function approveRevisionAtomic(revisionId: number, adminId: number)
     const proposed = typeof rev.proposedData === "string"
       ? JSON.parse(rev.proposedData)
       : rev.proposedData;
+
+    // Batch 3.3.1：已上線工廠的頭貼修改申請帶的是 factory-avatars-temp/ 暫存網址，
+    // 正式工廠資料只能寫搬移後的正式網址。fail closed：申請裡只要看起來是暫存頭貼，
+    // 就必須有「針對同一間工廠、同一個暫存網址」的搬移結果，否則不核准（避免任何
+    // 呼叫路徑繞過搬移，也擋住搬移後申請內容被換掉的 TOCTOU）。
+    let avatarOverride: string | null = null;
+    const promotion = options.avatarPromotion;
+    const proposedAvatar = proposed?.avatarUrl;
+    if (looksLikeTemporaryFactoryAvatarUrl(proposedAvatar) || promotion) {
+      if (!promotion || promotion.factoryId !== rev.factoryId || promotion.sourceUrl !== proposedAvatar) {
+        throw new Error("AVATAR_PROMOTION_MISMATCH");
+      }
+      const [factoryRows]: any = await conn.execute(
+        "SELECT status, deletedAt FROM factories WHERE id = ? FOR UPDATE",
+        [rev.factoryId]
+      );
+      const factoryRow = factoryRows?.[0];
+      if (!factoryRow || factoryRow.status !== "approved" || factoryRow.deletedAt !== null) {
+        throw new Error("AVATAR_PROMOTION_FACTORY_NOT_APPROVED");
+      }
+      avatarOverride = promotion.persistentUrl;
+    }
 
     // Build SET clause from proposedData whitelist
     const allowedFields = BASIC_DATA_FIELDS as readonly string[];
@@ -7538,6 +7573,10 @@ export async function approveRevisionAtomic(revisionId: number, adminId: number)
         } else if (field === "industry" || field === "subIndustry" || field === "mfgModes") {
           setClauses.push(`\`${field}\` = ?`);
           setValues.push(JSON.stringify(Array.isArray(val) ? val : []));
+        } else if (field === "avatarUrl" && avatarOverride) {
+          // 只改「這次寫進工廠資料」的值；factoryRevisions.proposedData 保持原本的暫存網址（歷史紀錄）。
+          setClauses.push(`\`${field}\` = ?`);
+          setValues.push(avatarOverride);
         } else if (field === "foundedYear") {
           // Coerce to int — guards against stale string values from old data
           const yr = val !== null && val !== undefined ? Math.floor(Number(val)) : null;
