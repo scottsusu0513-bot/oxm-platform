@@ -171,10 +171,11 @@ describe("factory.search 公開輸出", () => {
 });
 
 describe("factory.getSimilar 公開輸出", () => {
-  it("相關工廠與搜尋卡片同一個白名單形狀", async () => {
+  it("Batch 3.4：相關工廠改用 FactoryCardDTO（11 個卡片欄位），不含任何內部欄位", async () => {
     const similar = await appRouter.createCaller(publicCtx()).factory.getSimilar({ factoryId: fixtures[0].id, limit: 12 });
+    const CARD_KEYS = ["avatarCrop", "avatarUrl", "avgRating", "businessType", "id", "industry", "mfgModes", "name", "region", "reviewCount", "subIndustry"];
     for (const item of similar) {
-      expect(Object.keys(item).sort()).toEqual(PUBLIC_SEARCH_KEYS);
+      expect(Object.keys(item).sort()).toEqual(CARD_KEYS);
       for (const k of INTERNAL_KEYS) expect(item).not.toHaveProperty(k);
     }
   });

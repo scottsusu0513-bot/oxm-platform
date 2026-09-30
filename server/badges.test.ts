@@ -333,7 +333,7 @@ describe("server/routers.ts 靜態安全合約 —— 四條回傳工廠資料�
     expect(detailBlock).toMatch(/stripHiddenBadgesForPublic\(stripCertificationEvidence\(factory\)\)/);
   });
 
-  it("favorite.getByUser：回傳的 items 呼叫 stripCertificationEvidence 與 stripHiddenBadgesForPublic（收藏清單的使用者不是 owner／共管者／admin）", () => {
+  it("favorite.getByUser：回傳的 items 只用 FactoryCardDTO 明確白名單（Batch 3.4；收藏清單的使用者不是 owner／共管者／admin）", () => {
     const block = extractBlock(
       ROUTERS_SOURCE,
       "getByUser: protectedProcedure.input(z.object({",
@@ -341,7 +341,10 @@ describe("server/routers.ts 靜態安全合約 —— 四條回傳工廠資料�
     );
     // Batch 2.5：公開工廠照舊消毒；之後才下架／封存的工廠只回傳 id／名稱＋
     // isUnavailable，完全不帶工廠資料（更嚴格，不需要消毒）。
-    expect(block).toMatch(/isFactoryPubliclyVisible\(f\)\s*\?\s*stripHiddenBadgesForPublic\(stripCertificationEvidence\(f\)\)/);
+    // Batch 3.4：改成卡片白名單（見 server/publicFactoryDto.ts toFactoryCardDTO）——
+    // 白名單本身不含任何徽章／證明欄位，比「整列＋刪欄位」更嚴格。
+    expect(block).toMatch(/isFactoryPubliclyVisible\(f\)\s*\?\s*toFactoryCardDTO\(f\)/);
+    expect(block).not.toMatch(/\.\.\.f\b/);
     expect(block).toMatch(/:\s*\{ id: f\.id, name: f\.name, isUnavailable: true as const \}/);
   });
 

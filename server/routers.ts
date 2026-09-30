@@ -129,7 +129,8 @@ import {
   erpNeedTypeLabel,
 } from "../shared/erpOptimization";
 import { clampImageCrop } from "../shared/imageCrop";
-import { toPublicFactoryDetail, toPublicFactorySearchResult } from "./publicFactoryDto";
+import { toPublicFactoryDetail, toPublicFactorySearchResult, toFactoryCardDTO, toPublicProductDTO, toPublicReviewDTO } from "./publicFactoryDto";
+import { toPublicNewsListItem, toPublicNewsDetail } from "./publicNewsDto";
 import { isLegacyDataUrl } from "../shared/persistentImageUrl";
 import { looksLikeTemporaryFactoryAvatarUrl } from "./factoryAvatarUrl";
 import { promoteTemporaryFactoryAvatar, FactoryAvatarPromotionError } from "./factoryAvatarPromotion";
@@ -1764,7 +1765,13 @@ export const appRouter = router({
         ? stripCertificationEvidence(factory)
         : toPublicFactoryDetail(factory);
       const safeLatestRevision = latestRevision ? stripCertificationEvidenceFromRevision(latestRevision) : null;
-      const result: Record<string, any> = { ...publicSafeFactory, products: prods, latestRevision: safeLatestRevision };
+      // Batch 3.4：公開視角的商品改用明確白名單（不含 factoryId／createdAt／updatedAt）；
+      // owner／共管者／admin 維持完整商品資料（後台管理需要）。
+      const result: Record<string, any> = {
+        ...publicSafeFactory,
+        products: isAuthorized ? prods : prods.map(toPublicProductDTO),
+        latestRevision: safeLatestRevision,
+      };
       if (isAuthorized) {
         result.certificationEvidenceStatus = summarizeCertificationEvidenceForOwner(factory.certificationEvidence);
         result.isArchived = isFactoryArchived(factory);
@@ -1785,7 +1792,8 @@ export const appRouter = router({
       // 跟 search／getById 未授權視角同一套消毒：絕不外流 certificationEvidence
       // ／adminNote／contactStatus／deletedAt，徽章只回傳公開顯示的子集合。
       // 相關工廠卡片與搜尋卡片共用同一個公開白名單形狀（見 server/publicFactoryDto.ts）。
-      return similar.map(toPublicFactorySearchResult);
+      // Batch 3.4：相關工廠卡片只需要 11 個欄位（FactoryCardDTO），不再送完整搜尋 DTO。
+      return similar.map(toFactoryCardDTO);
     }),
 
     getMine: protectedProcedure.query(async ({ ctx }) => {
@@ -4696,7 +4704,9 @@ export const appRouter = router({
       pageSize: z.number().int().min(1).max(100).default(20),
     })).query(async ({ input, ctx }) => {
       if (!(await canViewFactoryDataById(input.factoryId, ctx.user))) return { items: [], total: 0 };
-      return db.getReviewsByFactory(input.factoryId, input.page, input.pageSize);
+      // Batch 3.4：公開評價不送評價者 userId、合作確認單 id；「我的評價」改由 server 回傳 isMine。
+      const result = await db.getReviewsByFactory(input.factoryId, input.page, input.pageSize);
+      return { total: result.total, items: result.items.map(r => toPublicReviewDTO(r, ctx.user?.id)) };
     }),
 
     create: protectedProcedure.input(z.object({
@@ -4840,14 +4850,15 @@ export const appRouter = router({
     pageSize: z.number().int().min(1).max(100).default(20),
   })).query(async ({ ctx, input }) => {
     const result = await db.getFavoritesByUser(ctx.user.id, input.page, input.pageSize);
-    // 收藏清單裡的工廠對這位使用者來說只是一般會員視角，不是 owner／共管者／admin，
-    // 一律不得看到 certificationEvidence，徽章也只能看到公開顯示的子集合。
+    // 收藏清單裡的工廠對這位使用者來說只是一般會員視角，不是 owner／共管者／admin。
+    // Batch 3.4：只回傳卡片需要的 11 個欄位（FactoryCardDTO，明確白名單），不再送
+    // 整列工廠資料（先前會帶出 ownerId、rejectionReason、submittedAt、updatedAt）。
     // 收藏之後才下架／封存的工廠：保留收藏紀錄（可取消收藏），但只回傳 id／
     // 名稱＋isUnavailable，不再帶出任何工廠資料，前端顯示「目前已下架」。
     return {
       ...result,
       items: result.items.map(f => isFactoryPubliclyVisible(f)
-        ? stripHiddenBadgesForPublic(stripCertificationEvidence(f))
+        ? toFactoryCardDTO(f)
         : { id: f.id, name: f.name, isUnavailable: true as const }),
     };
   }),
@@ -5906,7 +5917,9 @@ export const appRouter = router({
 
   // ===== 平台公告 =====
   announcement: router({
-    list: publicProcedure.input(z.object({ limit: z.number().default(20) })).query(async ({ input }) => {
+    // 上限 100：後台公告管理頁（AdminAnnouncements）用 limit 100 呼叫同一支 API；
+    // 公開端首頁 3、公告按鈕 20、公告頁 50。
+    list: publicProcedure.input(z.object({ limit: z.number().int().min(1).max(100).default(20) })).query(async ({ input }) => {
       return db.getAnnouncements(input.limit);
     }),
     create: adminProcedure.input(z.object({
@@ -6094,7 +6107,9 @@ export const appRouter = router({
       offset: z.number().int().min(0).default(0),
       limit: z.number().int().min(1).max(50).default(20),
     })).query(async ({ input, ctx }) => {
-      return db.listPublicNews({ ...input, userId: ctx.user?.id });
+      // Batch 3.4：列表不送完整正文與內部欄位（見 server/publicNewsDto.ts）。
+      const result = await db.listPublicNews({ ...input, userId: ctx.user?.id });
+      return { total: result.total, items: result.items.map(toPublicNewsListItem) };
     }),
     getBySlug: publicProcedure.input(z.object({ slug: z.string().min(1).max(200) })).query(async ({ input }) => {
       const item = await db.getPublishedNewsBySlug(input.slug);
@@ -6103,7 +6118,7 @@ export const appRouter = router({
         db.getNewsIndustryNames(item.id),
         db.getNewsAttachmentsPublic(item.id),
       ]);
-      return { ...item, industryNames, attachments };
+      return toPublicNewsDetail(item, industryNames, attachments);
     }),
     // 分類清單側欄／手機版 Select 的 NEW 徽章：一次回傳所有分類的 NEW 狀態，
     // 前端不需要為每個分類各自發一次查詢，也不能只看目前已載入的第一頁資料。

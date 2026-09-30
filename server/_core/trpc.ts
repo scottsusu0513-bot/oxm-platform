@@ -3,9 +3,14 @@ import { initTRPC, TRPCError } from "@trpc/server";
 import superjson from "superjson";
 import type { TrpcContext } from "./context";
 import { isAdminUser } from "./admin";
+import { ENV } from "./env";
+import { formatTrpcError } from "./errorSanitize";
 
 const t = initTRPC.context<TrpcContext>().create({
   transformer: superjson,
+  // Batch 3.4：production 不把 DB／driver／執行期錯誤的原始訊息與 stack 送到 client
+  // （見 ./errorSanitize.ts）；明確丟出的 TRPCError 訊息照常保留。
+  errorFormatter: (opts) => formatTrpcError(opts, ENV.isProduction),
 });
 
 export const router = t.router;

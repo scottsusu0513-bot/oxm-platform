@@ -837,7 +837,7 @@ export function FactoryDetailView({
                         return (
                           <div key={review.id} className={`p-4 rounded-lg border ${
                             isVerified ? "bg-amber-50 border-orange-200"
-                            : review.userId === user?.id ? "border-primary/30 bg-primary/5"
+                            : review.isMine ? "border-primary/30 bg-primary/5"
                             : "border-border bg-white"
                           }`}>
                             <div className="flex items-start justify-between mb-2 gap-2 flex-wrap">
@@ -853,7 +853,7 @@ export function FactoryDetailView({
                                 )}
                                 <span className="font-medium text-sm">
                                   {review.userName ?? "匿名使用者"}
-                                  {review.userId === user?.id && <span className="ml-1 text-xs text-primary">（我的評價）</span>}
+                                  {review.isMine && <span className="ml-1 text-xs text-primary">（我的評價）</span>}
                                 </span>
                                 <div className="flex gap-0.5">
                                   {[1, 2, 3, 4, 5].map(s => (
