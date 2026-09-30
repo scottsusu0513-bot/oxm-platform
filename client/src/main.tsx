@@ -1,7 +1,8 @@
 import { trpc } from "@/lib/trpc";
 import { UNAUTHED_ERR_MSG } from '@shared/const';
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { httpBatchLink, TRPCClientError } from "@trpc/client";
+import { httpBatchLink, splitLink, TRPCClientError } from "@trpc/client";
+import { MAX_SEARCH_CALLS_PER_BATCH, SEARCH_PROCEDURE_PATH } from "@shared/searchBatch";
 import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import superjson from "superjson";
@@ -76,17 +77,30 @@ queryClient.getMutationCache().subscribe(event => {
   }
 });
 
+const trpcFetch: typeof globalThis.fetch = (input, init) =>
+  globalThis.fetch(input, {
+    ...(init ?? {}),
+    credentials: "include",
+  });
+
+// factory.search 走獨立的批次連線，單一 HTTP 請求最多 MAX_SEARCH_CALLS_PER_BATCH
+// 個搜尋（server 端 searchBatchGuard 超過即回 400）——手機「返回恢復」一次補回
+// 多頁時會自動拆成多個請求。其他 procedure 的批次行為完全不變。
 const trpcClient = trpc.createClient({
   links: [
-    httpBatchLink({
-      url: "/api/trpc",
-      transformer: superjson,
-      fetch(input, init) {
-        return globalThis.fetch(input, {
-          ...(init ?? {}),
-          credentials: "include",
-        });
-      },
+    splitLink({
+      condition: op => op.path === SEARCH_PROCEDURE_PATH,
+      true: httpBatchLink({
+        url: "/api/trpc",
+        transformer: superjson,
+        maxItems: MAX_SEARCH_CALLS_PER_BATCH,
+        fetch: trpcFetch,
+      }),
+      false: httpBatchLink({
+        url: "/api/trpc",
+        transformer: superjson,
+        fetch: trpcFetch,
+      }),
     }),
   ],
 });

@@ -20,7 +20,7 @@ vi.mock("openai", () => ({
 
 import * as db from "./db";
 import { ENV } from "./_core/env";
-import { resolveSearchIntent, SEARCH_INTENT_DEADLINE_MS } from "./semantic-search";
+import { resolveSearchIntent, SEARCH_INTENT_DEADLINE_MS, searchIntentCacheIdentity, __resetSearchIntentStateForTests } from "./semantic-search";
 
 const runId = `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
 const key = (label: string) => `sicdb-${label}-${runId}`;
@@ -28,7 +28,8 @@ const VALID = JSON.stringify({ mainIndustries: ["金屬加工"], subIndustries: 
 
 async function intentRow(k: string) {
   const conn = (await db.getDb())!;
-  const [rows] = (await conn.execute(sql`SELECT normalizedQuery, hitCount FROM aiSearchIntents WHERE normalizedQuery = ${k}`)) as unknown as [{ normalizedQuery: string; hitCount: number }[], unknown];
+  // Batch 3.6：DB 快取身分帶版本前綴（見 searchIntentCacheIdentity）
+  const [rows] = (await conn.execute(sql`SELECT normalizedQuery, hitCount FROM aiSearchIntents WHERE normalizedQuery = ${searchIntentCacheIdentity(k)}`)) as unknown as [{ normalizedQuery: string; hitCount: number }[], unknown];
   return rows[0] ?? null;
 }
 async function waitFor(fn: () => Promise<boolean>, ms = 3000) {
@@ -41,10 +42,11 @@ beforeEach(() => {
   (ENV as any).aiSearchProvider = "openai";
   (ENV as any).openaiApiKey = "test-key";
   provider.calls = 0;
+  __resetSearchIntentStateForTests();
 });
 afterAll(async () => {
   const conn = await db.getDb();
-  if (conn) await conn.execute(sql`DELETE FROM aiSearchIntents WHERE normalizedQuery LIKE ${`sicdb-%-${runId}`}`);
+  if (conn) await conn.execute(sql`DELETE FROM aiSearchIntents WHERE normalizedQuery LIKE ${`%sicdb-%-${runId}`}`);
 });
 
 describe("aiSearchIntents DB 快取", () => {
@@ -52,7 +54,7 @@ describe("aiSearchIntents DB 快取", () => {
     const k = key("p");
     const conn = (await db.getDb())!;
     await conn.execute(sql`INSERT INTO aiSearchIntents (normalizedQuery, mainIndustries, subIndustries, productKeywords, searchSynonyms, confidence)
-      VALUES (${k}, ${JSON.stringify(["塑膠"])}, '[]', ${JSON.stringify(["射出"])}, '[]', 0.9)`);
+      VALUES (${searchIntentCacheIdentity(k)}, ${JSON.stringify(["塑膠"])}, '[]', ${JSON.stringify(["射出"])}, '[]', 0.9)`);
     provider.behavior = async () => { throw new Error("must not be called"); };
     const r = await resolveSearchIntent(k);
     expect(r.outcome).toBe("db_cache_hit");

@@ -1,70 +1,18 @@
-import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
-import { INDUSTRY_OPTIONS, INDUSTRIES } from '../shared/constants';
+import { INDUSTRIES } from '../shared/constants';
 import { getDb } from './db';
-import { searchCache, aiSearchIntents } from '../drizzle/schema';
+import { aiSearchIntents } from '../drizzle/schema';
 import { eq, sql } from 'drizzle-orm';
 import { ENV } from './_core/env';
 import { getCurrentAiCallContext } from './ai/aiCallContext';
 import { logAiModelCall } from './ai/aiUsageLogging';
+import { BoundedLruCache } from './boundedLruCache';
 
-// ===== 舊版 Anthropic 快取（保留，enhanceSearchKeyword 仍可用）=====
-const anthropicClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY ?? '' });
-const memCache = new Map<string, string>();
-const isLegacyEnabled = () => !!process.env.ANTHROPIC_API_KEY;
-
-export async function enhanceSearchKeyword(keyword: string): Promise<string> {
-  if (!keyword.trim()) return keyword;
-  if (!isLegacyEnabled()) return keyword;
-
-  const key = keyword.toLowerCase().trim().slice(0, 100);
-  if (memCache.has(key)) return memCache.get(key)!;
-
-  try {
-    const db = await getDb();
-    if (db) {
-      const [row] = await db.select().from(searchCache).where(eq(searchCache.keyword, key));
-      if (row) { memCache.set(key, row.enhanced); return row.enhanced; }
-    }
-  } catch { /* fallback */ }
-
-  try {
-    const timeout = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('AI timeout')), 5000)
-    );
-    const response = await Promise.race([
-      anthropicClient.messages.create({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 100,
-        messages: [{
-          role: 'user',
-          content: `你是台灣製造業搜尋助手。用戶搜尋了「${key}」。
-可用的產業分類有：${INDUSTRY_OPTIONS.join('、')}
-請判斷用戶想找的是什麼，回傳最適合的搜尋詞。規則：
-1. 如果關鍵字已經是產業名稱或工廠名稱，直接回傳原始關鍵字
-2. 如果是產業的同義詞（例如「衣服」→「紡織」），回傳對應的產業名稱
-3. 如果是產品名稱（例如「螺絲」→「金屬加工」），回傳對應的產業名稱
-4. 如果無法對應到特定產業，回傳原始關鍵字
-只回傳搜尋詞本身，不要有任何解釋或標點符號。`,
-        }],
-      }),
-      timeout,
-    ]);
-    const enhanced = (response.content[0] as any).text?.trim() ?? keyword;
-    memCache.set(key, enhanced);
-    getDb().then(db => {
-      if (!db) return;
-      db.insert(searchCache).values({ keyword: key, enhanced })
-        .onDuplicateKeyUpdate({ set: { enhanced } }).catch(() => {});
-    });
-    return enhanced;
-  } catch (error) {
-    console.error('[SemanticSearch] AI 呼叫失敗，使用原始關鍵字:', error);
-    return keyword;
-  }
-}
-
-// ===== 新版 AI 搜尋意圖 =====
+// ===== AI 搜尋意圖 =====
+//
+// Batch 3.6：舊版 Anthropic enhanceSearchKeyword（與 searchCache 資料表的讀寫）
+// 已移除——factory.search 自 Batch 3.2 起不再呼叫，正式站 searchCache 為 0 筆。
+// searchCache 資料表本身保留（不做 migration）。
 
 export interface AISearchIntent {
   normalizedQuery:  string;
@@ -74,8 +22,6 @@ export interface AISearchIntent {
   searchSynonyms:   string[];
   confidence:       number;
 }
-
-const memIntentCache = new Map<string, AISearchIntent>();
 
 const ALL_MAIN_INDUSTRIES: string[] = INDUSTRIES.map(i => i.name as string);
 const ALL_SUB_INDUSTRIES: string[]  = INDUSTRIES.flatMap(i => (i.sub as readonly string[]).slice());
@@ -128,6 +74,45 @@ function parseAndValidateIntent(raw: string, normalizedQuery: string): AISearchI
   };
 }
 
+// ── 快取身分與新鮮度（Batch 3.6）───────────────────────────────────────
+//
+// 快取身分＝`${SEARCH_INTENT_CACHE_VERSION}:${normalizedQuery}`（存在
+// aiSearchIntents.normalizedQuery 欄位）。prompt／model／產業分類／intent 結構有
+// 語意變更時，把版本往上加即可讓舊結果自然失效——舊版本的 DB rows 不刪、不做
+// migration，只是不再被命中。刻意不用部署 hash（每次部署都讓全部快取失效）。
+export const SEARCH_INTENT_CACHE_VERSION = 'v2';
+/** 信心 ≥ 此值的 intent 才會讓搜尋進入 AI mode（見 server/db.ts searchFactories）。 */
+export const SEARCH_INTENT_LOW_CONFIDENCE_THRESHOLD = 0.5;
+export const SEARCH_INTENT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+export const SEARCH_INTENT_LOW_CONFIDENCE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+export const SEARCH_INTENT_MEMORY_CACHE_MAX_ENTRIES = 1000;
+
+export function searchIntentCacheIdentity(normalizedKey: string): string {
+  return `${SEARCH_INTENT_CACHE_VERSION}:${normalizedKey}`;
+}
+
+export function searchIntentTtlMs(confidence: number): number {
+  return confidence >= SEARCH_INTENT_LOW_CONFIDENCE_THRESHOLD ? SEARCH_INTENT_TTL_MS : SEARCH_INTENT_LOW_CONFIDENCE_TTL_MS;
+}
+
+/** 以「最後一次真正解析出這個 intent 的時間」判斷是否仍在 TTL 內。 */
+export function isSearchIntentFresh(resolvedAt: Date, confidence: number, now: number = Date.now()): boolean {
+  const t = resolvedAt.getTime();
+  return Number.isFinite(t) && now - t < searchIntentTtlMs(confidence);
+}
+
+// 行程內記憶體快取：有上限的 LRU，每筆帶自己的到期時間（DB 快取不受影響）。
+const memIntentCache = new BoundedLruCache<string, { intent: AISearchIntent; expiresAt: number }>(SEARCH_INTENT_MEMORY_CACHE_MAX_ENTRIES);
+
+// ── OpenAI client（行程內共用；只有 API key 變更時才重建）──────────────
+let openAiClient: { apiKey: string; client: OpenAI } | null = null;
+function getOpenAiClient(): OpenAI {
+  if (!openAiClient || openAiClient.apiKey !== ENV.openaiApiKey) {
+    openAiClient = { apiKey: ENV.openaiApiKey, client: new OpenAI({ apiKey: ENV.openaiApiKey }) };
+  }
+  return openAiClient.client;
+}
+
 /**
  * Phase 8.1（見對話中「provider instrumentation」）：這個 client 跟
  * provider.ts 的 OpenAiChatProvider 是完全獨立的第二條 LLM 路徑（AI Shell
@@ -138,7 +123,7 @@ function parseAndValidateIntent(raw: string, normalizedQuery: string): AISearchI
  * aiModelCalls row（不是「用 null 歸屬」，是完全不記）。
  */
 async function resolveSearchIntentWithOpenAI(key: string, signal: AbortSignal): Promise<AISearchIntent> {
-  const client = new OpenAI({ apiKey: ENV.openaiApiKey });
+  const client = getOpenAiClient();
   const startedAt = Date.now();
   const shouldLog = getCurrentAiCallContext() !== undefined;
   try {
@@ -212,58 +197,56 @@ export const SEARCH_INTENT_DEADLINE_MS = 3500;
 /** 只供 server 內部 log／測試，不對外公開。 */
 export type SearchIntentOutcome =
   | 'memory_cache_hit' | 'db_cache_hit' | 'success'
-  | 'timeout' | 'provider_error' | 'invalid_output' | 'disabled';
+  | 'timeout' | 'provider_error' | 'invalid_output' | 'disabled'
+  | 'provider_unavailable';
 
-export async function getSearchIntent(keyword: string): Promise<AISearchIntent | null> {
-  return (await resolveSearchIntent(keyword)).intent;
+type ProviderResult = { intent: AISearchIntent | null; outcome: SearchIntentOutcome };
+
+// ── Provider 故障保護（Batch 3.6）──────────────────────────────────────
+//
+// OpenAI 故障時，每一次 HYBRID／SEMANTIC 搜尋都要等滿 3.5s 才 fallback。連續
+// FAILURE_SHIELD_THRESHOLD 次「provider 明確不可用」（timeout／連線失敗／5xx）
+// 後，FAILURE_SHIELD_WINDOW_MS 內直接略過 provider、用原始 keyword 搜尋（跟
+// timeout 的 fallback 結果完全相同）。刻意要連續多次才打開：Batch 3.2 實測冷呼叫
+// p90 約 3.4s，單一慢查詢 timeout 不應該讓所有人 30 秒內都用不到 AI。4xx
+// （金鑰／設定錯誤）與格式錯誤不計入、不打開保護，真正的設定錯誤照樣每次都會
+// 出現在 log。成功一次就重置。窗口固定、不延長；只用時間戳，不留任何 timer。
+export const FAILURE_SHIELD_THRESHOLD = 3;
+export const FAILURE_SHIELD_WINDOW_MS = 30_000;
+let consecutiveProviderFailures = 0;
+let failureShieldUntil = 0;
+
+function isProviderUnavailableError(err: unknown, aborted: boolean): boolean {
+  if (aborted) return true;
+  const e = err as { name?: unknown; status?: unknown } | null;
+  if (e?.name === 'APIConnectionError' || e?.name === 'APIConnectionTimeoutError') return true;
+  return typeof e?.status === 'number' && e.status >= 500;
 }
 
-/**
- * 取得搜尋 intent 並回報結果類別。timeout／provider error（含 429／5xx／網路）
- * ／invalid output 一律回傳 intent=null，呼叫端直接用原始 keyword 走既有非 AI
- * 搜尋；失敗時不寫任何 intent 快取。
- */
-export async function resolveSearchIntent(keyword: string): Promise<{ intent: AISearchIntent | null; outcome: SearchIntentOutcome }> {
-  if (!isIntentEnabled()) return { intent: null, outcome: 'disabled' };
+function recordProviderFailure(err: unknown, aborted: boolean): void {
+  if (!isProviderUnavailableError(err, aborted)) return;
+  consecutiveProviderFailures += 1;
+  if (consecutiveProviderFailures >= FAILURE_SHIELD_THRESHOLD) {
+    failureShieldUntil = Date.now() + FAILURE_SHIELD_WINDOW_MS;
+    consecutiveProviderFailures = 0;
+  }
+}
 
-  const key = keyword.toLowerCase().trim().slice(0, 80);
-  if (!key) return { intent: null, outcome: 'disabled' };
+function isFailureShieldOpen(): boolean {
+  return Date.now() < failureShieldUntil;
+}
 
-  // 1. 記憶體快取
-  const memHit = memIntentCache.get(key);
-  if (memHit) return { intent: memHit, outcome: 'memory_cache_hit' };
+// ── 相同請求合併（Batch 3.6）──────────────────────────────────────────
+//
+// prompt 唯一的變數就是 normalized key，所以「key 相同」＝「送給 OpenAI 的請求
+// 相同」，不同 keyword／篩選條件／搜尋模式不會被合併。只合併「沒有 AI 呼叫
+// context」的請求（公開 /search）：AI 助理的呼叫帶 usage 歸屬 context，共用別人
+// 的 provider 呼叫會讓 usage 記在錯的對話上，因此一律獨立呼叫。完成或失敗都在
+// finally 移除，Map 不會累積。
+const inFlightIntentRequests = new Map<string, Promise<ProviderResult>>();
 
-  // 2. DB 快取
-  try {
-    const db = await getDb();
-    if (db) {
-      const [row] = await db.select().from(aiSearchIntents).where(eq(aiSearchIntents.normalizedQuery, key));
-      if (row) {
-        const intent: AISearchIntent = {
-          normalizedQuery:  row.normalizedQuery,
-          mainIndustries:   row.mainIndustries,
-          subIndustries:    row.subIndustries,
-          productKeywords:  row.productKeywords,
-          searchSynonyms:   row.searchSynonyms,
-          confidence:       Number(row.confidence),
-        };
-        memIntentCache.set(key, intent);
-        // 非同步更新命中計數
-        getDb().then(db2 => {
-          if (!db2) return;
-          db2.update(aiSearchIntents)
-            .set({ hitCount: sql`${aiSearchIntents.hitCount} + 1`, lastUsedAt: new Date() })
-            .where(eq(aiSearchIntents.normalizedQuery, key))
-            .catch(() => {});
-        });
-        return { intent, outcome: 'db_cache_hit' };
-      }
-    }
-  } catch { /* DB 失敗繼續呼叫 AI */ }
-
-  if (ENV.aiSearchProvider !== 'openai') return { intent: null, outcome: 'disabled' };
-
-  // 3. 呼叫 AI：唯一 deadline＝AbortController（成功／失敗／中止都清掉 timer）。
+/** 真正呼叫 provider 一次：deadline、故障保護計數、成功時寫入快取。 */
+async function callProviderOnce(key: string): Promise<ProviderResult> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), SEARCH_INTENT_DEADLINE_MS);
   const startedAt = Date.now();
@@ -271,43 +254,142 @@ export async function resolveSearchIntent(keyword: string): Promise<{ intent: AI
   try {
     intent = await resolveSearchIntentWithOpenAI(key, controller.signal);
   } catch (err) {
-    const outcome: SearchIntentOutcome = controller.signal.aborted
+    const aborted = controller.signal.aborted;
+    const outcome: SearchIntentOutcome = aborted
       ? 'timeout'
       : err instanceof InvalidSearchIntentOutputError ? 'invalid_output' : 'provider_error';
+    recordProviderFailure(err, aborted);
     console.warn(`[AISearch] intent ${outcome} after ${Date.now() - startedAt}ms, falling back to keyword search`);
     return { intent: null, outcome };
   } finally {
     clearTimeout(timer);
   }
 
-  {
-    memIntentCache.set(key, intent);
+  consecutiveProviderFailures = 0;
+  failureShieldUntil = 0;
+  memIntentCache.set(key, { intent, expiresAt: Date.now() + searchIntentTtlMs(intent.confidence) });
 
-    // 非同步寫入 DB（只有真正成功的 intent 才會走到這裡）
-    getDb().then(db => {
-      if (!db) return;
-      db.insert(aiSearchIntents).values({
-        normalizedQuery:  key,
-        mainIndustries:   intent.mainIndustries,
-        subIndustries:    intent.subIndustries,
-        productKeywords:  intent.productKeywords,
-        searchSynonyms:   intent.searchSynonyms,
-        confidence:       String(intent.confidence),
-        aiProvider:       ENV.aiSearchProvider,
-        aiModel:          ENV.aiSearchModel,
-      }).onDuplicateKeyUpdate({
-        set: {
-          mainIndustries:  intent.mainIndustries,
-          subIndustries:   intent.subIndustries,
-          productKeywords: intent.productKeywords,
-          searchSynonyms:  intent.searchSynonyms,
-          confidence:      String(intent.confidence),
-          hitCount:        sql`${aiSearchIntents.hitCount} + 1`,
-          lastUsedAt:      new Date(),
-        },
-      }).catch(() => {});
-    });
+  // 非同步寫入 DB（只有真正成功的 intent 才會走到這裡）。updatedAt 明確設為現在：
+  // 它代表「最後一次真正解析的時間」，是新鮮度判斷的依據。
+  const identity = searchIntentCacheIdentity(key);
+  getDb().then(db => {
+    if (!db) return;
+    db.insert(aiSearchIntents).values({
+      normalizedQuery:  identity,
+      mainIndustries:   intent.mainIndustries,
+      subIndustries:    intent.subIndustries,
+      productKeywords:  intent.productKeywords,
+      searchSynonyms:   intent.searchSynonyms,
+      confidence:       String(intent.confidence),
+      aiProvider:       ENV.aiSearchProvider,
+      aiModel:          ENV.aiSearchModel,
+    }).onDuplicateKeyUpdate({
+      set: {
+        mainIndustries:  intent.mainIndustries,
+        subIndustries:   intent.subIndustries,
+        productKeywords: intent.productKeywords,
+        searchSynonyms:  intent.searchSynonyms,
+        confidence:      String(intent.confidence),
+        aiProvider:      ENV.aiSearchProvider,
+        aiModel:         ENV.aiSearchModel,
+        hitCount:        sql`${aiSearchIntents.hitCount} + 1`,
+        lastUsedAt:      new Date(),
+        updatedAt:       new Date(),
+      },
+    }).catch(() => {});
+  }).catch(() => {});
 
-    return { intent, outcome: 'success' };
+  return { intent, outcome: 'success' };
+}
+
+export async function getSearchIntent(keyword: string): Promise<AISearchIntent | null> {
+  return (await resolveSearchIntent(keyword)).intent;
+}
+
+/**
+ * 取得搜尋 intent 並回報結果類別。timeout／provider error（含 429／5xx／網路）
+ * ／invalid output／故障保護中 一律回傳 intent=null，呼叫端直接用原始 keyword
+ * 走既有非 AI 搜尋；失敗時不寫任何 intent 快取。
+ */
+export async function resolveSearchIntent(keyword: string): Promise<ProviderResult> {
+  if (!isIntentEnabled()) return { intent: null, outcome: 'disabled' };
+
+  const key = keyword.toLowerCase().trim().slice(0, 80);
+  if (!key) return { intent: null, outcome: 'disabled' };
+
+  // 1. 記憶體快取（有上限的 LRU，過期即丟棄）
+  const memHit = memIntentCache.get(key);
+  if (memHit) {
+    if (memHit.expiresAt > Date.now()) return { intent: memHit.intent, outcome: 'memory_cache_hit' };
+    memIntentCache.delete(key);
   }
+
+  // 2. DB 快取（同版本且仍在 TTL 內才算命中；過期的 row 不刪，成功後由 upsert 更新）
+  const identity = searchIntentCacheIdentity(key);
+  try {
+    const db = await getDb();
+    if (db) {
+      const [row] = await db.select().from(aiSearchIntents).where(eq(aiSearchIntents.normalizedQuery, identity));
+      if (row) {
+        const confidence = Number(row.confidence);
+        const resolvedAt = new Date(row.updatedAt);
+        if (isSearchIntentFresh(resolvedAt, confidence)) {
+          const intent: AISearchIntent = {
+            normalizedQuery:  key,
+            mainIndustries:   row.mainIndustries,
+            subIndustries:    row.subIndustries,
+            productKeywords:  row.productKeywords,
+            searchSynonyms:   row.searchSynonyms,
+            confidence,
+          };
+          memIntentCache.set(key, { intent, expiresAt: resolvedAt.getTime() + searchIntentTtlMs(confidence) });
+          // 非同步更新命中計數。updatedAt 明確保留原值：這欄有 ON UPDATE
+          // CURRENT_TIMESTAMP，不保留的話每次命中都會把新鮮度往後延，熱門查詢
+          // 就永遠不會過期。
+          getDb().then(db2 => {
+            if (!db2) return;
+            db2.update(aiSearchIntents)
+              .set({ hitCount: sql`${aiSearchIntents.hitCount} + 1`, lastUsedAt: new Date(), updatedAt: sql`${aiSearchIntents.updatedAt}` })
+              .where(eq(aiSearchIntents.normalizedQuery, identity))
+              .catch(() => {});
+          }).catch(() => {});
+          return { intent, outcome: 'db_cache_hit' };
+        }
+      }
+    }
+  } catch { /* DB 失敗繼續呼叫 AI */ }
+
+  if (ENV.aiSearchProvider !== 'openai') return { intent: null, outcome: 'disabled' };
+
+  // 3. 故障保護中：直接 fallback（不打 provider）
+  if (isFailureShieldOpen()) return { intent: null, outcome: 'provider_unavailable' };
+
+  // 4. 呼叫 AI（公開搜尋的相同 key 併發請求共用同一次 provider 呼叫）
+  if (getCurrentAiCallContext() !== undefined) return callProviderOnce(key);
+  const existing = inFlightIntentRequests.get(key);
+  if (existing) return existing;
+  const request = callProviderOnce(key).finally(() => {
+    if (inFlightIntentRequests.get(key) === request) inFlightIntentRequests.delete(key);
+  });
+  inFlightIntentRequests.set(key, request);
+  return request;
+}
+
+/** 測試用：重置行程內狀態（記憶體快取、in-flight、故障保護）。 */
+export function __resetSearchIntentStateForTests(): void {
+  memIntentCache.clear();
+  inFlightIntentRequests.clear();
+  consecutiveProviderFailures = 0;
+  failureShieldUntil = 0;
+  openAiClient = null;
+}
+
+/** 測試用：目前的行程內狀態。 */
+export function __getSearchIntentStateForTests() {
+  return {
+    memoryCacheSize: memIntentCache.size,
+    inFlight: inFlightIntentRequests.size,
+    failureShieldOpen: isFailureShieldOpen(),
+    consecutiveProviderFailures,
+  };
 }

@@ -1,4 +1,4 @@
-import { eq, and, like, desc, asc, sql, inArray, or, isNull, gt, gte, isNotNull, lte, ne, getTableColumns } from "drizzle-orm";
+import { eq, and, like, desc, asc, sql, inArray, or, isNull, gt, gte, isNotNull, lte, ne, getTableColumns, type AnyColumn, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/mysql-core";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
@@ -82,6 +82,67 @@ export function resetDbPool(): void {
   console.error("[Database] Resetting pool after connection error");
   _pool = null;
   _db = null;
+}
+
+// ===== 搜尋專用連線池（Production Hardening Batch 3.6）=====
+//
+// 公開搜尋（factory.search／AI 找工廠／產業與地區 SEO 頁）走獨立的小連線池：
+//   - 每條連線建立時設定 SESSION max_execution_time：MySQL server 端超過時間會
+//     自己中止該 SELECT（ER_QUERY_TIMEOUT），連線本身仍可重用——不需要、也不
+//     使用 KILL QUERY。正常搜尋查詢目前約 1ms，上限遠高於正常值。
+//   - connectionLimit／queueLimit 有上限：極端流量時搜尋請求排不進佇列就立即
+//     失敗，不會無限排隊、也不會把主連線池（交易、後台、排程）的連線耗盡。
+//   - 只有 searchFactories 使用；migration／後台／背景 job 完全不受影響。
+export const SEARCH_QUERY_MAX_EXECUTION_MS = 3000;
+export const SEARCH_POOL_CONNECTION_LIMIT = 10;
+export const SEARCH_POOL_QUEUE_LIMIT = 100;
+let _searchDb: ReturnType<typeof drizzle> | null = null;
+let _searchPool: mysql.Pool | null = null;
+
+export async function getSearchDb(): Promise<ReturnType<typeof drizzle> | null> {
+  if (_searchDb) return _searchDb;
+  if (!process.env.DATABASE_URL) return null;
+  try {
+    const pool = mysql.createPool({
+      uri: process.env.DATABASE_URL,
+      connectionLimit: SEARCH_POOL_CONNECTION_LIMIT,
+      queueLimit: SEARCH_POOL_QUEUE_LIMIT,
+      waitForConnections: true,
+      enableKeepAlive: true,
+      keepAliveInitialDelay: 0,
+    });
+    // 'connection' 在每條新連線建立後、交給任何查詢之前觸發；同一條連線的指令
+    // 依序執行，這個 SET 一定先於該連線上的第一個搜尋查詢。
+    (pool as unknown as { pool: EventEmitter }).pool.on("connection", (conn: { query: (sql: string) => void }) => {
+      conn.query(`SET SESSION max_execution_time = ${SEARCH_QUERY_MAX_EXECUTION_MS}`);
+    });
+    (pool as unknown as EventEmitter).on("error", (rawErr: unknown) => {
+      const err = rawErr as Error & { code?: string };
+      console.error("[Database] Search pool error:", { code: err.code, message: err.message });
+      if (isRetryableDbError(err)) {
+        _searchPool = null;
+        _searchDb = null;
+        pool.end().catch(() => {});
+      }
+    });
+    _searchPool = pool;
+    _searchDb = drizzle(pool) as unknown as ReturnType<typeof drizzle>;
+    return _searchDb;
+  } catch (error) {
+    console.error("[Database] Failed to create search pool:", error instanceof Error ? error.message : error);
+    return null;
+  }
+}
+
+/** 搜尋查詢被 MySQL max_execution_time 中止（ER_QUERY_TIMEOUT）。 */
+export function isSearchQueryTimeoutError(err: unknown): boolean {
+  let cur: unknown = err;
+  for (let i = 0; i < 3 && cur; i++) {
+    const e = cur as { errno?: unknown; code?: unknown; cause?: unknown };
+    if (e.errno === 3024 || e.code === "ER_QUERY_TIMEOUT") return true;
+    cur = e.cause;
+  }
+  return false;
 }
 
 export async function getDb() {
@@ -675,6 +736,65 @@ export async function getSimilarFactories(factoryId: number, limit = 12): Promis
 
 // AI 搜尋候選集上限：避免全表掃後在 JS 排序太多筆
 const AI_CANDIDATE_LIMIT = 300;
+let searchCandidateLimit = AI_CANDIDATE_LIMIT;
+/** 測試用：暫時調低候選上限，驗證「超過上限」的分頁行為（不傳參數＝還原）。 */
+export function __setSearchCandidateLimitForTests(limit?: number): void {
+  searchCandidateLimit = limit ?? AI_CANDIDATE_LIMIT;
+}
+
+/** 商品命中轉工廠 id 的上限（沿用既有 slice(0, 200) 語意，改在 SQL 端完成）。 */
+const PRODUCT_MATCH_FACTORY_LIMIT = 200;
+
+/**
+ * 使用者原始 keyword／AI 擴充詞當作「字面文字」比對時的 LIKE 樣式（Batch 3.6）：
+ * 跳脫 `%`、`_` 與跳脫字元本身，避免使用者輸入「%」「_」就變成萬用字元比對全部
+ * 資料。刻意用 `!` 當 ESCAPE 字元（不是反斜線）：不受 NO_BACKSLASH_ESCAPES
+ * sql_mode 影響。參數化查詢不變。
+ */
+export const LIKE_ESCAPE_CHAR = "!";
+export function escapeLikeLiteral(term: string): string {
+  return term.replace(/[!%_]/g, ch => `${LIKE_ESCAPE_CHAR}${ch}`);
+}
+export function likeContainsPattern(term: string): string {
+  return `%${escapeLikeLiteral(term)}%`;
+}
+function likeContainsLiteral(column: AnyColumn | SQL, term: string): SQL {
+  return sql`${column} LIKE ${likeContainsPattern(term)} ESCAPE '!'`;
+}
+function jsonSearchContainsLiteral(column: AnyColumn | SQL, term: string): SQL {
+  return sql`JSON_SEARCH(${column}, 'one', ${likeContainsPattern(term)}, '!') IS NOT NULL`;
+}
+
+/** 開發環境才輸出的搜尋除錯 log：正式環境不記錄使用者輸入的關鍵字或工廠名稱（Batch 3.6）。 */
+function searchDebugLog(message: string): void {
+  if (!ENV.isProduction) console.log(message);
+}
+
+/**
+ * 候選上限之後的分頁（Batch 3.6）。相關性／AI／排序詞模式只對「評分順序前
+ * searchCandidateLimit 筆」候選做 JS 排序；符合條件的工廠超過上限時，舊版第
+ * 上限筆之後的結果永遠翻不到（total 卻回報全部數量）。現在：前段仍是既有的
+ * 排序結果（上限內語意完全不變），超過的部分接在後面、依同一個
+ * DETERMINISTIC_RATING_ORDER 從 SQL 取出——候選查詢本身就是同一個順序＋LIMIT，
+ * 所以尾段剛好從第「上限」筆開始，不重複、不遺漏，total 與可翻到的筆數一致。
+ */
+async function pageFromRankedHeadAndTail<T>(opts: {
+  head: T[];
+  total: number;
+  page: number;
+  pageSize: number;
+  fetchTail: (offset: number, limit: number) => Promise<T[]>;
+}): Promise<{ items: T[]; tailStartIndex: number }> {
+  const start = (opts.page - 1) * opts.pageSize;
+  const end = start + opts.pageSize;
+  const fromHead = opts.head.slice(start, end);
+  if (end <= opts.head.length || opts.total <= opts.head.length) {
+    return { items: fromHead, tailStartIndex: fromHead.length };
+  }
+  const tailOffset = Math.max(start, opts.head.length);
+  const tail = await opts.fetchTail(tailOffset, end - tailOffset);
+  return { items: [...fromHead, ...tail], tailStartIndex: fromHead.length };
+}
 
 /**
  * 公開搜尋（factory.search／AI 找工廠）候選與結果的明確欄位清單——Batch 3.1
@@ -828,7 +948,7 @@ export async function searchFactories(params: {
   /** rankingSignals 裡，全部候選都找不到任何明確文字證據的能力詞。 */
   missingCapabilities?: string[];
 }> {
-  const db = await getDb();
+  const db = await getSearchDb();
   if (!db) return { items: [], total: 0 };
   const {
     industry, subIndustry, region, capitalLevel, mfgMode, keyword,
@@ -867,7 +987,7 @@ export async function searchFactories(params: {
 
     const candidates = await db.select(PUBLIC_FACTORY_SEARCH_COLUMNS).from(factories).where(whereClause)
       .orderBy(...DETERMINISTIC_RATING_ORDER)
-      .limit(AI_CANDIDATE_LIMIT);
+      .limit(searchCandidateLimit);
 
     const productMap = new Map<number, string[]>();
     if (candidates.length > 0) {
@@ -924,12 +1044,39 @@ export async function searchFactories(params: {
       sig => !scored.some(s => s.matchedSignals.has(sig.toLowerCase()))
     );
 
-    const offset = (page - 1) * pageSize;
-    const pageSlice = scored.slice(offset, offset + pageSize);
-    return {
-      items: pageSlice.map(s => s.factory),
+    // 超過候選上限的尾段：依評分順序接在排序結果之後，tier 用同一個函式計算
+    const paged = await pageFromRankedHeadAndTail({
+      head: scored,
       total,
-      tiers: pageSlice.map(s => s.tier),
+      page,
+      pageSize,
+      fetchTail: async (tailOffset, tailLimit) => {
+        const tailRows = await db.select(PUBLIC_FACTORY_SEARCH_COLUMNS).from(factories).where(whereClause)
+          .orderBy(...DETERMINISTIC_RATING_ORDER)
+          .limit(tailLimit).offset(tailOffset);
+        if (tailRows.length === 0) return [];
+        const tailProducts = new Map<number, string[]>();
+        const rows = await db
+          .select({ factoryId: products.factoryId, name: products.name, desc: products.description })
+          .from(products)
+          .where(inArray(products.factoryId, tailRows.map(f => f.id)));
+        for (const p of rows) {
+          const list = tailProducts.get(p.factoryId) ?? [];
+          list.push(`${p.name} ${p.desc ?? ''}`);
+          tailProducts.set(p.factoryId, list);
+        }
+        return tailRows.map(f => ({
+          factory: f,
+          tier: computeRankingTier(f, tailProducts.get(f.id) ?? [], rankingSignals, relatedSubIndustries),
+          matchesAllSignals: false,
+          matchedSignals: new Set<string>(),
+        }));
+      },
+    });
+    return {
+      items: paged.items.map(s => s.factory),
+      total,
+      tiers: paged.items.map(s => s.tier),
       directCapabilityMatchCount,
       missingCapabilities,
     };
@@ -943,30 +1090,25 @@ export async function searchFactories(params: {
   // 平行執行以省一次循序 round trip；合併結果（productMatchedIds）維持在
   // 兩者都完成之後才做，語意與原本循序版本完全相同。
   // AI timeout 時走 non-AI mode 仍能把商品命中的工廠拉進候選集。
-  //
-  // 這裡刻意多 select name／description（不是只要 factoryId）——見對話中
-  // 「General relevance ranking 不要增加額外 DB round trip」：這條 query 的
-  // WHERE 本來就是 `name LIKE %kw% OR description LIKE %kw%`，等於「所有
-  // 可能貢獻 productNameExact／productNameContains／productDescriptionContains
-  // 這三個 literal signal 的 product row」的完整集合（沒命中 keyword 的
-  // product 不可能讓這三個 signal 變成 true，所以不需要另外查）。General
-  // relevance ranking 直接複用這批 row 建 productMap，不用再對 candidates
-  // 多打一次「SELECT products WHERE factoryId IN (candidateIds)」。
-  const keywordProductMatchesPromise: Promise<{ factoryId: number; name: string; description: string | null }[]> = keyword
-    ? (async () => {
-        try {
-          return await db
-            .select({ factoryId: products.factoryId, name: products.name, description: products.description })
-            .from(products)
-            .where(or(
-              like(products.name,        `%${keyword}%`),
-              like(products.description, `%${keyword}%`),
-            )!);
-        } catch (e) {
-          console.error('[AISearch] keyword product prequery FAILED:', e);
-          return [];
-        }
-      })()
+  // Batch 3.6：商品命中只需要「哪些工廠」（最多 PRODUCT_MATCH_FACTORY_LIMIT
+  // 間）——改在 SQL 端 DISTINCT＋只看公開工廠＋固定排序＋LIMIT，不再把所有命中
+  // 商品（含完整描述）全部載入記憶體後才 slice。非公開工廠本來就會被下方
+  // publicFactoryCondition 排除，順序固定後結果可重現；命中工廠在上限內時與
+  // 舊版完全相同。兩個預查彼此沒有 dependency，維持平行。
+  const productMatchFactoryIds = async (termConds: SQL[]): Promise<number[]> => {
+    const rows = await db
+      .selectDistinct({ factoryId: products.factoryId })
+      .from(products)
+      .innerJoin(factories, eq(factories.id, products.factoryId))
+      .where(and(publicFactoryCondition(), or(...termConds)!))
+      .orderBy(asc(products.factoryId))
+      .limit(PRODUCT_MATCH_FACTORY_LIMIT);
+    return rows.map(r => r.factoryId);
+  };
+
+  const keywordProductIdsPromise: Promise<number[]> = keyword
+    ? productMatchFactoryIds([likeContainsLiteral(products.name, keyword), likeContainsLiteral(products.description, keyword)])
+        .catch(e => { console.error('[AISearch] keyword product prequery FAILED:', e instanceof Error ? e.message : e); return [] as number[]; })
     : Promise.resolve([]);
 
   // useAIMode=false 時完全不執行這個 query（維持原本行為：aiProductIds 只在
@@ -977,37 +1119,20 @@ export async function searchFactories(params: {
           const aiTerms = [...intent!.productKeywords, ...intent!.searchSynonyms]
             .filter((t): t is string => !!t && t.trim().length > 0);
           if (aiTerms.length === 0) return [];
-          const aiConds = aiTerms.flatMap(term => [
-            like(products.name,        `%${term}%`),
-            like(products.description, `%${term}%`),
-          ]);
-          const rows = await db
-            .select({ factoryId: products.factoryId })
-            .from(products)
-            .where(or(...aiConds)!);
-          return Array.from(new Set(rows.map(r => r.factoryId))).slice(0, 200);
+          return await productMatchFactoryIds(aiTerms.flatMap(term => [
+            likeContainsLiteral(products.name, term),
+            likeContainsLiteral(products.description, term),
+          ]));
         } catch (e) {
-          console.error('[AISearch] AI product prequery FAILED:', e);
+          console.error('[AISearch] AI product prequery FAILED:', e instanceof Error ? e.message : e);
           return [];
         }
       })()
     : Promise.resolve([]);
 
-  const [keywordProductMatches, aiProductIds] = await Promise.all([keywordProductMatchesPromise, aiProductIdsPromise]);
-  const keywordProductIds = Array.from(new Set(keywordProductMatches.map(r => r.factoryId))).slice(0, 200);
+  const [keywordProductIds, aiProductIds] = await Promise.all([keywordProductIdsPromise, aiProductIdsPromise]);
 
-  // General relevance ranking 用的 product signal 來源——直接從上面那批
-  // 「已經命中 keyword」的 product rows 分組，不用再對 candidates 多查一次
-  // products（見對話中「keywordProductMatches」）。AI mode 完全不用這個
-  // map，維持原本自己的 productMap（見下方 useAIMode 分支，本輪沒有改）。
-  const keywordProductMap = new Map<number, SearchMatchProductInput[]>();
-  for (const row of keywordProductMatches) {
-    const list = keywordProductMap.get(row.factoryId) ?? [];
-    list.push({ name: row.name, description: row.description });
-    keywordProductMap.set(row.factoryId, list);
-  }
-
-  console.log(`[AISearch] keyword="${keyword ?? ''}" useAIMode=${useAIMode} confidence=${intent?.confidence ?? 0} keywordProductIds=[${keywordProductIds.join(',')}]`);
+  searchDebugLog(`[AISearch] keyword="${keyword ?? ''}" useAIMode=${useAIMode} confidence=${intent?.confidence ?? 0} keywordProductIds=[${keywordProductIds.join(',')}]`);
 
   // 精準 subIndustry taxonomy keyword match（見對話中「subIndustry 應用層
   // taxonomy mapping」）：AI mode 與 non-AI mode 共用同一份，計算一次即可，
@@ -1024,7 +1149,7 @@ export async function searchFactories(params: {
 
   if (useAIMode) {
     const productMatchedIds = Array.from(new Set([...keywordProductIds, ...aiProductIds])).slice(0, 200);
-    console.log(`[AISearch] productMatchedIds=[${productMatchedIds.join(',')}] (keyword:${keywordProductIds.length} ai:${aiProductIds.length})`);
+    searchDebugLog(`[AISearch] productMatchedIds=[${productMatchedIds.join(',')}] (keyword:${keywordProductIds.length} ai:${aiProductIds.length})`);
 
     // Step 2: 候選集 content layer（OR 層）
     // 外層 AND：status='approved' + 使用者手動篩選
@@ -1032,9 +1157,9 @@ export async function searchFactories(params: {
     const contentConds: any[] = [];
     if (keyword) {
       contentConds.push(
-        like(factories.name,        `%${keyword}%`),
-        like(factories.description, `%${keyword}%`),
-        sql`JSON_SEARCH(${factories.industry}, 'one', ${`%${keyword}%`}) IS NOT NULL`,
+        likeContainsLiteral(factories.name,        keyword),
+        likeContainsLiteral(factories.description, keyword),
+        jsonSearchContainsLiteral(factories.industry, keyword),
         ...subIndustryTaxonomyConds,
       );
     }
@@ -1048,7 +1173,7 @@ export async function searchFactories(params: {
     const keywordCondCount   = keyword ? 3 + subIndustryTaxonomyConds.length : 0;
     const industryCondCount  = (!userHasSelectedIndustry && intent!.mainIndustries.length > 0) ? 1 : 0;
     const productIdCondCount = productMatchedIds.length > 0 ? 1 : 0;
-    console.log(`[AISearch] contentConds count=${contentConds.length} (keyword:${keywordCondCount} industry:${industryCondCount} product_ids:${productIdCondCount})`);
+    searchDebugLog(`[AISearch] contentConds count=${contentConds.length} (keyword:${keywordCondCount} industry:${industryCondCount} product_ids:${productIdCondCount})`);
 
     if (contentConds.length > 0) conditions.push(or(...contentConds)!);
 
@@ -1059,11 +1184,11 @@ export async function searchFactories(params: {
       db.select({ count: sql<number>`COUNT(*)` }).from(factories).where(whereClause),
       db.select(PUBLIC_FACTORY_SEARCH_COLUMNS).from(factories).where(whereClause)
         .orderBy(...DETERMINISTIC_RATING_ORDER)
-        .limit(AI_CANDIDATE_LIMIT),
+        .limit(searchCandidateLimit),
     ]);
     const total = Number(countResult?.count ?? 0);
 
-    console.log(`[AISearch] total=${total} candidates=${candidates.length}`);
+    searchDebugLog(`[AISearch] total=${total} candidates=${candidates.length}`);
 
     // Step 3: 批次查候選工廠的所有商品——結構化保留 name／description
     // （不要在這裡就合併成單一字串），因為 computeSearchMatchSignals 需要
@@ -1105,21 +1230,27 @@ export async function searchFactories(params: {
     });
 
     const topLog = scored.slice(0, 3).map(s => `{id:${s.factory.id},name:"${s.factory.name}",tier:${s.tier}}`).join(',');
-    console.log(`[AISearch] topResults=[${topLog}]`);
+    searchDebugLog(`[AISearch] topResults=[${topLog}]`);
 
-    const offset = (page - 1) * pageSize;
-    const items = scored.slice(offset, offset + pageSize).map(s => s.factory);
-    return { items, total };
+    const paged = await pageFromRankedHeadAndTail({
+      head: scored as { factory: FactorySearchRow }[],
+      total, page, pageSize,
+      fetchTail: (tailOffset, tailLimit) => db.select(PUBLIC_FACTORY_SEARCH_COLUMNS).from(factories).where(whereClause)
+        .orderBy(...DETERMINISTIC_RATING_ORDER)
+        .limit(tailLimit).offset(tailOffset)
+        .then(rows => rows.map(f => ({ factory: f }))),
+    });
+    return { items: paged.items.map(s => s.factory), total };
   }
 
   // 非 AI 模式（AI timeout / disabled / 低信心度 fallback）
   // keywordProductIds 來自上方共用 pre-query，同樣加入 OR 候選條件
-  console.log(`[AISearch] non-AI mode keyword="${keyword ?? ''}" confidence=${intent?.confidence ?? 0} keywordProductIds=[${keywordProductIds.join(',')}]`);
+  searchDebugLog(`[AISearch] non-AI mode keyword="${keyword ?? ''}" confidence=${intent?.confidence ?? 0} keywordProductIds=[${keywordProductIds.join(',')}]`);
   if (keyword) {
     const nonAiConds: any[] = [
-      like(factories.name,        `%${keyword}%`),
-      like(factories.description, `%${keyword}%`),
-      sql`JSON_SEARCH(${factories.industry}, 'one', ${`%${keyword}%`}) IS NOT NULL`,
+      likeContainsLiteral(factories.name,        keyword),
+      likeContainsLiteral(factories.description, keyword),
+      jsonSearchContainsLiteral(factories.industry, keyword),
       ...subIndustryTaxonomyConds,
     ];
     if (keywordProductIds.length > 0) {
@@ -1149,17 +1280,32 @@ export async function searchFactories(params: {
       db.select({ count: sql<number>`COUNT(*)` }).from(factories).where(whereClause),
       db.select(PUBLIC_FACTORY_SEARCH_COLUMNS).from(factories).where(whereClause)
         .orderBy(...DETERMINISTIC_RATING_ORDER)
-        .limit(AI_CANDIDATE_LIMIT),
+        .limit(searchCandidateLimit),
     ]);
     const total = Number(countResult?.count ?? 0);
 
-    // Product signals 直接複用上面已經查過的 keywordProductMap，不再對
-    // candidates 多打一次「SELECT products WHERE factoryId IN (...)」（見
-    // 對話中「不要增加 General 搜尋的 DB round trip dependency depth」）—
-    // keywordProductMap 本來就是「所有命中 keyword 的 product」的完整集合，
-    // 沒命中的 product 不可能讓 productNameExact／productNameContains／
-    // productDescriptionContains 變成 true，所以不需要另外查 candidates 的
-    // 全部 product。
+    // Batch 3.6：product signal 只需要「候選工廠」中命中 keyword 的商品——改成
+    // 在候選確定後，只查這些工廠（最多 searchCandidateLimit 間）的命中商品，
+    // 不再把全站所有命中商品（含完整描述）載入記憶體。候選工廠拿到的商品集合
+    // 與舊版完全相同（舊版 map 本來就只用候選工廠的那幾筆）。
+    const keywordProductMap = new Map<number, SearchMatchProductInput[]>();
+    if (candidates.length > 0) {
+      const rows = await db
+        .select({ factoryId: products.factoryId, name: products.name, description: products.description })
+        .from(products)
+        .where(and(
+          inArray(products.factoryId, candidates.map(f => f.id)),
+          or(likeContainsLiteral(products.name, keyword!), likeContainsLiteral(products.description, keyword!))!,
+        ));
+      for (const row of rows) {
+        const list = keywordProductMap.get(row.factoryId) ?? [];
+        list.push({ name: row.name, description: row.description });
+        keywordProductMap.set(row.factoryId, list);
+      }
+    }
+
+    // 只需要命中 keyword 的商品：沒命中的商品不可能讓 productNameExact／
+    // productNameContains／productDescriptionContains 變成 true。
     const scored = candidates.map(f => {
       const signals = computeSearchMatchSignals(f, keyword!, keywordProductMap.get(f.id) ?? [], subIndustryResolvedValues);
       return { factory: f, tier: computeGeneralMatchTier(signals) };
@@ -1177,9 +1323,15 @@ export async function searchFactories(params: {
       return a.factory.id - b.factory.id;
     });
 
-    const offset = (page - 1) * pageSize;
-    const items = scored.slice(offset, offset + pageSize).map(s => s.factory);
-    return { items, total };
+    const paged = await pageFromRankedHeadAndTail({
+      head: scored as { factory: FactorySearchRow }[],
+      total, page, pageSize,
+      fetchTail: (tailOffset, tailLimit) => db.select(PUBLIC_FACTORY_SEARCH_COLUMNS).from(factories).where(whereClause)
+        .orderBy(...DETERMINISTIC_RATING_ORDER)
+        .limit(tailLimit).offset(tailOffset)
+        .then(rows => rows.map(f => ({ factory: f }))),
+    });
+    return { items: paged.items.map(s => s.factory), total };
   }
 
   // 使用者明確選了非 relevance 的排序方式，或根本沒有 keyword（純瀏覽）：

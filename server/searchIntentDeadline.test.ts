@@ -40,7 +40,7 @@ vi.mock("./db", async (importOriginal) => {
 });
 
 import { ENV } from "./_core/env";
-import { resolveSearchIntent, getSearchIntent, SEARCH_INTENT_DEADLINE_MS } from "./semantic-search";
+import { resolveSearchIntent, getSearchIntent, SEARCH_INTENT_DEADLINE_MS, __resetSearchIntentStateForTests } from "./semantic-search";
 
 const okResponse = (content: string | null) => ({ choices: [{ message: { content } }], usage: undefined });
 const VALID = JSON.stringify({ mainIndustries: ["金屬加工"], subIndustries: [], productKeywords: ["螺絲"], searchSynonyms: [], confidence: 0.85 });
@@ -61,6 +61,8 @@ beforeEach(() => {
   (ENV as any).aiSearchProvider = "openai";
   (ENV as any).openaiApiKey = "test-key";
   provider.calls.length = 0;
+  // Batch 3.6：行程內狀態（記憶體快取、in-flight、故障保護）每個案例獨立
+  __resetSearchIntentStateForTests();
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 });
 afterEach(() => {

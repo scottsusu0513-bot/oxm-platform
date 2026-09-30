@@ -12,6 +12,7 @@ import { setupGoneRoutes } from "./goneRoutes";
 import { ROBOTS_TXT, setupApiNoIndexHeader } from "./robots";
 import { setupLegacyBlogRedirect } from "./legacyBlogRedirect";
 import { apiLimiter, loginLimiter, uploadLimiter, messageLimiter, submitReviewLimiter, adminLimiter, searchLimiter, reportLimiter, analyticsIngestLimiter } from "./rateLimit";
+import { searchBatchGuard } from "./searchBatchGuard";
 import { COOKIE_NAME } from "@shared/const";
 import { INDUSTRY_SLUGS, REGION_SLUGS, SUB_INDUSTRY_SEARCH_ENTRY_BY_PARENT_AND_LABEL } from "../../shared/constants";
 import { LIBRARY_ARTICLES } from "../../shared/content/library";
@@ -62,6 +63,9 @@ async function startServer() {
 
   console.log("[boot] registering oauth routes");
   app.use("/api/", apiLimiter);
+  // 單一 tRPC 批次內 factory.search 的數量上限（searchLimiter 以 HTTP request 計數，
+  // 批次會把一次計數放大成多次搜尋，見 ./searchBatchGuard.ts）
+  app.use(searchBatchGuard);
 
   // Route-level rate limits（比 apiLimiter 更嚴格的特定路徑）
   app.use("/api/oauth", loginLimiter);

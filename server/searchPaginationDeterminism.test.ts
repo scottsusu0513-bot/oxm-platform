@@ -133,7 +133,8 @@ async function assertDeterministicPagination(params: SearchParams) {
  * 鍵都是唯一的 factories.id，不依賴任何 MySQL 版本行為。
  */
 async function captureSearchSql(params: SearchParams): Promise<string[]> {
-  const conn = await db.getDb();
+  // Batch 3.6：searchFactories 改走搜尋專用連線池（getSearchDb）
+  const conn = await db.getSearchDb();
   if (!conn) throw new Error("no db");
   const client = (conn as unknown as { session: { client: Record<string, (...args: any[]) => any> } }).session.client;
   const captured: string[] = [];

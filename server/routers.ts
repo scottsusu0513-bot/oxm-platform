@@ -212,6 +212,9 @@ async function deleteChatPdfObjectsBestEffort(keys: string[]): Promise<void> {
 // 徽章證明圖片 presigned 檢視網址有效秒數：10 分鐘，落在建議的 10～15 分鐘區間內。
 const CERTIFICATION_EVIDENCE_VIEW_URL_TTL_SECONDS = 600;
 
+/** factory.search 的頁數上限（Batch 3.6）。 */
+export const FACTORY_SEARCH_MAX_PAGE = 1000;
+
 function requireVerifiedEmail(user: { primaryEmailVerifiedAt: Date | null }): void {
   if (!user.primaryEmailVerifiedAt) {
     throw new TRPCError({ code: "FORBIDDEN", message: "UNVERIFIED_EMAIL" });
@@ -2223,9 +2226,12 @@ export const appRouter = router({
   /** 「可打樣」——EXISTS 任一 products.provideSample=true，見 server/db.ts searchFactories。 */
   sample: z.boolean().optional(),
   sortBy: z.enum(["rating", "reviews", "response", "newest"]).optional(),
-  page: z.number().int().min(1).default(1),
+  // Batch 3.6：server 端頁數上限（1000 頁 × 最多 50 筆＝5 萬筆，遠超過正常瀏覽），
+  // 避免任意巨大的 page 進入 DB OFFSET。
+  page: z.number().int().min(1).max(FACTORY_SEARCH_MAX_PAGE).default(1),
   pageSize: z.number().int().min(1).max(50).default(20),
 })).query(async ({ ctx, input }) => {
+  const searchStartedAt = Date.now();
   const industry      = input.industry     && input.industry.length > 0     ? input.industry     : undefined;
   const subIndustry   = input.subIndustry  && input.subIndustry.length > 0  ? input.subIndustry  : undefined;
   const region        = input.region       && input.region.length > 0       ? input.region       : undefined;
@@ -2269,7 +2275,8 @@ export const appRouter = router({
   // 不能跟 getSearchIntent 平行——DIRECT 的價值就是「保證不打 OpenAI」，
   // 如果兩者同時起跑，就算最後判定是 DIRECT，OpenAI 呼叫也已經發出去了。
   const searchRoute = (!rankingSignals && input.keyword) ? await classifySearchQuery(input.keyword) : null;
-  if (searchRoute) {
+  // Batch 3.6：正式環境不記錄使用者輸入的關鍵字（見下方回傳前的摘要 log）
+  if (searchRoute && !ENV.isProduction) {
     console.log(`[SearchRouter] query="${input.keyword}" route=${searchRoute.route} reason=${searchRoute.reason}`);
   }
 
@@ -2349,6 +2356,8 @@ export const appRouter = router({
     businessType: input.businessType, smallBatch: input.smallBatch, sample: input.sample,
     sortBy: input.sortBy, q: input.q, aiSearchConversationId: input.aiSearchConversationId,
   });
+  // 每次搜尋一行摘要：只有模式／是否用到 AI intent／筆數／耗時，不含關鍵字或工廠名稱
+  console.log(`[Search] route=${searchRoute?.route ?? (rankingSignals ? 'RANKING' : 'BROWSE')} aiIntent=${intent ? 'yes' : 'no'} page=${input.page} total=${result.total} ms=${Date.now() - searchStartedAt}`);
   return {
     ...result,
     items: result.items.map(stripForSearch),

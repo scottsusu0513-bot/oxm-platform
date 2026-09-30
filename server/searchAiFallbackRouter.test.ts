@@ -1,7 +1,8 @@
 /**
  * factory.search 的 AI 失敗 fallback（Production Hardening Batch 3.2 Phase 2）
- * — router 層整合測試，真的走本機測試資料庫；OpenAI／Anthropic SDK 以 mock
- * 取代，永遠不打外部服務。
+ * — router 層整合測試，真的走本機測試資料庫；OpenAI SDK 以 mock 取代，永遠
+ * 不打外部服務。Batch 3.6 起舊的 Anthropic enhanceSearchKeyword 路徑與
+ * @anthropic-ai/sdk dependency 已完全移除（見最後的結構合約）。
  *
  * 修改前（Batch 3.2 Phase 1 本機實測）：OpenAI 卡住 → 2.5s 邏輯 timeout →
  * 依序再呼叫 Anthropic enhanceSearchKeyword（5s 邏輯 timeout）→ 7,566ms 才回應。
@@ -13,7 +14,6 @@ import { sql } from "drizzle-orm";
 
 const calls = vi.hoisted(() => ({
   openai: [] as { signal: AbortSignal; maxRetries: number }[],
-  anthropic: 0,
   behavior: null as null | ((signal: AbortSignal) => Promise<unknown>),
 }));
 vi.mock("openai", () => ({
@@ -21,17 +21,12 @@ vi.mock("openai", () => ({
     chat = { completions: { create: (_b: unknown, opts: { signal: AbortSignal; maxRetries: number }) => { calls.openai.push(opts); return calls.behavior!(opts.signal); } } };
   },
 }));
-vi.mock("@anthropic-ai/sdk", () => ({
-  default: class { messages = { create: () => { calls.anthropic++; return new Promise(() => {}); } }; },
-}));
-// 讓舊的 Anthropic fallback 如果仍在 critical path 上就一定會被呼叫到
-process.env.ANTHROPIC_API_KEY = "test-key-anthropic-must-not-be-used";
 
 import * as db from "./db";
 import { appRouter } from "./routers";
 import { ENV } from "./_core/env";
 import type { TrpcContext } from "./_core/context";
-import { SEARCH_INTENT_DEADLINE_MS } from "./semantic-search";
+import { SEARCH_INTENT_DEADLINE_MS, __resetSearchIntentStateForTests } from "./semantic-search";
 import { ensureTestUser, deleteTestUser } from "./_core/financeTestFixtures";
 
 const runId = `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
@@ -68,7 +63,7 @@ beforeEach(() => {
   (ENV as any).aiSearchProvider = "openai";
   (ENV as any).openaiApiKey = "test-key";
   calls.openai.length = 0;
-  calls.anthropic = 0;
+  __resetSearchIntentStateForTests();
 });
 
 describe("factory.search：AI intent 失敗 → 直接用原始 keyword 走非 AI 搜尋", () => {
@@ -81,7 +76,6 @@ describe("factory.search：AI intent 失敗 → 直接用原始 keyword 走非 A
     expect(calls.openai).toHaveLength(1);
     expect(calls.openai[0].signal.aborted).toBe(true);
     expect(calls.openai[0].maxRetries).toBe(0);
-    expect(calls.anthropic).toBe(0);
     expect(elapsed).toBeGreaterThanOrEqual(SEARCH_INTENT_DEADLINE_MS - 50);
     expect(elapsed).toBeLessThan(SEARCH_INTENT_DEADLINE_MS + 2000); // 不再有 +5s 的 Anthropic 等待
     const expected = await db.searchFactories({ keyword: KW, page: 1, pageSize: 20, intent: null, userHasSelectedIndustry: false });
@@ -97,14 +91,12 @@ describe("factory.search：AI intent 失敗 → 直接用原始 keyword 走非 A
       expect(Date.now() - t0).toBeLessThan(2000);
       expect(r.total).toBe(3);
     }
-    expect(calls.anthropic).toBe(0);
   }, 20000);
 
   it("I：invalid JSON → 非 AI keyword 搜尋、不是 500、不是空結果", async () => {
     calls.behavior = async () => ({ choices: [{ message: { content: "not json" } }] });
     const r = await appRouter.createCaller(ctx()).factory.search({ keyword: KW, page: 1, pageSize: 20 });
     expect(r.total).toBe(3);
-    expect(calls.anthropic).toBe(0);
   });
 
   it("冷 AI 成功：結果與「同一份 intent 直接交給 searchFactories」完全相同（AI 成功語意不變）", async () => {
@@ -120,14 +112,16 @@ describe("factory.search：AI intent 失敗 → 直接用原始 keyword 走非 A
     });
     expect(r.total).toBe(expected.total);
     expect(r.items.map(i => i.id)).toEqual(expected.items.map(i => i.id));
-    expect(calls.anthropic).toBe(0);
   });
 
-  it("結構合約：routers.ts 的 factory.search 不再 import／呼叫 enhanceSearchKeyword", async () => {
+  it("結構合約：舊的 Anthropic enhanceSearchKeyword／searchCache 路徑與 @anthropic-ai/sdk 已完全移除", async () => {
     const fs = await import("node:fs");
     const path = await import("node:path");
-    const src = fs.readFileSync(path.resolve(import.meta.dirname, "routers.ts"), "utf-8");
-    expect(src).not.toMatch(/enhanceSearchKeyword\s*\(/);
-    expect(src).not.toMatch(/import\s*\{[^}]*enhanceSearchKeyword[^}]*\}\s*from\s*['"]\.\/semantic-search['"]/);
+    const read = (f: string) => fs.readFileSync(path.resolve(import.meta.dirname, f), "utf-8");
+    expect(read("routers.ts")).not.toMatch(/enhanceSearchKeyword\s*\(|import\s*\{[^}]*enhanceSearchKeyword/);
+    const semantic = read("semantic-search.ts");
+    expect(semantic).not.toMatch(/function enhanceSearchKeyword|from ['"]@anthropic-ai\/sdk['"]|\(searchCache\)|new Map<string, string>\(\)/);
+    const pkg = JSON.parse(read("../package.json"));
+    expect(pkg.dependencies?.["@anthropic-ai/sdk"]).toBeUndefined();
   });
 });
