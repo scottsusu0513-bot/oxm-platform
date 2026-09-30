@@ -21,6 +21,7 @@ import {
   getDb, getApprovedFactoriesForSitemap, getApprovedRegionIndustryCombosForSitemap,
   getApprovedIndustrySubIndustryCombosForSitemap, getApprovedRegionIndustrySubIndustryCombosForSitemap,
   getPublishedNewsForSitemap, ensureConsultantsSeeded, ensureCertificationServiceCatalogSeeded,
+  checkDbTimezoneAssumptions,
 } from "../db";
 import { ensureUpgradeProgramsSeeded } from "../upgradePrograms";
 import { runCollaborationOrderOverdueEmailCheck } from "../orderOverdueCheck";
@@ -375,6 +376,7 @@ async function startServer() {
     ensureConsultantsSeeded().catch(err => console.error("[boot] consultant seed failed:", err));
     ensureCertificationServiceCatalogSeeded().catch(err => console.error("[boot] certification service catalog seed failed:", err));
     ensureUpgradeProgramsSeeded().catch(err => console.error("[boot] upgrade program seed failed:", err));
+    checkDbTimezoneAssumptions().catch(err => console.error("[boot] timezone check failed:", err instanceof Error ? err.message : err));
   });
 }
 

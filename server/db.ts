@@ -78,6 +78,25 @@ function isRetryableDbError(err: unknown): boolean {
   return code === "PROTOCOL_CONNECTION_LOST" || code === "ECONNRESET" || code === "ETIMEDOUT";
 }
 
+/**
+ * 啟動時檢查時區假設（Batch 3.8）。正式站 DB 的 session 時區是 UTC（NOW() ＝
+ * UTC_TIMESTAMP()），drizzle 以 UTC 字串寫入 timestamp，token／OAuth state／
+ * 驗證碼等到期判斷同時用 drizzle 比較與 SQL NOW()——兩者一致的前提是 DB session
+ * 時區為 UTC；raw mysql2 讀取的 Date 則以 Node 行程時區解析，前提是行程也是 UTC。
+ * 任一前提被改變時在 log 明確警告（不自動修改任何設定）。
+ */
+export async function checkDbTimezoneAssumptions(): Promise<{ dbOffsetSeconds: number; processOffsetMinutes: number } | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const [rows] = await db.execute(sql`SELECT TIMESTAMPDIFF(SECOND, UTC_TIMESTAMP(), NOW()) AS off`) as unknown as [{ off: number }[], unknown];
+  const dbOffsetSeconds = Number(rows[0]?.off ?? 0);
+  const processOffsetMinutes = new Date().getTimezoneOffset();
+  if (dbOffsetSeconds !== 0 || processOffsetMinutes !== 0) {
+    console.error(`[boot] timezone assumption violated: DB session offset=${dbOffsetSeconds}s, process offset=${-processOffsetMinutes}min (expected both UTC)`);
+  }
+  return { dbOffsetSeconds, processOffsetMinutes };
+}
+
 export function resetDbPool(): void {
   console.error("[Database] Resetting pool after connection error");
   _pool = null;
@@ -1941,19 +1960,37 @@ export async function deleteConversation(conversationId: number, userId: number)
   // 驗證權限：使用者或工廠業主
   const factory = await getFactoryById(conv.factoryId);
   if (conv.userId !== userId && factory?.ownerId !== userId) throw new Error("無權限刪除此對話");
-  await db.delete(messages).where(eq(messages.conversationId, conversationId));
-  await db.delete(conversations).where(eq(conversations.id, conversationId));
+  // Batch 3.8：collaborationOrders.conversationId 是 ON DELETE CASCADE——刪除對話會連帶
+  // 刪掉雙方的合作確認單（以及日期修改／重複下訂申請），讓需求方的合作紀錄無聲消失。
+  // 有合作確認單的對話不可刪除；檢查與刪除在同一個 transaction 內（鎖住對話列），
+  // 訊息與對話一起刪除，不會留下「訊息已刪、對話還在」的半完成狀態。
+  await db.transaction(async (tx) => {
+    await tx.select({ id: conversations.id }).from(conversations)
+      .where(eq(conversations.id, conversationId)).limit(1).for("update");
+    const orders = await tx.select({ id: collaborationOrders.id }).from(collaborationOrders)
+      .where(eq(collaborationOrders.conversationId, conversationId)).limit(1);
+    if (orders.length > 0) throw new Error(CONVERSATION_HAS_ORDERS_MESSAGE);
+    await tx.delete(messages).where(eq(messages.conversationId, conversationId));
+    await tx.delete(conversations).where(eq(conversations.id, conversationId));
+  });
 }
+
+export const CONVERSATION_HAS_ORDERS_MESSAGE = "此對話已有合作確認單，為保留雙方的合作紀錄，無法刪除";
 
 // ===== Review helpers =====
 export async function createReview(data: { factoryId: number; userId: number; rating: number; comment?: string }) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
-  // 檢查是否已評價過
-  const existing = await db.select().from(reviews)
-    .where(and(eq(reviews.factoryId, data.factoryId), eq(reviews.userId, data.userId))).limit(1);
-  if (existing.length > 0) throw new Error("您已經評價過此工廠");
-  await db.insert(reviews).values(data);
+  // Batch 3.8：「已評價過」檢查與新增在同一個 transaction 內，先鎖住評價者的
+  // users 列——同一使用者的併發請求（連點、兩個分頁）會依序執行，不會各自通過
+  // 檢查後新增兩筆評價。
+  await db.transaction(async (tx) => {
+    await tx.select({ id: users.id }).from(users).where(eq(users.id, data.userId)).limit(1).for("update");
+    const existing = await tx.select({ id: reviews.id }).from(reviews)
+      .where(and(eq(reviews.factoryId, data.factoryId), eq(reviews.userId, data.userId))).limit(1);
+    if (existing.length > 0) throw new Error("您已經評價過此工廠");
+    await tx.insert(reviews).values(data);
+  });
   // 更新工廠平均評分
   await recalcFactoryRating(data.factoryId);
 }
@@ -2452,22 +2489,21 @@ export async function getAdminReviews(page = 1, pageSize = 20) {
 export async function toggleFavorite(userId: number, factoryId: number): Promise<boolean> {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
-  
-  // 檢查是否已收藏
-  const existing = await db.select().from(favorites)
-    .where(and(eq(favorites.userId, userId), eq(favorites.factoryId, factoryId)))
-    .limit(1);
-  
-  if (existing.length > 0) {
-    // 已收藏，則刪除
-    await db.delete(favorites)
-      .where(and(eq(favorites.userId, userId), eq(favorites.factoryId, factoryId)));
-    return false; // 已取消收藏
-  } else {
-    // 未收藏，則新增
-    await db.insert(favorites).values({ userId, factoryId });
+  // Batch 3.8：檢查與新增／刪除在同一個 transaction 內並先鎖住使用者列——同一使用者
+  // 的併發切換依序執行，不會各自通過「尚未收藏」檢查而新增兩筆重複收藏。
+  return db.transaction(async (tx) => {
+    await tx.select({ id: users.id }).from(users).where(eq(users.id, userId)).limit(1).for("update");
+    const existing = await tx.select({ id: favorites.id }).from(favorites)
+      .where(and(eq(favorites.userId, userId), eq(favorites.factoryId, factoryId)))
+      .limit(1);
+    if (existing.length > 0) {
+      await tx.delete(favorites)
+        .where(and(eq(favorites.userId, userId), eq(favorites.factoryId, factoryId)));
+      return false; // 已取消收藏
+    }
+    await tx.insert(favorites).values({ userId, factoryId });
     return true; // 已收藏
-  }
+  });
 }
 
 export async function isFavorited(userId: number, factoryId: number): Promise<boolean> {
@@ -3121,7 +3157,13 @@ export async function completeUserOnboarding(userId: number) {
 export async function deleteReview(id: number, userId: number) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
+  const [target] = await db.select({ factoryId: reviews.factoryId }).from(reviews)
+    .where(and(eq(reviews.id, id), eq(reviews.userId, userId))).limit(1);
+  if (!target) return;
   await db.delete(reviews).where(and(eq(reviews.id, id), eq(reviews.userId, userId)));
+  // Batch 3.8：刪除後重新計算工廠的平均評分與評價數（原本不會更新，公開卡片的
+  // 評價數與平均分數會一直包含已刪除的評價）。
+  await recalcFactoryRating(target.factoryId);
 }
 
 export async function getReportsByUser(userId: number) {
@@ -6863,6 +6905,11 @@ export async function getCollaborationOrderDetail(id: number) {
 
 // ===== Phase 4B: 訂單日期修改申請 =====
 
+/**
+ * 建立日期修改申請（Batch 3.8）：transaction 內先鎖住訂單列（SELECT … FOR UPDATE），
+ * 再檢查是否已有待確認申請——兩個併發請求會依序執行，第二個看到第一個的申請，
+ * 不會產生兩筆 pending。
+ */
 export async function createCollaborationOrderChangeRequest(data: {
   orderId: number;
   requestedByUserId: number;
@@ -6872,19 +6919,23 @@ export async function createCollaborationOrderChangeRequest(data: {
 }): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
-  const existing = await db.select({ id: collaborationOrderChangeRequests.id })
-    .from(collaborationOrderChangeRequests)
-    .where(and(
-      eq(collaborationOrderChangeRequests.orderId, data.orderId),
-      eq(collaborationOrderChangeRequests.status, "pending")
-    )).limit(1);
-  if (existing.length > 0) throw new Error("PENDING_EXISTS");
-  await db.insert(collaborationOrderChangeRequests).values({
-    orderId: data.orderId,
-    requestedByUserId: data.requestedByUserId,
-    reason: data.reason ?? null,
-    oldValuesJson: data.oldValues,
-    newValuesJson: data.newValues,
+  await db.transaction(async (tx) => {
+    await tx.select({ id: collaborationOrders.id }).from(collaborationOrders)
+      .where(eq(collaborationOrders.id, data.orderId)).limit(1).for("update");
+    const existing = await tx.select({ id: collaborationOrderChangeRequests.id })
+      .from(collaborationOrderChangeRequests)
+      .where(and(
+        eq(collaborationOrderChangeRequests.orderId, data.orderId),
+        eq(collaborationOrderChangeRequests.status, "pending")
+      )).limit(1);
+    if (existing.length > 0) throw new Error("PENDING_EXISTS");
+    await tx.insert(collaborationOrderChangeRequests).values({
+      orderId: data.orderId,
+      requestedByUserId: data.requestedByUserId,
+      reason: data.reason ?? null,
+      oldValuesJson: data.oldValues,
+      newValuesJson: data.newValues,
+    });
   });
 }
 
@@ -6938,38 +6989,40 @@ export async function listAcceptedCollaborationOrderChangeRequests(orderId: numb
     )).orderBy(asc(collaborationOrderChangeRequests.acceptedAt));
 }
 
+/**
+ * 回應日期修改申請（Batch 3.8）：同一個 transaction 內以條件式 UPDATE（仍是 pending）
+ * 認領申請，再套用新日期——不會出現「申請已接受但日期沒更新」的半完成狀態，
+ * 兩個併發回應也只有一個會成功（另一個得到 NOT_PENDING）。
+ */
 export async function respondCollaborationOrderChangeRequest(
   requestId: number,
   action: "accepted" | "rejected"
 ): Promise<{ orderId: number }> {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
-  const now = new Date();
-  const rows = await db.select().from(collaborationOrderChangeRequests)
-    .where(eq(collaborationOrderChangeRequests.id, requestId)).limit(1);
-  const req = rows[0];
-  if (!req) throw new Error("NOT_FOUND");
-  if (req.status !== "pending") throw new Error("NOT_PENDING");
-  if (action === "accepted") {
-    const newValues = req.newValuesJson as Record<string, string | null>;
-    await db.update(collaborationOrderChangeRequests).set({
-      status: "accepted",
-      acceptedAt: now,
-    }).where(eq(collaborationOrderChangeRequests.id, requestId));
-    await db.update(collaborationOrders).set({
-      depositDueDate: newValues.depositDueDate ?? null,
-      productionStartDate: newValues.productionStartDate ?? null,
-      expectedCompletionDate: newValues.expectedCompletionDate ?? null,
-      expectedShipmentDate: newValues.expectedShipmentDate ?? null,
-      finalPaymentDueDate: newValues.finalPaymentDueDate ?? null,
-    }).where(eq(collaborationOrders.id, req.orderId));
-  } else {
-    await db.update(collaborationOrderChangeRequests).set({
-      status: "rejected",
-      rejectedAt: now,
-    }).where(eq(collaborationOrderChangeRequests.id, requestId));
-  }
-  return { orderId: req.orderId };
+  return db.transaction(async (tx) => {
+    const now = new Date();
+    const rows = await tx.select().from(collaborationOrderChangeRequests)
+      .where(eq(collaborationOrderChangeRequests.id, requestId)).limit(1).for("update");
+    const req = rows[0];
+    if (!req) throw new Error("NOT_FOUND");
+    if (req.status !== "pending") throw new Error("NOT_PENDING");
+    const [claimed]: any = await tx.update(collaborationOrderChangeRequests).set(
+      action === "accepted" ? { status: "accepted", acceptedAt: now } : { status: "rejected", rejectedAt: now },
+    ).where(and(eq(collaborationOrderChangeRequests.id, requestId), eq(collaborationOrderChangeRequests.status, "pending")));
+    if ((claimed?.affectedRows ?? 0) !== 1) throw new Error("NOT_PENDING");
+    if (action === "accepted") {
+      const newValues = req.newValuesJson as Record<string, string | null>;
+      await tx.update(collaborationOrders).set({
+        depositDueDate: newValues.depositDueDate ?? null,
+        productionStartDate: newValues.productionStartDate ?? null,
+        expectedCompletionDate: newValues.expectedCompletionDate ?? null,
+        expectedShipmentDate: newValues.expectedShipmentDate ?? null,
+        finalPaymentDueDate: newValues.finalPaymentDueDate ?? null,
+      }).where(eq(collaborationOrders.id, req.orderId));
+    }
+    return { orderId: req.orderId };
+  });
 }
 
 // ===== Phase 4C: 訂單日期逾期 Email 通知 =====
@@ -7075,6 +7128,11 @@ export async function getFactoryEmailRecipients(
   ];
 }
 
+/**
+ * 需求方回應合作確認單（Batch 3.8）：只有 status 仍是 pending 時才會生效。
+ * 回傳 false＝狀態已被另一個請求改變（重複點擊、兩個分頁同時回應），呼叫端不得
+ * 再送系統訊息／通知。
+ */
 export async function respondCollaborationOrder(
   id: number,
   action: "accepted" | "rejected",
@@ -7083,100 +7141,129 @@ export async function respondCollaborationOrder(
     acceptedAsType: "user" | "factory";
     acceptedAsFactoryId: number | null;
   }
-): Promise<void> {
+): Promise<boolean> {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
   const now = new Date();
+  const pending = and(eq(collaborationOrders.id, id), eq(collaborationOrders.status, "pending"));
+  let result: any;
   if (action === "accepted") {
     if (!acceptedAs?.acceptedByUserId) {
       throw new Error("acceptedByUserId is required when accepting a collaboration order");
     }
-    await db.update(collaborationOrders).set({
+    [result] = await db.update(collaborationOrders).set({
       status: "accepted",
-      // 訂單被接受的當下才初始化製作階段（不是建立訂單時）——pending 狀態沒有 currentStage
       currentStage: "awaiting_deposit",
       acceptedAt: now,
       acceptedByUserId: acceptedAs.acceptedByUserId,
       acceptedAsType: acceptedAs.acceptedAsType ?? "user",
       acceptedAsFactoryId: acceptedAs.acceptedAsFactoryId,
-    }).where(eq(collaborationOrders.id, id));
+    }).where(pending);
   } else {
-    await db.update(collaborationOrders).set({ status: "rejected", rejectedAt: now }).where(eq(collaborationOrders.id, id));
+    [result] = await db.update(collaborationOrders).set({ status: "rejected", rejectedAt: now }).where(pending);
   }
+  return (result?.affectedRows ?? 0) === 1;
 }
 
+/** 申請取消（Batch 3.8）：只有狀態仍是呼叫端驗證過的 fromStatus 時才生效。 */
 export async function requestCancelCollaborationOrder(
   id: number,
   requestedByUserId: number,
   reason: string,
   fromStatus: string
-): Promise<void> {
+): Promise<boolean> {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
-  await db.update(collaborationOrders).set({
+  const [result]: any = await db.update(collaborationOrders).set({
     status: "cancel_requested",
     cancelRequestedByUserId: requestedByUserId,
     cancelRequestedAt: new Date(),
     cancelRequestReason: reason,
     cancelRequestedFromStatus: fromStatus,
-  }).where(eq(collaborationOrders.id, id));
+  }).where(and(eq(collaborationOrders.id, id), eq(collaborationOrders.status, fromStatus as any)));
+  return (result?.affectedRows ?? 0) === 1;
 }
 
+/**
+ * 回應取消申請（Batch 3.8）：只有仍是 cancel_requested（且是同一次申請）時才生效，
+ * 回傳是否真的套用。
+ */
 export async function respondCancelCollaborationOrder(
   id: number,
   action: "accept" | "reject"
-): Promise<void> {
+): Promise<boolean> {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
   const [order] = await db.select().from(collaborationOrders).where(eq(collaborationOrders.id, id)).limit(1);
   if (!order) throw new Error("找不到合作確認單");
   const now = new Date();
+  const sameRequest = and(
+    eq(collaborationOrders.id, id),
+    eq(collaborationOrders.status, "cancel_requested"),
+    order.cancelRequestedAt ? eq(collaborationOrders.cancelRequestedAt, order.cancelRequestedAt) : isNull(collaborationOrders.cancelRequestedAt),
+  );
+  let result: any;
   if (action === "accept") {
-    await db.update(collaborationOrders).set({ status: "cancelled", cancelledAt: now }).where(eq(collaborationOrders.id, id));
+    [result] = await db.update(collaborationOrders).set({ status: "cancelled", cancelledAt: now }).where(sameRequest);
   } else {
     const restored = (order.cancelRequestedFromStatus ?? "accepted") as any;
-    await db.update(collaborationOrders).set({
+    [result] = await db.update(collaborationOrders).set({
       status: restored,
       cancelRequestedByUserId: null,
       cancelRequestedAt: null,
       cancelRequestReason: null,
       cancelRequestedFromStatus: null,
-    }).where(eq(collaborationOrders.id, id));
+    }).where(sameRequest);
   }
+  return (result?.affectedRows ?? 0) === 1;
 }
 
+/** 狀態推進（Batch 3.8）：只有目前狀態仍是 fromStatus 時才生效，回傳是否套用。 */
 export async function updateCollaborationOrderStatus(
   id: number,
-  status: "in_progress" | "shipped" | "completed"
-): Promise<void> {
+  status: "in_progress" | "shipped" | "completed",
+  fromStatus: string
+): Promise<boolean> {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
   const now = new Date();
   const extra: Record<string, any> = {};
   if (status === "completed") extra.completedAt = now;
-  await db.update(collaborationOrders).set({ status, ...extra }).where(eq(collaborationOrders.id, id));
+  const [result]: any = await db.update(collaborationOrders).set({ status, ...extra })
+    .where(and(eq(collaborationOrders.id, id), eq(collaborationOrders.status, fromStatus as any)));
+  return (result?.affectedRows ?? 0) === 1;
 }
 
-export async function earlyCompleteOrder(orderId: number, userId: number): Promise<void> {
+/** 提早完工（Batch 3.8）：只在 accepted／in_progress 且尚未記錄時生效。 */
+export async function earlyCompleteOrder(orderId: number, userId: number): Promise<boolean> {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
-  await db.update(collaborationOrders).set({
+  const [result]: any = await db.update(collaborationOrders).set({
     earlyCompletedAt: new Date(),
     earlyCompletedByUserId: userId,
-  }).where(eq(collaborationOrders.id, orderId));
+  }).where(and(
+    eq(collaborationOrders.id, orderId),
+    inArray(collaborationOrders.status, ["accepted", "in_progress"]),
+    isNull(collaborationOrders.earlyCompletedAt),
+  ));
+  return (result?.affectedRows ?? 0) === 1;
 }
 
-export async function earlyShipOrder(orderId: number, userId: number): Promise<void> {
+/** 提早出貨（Batch 3.8）：只在 accepted／in_progress 且尚未記錄時生效。 */
+export async function earlyShipOrder(orderId: number, userId: number): Promise<boolean> {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
-  await db.update(collaborationOrders).set({
+  const [result]: any = await db.update(collaborationOrders).set({
     earlyShippedAt: new Date(),
     earlyShippedByUserId: userId,
-  }).where(eq(collaborationOrders.id, orderId));
+  }).where(and(
+    eq(collaborationOrders.id, orderId),
+    inArray(collaborationOrders.status, ["accepted", "in_progress"]),
+    isNull(collaborationOrders.earlyShippedAt),
+  ));
+  return (result?.affectedRows ?? 0) === 1;
 }
 
-// 最小的 transaction connection 介面（mysql2 PoolConnection 的子集），只列出這裡用到的方法，
-// 方便單元測試用 mock 物件取代真正的資料庫連線，驗證呼叫順序與 rollback 行為。
 export type TxConnection = {
   // mysql2 3.22+ 的 execute 參數型別較嚴格（ExecuteValues），這裡只描述呼叫端需要的形狀
   execute: (sql: string, values?: any[]) => Promise<[any, any]>;
@@ -7482,23 +7569,32 @@ export async function createVerifiedOrderReview(data: {
 }): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
-  // 檢查是否已有此訂單的評價
-  const existing = await db.select().from(reviews)
-    .where(eq(reviews.collaborationOrderId, data.collaborationOrderId)).limit(1);
-  if (existing.length > 0) throw new Error("此合作確認單已留過評價");
-  await db.insert(reviews).values({
-    factoryId: data.factoryId,
-    userId: data.userId,
-    rating: data.rating,
-    comment: data.comment ?? null,
-    collaborationOrderId: data.collaborationOrderId,
-    reviewType: "verified_order",
+  // Batch 3.8：鎖住訂單列後才檢查「此訂單是否已留過評價」並新增——同一張訂單的
+  // 併發請求依序執行，不會產生兩筆驗證評價。
+  await db.transaction(async (tx) => {
+    await tx.select({ id: collaborationOrders.id }).from(collaborationOrders)
+      .where(eq(collaborationOrders.id, data.collaborationOrderId)).limit(1).for("update");
+    const existing = await tx.select({ id: reviews.id }).from(reviews)
+      .where(eq(reviews.collaborationOrderId, data.collaborationOrderId)).limit(1);
+    if (existing.length > 0) throw new Error("此合作確認單已留過評價");
+    await tx.insert(reviews).values({
+      factoryId: data.factoryId,
+      userId: data.userId,
+      rating: data.rating,
+      comment: data.comment ?? null,
+      collaborationOrderId: data.collaborationOrderId,
+      reviewType: "verified_order",
+    });
   });
   await recalcFactoryRating(data.factoryId);
 }
 
 // ===== 重複下訂申請 =====
 
+/**
+ * 建立重複下訂申請（Batch 3.8）：鎖住原訂單列後確認沒有待處理的申請才新增——
+ * 重複點擊／兩個分頁同時送出不會產生兩筆申請（與兩則訊息、兩次通知）。
+ */
 export async function createRepeatOrderRequest(data: {
   originalOrderId: number;
   conversationId: number;
@@ -7507,13 +7603,23 @@ export async function createRepeatOrderRequest(data: {
 }): Promise<number> {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
-  const result = await db.insert(collaborationOrderRepeatRequests).values({
-    originalOrderId: data.originalOrderId,
-    conversationId: data.conversationId,
-    requestedByUserId: data.requestedByUserId,
-    requestedAsFactoryId: data.requestedAsFactoryId ?? null,
+  return db.transaction(async (tx) => {
+    await tx.select({ id: collaborationOrders.id }).from(collaborationOrders)
+      .where(eq(collaborationOrders.id, data.originalOrderId)).limit(1).for("update");
+    const pending = await tx.select({ id: collaborationOrderRepeatRequests.id }).from(collaborationOrderRepeatRequests)
+      .where(and(
+        eq(collaborationOrderRepeatRequests.originalOrderId, data.originalOrderId),
+        eq(collaborationOrderRepeatRequests.status, "pending"),
+      )).limit(1);
+    if (pending.length > 0) throw new Error("PENDING_EXISTS");
+    const result = await tx.insert(collaborationOrderRepeatRequests).values({
+      originalOrderId: data.originalOrderId,
+      conversationId: data.conversationId,
+      requestedByUserId: data.requestedByUserId,
+      requestedAsFactoryId: data.requestedAsFactoryId ?? null,
+    });
+    return (result as any)[0].insertId as number;
   });
-  return (result as any)[0].insertId as number;
 }
 
 export async function getRepeatOrderRequest(id: number) {
@@ -7524,12 +7630,58 @@ export async function getRepeatOrderRequest(id: number) {
   return rows[0] ?? null;
 }
 
-export async function respondRepeatOrderRequest(requestId: number, action: "accepted" | "rejected"): Promise<void> {
+/** 拒絕重複下訂申請（Batch 3.8）：只有仍是 pending 時才生效，回傳是否套用。 */
+export async function respondRepeatOrderRequest(requestId: number, action: "accepted" | "rejected"): Promise<boolean> {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
-  await db.update(collaborationOrderRepeatRequests)
+  const [result]: any = await db.update(collaborationOrderRepeatRequests)
     .set({ status: action })
-    .where(eq(collaborationOrderRepeatRequests.id, requestId));
+    .where(and(eq(collaborationOrderRepeatRequests.id, requestId), eq(collaborationOrderRepeatRequests.status, "pending")));
+  return (result?.affectedRows ?? 0) === 1;
+}
+
+/**
+ * 接受重複下訂（Batch 3.8）：同一個 transaction 內先以條件式 UPDATE 認領申請
+ * （仍是 pending），再建立新訂單並設為 accepted。重複點擊／逾時重送不會建立兩張
+ * 新合作確認單；任一步失敗整體 rollback，不會留下「申請已接受但沒有訂單」或
+ * 「訂單建立但仍是 pending」的半完成狀態。認領失敗時丟出 NOT_PENDING。
+ */
+export async function acceptRepeatOrderRequestAtomic(
+  requestId: number,
+  order: CreateCollaborationOrderData,
+  acceptedAs: { acceptedByUserId: number; acceptedAsType: "user" | "factory"; acceptedAsFactoryId: number | null },
+): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  return db.transaction(async (tx) => {
+    const [claimed]: any = await tx.update(collaborationOrderRepeatRequests)
+      .set({ status: "accepted" })
+      .where(and(eq(collaborationOrderRepeatRequests.id, requestId), eq(collaborationOrderRepeatRequests.status, "pending")));
+    if ((claimed?.affectedRows ?? 0) !== 1) throw new Error("NOT_PENDING");
+    const now = new Date();
+    const inserted = await tx.insert(collaborationOrders).values({
+      conversationId: order.conversationId,
+      factoryId: order.factoryId,
+      buyerUserId: order.buyerUserId,
+      createdByUserId: order.createdByUserId,
+      productId: order.productId ?? null,
+      projectName: order.projectName,
+      description: order.description,
+      depositDueDate: order.depositDueDate ?? null,
+      productionStartDate: order.productionStartDate ?? null,
+      expectedCompletionDate: order.expectedCompletionDate ?? null,
+      expectedShipmentDate: order.expectedShipmentDate ?? null,
+      finalPaymentDueDate: order.finalPaymentDueDate ?? null,
+      note: order.note ?? null,
+      status: "accepted",
+      currentStage: "awaiting_deposit",
+      acceptedAt: now,
+      acceptedByUserId: acceptedAs.acceptedByUserId,
+      acceptedAsType: acceptedAs.acceptedAsType,
+      acceptedAsFactoryId: acceptedAs.acceptedAsFactoryId,
+    });
+    return (inserted as any)[0].insertId as number;
+  });
 }
 
 // ===== Push Notification Tokens =====
@@ -9238,37 +9390,41 @@ export type CreateBidInput = {
 export async function createCommunityBid(input: CreateBidInput): Promise<number> {
   const db_ = await getDb();
   if (!db_) throw new Error("DB not available");
-  const [result] = await db_.insert(communityBids).values({
-    spaceCode: input.spaceCode,
-    authorUserId: input.authorUserId,
-    authorFactoryId: input.authorFactoryId,
-    authorNameSnapshot: input.authorNameSnapshot,
-    authorFactoryNameSnapshot: input.authorFactoryNameSnapshot,
-    authorRoleSnapshot: input.authorRoleSnapshot,
-    title: input.title,
-    description: input.description,
-    quantity: input.quantity,
-    material: input.material,
-    specifications: input.specifications,
-    sampleRequired: input.sampleRequired,
-    desiredDeliveryDate: input.desiredDeliveryDate,
-    deliveryLocation: input.deliveryLocation,
-    budgetMin: input.budgetMin,
-    budgetMax: input.budgetMax,
-    images: input.images,
-    pinnedProductIds: input.pinnedProductIds,
-    durationHours: input.durationHours,
-    status: "draft",
+  // Batch 3.8：需求單本體與目標產業在同一個 transaction 內寫入，任一步失敗整體
+  // rollback——不會留下沒有目標產業（或目標產業被清空）的需求單。
+  return db_.transaction(async (tx) => {
+    const [result] = await tx.insert(communityBids).values({
+      spaceCode: input.spaceCode,
+      authorUserId: input.authorUserId,
+      authorFactoryId: input.authorFactoryId,
+      authorNameSnapshot: input.authorNameSnapshot,
+      authorFactoryNameSnapshot: input.authorFactoryNameSnapshot,
+      authorRoleSnapshot: input.authorRoleSnapshot,
+      title: input.title,
+      description: input.description,
+      quantity: input.quantity,
+      material: input.material,
+      specifications: input.specifications,
+      sampleRequired: input.sampleRequired,
+      desiredDeliveryDate: input.desiredDeliveryDate,
+      deliveryLocation: input.deliveryLocation,
+      budgetMin: input.budgetMin,
+      budgetMax: input.budgetMax,
+      images: input.images,
+      pinnedProductIds: input.pinnedProductIds,
+      durationHours: input.durationHours,
+      status: "draft",
+    });
+    const bidId = (result as any).insertId as number;
+
+    if (input.targetIndustrySpaceCodes && input.targetIndustrySpaceCodes.length > 0) {
+      await tx.insert(communityBidIndustries).values(
+        input.targetIndustrySpaceCodes.map(sc => ({ bidId, spaceCode: sc })),
+      );
+    }
+
+    return bidId;
   });
-  const bidId = (result as any).insertId as number;
-
-  if (input.targetIndustrySpaceCodes && input.targetIndustrySpaceCodes.length > 0) {
-    await db_.insert(communityBidIndustries).values(
-      input.targetIndustrySpaceCodes.map(sc => ({ bidId, spaceCode: sc })),
-    );
-  }
-
-  return bidId;
 }
 
 export type UpdateBidInput = Partial<Omit<CreateBidInput, "spaceCode" | "authorUserId" | "authorFactoryId" | "authorNameSnapshot" | "authorFactoryNameSnapshot" | "authorRoleSnapshot">>;
@@ -9276,24 +9432,28 @@ export type UpdateBidInput = Partial<Omit<CreateBidInput, "spaceCode" | "authorU
 export async function updateCommunityBid(bidId: number, input: UpdateBidInput): Promise<void> {
   const db_ = await getDb();
   if (!db_) throw new Error("DB not available");
+  // Batch 3.8：需求單本體與目標產業在同一個 transaction 內寫入，任一步失敗整體
+  // rollback——不會留下沒有目標產業（或目標產業被清空）的需求單。
+  await db_.transaction(async (tx) => {
 
-  const { targetIndustrySpaceCodes, images, pinnedProductIds, ...rest } = input;
-  const updateFields: Record<string, unknown> = { ...rest };
-  if (images !== undefined) updateFields.images = images;
-  if (pinnedProductIds !== undefined) updateFields.pinnedProductIds = pinnedProductIds;
+    const { targetIndustrySpaceCodes, images, pinnedProductIds, ...rest } = input;
+    const updateFields: Record<string, unknown> = { ...rest };
+    if (images !== undefined) updateFields.images = images;
+    if (pinnedProductIds !== undefined) updateFields.pinnedProductIds = pinnedProductIds;
 
-  if (Object.keys(updateFields).length > 0) {
-    await db_.update(communityBids).set(updateFields).where(eq(communityBids.id, bidId));
-  }
-
-  if (targetIndustrySpaceCodes !== undefined) {
-    await db_.delete(communityBidIndustries).where(eq(communityBidIndustries.bidId, bidId));
-    if (targetIndustrySpaceCodes.length > 0) {
-      await db_.insert(communityBidIndustries).values(
-        targetIndustrySpaceCodes.map(sc => ({ bidId, spaceCode: sc })),
-      );
+    if (Object.keys(updateFields).length > 0) {
+      await tx.update(communityBids).set(updateFields).where(eq(communityBids.id, bidId));
     }
-  }
+
+    if (targetIndustrySpaceCodes !== undefined) {
+      await tx.delete(communityBidIndustries).where(eq(communityBidIndustries.bidId, bidId));
+      if (targetIndustrySpaceCodes.length > 0) {
+        await tx.insert(communityBidIndustries).values(
+          targetIndustrySpaceCodes.map(sc => ({ bidId, spaceCode: sc })),
+        );
+      }
+    }
+  });
 }
 
 export async function getCommunityBidById(bidId: number): Promise<CommunityBid | null> {

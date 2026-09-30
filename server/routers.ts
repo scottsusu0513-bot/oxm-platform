@@ -212,6 +212,9 @@ async function deleteChatPdfObjectsBestEffort(keys: string[]): Promise<void> {
 // 徽章證明圖片 presigned 檢視網址有效秒數：10 分鐘，落在建議的 10～15 分鐘區間內。
 const CERTIFICATION_EVIDENCE_VIEW_URL_TTL_SECONDS = 600;
 
+/** 合作確認單狀態已被另一個請求改變（Batch 3.8：條件式狀態轉換失敗）。 */
+const ORDER_STATE_CHANGED_MESSAGE = "合作確認單狀態已變更，請重新整理後再試";
+
 /** factory.search 的頁數上限（Batch 3.6）。 */
 export const FACTORY_SEARCH_MAX_PAGE = 1000;
 
@@ -3692,7 +3695,12 @@ export const appRouter = router({
       // 私有 PDF 型錄的 key 必須在刪 DB 之前收集（刪掉之後就查不到了）
       const pdfKeys = await db.getPrivateChatPdfKeysForConversation(input.conversationId);
       // 傳 factory.ownerId 讓 DB 層的 owner 檢查通過（co-manager 已在上方驗過）
-      await db.deleteConversation(input.conversationId, factory!.ownerId);
+      try {
+        await db.deleteConversation(input.conversationId, factory!.ownerId);
+      } catch (e: any) {
+        if (e?.message === db.CONVERSATION_HAS_ORDERS_MESSAGE) throw new TRPCError({ code: "CONFLICT", message: e.message });
+        throw e;
+      }
       // DB 刪除正確性優先：S3 刪除失敗只記 log、留下孤兒物件，不影響對話刪除結果
       await deleteChatPdfObjectsBestEffort(pdfKeys);
       return { success: true };
@@ -3824,7 +3832,8 @@ export const appRouter = router({
         acceptedAs = { acceptedByUserId: ctx.user.id, acceptedAsType: asType, acceptedAsFactoryId: asFactoryId };
       }
 
-      await db.respondCollaborationOrder(order.id, input.action, acceptedAs);
+      // Batch 3.8：條件式更新——狀態已被另一個請求改變時不送系統訊息／通知
+      if (!(await db.respondCollaborationOrder(order.id, input.action, acceptedAs))) throw new TRPCError({ code: "CONFLICT", message: ORDER_STATE_CHANGED_MESSAGE });
       const sysMsg = input.action === "accepted"
         ? "需求方已同意合作確認單，本筆合作已成立"
         : "需求方已拒絕此合作確認單";
@@ -3884,7 +3893,7 @@ export const appRouter = router({
       if (!allowedFrom[input.status]?.includes(order.status)) {
         throw new TRPCError({ code: "BAD_REQUEST", message: `無法從「${order.status}」改為「${input.status}」` });
       }
-      await db.updateCollaborationOrderStatus(order.id, input.status);
+      if (!(await db.updateCollaborationOrderStatus(order.id, input.status, order.status))) throw new TRPCError({ code: "CONFLICT", message: ORDER_STATE_CHANGED_MESSAGE });
       // 通知買家：訂單進度更新
       const statusLabels: Record<string, string> = {
         in_progress: "已開始製作",
@@ -3931,7 +3940,7 @@ export const appRouter = router({
       const isCoMgr = !isOwner && await db.isActiveCoManager(factory.id, ctx.user.id);
       const isBuyer = order.buyerUserId === ctx.user.id;
       if (!isOwner && !isCoMgr && !isBuyer) throw new TRPCError({ code: "FORBIDDEN", message: "無權限" });
-      await db.requestCancelCollaborationOrder(order.id, ctx.user.id, input.reason, order.status);
+      if (!(await db.requestCancelCollaborationOrder(order.id, ctx.user.id, input.reason, order.status))) throw new TRPCError({ code: "CONFLICT", message: ORDER_STATE_CHANGED_MESSAGE });
       const isFactorySide = isOwner || isCoMgr;
       const db_ = await getDb();
       if (db_) {
@@ -4011,7 +4020,7 @@ export const appRouter = router({
       const isCoMgr = !isOwner && await db.isActiveCoManager(factory.id, ctx.user.id);
       const isBuyer = order.buyerUserId === ctx.user.id;
       if (!isOwner && !isCoMgr && !isBuyer) throw new TRPCError({ code: "FORBIDDEN", message: "無權限" });
-      await db.respondCancelCollaborationOrder(order.id, input.action);
+      if (!(await db.respondCancelCollaborationOrder(order.id, input.action))) throw new TRPCError({ code: "CONFLICT", message: ORDER_STATE_CHANGED_MESSAGE });
       const sysMsg = input.action === "accept"
         ? "對方已同意取消，合作確認單已取消"
         : "對方已拒絕取消，合作確認單維持原狀態";
@@ -4492,7 +4501,7 @@ export const appRouter = router({
       const isOwner = factory.ownerId === ctx.user.id;
       const isCoMgr = !isOwner && await db.isActiveCoManager(factory.id, ctx.user.id);
       if (!isOwner && !isCoMgr) throw new TRPCError({ code: "FORBIDDEN", message: "只有供應工廠方可操作" });
-      await db.earlyCompleteOrder(order.id, ctx.user.id);
+      if (!(await db.earlyCompleteOrder(order.id, ctx.user.id))) throw new TRPCError({ code: "CONFLICT", message: ORDER_STATE_CHANGED_MESSAGE });
       // 通知買家：提早完工
       notifyUser(
         order.buyerUserId,
@@ -4534,7 +4543,7 @@ export const appRouter = router({
       const isOwner = factory.ownerId === ctx.user.id;
       const isCoMgr = !isOwner && await db.isActiveCoManager(factory.id, ctx.user.id);
       if (!isOwner && !isCoMgr) throw new TRPCError({ code: "FORBIDDEN", message: "只有供應工廠方可操作" });
-      await db.earlyShipOrder(order.id, ctx.user.id);
+      if (!(await db.earlyShipOrder(order.id, ctx.user.id))) throw new TRPCError({ code: "CONFLICT", message: ORDER_STATE_CHANGED_MESSAGE });
       // 通知買家：提早出貨
       notifyUser(
         order.buyerUserId,
@@ -4585,12 +4594,19 @@ export const appRouter = router({
         }
       }
 
-      const requestId = await db.createRepeatOrderRequest({
-        originalOrderId: order.id,
-        conversationId: order.conversationId,
-        requestedByUserId: ctx.user.id,
-        requestedAsFactoryId: input.asFactoryId ?? null,
-      });
+      let requestId: number;
+      try {
+        requestId = await db.createRepeatOrderRequest({
+          originalOrderId: order.id,
+          conversationId: order.conversationId,
+          requestedByUserId: ctx.user.id,
+          requestedAsFactoryId: input.asFactoryId ?? null,
+        });
+      } catch (e: any) {
+        // Batch 3.8：同一張訂單已有待處理的重複下訂申請（連點／兩個分頁同時送出）
+        if (e?.message === "PENDING_EXISTS") throw new TRPCError({ code: "CONFLICT", message: "已有一筆待對方回應的重複下訂申請" });
+        throw e;
+      }
 
       await db.saveMessage(
         order.conversationId,
@@ -4662,7 +4678,9 @@ export const appRouter = router({
       if (input.action === "accept") assertFactoryAcceptsNewOrder(factory);
 
       if (input.action === "reject") {
-        await db.respondRepeatOrderRequest(input.requestId, "rejected");
+        if (!(await db.respondRepeatOrderRequest(input.requestId, "rejected"))) {
+          throw new TRPCError({ code: "CONFLICT", message: "此申請已處理" });
+        }
         // 通知申請方：被拒絕
         notifyUser(
           request.requestedByUserId,
@@ -4700,30 +4718,33 @@ export const appRouter = router({
       });
       if (dateOrderError) throw new TRPCError({ code: "BAD_REQUEST", message: dateOrderError });
 
-      const newOrderId = await db.createCollaborationOrder({
-        conversationId: originalOrder.conversationId,
-        factoryId: originalOrder.factoryId,
-        buyerUserId: request.requestedByUserId,
-        createdByUserId: ctx.user.id,
-        productId: null,
-        projectName: input.projectName.trim(),
-        description: input.description.trim(),
-        depositDueDate: input.depositDueDate ?? null,
-        productionStartDate: input.productionStartDate ?? null,
-        expectedCompletionDate: input.expectedCompletionDate ?? null,
-        expectedShipmentDate: input.expectedShipmentDate ?? null,
-        finalPaymentDueDate: input.finalPaymentDueDate ?? null,
-        note: input.note?.trim() ?? null,
-      });
-
-      // Set accepted directly
-      await db.respondCollaborationOrder(newOrderId, "accepted", {
-        acceptedAsType: request.requestedAsFactoryId ? "factory" : "user",
-        acceptedAsFactoryId: request.requestedAsFactoryId ?? null,
-        acceptedByUserId: request.requestedByUserId,
-      });
-
-      await db.respondRepeatOrderRequest(input.requestId, "accepted");
+      // Batch 3.8：認領申請、建立新訂單、設為 accepted 在同一個 transaction 內完成；
+      // 重複點擊／逾時重送只有第一次會建立新合作確認單。
+      let newOrderId: number;
+      try {
+        newOrderId = await db.acceptRepeatOrderRequestAtomic(input.requestId, {
+          conversationId: originalOrder.conversationId,
+          factoryId: originalOrder.factoryId,
+          buyerUserId: request.requestedByUserId,
+          createdByUserId: ctx.user.id,
+          productId: null,
+          projectName: input.projectName.trim(),
+          description: input.description.trim(),
+          depositDueDate: input.depositDueDate ?? null,
+          productionStartDate: input.productionStartDate ?? null,
+          expectedCompletionDate: input.expectedCompletionDate ?? null,
+          expectedShipmentDate: input.expectedShipmentDate ?? null,
+          finalPaymentDueDate: input.finalPaymentDueDate ?? null,
+          note: input.note?.trim() ?? null,
+        }, {
+          acceptedAsType: request.requestedAsFactoryId ? "factory" : "user",
+          acceptedAsFactoryId: request.requestedAsFactoryId ?? null,
+          acceptedByUserId: request.requestedByUserId,
+        });
+      } catch (e: any) {
+        if (e?.message === "NOT_PENDING") throw new TRPCError({ code: "CONFLICT", message: "此申請已處理" });
+        throw e;
+      }
 
       await db.saveMessage(
         originalOrder.conversationId,
