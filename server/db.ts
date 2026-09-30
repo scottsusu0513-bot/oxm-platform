@@ -1638,6 +1638,62 @@ export async function getMessageById(id: number) {
   return result.length > 0 ? result[0] : undefined;
 }
 
+// ===== 聊天 PDF 型錄（私有 bucket，Batch 3.5；見 server/chatPdfAttachment.ts）=====
+
+/** 刪除對話前收集該對話所有尚未刪除的私有 PDF key（DB 刪掉之後就查不到了）。 */
+export async function getPrivateChatPdfKeysForConversation(conversationId: number): Promise<string[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.select({ attachmentData: messages.attachmentData })
+    .from(messages)
+    .where(and(eq(messages.conversationId, conversationId), eq(messages.type, "pdf")));
+  const keys: string[] = [];
+  for (const row of rows) {
+    const a = row.attachmentData as Record<string, unknown> | null;
+    if (a && a.storage === "private" && typeof a.fileKey === "string" && a.fileKey) keys.push(a.fileKey);
+  }
+  return keys;
+}
+
+/**
+ * cleanup 候選：私有儲存、仍有 fileKey、expiresAt 早於 expiresBefore（呼叫端傳
+ * now − 30 天）。expiresAt 一律由 toISOString() 寫入，字串比較等同時間比較。
+ */
+export async function getChatPdfAttachmentsDueForCleanup(expiresBeforeIso: string, limit: number): Promise<{ id: number; attachmentData: unknown }[]> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  return db.select({ id: messages.id, attachmentData: messages.attachmentData })
+    .from(messages)
+    .where(and(
+      eq(messages.type, "pdf"),
+      sql`JSON_UNQUOTE(JSON_EXTRACT(${messages.attachmentData}, '$.storage')) = 'private'`,
+      sql`JSON_TYPE(JSON_EXTRACT(${messages.attachmentData}, '$.fileKey')) = 'STRING'`,
+      sql`JSON_UNQUOTE(JSON_EXTRACT(${messages.attachmentData}, '$.expiresAt')) < ${expiresBeforeIso}`,
+    ))
+    .orderBy(asc(messages.id))
+    .limit(limit);
+}
+
+/**
+ * 物件刪除成功後標記：deleted=true、deletedAt、fileKey=null，保留檔名／大小／
+ * 期限讓聊天紀錄仍顯示「已逾期」卡片。條件式 UPDATE（fileKey 仍是預期值才更新）：
+ * 兩個 cleanup 同時執行時只有一個會生效，另一個回 false，不會互相覆蓋 JSON。
+ */
+export async function markChatPdfAttachmentDeleted(messageId: number, expectedFileKey: string, deletedAtIso: string): Promise<boolean> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  const [result]: any = await db.update(messages)
+    .set({
+      attachmentData: sql`JSON_SET(${messages.attachmentData}, '$.deleted', CAST('true' AS JSON), '$.deletedAt', ${deletedAtIso}, '$.fileKey', CAST('null' AS JSON))`,
+    })
+    .where(and(
+      eq(messages.id, messageId),
+      eq(messages.type, "pdf"),
+      sql`JSON_UNQUOTE(JSON_EXTRACT(${messages.attachmentData}, '$.fileKey')) = ${expectedFileKey}`,
+    ));
+  return (result?.affectedRows ?? 0) > 0;
+}
+
 export async function markMessagesAsRead(conversationId: number, readerId: number) {
   const db = await getDb();
   if (!db) return;

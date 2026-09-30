@@ -75,3 +75,39 @@ export async function openExternalUrl(url: string): Promise<void> {
   }
   window.open(url, "_blank", "noopener,noreferrer");
 }
+
+/**
+ * 「點擊 → 向 server 取得短效網址 → 開啟」用：必須在點擊事件的同步階段呼叫
+ * （第一個 await 之前就會開好分頁）。
+ *
+ * App：取得網址後交給 openExternalUrl（`@capacitor/browser`）。
+ * Web：await 之後才 window.open 已經不在使用者點擊的同步範圍，會被 popup
+ * blocker 無聲擋下——所以先同步開一個空白分頁，取得網址後再導向；取得失敗就
+ * 關掉。連空白分頁都被擋時改成同分頁開啟，不會無聲失敗。
+ */
+export async function openExternalUrlFromAsync(getUrl: () => Promise<string>): Promise<void> {
+  if (isNativeApp()) {
+    await openExternalUrl(await getUrl());
+    return;
+  }
+  const popup = window.open("", "_blank");
+  if (popup) {
+    try {
+      popup.opener = null;
+    } catch {
+      // 部分瀏覽器不允許改寫 opener，不影響開啟
+    }
+  }
+  let url: string;
+  try {
+    url = await getUrl();
+  } catch (err) {
+    popup?.close();
+    throw err;
+  }
+  if (popup && !popup.closed) {
+    popup.location.replace(url);
+    return;
+  }
+  window.location.assign(url);
+}

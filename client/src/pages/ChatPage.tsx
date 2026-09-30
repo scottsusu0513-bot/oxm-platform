@@ -13,6 +13,7 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { performLogin } from "@/const";
 import { trpc } from "@/lib/trpc";
 import { isSafeChatReturnSource } from "@/lib/chatReturnSource";
+import { openExternalUrlFromAsync } from "@/lib/platform";
 import { useRoute, useLocation, useSearch, Link } from "wouter";
 import { useState, useRef, useEffect, useLayoutEffect, useCallback, memo } from "react";
 import { toast } from "sonner";
@@ -41,13 +42,23 @@ type AttachedProduct = {
   detailUrl?: string;
 };
 
+// server 只回 metadata（見 server/chatPdfAttachment.ts toChatPdfAttachmentDTO）：
+// 沒有 key、沒有網址；下載一律用 messageId 向 server 取得短效連結。
 type PdfAttachment = {
-  fileKey?: string;
   fileName: string;
   fileSize: number;
+  mimeType?: string;
   expiresAt: string;
   deleted?: boolean;
 };
+
+const CHAT_PDF_MAX_BYTES = 10 * 1024 * 1024;
+
+/** 直傳 presigned PUT：PDF bytes 不經過我們的 API（不走 base64／JSON）。 */
+async function uploadPdfToPresignedUrl(uploadUrl: string, file: File, contentType: string): Promise<void> {
+  const res = await fetch(uploadUrl, { method: "PUT", headers: { "Content-Type": contentType }, body: file });
+  if (!res.ok) throw new Error("檔案上傳失敗，請重試");
+}
 
 // ── 商品附件卡片 ─────────────────────────────────────────────────────────
 function ProductMessageCard({ data, isMine }: { data: Record<string, any>; isMine: boolean }) {
@@ -111,24 +122,20 @@ function PdfMessageCard({ pdf, messageId, isMine }: { pdf: PdfAttachment; messag
   const text = isMine ? "text-primary-foreground" : "text-foreground";
   const sub = isMine ? "text-primary-foreground/60" : "text-muted-foreground";
 
-  const getUrlMut = trpc.chat.getPdfDownloadUrl.useMutation({
-    onSuccess: ({ url }) => {
-      const a = document.createElement("a");
-      a.href = url;
-      a.target = "_blank";
-      a.rel = "noopener noreferrer";
-      a.click();
-    },
-    onError: (err) => toast.error(err.message),
-  });
+  const getUrlMut = trpc.chat.getPdfDownloadUrl.useMutation();
+  const openPdf = () => {
+    // 必須在點擊的同步階段呼叫（web 先開分頁，避免 await 之後被 popup blocker 擋下）
+    openExternalUrlFromAsync(async () => (await getUrlMut.mutateAsync({ messageId })).url)
+      .catch((err: unknown) => toast.error(err instanceof Error ? err.message : "無法開啟型錄"));
+  };
 
   if (isUnavailable) {
     return (
       <div className={`rounded-lg border p-3 mt-1 ${border}`}>
         <div className="flex items-center gap-2">
           <FileText className={`w-5 h-5 ${sub} shrink-0`} />
-          <div>
-            <p className={`text-sm font-medium ${text}`}>{pdf.fileName}</p>
+          <div className="min-w-0">
+            <p className={`text-sm font-medium break-words ${text}`}>{pdf.fileName}</p>
             <p className={`text-xs ${sub}`}>此型錄已逾期，無法下載</p>
           </div>
         </div>
@@ -149,7 +156,7 @@ function PdfMessageCard({ pdf, messageId, isMine }: { pdf: PdfAttachment; messag
           disabled={getUrlMut.isPending}
           onClick={(e) => {
             e.stopPropagation();
-            getUrlMut.mutate({ messageId });
+            openPdf();
           }}
           className={`shrink-0 inline-flex items-center gap-1 text-xs px-2 py-1 rounded border transition-colors ${
             isMine
@@ -1360,15 +1367,9 @@ export default function ChatPage() {
     },
     onError: (err) => toast.error(err.message),
   });
-  const sendPdfMut = trpc.chat.sendPdf.useMutation({
-    onSuccess: () => {
-      toast.success("PDF 型錄已傳送");
-      utils.chat.getMessages.invalidate({ conversationId: conversationId! });
-      utils.chat.myConversations.invalidate();
-      chatEducation.refreshEducationState();
-    },
-    onError: (err) => toast.error(err.message),
-  });
+  const createPdfUploadSessionMut = trpc.chat.createPdfUploadSession.useMutation();
+  const finalizePdfUploadMut = trpc.chat.finalizePdfUpload.useMutation();
+  const [isUploadingPdf, setIsUploadingPdf] = useState(false);
 
   // 切換對話時重置 scroll 狀態
   useEffect(() => {
@@ -1422,33 +1423,45 @@ export default function ChatPage() {
     }
   };
 
-  const handlePdfUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+  // PDF 型錄：取得上傳 session → 直傳私有 S3 → finalize（server 重新驗證後才建立訊息）
+  const handlePdfUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = "";
-    if (!file || !conversationId) return;
+    if (!file || !conversationId || isUploadingPdf) return;
 
     if (file.type !== "application/pdf" || !file.name.toLowerCase().endsWith(".pdf")) {
       toast.error("只允許上傳 PDF 檔案");
       return;
     }
-    if (file.size > 10 * 1024 * 1024) {
+    if (file.size <= 0 || file.size > CHAT_PDF_MAX_BYTES) {
       toast.error("檔案大小不可超過 10MB");
       return;
     }
 
-    const reader = new FileReader();
-    reader.onload = () => {
-      const fileData = reader.result as string;
-      sendPdfMut.mutate({
+    setIsUploadingPdf(true);
+    try {
+      const session = await createPdfUploadSessionMut.mutateAsync({
         conversationId,
-        fileData,
         fileName: file.name,
         fileSize: file.size,
         mimeType: "application/pdf",
       });
-    };
-    reader.readAsDataURL(file);
-  }, [conversationId, sendPdfMut]);
+      await uploadPdfToPresignedUrl(session.uploadUrl, file, session.contentType);
+      await finalizePdfUploadMut.mutateAsync({
+        conversationId,
+        uploadKey: session.uploadKey,
+        fileName: session.fileName,
+      });
+      toast.success("PDF 型錄已傳送");
+      utils.chat.getMessages.invalidate({ conversationId });
+      utils.chat.myConversations.invalidate();
+      chatEducation.refreshEducationState();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "PDF 上傳失敗，請重試");
+    } finally {
+      setIsUploadingPdf(false);
+    }
+  }, [conversationId, isUploadingPdf, createPdfUploadSessionMut, finalizePdfUploadMut, utils, chatEducation]);
 
   const { refreshEducationState } = chatEducation;
   const invalidateMessages = useCallback(() => {
@@ -1562,7 +1575,7 @@ export default function ChatPage() {
                         if (chatEducation.factorySpotlightOpen) chatEducation.dismiss();
                         if (chatEducation.orderTipBubbleOpen) chatEducation.dismiss();
                       }}
-                      disabled={sendPdfMut.isPending}
+                      disabled={isUploadingPdf}
                       title="附件"
                     >
                       <Plus className="w-4 h-4" />
@@ -1629,18 +1642,18 @@ export default function ChatPage() {
                   onChange={(e) => setMessage(e.target.value)}
                   placeholder={isNewChat ? "輸入第一則訊息以開始對話..." : "輸入訊息..."}
                   onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && handleSend()}
-                  disabled={isSending || sendMut.isPending || sendPdfMut.isPending}
+                  disabled={isSending || sendMut.isPending || isUploadingPdf}
                 />
                 <Button
                   onClick={handleSend}
-                  disabled={!message.trim() || isSending || sendMut.isPending || sendPdfMut.isPending}
+                  disabled={!message.trim() || isSending || sendMut.isPending || isUploadingPdf}
                   className="shrink-0"
                 >
                   <Send className="w-4 h-4" />
                 </Button>
               </div>
 
-              {sendPdfMut.isPending && (
+              {isUploadingPdf && (
                 <p className="text-xs text-muted-foreground mt-2 text-center">正在上傳 PDF，請稍候…</p>
               )}
             </div>

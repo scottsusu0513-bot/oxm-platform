@@ -80,6 +80,8 @@ export interface PrivateObjectMetadata {
   exists: boolean;
   sizeBytes: number;
   contentType: string | null;
+  /** 聊天 PDF 搬移時判斷「目標已存在的是不是同一份內容」用（Batch 3.5）。 */
+  etag: string | null;
 }
 
 /** HeadObject——finalize 階段用來重新驗證實際上傳的檔案大小／型別，不信任前端宣稱的值。 */
@@ -91,10 +93,11 @@ export async function privateStorageHeadObject(key: string): Promise<PrivateObje
       exists: true,
       sizeBytes: result.ContentLength ?? 0,
       contentType: result.ContentType ?? null,
+      etag: result.ETag ?? null,
     };
   } catch (err) {
     if (err instanceof NotFound || (err as { name?: string })?.name === "NotFound") {
-      return { exists: false, sizeBytes: 0, contentType: null };
+      return { exists: false, sizeBytes: 0, contentType: null, etag: null };
     }
     throw err;
   }
@@ -153,29 +156,36 @@ function sanitizeForHeader(name: string): string {
   return name.replace(/[\r\n]/g, "").slice(0, 200);
 }
 
-function buildContentDisposition(displayName: string): string {
+export type ContentDispositionType = "attachment" | "inline";
+
+export function buildContentDisposition(displayName: string, disposition: ContentDispositionType = "attachment"): string {
   const safe = sanitizeForHeader(displayName);
   const asciiFallback = safe.replace(/[^\x20-\x7E]/g, "_") || "attachment.pdf";
   const encoded = encodeURIComponent(safe);
-  return `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encoded}`;
+  return `${disposition}; filename="${asciiFallback}"; filename*=UTF-8''${encoded}`;
 }
 
 /**
  * 產生短效 presigned GET 網址供會員下載。有效秒數是呼叫端算好、傳進來的
  * 值（見 routers.ts 的「300 秒與距離期限剩餘秒數取較短值」邏輯），這個函式
  * 本身不重複做期限判斷，只負責簽章。
+ *
+ * options 預設值維持找消息附件原本的行為（attachment、不指定 Cache-Control）；
+ * 聊天 PDF 型錄傳 inline（維持直接預覽）＋ private, no-store（Batch 3.5）。
  */
 export async function privateStorageCreateDownloadUrl(
   key: string,
   displayName: string,
   expiresInSeconds: number,
+  options: { disposition?: ContentDispositionType; cacheControl?: string } = {},
 ): Promise<string> {
   const config = requirePrivateStorageConfig();
   const command = new GetObjectCommand({
     Bucket: config.bucket,
     Key: key,
-    ResponseContentDisposition: buildContentDisposition(displayName),
+    ResponseContentDisposition: buildContentDisposition(displayName, options.disposition ?? "attachment"),
     ResponseContentType: "application/pdf",
+    ...(options.cacheControl ? { ResponseCacheControl: options.cacheControl } : {}),
   });
   return getSignedUrl(getClient(config), command, { expiresIn: Math.max(1, Math.floor(expiresInSeconds)) });
 }

@@ -113,7 +113,7 @@ import {
   assertArchivedResubmissionCompletion,
 } from "./factoryVisibility";
 import { notifyOwner } from "./_core/notification";
-import { storagePut, storagePresignedUrl, storageDelete } from "./storage";
+import { storagePut, storageDelete } from "./storage";
 import { validateImageUpload } from "./_core/security";
 import { INDUSTRY_OPTIONS, TAIWAN_REGIONS, CAPITAL_OPTIONS, INDUSTRY_SLUGS } from "../shared/constants";
 import {
@@ -131,6 +131,24 @@ import {
 import { clampImageCrop } from "../shared/imageCrop";
 import { toPublicFactoryDetail, toPublicFactorySearchResult, toFactoryCardDTO, toPublicProductDTO, toPublicReviewDTO } from "./publicFactoryDto";
 import { toPublicNewsListItem, toPublicNewsDetail } from "./publicNewsDto";
+import {
+  CHAT_PDF_DELETED_MESSAGE,
+  CHAT_PDF_DOWNLOAD_CACHE_CONTROL,
+  CHAT_PDF_MAX_BYTES,
+  CHAT_PDF_MIME_TYPE,
+  CHAT_PDF_UPLOAD_URL_TTL_SECONDS,
+  ChatPdfPromotionError,
+  buildPrivateChatPdfAttachment,
+  chatPdfExpiresAt,
+  createChatPdfTmpKey,
+  decideChatPdfDownload,
+  parseChatPdfTmpKey,
+  parsePrivateChatPdfAttachment,
+  promoteChatPdfUpload,
+  sanitizeChatPdfFileName,
+  toClientChatMessage,
+  type ChatPdfStorage,
+} from "./chatPdfAttachment";
 import { isLegacyDataUrl } from "../shared/persistentImageUrl";
 import { looksLikeTemporaryFactoryAvatarUrl } from "./factoryAvatarUrl";
 import { promoteTemporaryFactoryAvatar, FactoryAvatarPromotionError } from "./factoryAvatarPromotion";
@@ -154,6 +172,42 @@ import {
   privateStoragePutObject,
   privateStorageCreateViewUrl,
 } from "./privateStorage";
+
+// 聊天 PDF 型錄使用的私有 storage primitives（與找消息 PDF 同一組獨立憑證）
+const chatPdfPrivateStorage: ChatPdfStorage = {
+  head: privateStorageHeadObject,
+  readHeadBytes: privateStorageReadHeadBytes,
+  copy: privateStorageCopyObject,
+  delete: privateStorageDeleteObject,
+};
+
+/** 上傳 PDF 型錄的權限：對話存在、工廠 owner 或 active co-manager、對話可寫入（買方不能上傳）。 */
+async function requireChatPdfUploader(user: { id: number; isAdmin?: boolean }, conversationId: number) {
+  const conv = await db.getConversationById(conversationId);
+  if (!conv) throw new TRPCError({ code: "NOT_FOUND", message: "對話不存在" });
+  const factory = await db.getFactoryById(conv.factoryId);
+  const isFactoryOwner = factory?.ownerId === user.id;
+  const isCoMgr = !isFactoryOwner && !!factory && await db.isActiveCoManager(factory.id, user.id);
+  if (!factory || (!isFactoryOwner && !isCoMgr)) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "僅工廠管理者可上傳型錄" });
+  }
+  await assertConversationWritable(conv, factory, user);
+  return { conv, factory };
+}
+
+async function deleteChatPdfObjectsBestEffort(keys: string[]): Promise<void> {
+  if (keys.length === 0) return;
+  if (!isPrivateStorageConfigured()) {
+    console.warn(`[chat] private storage not configured; ${keys.length} chat PDF object(s) left for cleanup`);
+    return;
+  }
+  const results = await Promise.allSettled(keys.map(key => privateStorageDeleteObject(key)));
+  results.forEach((r, i) => {
+    if (r.status === "rejected") {
+      console.warn(`[chat] failed to delete chat PDF object key=${keys[i]}:`, r.reason instanceof Error ? r.reason.name : "unknown");
+    }
+  });
+}
 
 // 徽章證明圖片 presigned 檢視網址有效秒數：10 分鐘，落在建議的 10～15 分鐘區間內。
 const CERTIFICATION_EVIDENCE_VIEW_URL_TTL_SECONDS = 600;
@@ -3162,7 +3216,9 @@ export const appRouter = router({
       const isCoMgr = !isFactoryOwner && !!factory && await db.isActiveCoManager(factory.id, ctx.user.id);
       if (conv.userId !== ctx.user.id && !isFactoryOwner && !isCoMgr && ctx.user.role !== 'admin') throw new Error("無權限");
       try {
-        return await db.getMessagesByConversation(input.conversationId, input.page);
+        // PDF 型錄只回 metadata（不含 fileKey／網址），其他訊息類型原樣回傳
+        const rows = await db.getMessagesByConversation(input.conversationId, input.page);
+        return rows.map(toClientChatMessage);
       } catch (error) {
         console.error("[getMessages] DB query failed", {
           conversationId: input.conversationId,
@@ -3485,59 +3541,65 @@ export const appRouter = router({
       return { success: true };
     }),
 
-    // 上傳 PDF 型錄並傳送訊息
-    sendPdf: protectedProcedure.input(z.object({
-      conversationId: z.number(),
-      fileData: z.string().min(1),
+    // PDF 型錄（Batch 3.5）：前端取得 presigned PUT 直傳私有 bucket 的暫存 key，
+    // 再呼叫 finalizePdfUpload 由 server 重新驗證後搬到正式 key、寫入訊息。PDF
+    // bytes 不經過 Express JSON body（一般 API 維持 100kb 上限）。
+    createPdfUploadSession: protectedProcedure.input(z.object({
+      conversationId: z.number().int().positive(),
       fileName: z.string().min(1).max(255),
-      fileSize: z.number().int().min(1).max(10 * 1024 * 1024),
-      mimeType: z.literal("application/pdf"),
+      fileSize: z.number().int().min(1).max(CHAT_PDF_MAX_BYTES),
+      mimeType: z.literal(CHAT_PDF_MIME_TYPE),
     })).mutation(async ({ ctx, input }) => {
-      const conv = await db.getConversationById(input.conversationId);
-      if (!conv) throw new TRPCError({ code: "NOT_FOUND", message: "對話不存在" });
-      const factory = await db.getFactoryById(conv.factoryId);
-      const isFactoryOwnerPdf = factory?.ownerId === ctx.user.id;
-      const isCoMgrPdf = !isFactoryOwnerPdf && !!factory && await db.isActiveCoManager(factory.id, ctx.user.id);
-      if (!isFactoryOwnerPdf && !isCoMgrPdf) throw new TRPCError({ code: "FORBIDDEN", message: "僅工廠管理者可上傳型錄" });
-      await assertConversationWritable(conv, factory, ctx.user);
-
-      // Strip path traversal and dangerous chars; allow spaces and CJK
-      let safeName = input.fileName
-        .replace(/\.\./g, "_")
-        .replace(/[/\\<>"'&]/g, "_")
-        .replace(/[\x00-\x1f\x7f]/g, "_")
-        .substring(0, 100)
-        .trim();
-      if (!safeName || safeName === ".pdf") safeName = "catalog.pdf";
-      if (!safeName.toLowerCase().endsWith(".pdf")) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "只允許上傳 PDF 檔案" });
+      await requireChatPdfUploader(ctx.user, input.conversationId);
+      const fileName = sanitizeChatPdfFileName(input.fileName);
+      if (!fileName) throw new TRPCError({ code: "BAD_REQUEST", message: "只允許上傳 PDF 檔案" });
+      if (!isPrivateStorageConfigured()) {
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: "私有附件儲存尚未設定" });
       }
+      const uploadKey = createChatPdfTmpKey();
+      const uploadUrl = await privateStorageCreateUploadUrl(uploadKey, CHAT_PDF_MIME_TYPE, CHAT_PDF_UPLOAD_URL_TTL_SECONDS);
+      return { uploadUrl, uploadKey, fileName, contentType: CHAT_PDF_MIME_TYPE, expiresInSeconds: CHAT_PDF_UPLOAD_URL_TTL_SECONDS };
+    }),
 
-      const base64Data = input.fileData.replace(/^data:application\/pdf;base64,/, "");
-      const buffer = Buffer.from(base64Data, "base64");
-      if (buffer.length > 10 * 1024 * 1024) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "檔案大小不可超過 10MB" });
+    // 重新驗證權限（不依賴 createPdfUploadSession 當時的檢查）→ 嚴格解析暫存 key →
+    // HEAD／%PDF- 驗證 → CopyObject 到 chat-attachments/{factoryId}/ → 驗證正式物件
+    // → 刪暫存 → 最後才寫訊息。S3 與 DB 不是 atomic：正式物件已建立但訊息寫入
+    // 失敗時會留下孤兒物件（可接受，不影響任何已存在的訊息）。
+    finalizePdfUpload: protectedProcedure.input(z.object({
+      conversationId: z.number().int().positive(),
+      uploadKey: z.string().min(1).max(200),
+      fileName: z.string().min(1).max(255),
+    })).mutation(async ({ ctx, input }) => {
+      const { factory } = await requireChatPdfUploader(ctx.user, input.conversationId);
+      const fileName = sanitizeChatPdfFileName(input.fileName);
+      if (!fileName) throw new TRPCError({ code: "BAD_REQUEST", message: "只允許上傳 PDF 檔案" });
+      if (!parseChatPdfTmpKey(input.uploadKey)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "無效的上傳資料，請重新上傳" });
       }
-      if (buffer[0] !== 0x25 || buffer[1] !== 0x50 || buffer[2] !== 0x44 || buffer[3] !== 0x46) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "檔案格式不正確，請上傳 PDF" });
+      if (!isPrivateStorageConfigured()) {
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: "私有附件儲存尚未設定" });
       }
-
-      const fileKey = `chat-pdfs/${factory.id}/${nanoid()}.pdf`;
-      const { url: fileUrl } = await storagePut(fileKey, buffer, "application/pdf");
-      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
-
-      await db.saveMessage(input.conversationId, ctx.user.id, "factory", "", "pdf", {
-        fileUrl,
-        fileKey,
-        fileName: safeName,
-        fileSize: buffer.length,
-        expiresAt,
+      let promoted: { fileKey: string; sizeBytes: number };
+      try {
+        promoted = await promoteChatPdfUpload({ uploadKey: input.uploadKey, factoryId: factory.id }, chatPdfPrivateStorage);
+      } catch (err) {
+        if (err instanceof ChatPdfPromotionError) throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
+        throw err;
+      }
+      const attachment = buildPrivateChatPdfAttachment({
+        fileKey: promoted.fileKey,
+        fileName,
+        fileSize: promoted.sizeBytes,
+        expiresAt: chatPdfExpiresAt(new Date()),
       });
+      await db.saveMessage(input.conversationId, ctx.user.id, "factory", "", "pdf", attachment);
       return { success: true };
     }),
 
-    // 取得 PDF 下載 URL（需通過權限+過期驗證，回傳 5 分鐘有效的 presigned URL）
-    getPdfDownloadUrl: protectedProcedure.input(z.object({ messageId: z.number() })).mutation(async ({ ctx, input }) => {
+    // 取得 PDF 下載連結：client 只給 messageId，server 查 key、驗證讀取權限與期限，
+    // 回傳私有 bucket 的短效 presigned GET（inline 預覽、private, no-store）。
+    // 一般參與者到 expiresAt 為止；管理員另有 30 天寬限期；物件刪除後所有人都不行。
+    getPdfDownloadUrl: protectedProcedure.input(z.object({ messageId: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
       const msg = await db.getMessageById(input.messageId);
       if (!msg) throw new TRPCError({ code: "NOT_FOUND", message: "訊息不存在" });
       if (msg.type !== "pdf") throw new TRPCError({ code: "BAD_REQUEST", message: "此訊息不是 PDF 附件" });
@@ -3548,26 +3610,24 @@ export const appRouter = router({
       const factory = await db.getFactoryById(conv.factoryId);
       const isConvUser = conv.userId === ctx.user.id;
       const isFactoryOwner = factory?.ownerId === ctx.user.id;
+      const isAdmin = ctx.user.role === 'admin';
       const isCoMgrPdf = !isConvUser && !isFactoryOwner && !!factory && await db.isActiveCoManager(factory.id, ctx.user.id);
-      if (!isConvUser && !isFactoryOwner && !isCoMgrPdf && ctx.user.role !== 'admin') {
+      if (!isConvUser && !isFactoryOwner && !isCoMgrPdf && !isAdmin) {
         throw new TRPCError({ code: "FORBIDDEN", message: "無權存取此檔案" });
       }
 
-      const attachment = (msg.attachmentData ?? {}) as {
-        fileKey?: string; fileUrl?: string; expiresAt?: string; deleted?: boolean;
-      };
-      if (attachment.deleted) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "此型錄已被刪除" });
-      if (!attachment.expiresAt || new Date(attachment.expiresAt) < new Date()) {
-        throw new TRPCError({ code: "PRECONDITION_FAILED", message: "此型錄已逾期，無法下載" });
+      const decision = decideChatPdfDownload(parsePrivateChatPdfAttachment(msg.attachmentData), { isAdmin, now: new Date() });
+      if (!decision.ok) throw new TRPCError({ code: "PRECONDITION_FAILED", message: decision.message });
+      if (!isPrivateStorageConfigured()) {
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: "私有附件儲存尚未設定" });
       }
-
-      // 優先 presigned URL（5 分鐘），fallback 到 fileUrl
-      if (attachment.fileKey) {
-        const url = await storagePresignedUrl(attachment.fileKey, 300);
-        return { url };
-      }
-      if (attachment.fileUrl) return { url: attachment.fileUrl };
-      throw new TRPCError({ code: "NOT_FOUND", message: "找不到檔案" });
+      const meta = await privateStorageHeadObject(decision.fileKey);
+      if (!meta.exists) throw new TRPCError({ code: "PRECONDITION_FAILED", message: CHAT_PDF_DELETED_MESSAGE });
+      const url = await privateStorageCreateDownloadUrl(decision.fileKey, decision.fileName, decision.ttlSeconds, {
+        disposition: "inline",
+        cacheControl: CHAT_PDF_DOWNLOAD_CACHE_CONTROL,
+      });
+      return { url, expiresInSeconds: decision.ttlSeconds };
     }),
 
     unreadCount: protectedProcedure.query(async ({ ctx }) => {
@@ -3590,8 +3650,12 @@ export const appRouter = router({
       const isFactoryOwner = factory?.ownerId === ctx.user.id;
       const isCoMgr = !isFactoryOwner && !!factory && await db.isActiveCoManager(factory.id, ctx.user.id);
       if (!isFactoryOwner && !isCoMgr) throw new Error("無權限刪除此對話");
+      // 私有 PDF 型錄的 key 必須在刪 DB 之前收集（刪掉之後就查不到了）
+      const pdfKeys = await db.getPrivateChatPdfKeysForConversation(input.conversationId);
       // 傳 factory.ownerId 讓 DB 層的 owner 檢查通過（co-manager 已在上方驗過）
       await db.deleteConversation(input.conversationId, factory!.ownerId);
+      // DB 刪除正確性優先：S3 刪除失敗只記 log、留下孤兒物件，不影響對話刪除結果
+      await deleteChatPdfObjectsBestEffort(pdfKeys);
       return { success: true };
     }),
   }),
