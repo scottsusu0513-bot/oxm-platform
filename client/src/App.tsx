@@ -19,7 +19,7 @@ import { AppBottomNav } from "@/components/AppBottomNav";
 import NetworkStatusOverlay from "@/components/NetworkStatusOverlay";
 import { AiShellProvider } from "@/contexts/AiShellContext";
 import { FloatingActionStack } from "@/components/FloatingActionStack";
-import { isAiShellExcludedPath } from "@/lib/aiShellRoutes";
+import { AiShellGate } from "@/components/ai/AiShellGate";
 import { isFooterExcludedPath } from "@/lib/footerRoutes";
 import { decideScrollNavigationAction, hasExplicitScrollTarget, isHomeNavigationIntentState } from "@/lib/scrollRestoration";
 import { ConsentGate } from "@/components/ConsentGate";
@@ -114,16 +114,8 @@ const AdminCertificationServices = lazy(() => import("./pages/AdminCertification
 const AdminConsultantManagement = lazy(() => import("./pages/AdminConsultantManagement"));
 const AdminAiManagement = lazy(() => import("./pages/AdminAiManagement"));
 
-// GlobalAiShell 原本是 eager import：不管使用者有沒有打開過 AI 助理，
-// Streamdown（markdown 渲染）跟一堆 AI 附件卡片元件都會被打包進首屏必載的
-// 主要 chunk，拖慢 App 冷啟動時的 JS 下載／parse／evaluate。這裡改成跟其他
-// 頁面路由同一種 lazy()，讓 Vite 把它獨立切成一個 chunk，使用者真的觸發
-// AiShellGate（見下方，依路由決定要不要掛載）時才下載。原本是具名 export，
-// lazy() 需要 default export，用 .then() 轉接，不改動 GlobalAiShell.tsx
-// 本身的 export 方式。
-const GlobalAiShell = lazy(() =>
-  import("@/components/ai/GlobalAiShell").then(m => ({ default: m.GlobalAiShell }))
-);
+// GlobalAiShell 的 lazy() 與掛載時機在 AiShellGate（components/ai/AiShellGate.tsx）：
+// 使用者第一次打開 AI 之前完全不 render，也就不會下載 GlobalAiShell chunk。
 
 // ── App badge count syncer ────────────────────────────────────────────────────
 // 只在 Capacitor native app 執行，沿用 Navbar 相同紅點邏輯計算 badge 數字
@@ -378,18 +370,6 @@ function PushNavigationHandler() {
 
 function PageFallback() {
   return <AppLoading />;
-}
-
-function AiShellGate() {
-  const [pathname] = useLocation();
-  if (isAiShellExcludedPath(pathname)) return null;
-  // fallback=null：GlobalAiShell 是浮動面板，chunk 還沒載入完成前不顯示任何
-  // 東西即可，不需要 loading 佔位（沒有固定版位、也不在首屏視覺內）。
-  return (
-    <Suspense fallback={null}>
-      <GlobalAiShell />
-    </Suspense>
-  );
 }
 
 // Global Footer：App 全域掛載 + route gate，比照上面 AiShellGate 的寫法。

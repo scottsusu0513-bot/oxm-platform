@@ -117,8 +117,13 @@ describe("client/src/App.tsx — Global AI Shell 掛在 Router 的手足層級�
     // 有打開過 AI 助理都一起塞進首屏必載的主要 bundle。仍然是同一顆
     // GlobalAiShell（只是透過 AiShellGate + Suspense 掛載），不影響下面
     // 「跟 <Router /> 平行掛載在 AiShellProvider 裡」這個語意保證。
-    expect(source).toMatch(/const GlobalAiShell = lazy\(\(\) =>\s*\n\s*import\("@\/components\/ai\/GlobalAiShell"\)/);
-    expect(source).toMatch(/<AiShellProvider>[\s\S]*<Router \/>[\s\S]*<\/AiShellProvider>/);
+    // Batch 3.3：lazy(GlobalAiShell) 連同「第一次打開才掛載」的邏輯搬到
+    // components/ai/AiShellGate.tsx；App 只負責把 AiShellGate 跟 <Router /> 一起
+    // 掛在 AiShellProvider 裡。
+    expect(source).toMatch(/import \{ AiShellGate \} from "@\/components\/ai\/AiShellGate"/);
+    const gate = readSource("client", "src", "components", "ai", "AiShellGate.tsx");
+    expect(gate).toMatch(/const GlobalAiShell = lazy\(\(\) =>\s*\n\s*import\("@\/components\/ai\/GlobalAiShell"\)/);
+    expect(source).toMatch(/<AiShellProvider>[\s\S]*<Router \/>[\s\S]*<AiShellGate \/>[\s\S]*<\/AiShellProvider>/);
   });
 });
 
