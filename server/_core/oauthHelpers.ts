@@ -1,9 +1,10 @@
-import { createHash, randomBytes } from "crypto";
+import { createHash, randomBytes, timingSafeEqual } from "crypto";
 import type { Request, Response } from "express";
 import * as db from "../db";
 import { sdk } from "./sdk";
 import { getSessionCookieOptions } from "./cookies";
 import { COOKIE_NAME, THIRTY_DAYS_MS } from "@shared/const";
+import { APP_LOGIN_CHALLENGE_RE, APP_LOGIN_VERIFIER_RE } from "@shared/appLoginPkce";
 
 export type OAuthUserInfo = {
   provider: "google" | "apple" | "line";
@@ -189,8 +190,72 @@ async function applyPrimaryEmailRules(
   }
 }
 
+// ── OAuth state 綁定與 App 登入票券（Production Hardening Batch 3.7）──────────
+
+export const OAUTH_STATE_COOKIE = "oauth_state";
+
+/** 原始 Cookie header 中名稱為 name 的所有值（同名 cookie 可能因 path 不同而並存）。 */
+export function readCookieValues(cookieHeader: string | undefined, name: string): string[] {
+  if (!cookieHeader) return [];
+  const out: string[] = [];
+  for (const part of cookieHeader.split(";")) {
+    const idx = part.indexOf("=");
+    if (idx < 0) continue;
+    if (part.slice(0, idx).trim() !== name) continue;
+    const raw = part.slice(idx + 1).trim();
+    try { out.push(decodeURIComponent(raw)); } catch { out.push(raw); }
+  }
+  return out;
+}
+
+/**
+ * OAuth callback 的 state 必須同時：(1) 存在 DB 且未使用未過期（consumeOauthState），
+ * (2) 等於「這個瀏覽器」在發起登入時拿到的 oauth_state cookie。少了 (2)，攻擊者
+ * 可以用自己帳號發起登入、把 callback 網址丟給受害者，讓受害者的瀏覽器登入成
+ * 攻擊者的帳號（login CSRF）。
+ */
+export function isOAuthStateBoundToBrowser(req: Request, stateParam: string): boolean {
+  const expected = Buffer.from(stateParam);
+  return readCookieValues(req.headers.cookie, OAUTH_STATE_COOKIE).some(v => {
+    const actual = Buffer.from(v);
+    return actual.length === expected.length && timingSafeEqual(actual, expected);
+  });
+}
+
+/** App 登入：state 格式為 `<64 hex>.<challenge>`；其他情況回傳 null。 */
+export function appLoginChallengeFromState(state: string): string | null {
+  const dot = state.indexOf(".");
+  if (dot < 0) return null;
+  const challenge = state.slice(dot + 1);
+  return APP_LOGIN_CHALLENGE_RE.test(challenge) ? challenge : null;
+}
+
+export function appLoginChallengeFromVerifier(verifier: string): string {
+  return createHash("sha256").update(verifier).digest("base64url");
+}
+
+/**
+ * 票券格式：`<64 hex>` 或 `<64 hex>.<challenge>`。DB 只存 SHA-256（不存原文）；
+ * challenge 是票券的一部分，竄改 challenge 會讓雜湊查不到。
+ */
+export function parseAppLoginTicket(ticket: string): { ticketHash: string; challenge: string | null } | null {
+  const m = /^([0-9a-f]{64})(?:\.([A-Za-z0-9_-]{43}))?$/.exec(ticket);
+  if (!m) return null;
+  return { ticketHash: sha256Hex(ticket), challenge: m[2] ?? null };
+}
+
+/** 票券帶 challenge 時，verifier 必須存在且雜湊相符（常數時間比較）。 */
+export function isAppLoginVerifierValid(challenge: string | null, verifier: unknown): boolean {
+  if (challenge == null) return true;
+  if (typeof verifier !== "string" || !APP_LOGIN_VERIFIER_RE.test(verifier)) return false;
+  const a = Buffer.from(appLoginChallengeFromVerifier(verifier));
+  const b = Buffer.from(challenge);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
 /**
  * Issue a session cookie (web flow) or an app ticket (app flow) for the resolved user.
+ * App 流程的票券帶上 OAuth state 裡的 challenge（見 shared/appLoginPkce.ts）。
  */
 export async function issueSessionOrTicket(
   req: Request,
@@ -198,19 +263,20 @@ export async function issueSessionOrTicket(
   openId: string,
   name: string,
   source: string | null | undefined,
-  getClientIp: (req: Request) => string
+  getClientIp: (req: Request) => string,
+  appLoginChallenge: string | null = null,
 ): Promise<void> {
   if (source === "app") {
     const user = await db.getUserByOpenId(openId);
     if (!user) throw new Error("User not found for ticket issuance");
-    const ticket = randomBytes(32).toString("hex");
+    const ticket = appLoginChallenge ? `${randomBytes(32).toString("hex")}.${appLoginChallenge}` : randomBytes(32).toString("hex");
     await db.createAppLoginTicket({
-      ticket,
+      ticketHash: sha256Hex(ticket),
       userId: user.id,
       userAgent: req.headers["user-agent"],
       ip: getClientIp(req),
     });
-    res.redirect(302, `oxm://oauth/callback?ticket=${ticket}`);
+    res.redirect(302, `oxm://oauth/callback?ticket=${encodeURIComponent(ticket)}`);
   } else {
     await setSessionCookieForUser(req, res, openId, name);
   }

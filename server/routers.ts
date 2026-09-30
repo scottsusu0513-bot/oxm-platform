@@ -810,6 +810,15 @@ function getCommunityImageUrlPrefix(userId: number): string | null {
 }
 
 function assertCommunityImagesOwned(images: string[], userId: number): void {
+  assertPlatformImagesOwned(images, `/community-posts/${userId}/`);
+}
+
+/**
+ * 公開頁面顯示的圖片網址必須是「透過平台上傳、且屬於這個擁有者」的公開 bucket
+ * 物件（Batch 3.7 起商品圖片也套用）：同一個 origin、路徑在指定前綴底下、沒有
+ * `..`。不接受外部網址、data: URL 或其他擁有者的物件。
+ */
+function assertPlatformImagesOwned(images: string[], expectedPathPrefix: string): void {
   if (images.length === 0) return;
   const s3Bucket = process.env.AWS_S3_BUCKET;
   const s3Region = process.env.AWS_REGION ?? "ap-southeast-1";
@@ -823,7 +832,6 @@ function assertCommunityImagesOwned(images: string[], userId: number): void {
   const expectedOrigin = s3PublicBase
     ? new URL(s3PublicBase).origin
     : `https://${s3Bucket}.s3.${s3Region}.amazonaws.com`;
-  const expectedPathPrefix = `/community-posts/${userId}/`;
   for (const urlStr of images) {
     let parsed: URL;
     try { parsed = new URL(urlStr); } catch {
@@ -838,6 +846,25 @@ function assertCommunityImagesOwned(images: string[], userId: number): void {
     }
   }
 }
+/** 一般讀者看到的留言樹：管理員隱藏的留言比照已刪除，不含內容與作者資訊。 */
+function redactHiddenCommunityComments<T extends { isHidden?: boolean | null; replies?: T[] }>(comments: T[]): T[] {
+  return comments.map(c => {
+    const replies = c.replies ? redactHiddenCommunityComments(c.replies) : c.replies;
+    if (!c.isHidden) return { ...c, replies };
+    return {
+      ...c,
+      content: "",
+      authorName: null,
+      authorFactoryName: null,
+      authorUserId: null,
+      authorFactoryId: null,
+      authorNameSnapshot: null,
+      authorFactoryNameSnapshot: null,
+      replies,
+    };
+  });
+}
+
 const VALID_SPACE_CODES = new Set<string>([
   ...Object.values(INDUSTRY_SLUGS),
   COMMUNITY_CROSS_INDUSTRY_SLUG,
@@ -3026,6 +3053,8 @@ export const appRouter = router({
     })).mutation(async ({ ctx, input }) => {
       const { resubmissionCompletion, ...productInput } = input;
       await assertFactoryManager(input.factoryId, ctx.user.id, { resubmissionCompletion });
+      // Batch 3.7：商品圖片只能是這間工廠透過 product.uploadImage 上傳的物件
+      if (productInput.images) assertPlatformImagesOwned(productInput.images, `/product-images/${input.factoryId}/`);
       if (productInput.categoryId != null) {
         const cats = await db.getCategoriesByFactoryId(productInput.factoryId);
         if (!cats.some((c) => c.id === productInput.categoryId)) {
@@ -3053,6 +3082,7 @@ export const appRouter = router({
     })).mutation(async ({ ctx, input }) => {
       const { id, factoryId, resubmissionCompletion, ...data } = input;
       await assertFactoryManager(factoryId, ctx.user.id, { resubmissionCompletion });
+      if (data.images) assertPlatformImagesOwned(data.images, `/product-images/${factoryId}/`);
       if (data.categoryId != null) {
         const cats = await db.getCategoriesByFactoryId(factoryId);
         if (!cats.some((c) => c.id === data.categoryId)) {
@@ -6986,7 +7016,10 @@ export const appRouter = router({
             throw new TRPCError({ code: "NOT_FOUND", message: "找不到此貼文" });
           }
         }
-        const comments = await db.getCommunityCommentsByPost(input.postId);
+        // Batch 3.7：管理員隱藏的留言對一般讀者與已刪除留言同樣處理（不送內容與作者）
+        const comments = ctx.user?.role === "admin"
+          ? await db.getCommunityCommentsByPost(input.postId)
+          : redactHiddenCommunityComments(await db.getCommunityCommentsByPost(input.postId));
         const pinnedProductIds = (post.pinnedProductIds ?? []) as number[];
         // 釘選商品所屬工廠之後若下架／刪除，商品不得再透過貼文公開（管理者除外）。
         const pinnedProductRows = await db.getProductsByIds(pinnedProductIds);
@@ -8032,7 +8065,11 @@ export const appRouter = router({
         const reviewHistory = isAdmin ? await db.listCommunityBidReviewHistory(input.bidId) : [];
         const pinnedProductIdsArr = (bid.pinnedProductIds ?? []) as number[];
         const pinnedProducts = pinnedProductIdsArr.length > 0 ? await db.getProductsByIds(pinnedProductIdsArr) : [];
-        return { bid, targetIndustries, reviewHistory, pinnedProducts };
+        // Batch 3.7：審核資訊（退回原因、審核者 id、審核時間）只給發包者本人與管理員
+        const visibleBid = isOwner || isAdmin
+          ? bid
+          : { ...bid, rejectionReason: null, reviewedByUserId: null, reviewedAt: null };
+        return { bid: visibleBid, targetIndustries, reviewHistory, pinnedProducts };
       }),
 
     pendingBidCount: protectedProcedure.query(async ({ ctx }) => {
@@ -8373,6 +8410,10 @@ export const appRouter = router({
         checkCommunityRead(ctx.user);
         const bid = await db.getCommunityBidById(input.bidId);
         if (!bid || bid.deletedAt) throw new TRPCError({ code: "NOT_FOUND", message: "找不到此需求" });
+        // Batch 3.7：與 getBid 相同的可見性——未上架的需求只有發包者與管理員看得到
+        if (bid.status !== "active" && bid.authorUserId !== ctx.user.id && ctx.user.role !== "admin") {
+          throw new TRPCError({ code: "NOT_FOUND", message: "找不到此需求" });
+        }
         const count = await db.getCommunityBidOfferCount(input.bidId);
         return { count };
       }),

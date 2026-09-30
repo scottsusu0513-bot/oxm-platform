@@ -431,6 +431,9 @@ describe("Admin 安全", () => {
 
   it("X：完成可信信箱驗證 → LINE 可以連結到既有 admin 帳號（證明控制該帳號，不是 LINE email 授予 admin）", async () => {
     const { user, email } = await mkVerifiedUser("x-admin", { role: "admin" });
+    // Batch 3.7：管理員身分以白名單為唯一依據（DB role 會跟白名單同步），這裡的
+    // 既有 admin 帳號必須真的在白名單內；連結 LINE 不授予、也不移除 admin。
+    vi.stubEnv("ADMIN_WHITELIST_OPEN_IDS", JSON.stringify([user.openId]));
     const b = newBrowser();
     await lineCallback(b, lineSub("x"), email);
     await appRouter.createCaller(trpcCtx(b)).accountLink.verify({ token: tokenFromLastEmail() });
@@ -440,5 +443,12 @@ describe("Admin 安全", () => {
       expect(r.user.id).toBe(user.id);
       expect(r.user.role).toBe("admin");
     }
+    vi.unstubAllEnvs();
+  });
+
+  it("X2：DB role 是 admin 但不在白名單（例如已被移出）→ 登入後 role 降回 user", async () => {
+    const { user } = await mkVerifiedUser("x2-stale-admin", { role: "admin" });
+    await db.upsertUser({ openId: user.openId, lastSignedIn: new Date() });
+    expect((await db.getUserById(user.id))!.role).toBe("user");
   });
 });

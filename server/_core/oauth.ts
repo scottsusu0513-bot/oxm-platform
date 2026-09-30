@@ -2,14 +2,17 @@ import type { CookieOptions, Express, Request, Response } from "express";
 import * as db from "../db";
 import { ENV } from "./env";
 import { randomBytes } from "crypto";
-import { handleOAuthCallback, issueSessionOrTicket, isGoogleEmailVerified, isLineEmailVerified } from "./oauthHelpers";
+import {
+  handleOAuthCallback, issueSessionOrTicket, isGoogleEmailVerified, isLineEmailVerified,
+  OAUTH_STATE_COOKIE, isOAuthStateBoundToBrowser, appLoginChallengeFromState,
+  parseAppLoginTicket, isAppLoginVerifierValid,
+} from "./oauthHelpers";
+import { APP_LOGIN_CHALLENGE_PARAM, APP_LOGIN_CHALLENGE_RE } from "@shared/appLoginPkce";
 import { resolveProviderLoginAction, startPendingAccountLink, startAppAccountLinkChallenge } from "./accountLink";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 
 // Cached Apple JWKS (fetched lazily on first Apple login)
 const APPLE_JWKS = createRemoteJWKSet(new URL("https://appleid.apple.com/auth/keys"));
-
-const OAUTH_STATE_COOKIE = "oauth_state";
 
 function getQueryParam(req: Request, key: string): string | undefined {
   const value = req.query[key];
@@ -39,7 +42,11 @@ async function initOAuthState(
 ): Promise<string | null> {
   const isProd = process.env.NODE_ENV === "production";
   const source = getQueryParam(req, "source") ?? "web";
-  const state = randomBytes(32).toString("hex");
+  // App 登入：把 App 產生的 PKCE challenge 放進 state（見 shared/appLoginPkce.ts），
+  // callback 取出後綁進登入票券，app-complete 必須提出對應的 verifier。
+  const challenge = getQueryParam(req, APP_LOGIN_CHALLENGE_PARAM);
+  const random = randomBytes(32).toString("hex");
+  const state = source === "app" && challenge && APP_LOGIN_CHALLENGE_RE.test(challenge) ? `${random}.${challenge}` : random;
 
   try {
     await db.createOauthState({
@@ -104,6 +111,13 @@ export function registerOAuthRoutes(app: Express) {
       return;
     }
 
+    // Batch 3.7：state 必須與這個瀏覽器發起登入時拿到的 cookie 相同（防 login CSRF），
+    // 不相符時不消耗 DB 的 state。
+    if (!isOAuthStateBoundToBrowser(req, stateParam)) {
+      res.status(400).json({ error: "Invalid OAuth state" });
+      return;
+    }
+
     let dbResult: { valid: boolean; redirectTo?: string | null; source?: string | null; provider?: string | null };
     try {
       dbResult = await db.consumeOauthState(stateParam);
@@ -161,7 +175,8 @@ export function registerOAuthRoutes(app: Express) {
         displayName: userInfo.name ?? null,
       });
 
-      await issueSessionOrTicket(req, res, openId, name, dbResult.source, getClientIp);
+      await issueSessionOrTicket(req, res, openId, name, dbResult.source, getClientIp,
+        dbResult.source === "app" ? appLoginChallengeFromState(stateParam) : null);
 
       if (dbResult.source !== "app") {
         res.redirect(302, dbResult.redirectTo || "/");
@@ -194,6 +209,11 @@ export function registerOAuthRoutes(app: Express) {
 
     if (!code || !stateParam) {
       res.status(400).json({ error: "code and state are required" });
+      return;
+    }
+
+    if (!isOAuthStateBoundToBrowser(req, stateParam)) {
+      res.status(400).json({ error: "Invalid OAuth state" });
       return;
     }
 
@@ -311,7 +331,8 @@ export function registerOAuthRoutes(app: Express) {
         displayName: lineName,
       });
 
-      await issueSessionOrTicket(req, res, openId, name, dbResult.source, getClientIp);
+      await issueSessionOrTicket(req, res, openId, name, dbResult.source, getClientIp,
+        dbResult.source === "app" ? appLoginChallengeFromState(stateParam) : null);
 
       if (dbResult.source !== "app") {
         res.redirect(302, dbResult.redirectTo || "/");
@@ -382,6 +403,11 @@ export function registerOAuthRoutes(app: Express) {
 
     if (!code || !stateParam) {
       res.status(400).json({ error: "code and state are required" });
+      return;
+    }
+
+    if (!isOAuthStateBoundToBrowser(req, stateParam)) {
+      res.status(400).json({ error: "Invalid OAuth state" });
       return;
     }
 
@@ -469,7 +495,8 @@ export function registerOAuthRoutes(app: Express) {
         displayName,
       });
 
-      await issueSessionOrTicket(req, res, openId, name, dbResult.source, getClientIp);
+      await issueSessionOrTicket(req, res, openId, name, dbResult.source, getClientIp,
+        dbResult.source === "app" ? appLoginChallengeFromState(stateParam) : null);
 
       if (dbResult.source !== "app") {
         res.redirect(302, dbResult.redirectTo || "/");
@@ -482,15 +509,23 @@ export function registerOAuthRoutes(app: Express) {
 
   // ── App login completion (unchanged) ────────────────────────────────────────
   app.post("/api/oauth/app-complete", async (req: Request, res: Response) => {
-    const { ticket } = req.body ?? {};
+    const { ticket, verifier } = req.body ?? {};
 
     if (!ticket || typeof ticket !== "string") {
       res.status(400).json({ error: "ticket is required" });
       return;
     }
 
+    // Batch 3.7：票券只存雜湊；帶 challenge 的票券必須同時提出對應的 verifier
+    // （攔截到 oxm:// 深層連結的其他 App 沒有 verifier）。驗證失敗不消耗票券。
+    const parsedTicket = parseAppLoginTicket(ticket);
+    if (!parsedTicket || !isAppLoginVerifierValid(parsedTicket.challenge, verifier)) {
+      res.status(400).json({ error: "Invalid or expired ticket" });
+      return;
+    }
+
     try {
-      const result = await db.consumeAppLoginTicket(ticket);
+      const result = await db.consumeAppLoginTicket(parsedTicket.ticketHash);
       if (!result.valid || !result.userId) {
         res.status(400).json({ error: "Invalid or expired ticket" });
         return;

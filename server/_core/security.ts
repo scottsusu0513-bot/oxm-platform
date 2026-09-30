@@ -173,7 +173,8 @@ export function setupOriginCheck(app: Express) {
     if (["POST", "PUT", "DELETE"].includes(req.method)) {
       // Apple Sign in with Apple uses response_mode=form_post, so Apple's server
       // POSTs to our callback from appleid.apple.com. The route is already
-      // CSRF-protected by the DB-validated state parameter — skip origin check.
+      // CSRF-protected by the DB-validated state parameter, which must also match
+      // this browser's oauth_state cookie (Batch 3.7) — skip origin check.
       if (req.path === "/api/oauth/apple/callback") {
         return next();
       }

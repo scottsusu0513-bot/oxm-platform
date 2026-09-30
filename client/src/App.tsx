@@ -25,6 +25,7 @@ import { decideScrollNavigationAction, hasExplicitScrollTarget, isHomeNavigation
 import { ConsentGate } from "@/components/ConsentGate";
 import { OnboardingTour } from "@/components/OnboardingTour";
 import { Footer } from "@/components/Footer";
+import { APP_LOGIN_VERIFIER_STORAGE_KEY } from "@shared/appLoginPkce";
 
 // ── 公開頁面 ──────────────────────────────────────────────────────────────
 const Home                  = lazy(() => import("./pages/Home"));
@@ -211,6 +212,16 @@ function AppBadgeSyncer() {
   return null;
 }
 
+function readAndClearAppLoginVerifier(): string | undefined {
+  try {
+    const v = localStorage.getItem(APP_LOGIN_VERIFIER_STORAGE_KEY) ?? undefined;
+    localStorage.removeItem(APP_LOGIN_VERIFIER_STORAGE_KEY);
+    return v;
+  } catch {
+    return undefined;
+  }
+}
+
 // Handles oxm://oauth/callback?ticket=... deep links on iOS and Android
 function AppDeepLinkHandler() {
   const utils = trpc.useUtils();
@@ -265,7 +276,6 @@ function AppDeepLinkHandler() {
           return;
         }
 
-        console.log("[AppDeepLinkHandler] ticket parsed (first 8):", ticket.slice(0, 8));
         await Browser.close();
         console.log("[AppDeepLinkHandler] Browser.close called");
 
@@ -274,7 +284,8 @@ function AppDeepLinkHandler() {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             credentials: "include",
-            body: JSON.stringify({ ticket }),
+            // Batch 3.7：同時提出登入前產生的 verifier（見 shared/appLoginPkce.ts）
+            body: JSON.stringify({ ticket, verifier: readAndClearAppLoginVerifier() }),
           });
           console.log("[AppDeepLinkHandler] app-complete status:", res.status);
           if (res.ok) {

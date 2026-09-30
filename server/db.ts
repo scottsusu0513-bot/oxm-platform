@@ -209,6 +209,15 @@ else if (
 ) {
   values.role = 'admin';
   updateSet.role = 'admin';
+} else if (user.email === undefined) {
+  // Batch 3.7：管理員身分以白名單（server/_core/admin.ts isAdminUser）為唯一
+  // 依據，DB 的 role 欄位跟著白名單同步（包含降級）。呼叫端沒帶 email（每次
+  // 請求更新 lastSignedIn）時，用 DB 既有 email 在 SQL 端判斷 email 白名單。
+  updateSet.role = ENV.adminWhitelistEmails.length > 0
+    ? sql`CASE WHEN ${users.email} IN (${sql.join(ENV.adminWhitelistEmails.map(e => sql`${e}`), sql`, `)}) THEN 'admin' ELSE 'user' END`
+    : 'user';
+} else {
+  updateSet.role = 'user';
 }
     if (!values.lastSignedIn) values.lastSignedIn = new Date();
     if (Object.keys(updateSet).length === 0) updateSet.lastSignedIn = new Date();
@@ -6253,27 +6262,21 @@ export async function createOauthState(params: {
   }
 }
 
+/**
+ * 消耗 OAuth state（Batch 3.7）：單一條件式 UPDATE（未使用、未過期）＋
+ * affectedRows 檢查，同一個 state 併發兩次只有一次有效。
+ */
 export async function consumeOauthState(state: string): Promise<{ valid: boolean; redirectTo?: string | null; source?: string | null; provider?: string | null }> {
   const db = await getDb();
   if (!db) return { valid: false };
   const now = new Date();
-
-  const rows = await db
-    .select()
-    .from(oauthStates)
-    .where(eq(oauthStates.state, state))
-    .limit(1);
-
-  const row = rows[0];
-  if (!row) return { valid: false };
-  if (row.usedAt !== null) return { valid: false };
-  if (row.expiresAt < now) return { valid: false };
-
-  await db
+  const [result]: any = await db
     .update(oauthStates)
     .set({ usedAt: now })
-    .where(eq(oauthStates.state, state));
-
+    .where(and(eq(oauthStates.state, state), isNull(oauthStates.usedAt), gt(oauthStates.expiresAt, now)));
+  if ((result?.affectedRows ?? 0) !== 1) return { valid: false };
+  const [row] = await db.select().from(oauthStates).where(eq(oauthStates.state, state)).limit(1);
+  if (!row) return { valid: false };
   return { valid: true, redirectTo: row.redirectTo, source: row.source, provider: row.provider };
 }
 
@@ -6626,18 +6629,22 @@ export async function linkProviderIdentityToUser(params: {
   }
 }
 
+/**
+ * App 登入票券：DB 只存 SHA-256（Batch 3.7）——票券是 2 分鐘內可換 session 的
+ * bearer credential，DB 外洩不應直接可用。
+ */
 export async function createAppLoginTicket(params: {
-  ticket: string;
+  ticketHash: string;
   userId: number;
   userAgent?: string;
   ip?: string;
 }): Promise<void> {
   const db = await getDb();
-  if (!db) return;
+  if (!db) throw new Error("DB not available");
   const now = new Date();
   const expiresAt = new Date(now.getTime() + 2 * 60 * 1000); // 2 分鐘有效
   await db.insert(appLoginTickets).values({
-    ticket: params.ticket,
+    ticket: params.ticketHash,
     userId: params.userId,
     createdAt: now,
     expiresAt,
@@ -6647,28 +6654,26 @@ export async function createAppLoginTicket(params: {
   });
 }
 
-export async function consumeAppLoginTicket(ticket: string): Promise<{ valid: boolean; userId?: number }> {
+/**
+ * 以票券雜湊消耗（Batch 3.7）：單一條件式 UPDATE（未使用、未過期）＋
+ * affectedRows 檢查——兩個併發請求拿同一張票券，只有一個能成功。
+ */
+export async function consumeAppLoginTicket(ticketHash: string): Promise<{ valid: boolean; userId?: number }> {
   const db = await getDb();
   if (!db) return { valid: false };
   const now = new Date();
-
-  const rows = await db
-    .select()
-    .from(appLoginTickets)
-    .where(eq(appLoginTickets.ticket, ticket))
-    .limit(1);
-
-  const row = rows[0];
-  if (!row) return { valid: false };
-  if (row.usedAt !== null) return { valid: false };
-  if (row.expiresAt < now) return { valid: false };
-
-  await db
+  const [result]: any = await db
     .update(appLoginTickets)
     .set({ usedAt: now })
-    .where(eq(appLoginTickets.ticket, ticket));
-
-  return { valid: true, userId: row.userId };
+    .where(and(
+      eq(appLoginTickets.ticket, ticketHash),
+      isNull(appLoginTickets.usedAt),
+      gt(appLoginTickets.expiresAt, now),
+    ));
+  if ((result?.affectedRows ?? 0) !== 1) return { valid: false };
+  const [row] = await db.select({ userId: appLoginTickets.userId })
+    .from(appLoginTickets).where(eq(appLoginTickets.ticket, ticketHash)).limit(1);
+  return row ? { valid: true, userId: row.userId } : { valid: false };
 }
 
 export async function purgeExpiredOauthStates(): Promise<void> {
@@ -7173,7 +7178,8 @@ export async function earlyShipOrder(orderId: number, userId: number): Promise<v
 // 最小的 transaction connection 介面（mysql2 PoolConnection 的子集），只列出這裡用到的方法，
 // 方便單元測試用 mock 物件取代真正的資料庫連線，驗證呼叫順序與 rollback 行為。
 export type TxConnection = {
-  execute: (sql: string, values?: unknown[]) => Promise<[any, any]>;
+  // mysql2 3.22+ 的 execute 參數型別較嚴格（ExecuteValues），這裡只描述呼叫端需要的形狀
+  execute: (sql: string, values?: any[]) => Promise<[any, any]>;
   beginTransaction: () => Promise<void>;
   commit: () => Promise<void>;
   rollback: () => Promise<void>;
