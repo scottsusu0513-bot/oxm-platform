@@ -9,7 +9,7 @@ import * as analyticsDb from "./analyticsDb";
 import { getClientIp } from "./_core/requestMeta";
 import { ANALYTICS_MIN_DATE, clampAnalyticsDateRange, isAnalyticsDateAllowed } from "@shared/analyticsTz";
 import { buildSearchFingerprint } from "@shared/searchFingerprint";
-import { enhanceSearchKeyword, getSearchIntent } from './semantic-search';
+import { getSearchIntent } from './semantic-search';
 import { classifySearchQuery } from './search-query-router';
 import { sendNewInquiryEmail, sendFactoryApprovedEmail, sendFactoryRejectedEmail, sendFactorySubmittedEmail, sendReportEmail, sendSupportTicketEmail, sendReviewReplyEmail, sendNewMessageNotificationEmail, sendReportStatusUpdateEmail, sendTicketStatusUpdateEmail, sendMessageReplyNotificationEmail, sendEmailVerificationEmail, sendAdminBroadcastEmail, sendRevisionSubmittedEmail, sendRevisionApprovedEmail, sendRevisionRejectedEmail, sendUpgradeApplicationEmail, sendUpgradeNewCaseConsultantEmail, sendPlatformAnnouncementEmail, sendFirstContactEmail, sendNewsEmail, sendIndustryRequestReceivedEmail, sendIndustryRequestAdminEmail } from './email';
 import { resolveAdminSenderIdentity } from './_core/officialIdentity';
@@ -2220,9 +2220,13 @@ export const appRouter = router({
       intent = null;
       keyword = input.keyword;
     } else {
-      // HYBRID／SEMANTIC：維持原本既有的 AI-assisted 流程，行為完全不變。
+      // HYBRID／SEMANTIC：AI-assisted 流程（AI 成功時的語意與結果不變）。
+      // Batch 3.2：intent 有硬期限＋真正中止（server/semantic-search.ts
+      // resolveSearchIntent）；timeout／provider error／invalid output →
+      // intent=null，直接用原始 keyword 走既有非 AI 搜尋，不再接著呼叫
+      // Anthropic enhanceSearchKeyword（正式站從未成功，只會再多等最多 5s）。
       intent = await getSearchIntent(input.keyword);
-      keyword = intent ? input.keyword : await enhanceSearchKeyword(input.keyword);
+      keyword = input.keyword;
     }
   }
 

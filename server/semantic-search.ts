@@ -110,8 +110,14 @@ ${subsByMain}
 5. 只回傳 JSON`;
 }
 
+/** OpenAI 回應不是可用的 intent JSON（JSON 解析失敗或結構不對）。 */
+export class InvalidSearchIntentOutputError extends Error {
+  constructor(message: string) { super(message); this.name = 'InvalidSearchIntentOutputError'; }
+}
+
 function parseAndValidateIntent(raw: string, normalizedQuery: string): AISearchIntent {
   const parsed = JSON.parse(raw);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('intent output is not a JSON object');
   return {
     normalizedQuery,
     mainIndustries:  (parsed.mainIndustries  ?? []).filter((s: unknown) => typeof s === 'string' && ALL_MAIN_INDUSTRIES.includes(s)),
@@ -131,20 +137,29 @@ function parseAndValidateIntent(raw: string, normalizedQuery: string): AISearchI
  * 直接呼叫 getSearchIntent()，沒有包 ambient context，不應該產生任何
  * aiModelCalls row（不是「用 null 歸屬」，是完全不記）。
  */
-async function resolveSearchIntentWithOpenAI(key: string): Promise<AISearchIntent> {
+async function resolveSearchIntentWithOpenAI(key: string, signal: AbortSignal): Promise<AISearchIntent> {
   const client = new OpenAI({ apiKey: ENV.openaiApiKey });
   const startedAt = Date.now();
   const shouldLog = getCurrentAiCallContext() !== undefined;
   try {
+    // 只限搜尋 intent 這個請求（不動任何共用 client）：signal 由
+    // resolveSearchIntent 的唯一 deadline 控制，到期時真的中止底層 HTTP
+    // 請求；maxRetries: 0——可 fallback 的非交易型請求，SDK 預設的 2 次自動
+    // 重試與短 deadline 不相容（見 Batch 3.2）。
     const response = await client.chat.completions.create({
       model:           ENV.aiSearchModel,
       max_tokens:      250,
       temperature:     0,
       response_format: { type: 'json_object' },
       messages: [{ role: 'user', content: buildIntentPrompt(key) }],
-    });
+    }, { signal, maxRetries: 0 });
     const text = response.choices[0]?.message?.content ?? '{}';
-    const result = parseAndValidateIntent(text, key);
+    let result: AISearchIntent;
+    try {
+      result = parseAndValidateIntent(text, key);
+    } catch (parseErr) {
+      throw new InvalidSearchIntentOutputError((parseErr as Error).message);
+    }
     if (shouldLog) {
       void logAiModelCall({
         layer: 'factorySemantic',
@@ -186,14 +201,37 @@ function isIntentEnabled(): boolean {
   return false;
 }
 
+/**
+ * 搜尋 intent 的 AI 硬期限（Batch 3.2）。唯一的 deadline 擁有者：到期時用
+ * AbortController 真的中止 OpenAI HTTP 請求（不是只停止等待），timer 一律清除。
+ * 3.5s 的理由見 Batch 3.2 報告：本機實測冷呼叫 p90 約 3.4s，2.5s 會讓約兩成
+ * 冷查詢 timeout，而 timeout 的結果不會被快取、同一個查詢就會一直慢。
+ */
+export const SEARCH_INTENT_DEADLINE_MS = 3500;
+
+/** 只供 server 內部 log／測試，不對外公開。 */
+export type SearchIntentOutcome =
+  | 'memory_cache_hit' | 'db_cache_hit' | 'success'
+  | 'timeout' | 'provider_error' | 'invalid_output' | 'disabled';
+
 export async function getSearchIntent(keyword: string): Promise<AISearchIntent | null> {
-  if (!isIntentEnabled()) return null;
+  return (await resolveSearchIntent(keyword)).intent;
+}
+
+/**
+ * 取得搜尋 intent 並回報結果類別。timeout／provider error（含 429／5xx／網路）
+ * ／invalid output 一律回傳 intent=null，呼叫端直接用原始 keyword 走既有非 AI
+ * 搜尋；失敗時不寫任何 intent 快取。
+ */
+export async function resolveSearchIntent(keyword: string): Promise<{ intent: AISearchIntent | null; outcome: SearchIntentOutcome }> {
+  if (!isIntentEnabled()) return { intent: null, outcome: 'disabled' };
 
   const key = keyword.toLowerCase().trim().slice(0, 80);
-  if (!key) return null;
+  if (!key) return { intent: null, outcome: 'disabled' };
 
   // 1. 記憶體快取
-  if (memIntentCache.has(key)) return memIntentCache.get(key)!;
+  const memHit = memIntentCache.get(key);
+  if (memHit) return { intent: memHit, outcome: 'memory_cache_hit' };
 
   // 2. DB 快取
   try {
@@ -218,28 +256,34 @@ export async function getSearchIntent(keyword: string): Promise<AISearchIntent |
             .where(eq(aiSearchIntents.normalizedQuery, key))
             .catch(() => {});
         });
-        return intent;
+        return { intent, outcome: 'db_cache_hit' };
       }
     }
   } catch { /* DB 失敗繼續呼叫 AI */ }
 
-  // 3. 呼叫 AI（1500ms timeout）
+  if (ENV.aiSearchProvider !== 'openai') return { intent: null, outcome: 'disabled' };
+
+  // 3. 呼叫 AI：唯一 deadline＝AbortController（成功／失敗／中止都清掉 timer）。
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), SEARCH_INTENT_DEADLINE_MS);
+  const startedAt = Date.now();
+  let intent: AISearchIntent;
   try {
-    const timeout = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('AI intent timeout')), 2500)
-    );
+    intent = await resolveSearchIntentWithOpenAI(key, controller.signal);
+  } catch (err) {
+    const outcome: SearchIntentOutcome = controller.signal.aborted
+      ? 'timeout'
+      : err instanceof InvalidSearchIntentOutputError ? 'invalid_output' : 'provider_error';
+    console.warn(`[AISearch] intent ${outcome} after ${Date.now() - startedAt}ms, falling back to keyword search`);
+    return { intent: null, outcome };
+  } finally {
+    clearTimeout(timer);
+  }
 
-    let resolvePromise: Promise<AISearchIntent>;
-    if (ENV.aiSearchProvider === 'openai') {
-      resolvePromise = resolveSearchIntentWithOpenAI(key);
-    } else {
-      return null;
-    }
-
-    const intent = await Promise.race([resolvePromise, timeout]);
+  {
     memIntentCache.set(key, intent);
 
-    // 非同步寫入 DB
+    // 非同步寫入 DB（只有真正成功的 intent 才會走到這裡）
     getDb().then(db => {
       if (!db) return;
       db.insert(aiSearchIntents).values({
@@ -264,9 +308,6 @@ export async function getSearchIntent(keyword: string): Promise<AISearchIntent |
       }).catch(() => {});
     });
 
-    return intent;
-  } catch (err) {
-    console.error('[AISearch] intent resolve failed, falling back:', (err as Error).message);
-    return null;
+    return { intent, outcome: 'success' };
   }
 }
