@@ -66,6 +66,11 @@ function usesNewCompletionParams(model: string): boolean {
  * 綽綽有餘的量級，遠低於「不能長達 5 分鐘」的上限。
  */
 const PROVIDER_TIMEOUT_MS = 60_000;
+/**
+ * Batch 3.9：明確設定重試次數。SDK 預設會再重試 2 次（逾時也會重試），單次呼叫最壞
+ * 可到 3 × 60 秒；保留 1 次重試給暫時性的 429／5xx，單次呼叫最壞約 2 × 60 秒。
+ */
+const PROVIDER_MAX_RETRIES = 1;
 
 /** OpenAI SDK 錯誤物件的 status code 對應到簡短分類，不落地完整錯誤訊息／stack（見對話中「九」）。 */
 function classifyProviderError(err: unknown): string {
@@ -118,7 +123,7 @@ class OpenAiChatProvider implements AiChatProvider {
         // 模型還是傾向寫長篇分析——同時當作 prompt 指示之外的技術防線。
         ...(newParams ? { max_completion_tokens: 260 } : { temperature: 0.4, max_tokens: 260 }),
         messages: messages.map(m => ({ role: m.role, content: m.content })),
-      }, { timeout: PROVIDER_TIMEOUT_MS });
+      }, { timeout: PROVIDER_TIMEOUT_MS, maxRetries: PROVIDER_MAX_RETRIES });
       const text = response.choices[0]?.message?.content;
       if (!text || !text.trim()) {
         throw new Error("AI provider returned an empty reply");
@@ -166,7 +171,7 @@ class OpenAiChatProvider implements AiChatProvider {
           ? { type: "json_schema", json_schema: { name: jsonSchema.name, strict: true, schema: jsonSchema.schema } }
           : { type: "json_object" },
         messages: messages.map(m => ({ role: m.role, content: m.content })),
-      }, { timeout: PROVIDER_TIMEOUT_MS });
+      }, { timeout: PROVIDER_TIMEOUT_MS, maxRetries: PROVIDER_MAX_RETRIES });
       if (response.usage) {
         // 開發期用的成本可視性 log，不影響正式回覆內容；兩層架構每輪對話會呼叫
         // 兩次 completeJson，方便驗收時觀察實際 token 用量與單層版本的差異。

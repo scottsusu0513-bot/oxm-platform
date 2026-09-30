@@ -21,8 +21,10 @@ import {
   getDb, getApprovedFactoriesForSitemap, getApprovedRegionIndustryCombosForSitemap,
   getApprovedIndustrySubIndustryCombosForSitemap, getApprovedRegionIndustrySubIndustryCombosForSitemap,
   getPublishedNewsForSitemap, ensureConsultantsSeeded, ensureCertificationServiceCatalogSeeded,
-  checkDbTimezoneAssumptions,
+  checkDbTimezoneAssumptions, closeDbPools,
 } from "../db";
+import { installProcessHandlers, missingRequiredProductionEnv, requestIdMiddleware, createReadinessCheck } from "./resilience";
+import { sql } from "drizzle-orm";
 import { ensureUpgradeProgramsSeeded } from "../upgradePrograms";
 import { runCollaborationOrderOverdueEmailCheck } from "../orderOverdueCheck";
 
@@ -31,9 +33,21 @@ async function startServer() {
   console.log("[boot] NODE_ENV =", process.env.NODE_ENV);
   console.log("[boot] PORT =", process.env.PORT);
 
+  // Batch 3.9：正式環境缺少必要設定時直接啟動失敗（不帶出任何值），而不是啟動後
+  // 每個登入／每個請求才在執行期出錯。
+  if (process.env.NODE_ENV === "production") {
+    const missing = missingRequiredProductionEnv();
+    if (missing.length > 0) {
+      console.error(`[boot] missing required configuration: ${missing.join(", ")}`);
+      process.exit(1);
+    }
+  }
+
   const app = express();
   app.set("trust proxy", 1);
   const server = createServer(app);
+  // Batch 3.9：每個 request 一個隨機 id（X-Request-Id），server log 與錯誤回報可對應同一次請求
+  app.use(requestIdMiddleware);
 
   console.log("[boot] applying security headers");
   setupSecurityHeaders(app);
@@ -118,6 +132,17 @@ async function startServer() {
       // DB wake-up best-effort; don't fail health check
     }
     res.status(200).json({ status: "ok" });
+  });
+
+  // Batch 3.9：readiness——這個 instance 現在能不能連到資料庫（唯讀 SELECT 1，2 秒上限；
+  // 不寫入、不呼叫任何外部服務）。/api/health 維持 liveness（process 活著即 200）：
+  // 若平台用 DB 狀態當 liveness，資料庫短暫中斷時所有 instance 會被一起判定失敗、
+  // 連靜態頁面都無法服務。這個端點供外部監控判斷「服務是否可用」。
+  const readiness = createReadinessCheck({ getDb, probe: sql`SELECT 1` });
+  app.get("/api/health/ready", async (_req, res) => {
+    res.set({ "Cache-Control": "no-store, no-cache, max-age=0" });
+    const r = await readiness();
+    res.status(r.status).json(r.body);
   });
 
   // Standalone logout route — does NOT go through tRPC/httpBatchLink
@@ -378,6 +403,10 @@ async function startServer() {
     ensureUpgradeProgramsSeeded().catch(err => console.error("[boot] upgrade program seed failed:", err));
     checkDbTimezoneAssumptions().catch(err => console.error("[boot] timezone check failed:", err instanceof Error ? err.message : err));
   });
+
+  // Batch 3.9：SIGTERM／SIGINT 優雅關機（有上限）、unhandledRejection 記錄不中斷、
+  // uncaughtException 記錄後關機重啟（見 ./resilience.ts）。
+  installProcessHandlers({ server, closeResources: closeDbPools });
 }
 
 startServer().catch((err) => {

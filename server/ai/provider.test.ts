@@ -89,7 +89,8 @@ describe("provider.ts：集中式 provider 逾時（Phase 10.2 P1）", () => {
 
     expect(mockCreate).toHaveBeenCalledTimes(1);
     const [, options] = mockCreate.mock.calls[0];
-    expect(options).toEqual({ timeout: 60_000 });
+    // Batch 3.9：明確設定重試 1 次（SDK 預設 2 次，逾時也會重試，單次呼叫最壞可到 3 × 60 秒）
+    expect(options).toEqual({ timeout: 60_000, maxRetries: 1 });
   });
 
   it("成功回應不受逾時機制影響，正常回傳文字並記錄 success=true", async () => {

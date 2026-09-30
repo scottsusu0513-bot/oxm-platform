@@ -12,7 +12,14 @@ import { resolveProviderLoginAction, startPendingAccountLink, startAppAccountLin
 import { createRemoteJWKSet, jwtVerify } from "jose";
 
 // Cached Apple JWKS (fetched lazily on first Apple login)
-const APPLE_JWKS = createRemoteJWKSet(new URL("https://appleid.apple.com/auth/keys"));
+const APPLE_JWKS = createRemoteJWKSet(new URL("https://appleid.apple.com/auth/keys"), { timeoutDuration: 10_000 });
+
+/**
+ * 對 OAuth provider（Google／LINE／Apple）的每一次 token 交換與使用者資料請求上限
+ * （Batch 3.9）。provider 卡住時 callback 在 10 秒內失敗、回到可重新登入的狀態，
+ * 而不是一直掛著；state 本來就是一次性的，使用者重新按登入即可。
+ */
+const OAUTH_PROVIDER_TIMEOUT_MS = 10_000;
 
 function getQueryParam(req: Request, key: string): string | undefined {
   const value = req.query[key];
@@ -140,6 +147,7 @@ export function registerOAuthRoutes(app: Express) {
       const redirectUri = `${baseUrl}/api/oauth/callback`;
 
       const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
+        signal: AbortSignal.timeout(OAUTH_PROVIDER_TIMEOUT_MS),
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: new URLSearchParams({
@@ -158,6 +166,7 @@ export function registerOAuthRoutes(app: Express) {
       }
 
       const userRes = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
+        signal: AbortSignal.timeout(OAUTH_PROVIDER_TIMEOUT_MS),
         headers: { Authorization: `Bearer ${tokenData.access_token}` },
       });
       const userInfo = await userRes.json() as any;
@@ -236,6 +245,7 @@ export function registerOAuthRoutes(app: Express) {
     try {
       // Exchange code for token
       const tokenRes = await fetch("https://api.line.me/oauth2/v2.1/token", {
+        signal: AbortSignal.timeout(OAUTH_PROVIDER_TIMEOUT_MS),
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: new URLSearchParams({
@@ -260,6 +270,7 @@ export function registerOAuthRoutes(app: Express) {
 
       if (tokenData.id_token) {
         const verifyRes = await fetch("https://api.line.me/oauth2/v2.1/verify", {
+        signal: AbortSignal.timeout(OAUTH_PROVIDER_TIMEOUT_MS),
           method: "POST",
           headers: { "Content-Type": "application/x-www-form-urlencoded" },
           body: new URLSearchParams({
@@ -278,6 +289,7 @@ export function registerOAuthRoutes(app: Express) {
       // Fallback: fetch profile if id_token verify failed or had no sub
       if (!lineUserId) {
         const profileRes = await fetch("https://api.line.me/v2/profile", {
+        signal: AbortSignal.timeout(OAUTH_PROVIDER_TIMEOUT_MS),
           headers: { Authorization: `Bearer ${tokenData.access_token}` },
         });
         if (profileRes.ok) {
@@ -433,6 +445,7 @@ export function registerOAuthRoutes(app: Express) {
       const clientSecret = await generateAppleClientSecret();
 
       const tokenRes = await fetch("https://appleid.apple.com/auth/token", {
+        signal: AbortSignal.timeout(OAUTH_PROVIDER_TIMEOUT_MS),
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: new URLSearchParams({

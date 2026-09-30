@@ -19,6 +19,7 @@
  * 一般 Error 無法區分而會保留訊息；server/ 目前沒有 throw 原始值的寫法。
  */
 import { TRPCError } from "@trpc/server";
+import { getRequestId } from "./resilience";
 
 export const GENERIC_INTERNAL_ERROR_MESSAGE = "伺服器發生錯誤，請稍後再試";
 
@@ -58,13 +59,14 @@ type ErrorShapeLike = { message: string; code: number; data: Record<string, unkn
  * 細節的訊息換成通用文案——完整錯誤仍記錄在 server log 供診斷。
  */
 export function formatTrpcError<S extends ErrorShapeLike>(
-  opts: { shape: S; error: TRPCError; path?: string },
+  opts: { shape: S; error: TRPCError; path?: string; ctx?: unknown },
   isProduction: boolean,
 ): S {
   if (!isProduction) return opts.shape;
   const { stack: _stack, ...data } = opts.shape.data;
   if (shouldSanitizeTrpcError(opts.error)) {
-    console.error(`[trpc] internal error sanitized for client (path=${opts.path ?? "unknown"}):`, opts.error.cause);
+    const requestId = getRequestId((opts.ctx as { req?: unknown } | undefined)?.req) ?? "-";
+    console.error(`[trpc] internal error sanitized for client (path=${opts.path ?? "unknown"} requestId=${requestId}):`, opts.error.cause);
     return { ...opts.shape, message: GENERIC_INTERNAL_ERROR_MESSAGE, data } as S;
   }
   return { ...opts.shape, data } as S;

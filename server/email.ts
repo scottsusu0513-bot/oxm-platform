@@ -1,6 +1,7 @@
 import { Resend } from 'resend';
 import { renderAnnouncementEmailHtml } from './announcementMarkdown';
 import { ENV } from './_core/env';
+import { maskEmail, withTimeout } from './_core/resilience';
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY ?? '';
 const FROM_EMAIL = process.env.FROM_EMAIL ?? '';
@@ -11,6 +12,26 @@ const getResend = () => {
   if (!RESEND_API_KEY) return null;
   return new Resend(RESEND_API_KEY);
 };
+
+// ── 寄信共用（Production Hardening Batch 3.9）─────────────────────────────
+// - Resend SDK 對 API 錯誤（收件人無效、額度、5xx）不丟例外，而是回傳 { error }——
+//   原本全部被忽略，寄信失敗仍被當成成功（log 也寫「已寄送」）。這裡統一把 error
+//   轉成例外，讓呼叫端既有的 try/catch 與重試邏輯看得到失敗（429 保留 statusCode）。
+// - 每封信最多等 EMAIL_SEND_TIMEOUT_MS：provider 卡住時不會讓批次寄信的佇列停住。
+//   逾時只停止等待，信件可能其實已寄出，因此逾時不重試（避免重複寄信）。
+export const EMAIL_SEND_TIMEOUT_MS = 15_000;
+type ResendClient = NonNullable<ReturnType<typeof getResend>>;
+async function deliverEmail(resend: ResendClient, payload: Parameters<ResendClient["emails"]["send"]>[0]) {
+  const result = await withTimeout(resend.emails.send(payload), EMAIL_SEND_TIMEOUT_MS, "email send");
+  const err = (result as { error?: { name?: string; message?: string; statusCode?: number } | null } | undefined)?.error;
+  if (err) {
+    const e = new Error(`Email provider error: ${err.name ?? "unknown"}`) as Error & { statusCode?: number };
+    e.name = "EmailProviderError";
+    e.statusCode = err.statusCode ?? (err.name === "rate_limit_exceeded" ? 429 : undefined);
+    throw e;
+  }
+  return result;
+}
 
 /**
  * 三層寄信安全規則（見對話中「一、Email：Vitest 防護正確，但 dev browser
@@ -68,7 +89,7 @@ export async function sendNewInquiryEmail(params: {
   try {
     const resend = getResend();
     if (!resend) return;
-    await resend.emails.send({
+    await deliverEmail(resend, {
       from: FROM_EMAIL,
       to: params.factoryEmail,
       subject,
@@ -80,7 +101,7 @@ export async function sendNewInquiryEmail(params: {
           <p>您在 OXM 平台收到一則來自 <strong>${escapeHtml(params.userName)}</strong> 的詢問訊息。</p>
           ${params.productName ? `<p>詢問產品：<strong>${escapeHtml(params.productName)}</strong></p>` : ''}
           <div style="background: #f5f5f5; padding: 16px; border-radius: 8px; margin: 16px 0;">
-            <p style="margin: 0;">${params.message}</p>
+            <p style="margin: 0;">${escapeHtml(params.message)}</p>
           </div>
           <p>請登入 OXM 平台查看並回覆：</p>
           <a href="${process.env.VITE_APP_URL ?? 'http://localhost:3000'}/messages"
@@ -91,7 +112,7 @@ export async function sendNewInquiryEmail(params: {
         </div>
       `,
     });
-    console.log(`[Email] 已寄送新詢問通知給 ${params.factoryEmail}`);
+    console.log(`[Email] 已寄送新詢問通知給 ${maskEmail(params.factoryEmail)}`);
   } catch (error) {
     console.error('[Email] 寄信失敗:', error);
   }
@@ -111,7 +132,7 @@ export async function sendFactoryRejectedEmail(params: {
   try {
     const resend = getResend();
     if (!resend) return;
-    await resend.emails.send({
+    await deliverEmail(resend, {
       from: FROM_EMAIL,
       to: params.factoryEmail,
       subject: `【OXM】您的工廠審核未通過`,
@@ -123,7 +144,7 @@ export async function sendFactoryRejectedEmail(params: {
           ${params.reason ? `
           <div style="background: #f5f5f5; padding: 16px; border-radius: 8px; margin: 16px 0;">
             <p style="margin: 0; font-weight: bold;">退回原因：</p>
-            <p style="margin: 8px 0 0;">${params.reason}</p>
+            <p style="margin: 8px 0 0;">${escapeHtml(params.reason)}</p>
           </div>` : ''}
           <p>請登入 OXM 平台修改工廠資料，修改完成後可重新送出審核。</p>
           <a href="${process.env.VITE_APP_URL ?? 'http://localhost:3000'}/dashboard"
@@ -134,7 +155,7 @@ export async function sendFactoryRejectedEmail(params: {
         </div>
       `,
     });
-    console.log(`[Email] 已寄送審核退回通知給 ${params.factoryEmail}`);
+    console.log(`[Email] 已寄送審核退回通知給 ${maskEmail(params.factoryEmail)}`);
   } catch (error) {
     console.error('[Email] 寄信失敗:', error);
   }
@@ -153,7 +174,7 @@ export async function sendFactoryApprovedEmail(params: {
   try {
     const resend = getResend();
     if (!resend) return;
-    await resend.emails.send({
+    await deliverEmail(resend, {
       from: FROM_EMAIL,
       to: params.factoryEmail,
       subject: `【OXM】您的工廠已通過審核`,
@@ -170,7 +191,7 @@ export async function sendFactoryApprovedEmail(params: {
         </div>
       `,
     });
-    console.log(`[Email] 已寄送審核通過通知給 ${params.factoryEmail}`);
+    console.log(`[Email] 已寄送審核通過通知給 ${maskEmail(params.factoryEmail)}`);
   } catch (error) {
     console.error('[Email] 寄信失敗:', error);
   }
@@ -196,7 +217,7 @@ export async function sendFactorySubmittedEmail(params: {
     const resend = getResend();
     if (!resend) return;
     const appUrl = process.env.VITE_APP_URL ?? 'http://localhost:3000';
-    await resend.emails.send({
+    await deliverEmail(resend, {
       from: FROM_EMAIL,
       to: ADMIN_EMAIL,
       subject: `【OXM】新工廠待審核：${params.factoryName}`,
@@ -204,7 +225,7 @@ export async function sendFactorySubmittedEmail(params: {
         <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
           <h2 style="color: #f97316;">有新工廠送出審核申請</h2>
           <p>工廠名稱：<strong>${escapeHtml(params.factoryName)}</strong></p>
-          <p>負責人：<strong>${escapeHtml(params.ownerName)}</strong>${params.ownerEmail ? `（${params.ownerEmail}）` : ''}</p>
+          <p>負責人：<strong>${escapeHtml(params.ownerName)}</strong>${params.ownerEmail ? `（${escapeHtml(params.ownerEmail)}）` : ''}</p>
           <a href="${appUrl}/admin/factories/${params.factoryId}"
             style="background: #f97316; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none; display: inline-block;">
             前往審核
@@ -239,7 +260,7 @@ export async function sendReportEmail(params: {
     const resend = getResend();
     if (!resend) return;
     const appUrl = process.env.VITE_APP_URL ?? 'http://localhost:3000';
-    await resend.emails.send({
+    await deliverEmail(resend, {
       from: FROM_EMAIL,
       to: ADMIN_EMAIL,
       subject: `【OXM】收到工廠檢舉：${params.factoryName}`,
@@ -250,7 +271,7 @@ export async function sendReportEmail(params: {
           <p>被檢舉工廠：<strong>${escapeHtml(params.factoryName)}</strong></p>
           <div style="background: #f5f5f5; padding: 16px; border-radius: 8px; margin: 16px 0;">
             <p style="margin: 0; font-weight: bold;">檢舉原因：</p>
-            <p style="margin: 8px 0 0;">${params.reason}</p>
+            <p style="margin: 8px 0 0;">${escapeHtml(params.reason)}</p>
           </div>
           <a href="${appUrl}/admin/factories/${params.factoryId}"
             style="background: #f97316; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none; display: inline-block;">
@@ -286,19 +307,19 @@ export async function sendSupportTicketEmail(params: {
   try {
     const resend = getResend();
     if (!resend) return;
-    await resend.emails.send({
+    await deliverEmail(resend, {
       from: FROM_EMAIL,
       to: ADMIN_EMAIL,
       subject: `【OXM】客服投訴：${params.subject}`,
       html: `
         <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
           <h2 style="color: #f97316;">收到新的客服投訴</h2>
-          <p>提交者：<strong>${escapeHtml(params.userName)}</strong>${params.userEmail ? `（${params.userEmail}）` : ''}</p>
-          <p>問題類型：<strong>${params.type}</strong></p>
-          <p>主旨：<strong>${params.subject}</strong></p>
+          <p>提交者：<strong>${escapeHtml(params.userName)}</strong>${params.userEmail ? `（${escapeHtml(params.userEmail)}）` : ''}</p>
+          <p>問題類型：<strong>${escapeHtml(params.type)}</strong></p>
+          <p>主旨：<strong>${escapeHtml(params.subject)}</strong></p>
           <div style="background: #f5f5f5; padding: 16px; border-radius: 8px; margin: 16px 0;">
             <p style="margin: 0; font-weight: bold;">詳細描述：</p>
-            <p style="margin: 8px 0 0;">${params.description}</p>
+            <p style="margin: 8px 0 0;">${escapeHtml(params.description)}</p>
           </div>
           <p style="color: #999; font-size: 12px; margin-top: 24px;">此信件由 OXM 平台自動發送。</p>
         </div>
@@ -328,7 +349,7 @@ export async function sendReviewReplyEmail(params: {
     const resend = getResend();
     if (!resend) return;
     const appUrl = process.env.VITE_APP_URL ?? 'http://localhost:3000';
-    await resend.emails.send({
+    await deliverEmail(resend, {
       from: FROM_EMAIL,
       to: params.userEmail,
       subject: `【OXM】${params.factoryName} 回覆了您的評價`,
@@ -339,11 +360,11 @@ export async function sendReviewReplyEmail(params: {
           <p>您對 <strong>${escapeHtml(params.factoryName)}</strong> 的評價已收到工廠回覆。</p>
           <div style="background: #f5f5f5; padding: 16px; border-radius: 8px; margin: 16px 0;">
             <p style="margin: 0; font-size: 12px; color: #666;">您的評價</p>
-            <p style="margin: 8px 0 0;">${params.originalComment}</p>
+            <p style="margin: 8px 0 0;">${escapeHtml(params.originalComment)}</p>
           </div>
           <div style="background: #fff7ed; border-left: 4px solid #f97316; padding: 16px; border-radius: 0 8px 8px 0; margin: 16px 0;">
             <p style="margin: 0; font-size: 12px; color: #666;">工廠回覆</p>
-            <p style="margin: 8px 0 0;">${params.replyContent}</p>
+            <p style="margin: 8px 0 0;">${escapeHtml(params.replyContent)}</p>
           </div>
           <a href="${appUrl}/factory/${params.factoryId}"
             style="background: #f97316; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none; display: inline-block;">
@@ -353,7 +374,7 @@ export async function sendReviewReplyEmail(params: {
         </div>
       `,
     });
-    console.log(`[Email] 已寄送評價回覆通知給 ${params.userEmail}`);
+    console.log(`[Email] 已寄送評價回覆通知給 ${maskEmail(params.userEmail)}`);
   } catch (error) {
     console.error('[Email] 寄信失敗:', error);
   }
@@ -376,7 +397,7 @@ export async function sendNewMessageNotificationEmail(params: {
     const resend = getResend();
     if (!resend) return;
     const appUrl = process.env.VITE_APP_URL ?? 'http://localhost:3000';
-    await resend.emails.send({
+    await deliverEmail(resend, {
       from: FROM_EMAIL,
       to: params.userEmail,
       subject: `【OXM】${params.factoryName} 回覆了您的詢問`,
@@ -386,7 +407,7 @@ export async function sendNewMessageNotificationEmail(params: {
           <p>親愛的 <strong>${escapeHtml(params.userName)}</strong> 您好，</p>
           <p>您在 OXM 平台的詢問收到了來自 <strong>${escapeHtml(params.factoryName)}</strong> 的回覆。</p>
           <div style="background: #f5f5f5; padding: 16px; border-radius: 8px; margin: 16px 0;">
-            <p style="margin: 0;">${params.messagePreview}</p>
+            <p style="margin: 0;">${escapeHtml(params.messagePreview)}</p>
           </div>
           <a href="${appUrl}/messages/${params.conversationId}"
             style="background: #f97316; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none; display: inline-block;">
@@ -396,7 +417,7 @@ export async function sendNewMessageNotificationEmail(params: {
         </div>
       `,
     });
-    console.log(`[Email] 已寄送新訊息通知給 ${params.userEmail}`);
+    console.log(`[Email] 已寄送新訊息通知給 ${maskEmail(params.userEmail)}`);
   } catch (error) {
     console.error('[Email] 寄信失敗:', error);
   }
@@ -427,7 +448,7 @@ export async function sendReportStatusUpdateEmail(params: {
     if (!resend) return;
     const appUrl = process.env.VITE_APP_URL ?? 'http://localhost:3000';
     const statusLabel = REPORT_STATUS_LABELS[params.status] ?? params.status;
-    await resend.emails.send({
+    await deliverEmail(resend, {
       from: FROM_EMAIL,
       to: params.userEmail,
       subject: `【OXM】您的檢舉案件狀態已更新：${statusLabel}`,
@@ -447,7 +468,7 @@ export async function sendReportStatusUpdateEmail(params: {
         </div>
       `,
     });
-    console.log(`[Email] 已寄送檢舉狀態更新通知給 ${params.userEmail}`);
+    console.log(`[Email] 已寄送檢舉狀態更新通知給 ${maskEmail(params.userEmail)}`);
   } catch (error) {
     console.error('[Email] 寄信失敗:', error);
   }
@@ -470,7 +491,7 @@ export async function sendTicketStatusUpdateEmail(params: {
     if (!resend) return;
     const appUrl = process.env.VITE_APP_URL ?? 'http://localhost:3000';
     const statusLabel = REPORT_STATUS_LABELS[params.status] ?? params.status;
-    await resend.emails.send({
+    await deliverEmail(resend, {
       from: FROM_EMAIL,
       to: params.userEmail,
       subject: `【OXM】您的客服投訴狀態已更新：${statusLabel}`,
@@ -478,7 +499,7 @@ export async function sendTicketStatusUpdateEmail(params: {
         <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
           <h2 style="color: #f97316;">您的客服投訴狀態已更新</h2>
           <p>親愛的 <strong>${escapeHtml(params.userName)}</strong> 您好，</p>
-          <p>您提交的客服投訴「<strong>${params.subject}</strong>」狀態已更新為：</p>
+          <p>您提交的客服投訴「<strong>${escapeHtml(params.subject)}</strong>」狀態已更新為：</p>
           <div style="background: #f5f5f5; padding: 16px; border-radius: 8px; margin: 16px 0; text-align: center;">
             <strong style="font-size: 18px; color: #f97316;">${statusLabel}</strong>
           </div>
@@ -490,7 +511,7 @@ export async function sendTicketStatusUpdateEmail(params: {
         </div>
       `,
     });
-    console.log(`[Email] 已寄送客服投訴狀態更新通知給 ${params.userEmail}`);
+    console.log(`[Email] 已寄送客服投訴狀態更新通知給 ${maskEmail(params.userEmail)}`);
   } catch (error) {
     console.error('[Email] 寄信失敗:', error);
   }
@@ -517,18 +538,18 @@ export async function sendMessageReplyNotificationEmail(params: {
     const resend = getResend();
     if (!resend) return;
     const appUrl = process.env.VITE_APP_URL ?? 'http://localhost:3000';
-    await resend.emails.send({
+    await deliverEmail(resend, {
       from: FROM_EMAIL,
       to: ADMIN_EMAIL,
       subject: `【OXM】站內信回覆：${params.campaignTitle}`,
       html: `
         <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
           <h2 style="color: #f97316;">使用者回覆了站內信</h2>
-          <p>站內信主題：<strong>${params.campaignTitle}</strong></p>
-          <p>回覆者：<strong>${escapeHtml(params.userName)}</strong>${params.userEmail ? `（${params.userEmail}）` : ''}</p>
+          <p>站內信主題：<strong>${escapeHtml(params.campaignTitle)}</strong></p>
+          <p>回覆者：<strong>${escapeHtml(params.userName)}</strong>${params.userEmail ? `（${escapeHtml(params.userEmail)}）` : ''}</p>
           <div style="background: #f5f5f5; padding: 16px; border-radius: 8px; margin: 16px 0;">
             <p style="margin: 0; font-weight: bold;">回覆內容：</p>
-            <p style="margin: 8px 0 0;">${params.replyContent}</p>
+            <p style="margin: 8px 0 0;">${escapeHtml(params.replyContent)}</p>
           </div>
           <a href="${appUrl}/admin?tab=messages&campaignId=${params.campaignId}"
             style="background: #f97316; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none; display: inline-block;">
@@ -557,7 +578,7 @@ export async function sendAdminBroadcastEmail(params: {
   const resend = getResend()!;
   const appUrl = process.env.VITE_APP_URL ?? 'http://localhost:3000';
   try {
-    await resend.emails.send({
+    await deliverEmail(resend, {
       from: FROM_EMAIL,
       to: params.toEmail,
       subject: `【OXM 站內信】${params.campaignTitle}`,
@@ -594,7 +615,7 @@ export async function sendEmailVerificationEmail(params: {
   }
   const resend = getResend();
   if (!resend) return;
-  await resend.emails.send({
+  await deliverEmail(resend, {
     from: FROM_EMAIL,
     to: params.toEmail,
     subject: `【OXM】請驗證您的電子郵件地址`,
@@ -637,7 +658,7 @@ export async function sendAccountLinkVerificationEmail(params: {
   const resend = getResend();
   if (!resend) return;
   const provider = escapeHtml(params.providerLabel);
-  await resend.emails.send({
+  await deliverEmail(resend, {
     from: FROM_EMAIL,
     to: params.toEmail,
     subject: `【OXM】確認將 ${params.providerLabel} 登入連結至您的帳號`,
@@ -680,7 +701,7 @@ export async function sendAccountLinkOtpEmail(params: {
   const resend = getResend();
   if (!resend) return;
   const provider = escapeHtml(params.providerLabel);
-  await resend.emails.send({
+  await deliverEmail(resend, {
     from: FROM_EMAIL,
     to: params.toEmail,
     subject: `【OXM】${params.providerLabel} 帳號連結驗證碼`,
@@ -728,7 +749,7 @@ export async function sendRevisionSubmittedEmail(params: {
   const safeSubmitter = escapeHtml(params.submitterName ?? '未知');
   const safeReason = params.revisionReason ? escapeHtml(params.revisionReason) : null;
   try {
-    await resend.emails.send({
+    await deliverEmail(resend, {
       from: FROM_EMAIL,
       to: ADMIN_EMAIL,
       subject: `【OXM 後台】工廠「${params.factoryName}」提交基本資料修改申請`,
@@ -761,7 +782,7 @@ export async function sendRevisionApprovedEmail(params: {
   const safeName = escapeHtml(params.factoryName);
   const safeRecipient = escapeHtml(params.recipientName ?? params.factoryName);
   try {
-    await resend.emails.send({
+    await deliverEmail(resend, {
       from: FROM_EMAIL,
       to: params.factoryEmail,
       subject: `【OXM】您的工廠資料修改申請已通過`,
@@ -794,7 +815,7 @@ export async function sendRevisionRejectedEmail(params: {
   const safeRecipient = escapeHtml(params.recipientName ?? params.factoryName);
   const safeReason = escapeHtml(params.reason);
   try {
-    await resend.emails.send({
+    await deliverEmail(resend, {
       from: FROM_EMAIL,
       to: params.factoryEmail,
       subject: `【OXM】您的工廠資料修改申請未通過`,
@@ -846,7 +867,7 @@ export async function sendUpgradeNewCaseConsultantEmail(params: {
   const capitalLabel = CAPITAL_AMOUNT_LABELS[params.capitalAmount] ?? params.capitalAmount;
 
   try {
-    await resend.emails.send({
+    await deliverEmail(resend, {
       from: FROM_EMAIL,
       to: params.consultantEmail,
       subject: `OXM 企業升級中心｜您有新的案件待查收`,
@@ -857,12 +878,12 @@ export async function sendUpgradeNewCaseConsultantEmail(params: {
           <p>您有一筆新的企業升級案件待查收，請登入 OXM 顧問中心查看案件內容並進行後續評估。</p>
           <table style="border-collapse:collapse; width:100%; margin: 16px 0;">
             <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">公司名稱</td><td style="padding:8px;">${escapeHtml(params.companyName)}</td></tr>
-            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">所在地區</td><td style="padding:8px;">${params.location}</td></tr>
+            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">所在地區</td><td style="padding:8px;">${escapeHtml(params.location)}</td></tr>
             <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">聯絡人</td><td style="padding:8px;">${escapeHtml(params.contactName)}</td></tr>
-            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">聯絡 Email</td><td style="padding:8px;">${params.email}</td></tr>
-            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">聯絡電話</td><td style="padding:8px;">${params.phone}</td></tr>
+            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">聯絡 Email</td><td style="padding:8px;">${escapeHtml(params.email)}</td></tr>
+            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">聯絡電話</td><td style="padding:8px;">${escapeHtml(params.phone)}</td></tr>
             <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">資本額</td><td style="padding:8px;">${capitalLabel}</td></tr>
-            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">申請時間</td><td style="padding:8px;">${params.appliedAt}</td></tr>
+            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">申請時間</td><td style="padding:8px;">${escapeHtml(params.appliedAt)}</td></tr>
           </table>
           <a href="${appUrl}/upgrade-consultant/cases"
             style="background:#f97316;color:white;padding:12px 24px;border-radius:6px;text-decoration:none;display:inline-block;">
@@ -872,7 +893,7 @@ export async function sendUpgradeNewCaseConsultantEmail(params: {
         </div>
       `,
     });
-    console.log(`[Email] 已寄送新案件通知給顧問 ${params.consultantEmail}`);
+    console.log(`[Email] 已寄送新案件通知給顧問 ${maskEmail(params.consultantEmail)}`);
   } catch (err) {
     console.warn('[Email] sendUpgradeNewCaseConsultantEmail failed:', err);
   }
@@ -900,7 +921,7 @@ export async function sendUpgradeApplicationEmail(params: {
   const appUrl = process.env.VITE_APP_URL ?? 'http://localhost:3000';
 
   try {
-    await resend.emails.send({
+    await deliverEmail(resend, {
       from: FROM_EMAIL,
       to: adminEmail,
       subject: `【OXM 企業升級中心】新申請 #${params.applicationId}：${params.companyName}`,
@@ -911,9 +932,9 @@ export async function sendUpgradeApplicationEmail(params: {
           <table style="border-collapse:collapse; width:100%; margin: 16px 0;">
             <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">公司名稱</td><td style="padding:8px;">${escapeHtml(params.companyName)}</td></tr>
             <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">聯絡人</td><td style="padding:8px;">${escapeHtml(params.contactName)}</td></tr>
-            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">電話</td><td style="padding:8px;">${params.phone}</td></tr>
-            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">Email</td><td style="padding:8px;">${params.email}</td></tr>
-            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">所在地</td><td style="padding:8px;">${params.location}</td></tr>
+            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">電話</td><td style="padding:8px;">${escapeHtml(params.phone)}</td></tr>
+            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">Email</td><td style="padding:8px;">${escapeHtml(params.email)}</td></tr>
+            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">所在地</td><td style="padding:8px;">${escapeHtml(params.location)}</td></tr>
           </table>
           <a href="${appUrl}/admin/upgrade-applications"
             style="background:#f97316;color:white;padding:12px 24px;border-radius:6px;text-decoration:none;display:inline-block;">
@@ -942,7 +963,7 @@ export async function sendPlatformAnnouncementEmail(params: {
   const safeTitle = escapeHtml(params.announcementTitle);
   const safeToName = escapeHtml(params.toName ?? '用戶');
   const contentHtml = renderAnnouncementEmailHtml(params.announcementContent);
-  await resend.emails.send({
+  await deliverEmail(resend, {
     from: FROM_EMAIL,
     to: params.toEmail,
     subject: `【OXM 平台公告】${params.announcementTitle}`,
@@ -986,7 +1007,7 @@ export async function sendNewsEmail(params: {
   const safeSummary = escapeHtml(params.newsSummary);
   const safeToName = escapeHtml(params.toName ?? '用戶');
   const articleUrl = `${appUrl}/news/${params.newsSlug}`;
-  await resend.emails.send({
+  await deliverEmail(resend, {
     from: FROM_EMAIL,
     to: params.toEmail,
     subject: `【OXM 產業情報中心】${params.newsTitle}`,
@@ -1031,7 +1052,7 @@ export async function sendOrderOverdueEmail(params: {
     if (!resend) return;
     const appUrl = process.env.VITE_APP_URL ?? 'http://localhost:3000';
     const greeting = params.recipientName ? `親愛的 <strong>${escapeHtml(params.recipientName)}</strong> 您好，` : '您好，';
-    await resend.emails.send({
+    await deliverEmail(resend, {
       from: FROM_EMAIL,
       to: params.to,
       subject: `【OXM 訂單提醒】訂單日期已逾期：${params.projectName}`,
@@ -1043,9 +1064,9 @@ export async function sendOrderOverdueEmail(params: {
           <table style="border-collapse:collapse; width:100%; margin: 16px 0;">
             <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold; width:40%;">訂單名稱</td><td style="padding:8px;">${escapeHtml(params.projectName)}</td></tr>
             <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">供應工廠</td><td style="padding:8px;">${escapeHtml(params.factoryName)}</td></tr>
-            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">逾期節點</td><td style="padding:8px; color:#dc2626; font-weight:bold;">${params.dateLabel}</td></tr>
-            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">原定日期</td><td style="padding:8px; color:#dc2626;">${params.dueDate}</td></tr>
-            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">您的角色</td><td style="padding:8px;">${params.side}</td></tr>
+            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">逾期節點</td><td style="padding:8px; color:#dc2626; font-weight:bold;">${escapeHtml(params.dateLabel)}</td></tr>
+            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">原定日期</td><td style="padding:8px; color:#dc2626;">${escapeHtml(params.dueDate)}</td></tr>
+            <tr><td style="padding:8px; background:#f5f5f5; font-weight:bold;">您的角色</td><td style="padding:8px;">${escapeHtml(params.side)}</td></tr>
           </table>
           <p>請雙方盡快進入 OXM 訂單詳情確認進度，若有日期調整需求，供應工廠可透過訂單詳情提出日期修改申請。</p>
           <a href="${appUrl}/orders/${params.orderId}"
@@ -1056,7 +1077,7 @@ export async function sendOrderOverdueEmail(params: {
         </div>
       `,
     });
-    console.log(`[Email] 已寄送訂單逾期通知 orderId=${params.orderId} field=${params.dateLabel} to=${params.to}`);
+    console.log(`[Email] 已寄送訂單逾期通知 orderId=${params.orderId} field=${params.dateLabel} to=${maskEmail(params.to)}`);
   } catch (error) {
     console.error('[Email] sendOrderOverdueEmail 失敗:', error);
     throw error; // re-throw so caller can track failures
@@ -1077,7 +1098,7 @@ export async function sendFirstContactEmail(params: {
     const resend = getResend();
     if (!resend) return;
     const appUrl = process.env.VITE_APP_URL ?? 'http://localhost:3000';
-    await resend.emails.send({
+    await deliverEmail(resend, {
       from: FROM_EMAIL,
       to: params.toEmail,
       subject: `【OXM】有新的使用者透過 OXM 聯繫你`,
@@ -1099,7 +1120,7 @@ export async function sendFirstContactEmail(params: {
         </div>
       `,
     });
-    console.log(`[Email] 首次聯繫通知已寄送至 ${params.toEmail}`);
+    console.log(`[Email] 首次聯繫通知已寄送至 ${maskEmail(params.toEmail)}`);
   } catch (error) {
     console.error('[Email] sendFirstContactEmail 失敗:', error);
   }
@@ -1119,7 +1140,7 @@ export async function sendIndustryRequestReceivedEmail(params: {
   try {
     const resend = getResend();
     if (!resend) return;
-    await resend.emails.send({
+    await deliverEmail(resend, {
       from: FROM_EMAIL,
       to: params.userEmail,
       subject: '【OXM】已收到您的產業新增需求',
@@ -1140,7 +1161,7 @@ export async function sendIndustryRequestReceivedEmail(params: {
         </div>
       `,
     });
-    console.log(`[Email] 產業新增需求確認信已寄送至 ${params.userEmail}`);
+    console.log(`[Email] 產業新增需求確認信已寄送至 ${maskEmail(params.userEmail)}`);
   } catch (error) {
     console.error('[Email] sendIndustryRequestReceivedEmail 失敗:', error);
   }
@@ -1172,7 +1193,7 @@ export async function sendIndustryRequestAdminEmail(params: {
   try {
     const resend = getResend();
     if (!resend) return;
-    await resend.emails.send({
+    await deliverEmail(resend, {
       from: FROM_EMAIL,
       to: ADMIN_EMAIL,
       subject: '【OXM】收到新的產業新增需求',

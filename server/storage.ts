@@ -3,6 +3,8 @@ import { publicImageUrl } from "./factoryAvatarUrl";
 
 function getClient(): S3Client {
   return new S3Client({
+    // Batch 3.9：S3 連線／請求上限，儲存服務卡住時上傳與下載不會無限等待
+    requestHandler: { connectionTimeout: 5_000, requestTimeout: 30_000 },
     region: process.env.AWS_REGION ?? "ap-southeast-1",
     credentials: {
       accessKeyId: process.env.AWS_ACCESS_KEY_ID ?? "",

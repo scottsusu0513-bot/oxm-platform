@@ -51,6 +51,8 @@ export function isPrivateStorageConfigured(): boolean {
 
 function getClient(config: PrivateStorageConfig): S3Client {
   return new S3Client({
+    // Batch 3.9：S3 連線／請求上限，儲存服務卡住時上傳與下載不會無限等待
+    requestHandler: { connectionTimeout: 5_000, requestTimeout: 30_000 },
     region: config.region,
     credentials: {
       accessKeyId: config.accessKeyId,

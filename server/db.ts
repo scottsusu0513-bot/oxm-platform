@@ -2,6 +2,7 @@ import { eq, and, like, desc, asc, sql, inArray, or, isNull, gt, gte, isNotNull,
 import { alias } from "drizzle-orm/mysql-core";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
+import { DatabaseUnavailableError } from "./_core/resilience";
 import { createHash, randomUUID } from "crypto";
 import type { EventEmitter } from "events";
 import {
@@ -164,41 +165,81 @@ export function isSearchQueryTimeoutError(err: unknown): boolean {
   return false;
 }
 
-export async function getDb() {
-  if (!_db && process.env.DATABASE_URL) {
-    try {
-      if (!_pool) {
-        _pool = await mysql.createPool({
-          uri: process.env.DATABASE_URL,
-          connectionLimit: 50,
-          waitForConnections: true,
-          enableKeepAlive: true,
-          keepAliveInitialDelay: 0,
-        });
-        (_pool as unknown as EventEmitter).on("error", (rawErr: unknown) => {
-          const err = rawErr as Error & { code?: string; fatal?: boolean };
-          console.error("[Database] Pool error:", {
-            code: err.code,
-            message: err.message,
-            fatal: err.fatal,
-          });
-          if (isRetryableDbError(err)) {
-            _pool = null;
-            _db = null;
-          }
-        });
+// ===== 主連線池（Production Hardening Batch 3.9）=====
+// - queueLimit：連線全部被占用時最多排隊這麼多個請求，超過立即失敗（不會無限排隊、
+//   讓記憶體與 pending request 一直累積）。
+// - connectTimeout：資料庫連不上時，每次建立連線最多等這麼久。
+// - 連不上資料庫時丟出 DatabaseUnavailableError（不是回傳 null）：null 會被大多數
+//   呼叫端當成「沒有資料」，資料庫中斷期間頁面會顯示「找不到工廠」「0 筆結果」，
+//   而不是錯誤。沒有設定 DATABASE_URL（測試／本機）時維持回傳 null。
+// - 同一時間只有一個初始化流程（single-flight），中斷期間大量請求不會各自建立連線池。
+export const MAIN_POOL_CONNECTION_LIMIT = 50;
+export const MAIN_POOL_QUEUE_LIMIT = 500;
+export const DB_CONNECT_TIMEOUT_MS = 10_000;
+let _dbInit: Promise<ReturnType<typeof drizzle>> | null = null;
+
+function describeDbError(err: unknown): { code?: string; name?: string; message?: string } {
+  const e = err as { code?: string; name?: string; message?: string } | null;
+  return { code: e?.code, name: e?.name, message: e?.message };
+}
+
+async function initDb(): Promise<ReturnType<typeof drizzle>> {
+  if (!_pool) {
+    const created = mysql.createPool({
+      uri: process.env.DATABASE_URL,
+      connectionLimit: MAIN_POOL_CONNECTION_LIMIT,
+      queueLimit: MAIN_POOL_QUEUE_LIMIT,
+      connectTimeout: DB_CONNECT_TIMEOUT_MS,
+      waitForConnections: true,
+      enableKeepAlive: true,
+      keepAliveInitialDelay: 0,
+    });
+    (created as unknown as EventEmitter).on("error", (rawErr: unknown) => {
+      const err = rawErr as Error & { code?: string; fatal?: boolean };
+      console.error("[Database] Pool error:", { code: err.code, message: err.message, fatal: err.fatal });
+      if (isRetryableDbError(err) && _pool === created) {
+        _pool = null;
+        _db = null;
+        created.end().catch(() => {});
       }
-      _db = drizzle(_pool) as unknown as ReturnType<typeof drizzle>;
-      const conn = await _pool.getConnection();
-      await conn.execute("SELECT 1");
-      conn.release();
-    } catch (error) {
-      console.error("[Database] Failed to connect:", error);
-      _db = null;
-      _pool = null;
-    }
+    });
+    _pool = created;
   }
+  const pool = _pool;
+  let conn: mysql.PoolConnection | undefined;
+  try {
+    conn = await pool.getConnection();
+    await conn.execute("SELECT 1");
+  } catch (error) {
+    console.error("[Database] Failed to connect:", describeDbError(error));
+    if (_pool === pool) _pool = null;
+    pool.end().catch(() => {});
+    throw new DatabaseUnavailableError();
+  } finally {
+    conn?.release();
+  }
+  _db = drizzle(pool) as unknown as ReturnType<typeof drizzle>;
   return _db;
+}
+
+export async function getDb(): Promise<ReturnType<typeof drizzle> | null> {
+  if (_db) return _db;
+  if (!process.env.DATABASE_URL) return null;
+  if (!_dbInit) _dbInit = initDb().finally(() => { _dbInit = null; });
+  return _dbInit;
+}
+
+/** 測試用：目前主連線池實際生效的設定。 */
+export function __getMainPoolConfigForTests(): { connectionLimit?: number; queueLimit?: number; connectTimeout?: number } | null {
+  const cfg = (_pool as unknown as { pool?: { config?: { connectionLimit?: number; queueLimit?: number; connectionConfig?: { connectTimeout?: number } } } } | null)?.pool?.config;
+  return cfg ? { connectionLimit: cfg.connectionLimit, queueLimit: cfg.queueLimit, connectTimeout: cfg.connectionConfig?.connectTimeout } : null;
+}
+
+/** 關機時關閉主連線池與搜尋連線池（Batch 3.9，見 server/_core/resilience.ts）。 */
+export async function closeDbPools(): Promise<void> {
+  const pools = [_pool, _searchPool].filter((p): p is mysql.Pool => !!p);
+  _pool = null; _db = null; _searchPool = null; _searchDb = null;
+  await Promise.allSettled(pools.map(p => p.end()));
 }
 
 // ===== User helpers =====

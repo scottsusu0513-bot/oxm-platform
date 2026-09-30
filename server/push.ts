@@ -1,6 +1,7 @@
 import { initializeApp, getApps, cert } from "firebase-admin/app";
 import { getMessaging } from "firebase-admin/messaging";
 import * as db from "./db";
+import { withTimeout } from "./_core/resilience";
 
 let firebaseInitialized = false;
 let firebaseInitError: string | null = null;
@@ -30,6 +31,8 @@ function ensureFirebaseInit(): void {
     throw new Error(firebaseInitError);
   }
 }
+
+export const PUSH_SEND_TIMEOUT_MS = 10_000;
 
 export type SendPushResult =
   | { status: "sent"; tokenCount: number; successCount: number; failureCount: number }
@@ -77,7 +80,15 @@ export async function sendPushToUser(
     },
   };
 
-  const response = await getMessaging().sendEachForMulticast(message);
+  // Batch 3.9：FCM 卡住時不讓呼叫端（部分在 request 路徑內 await）無限等待
+  let response: Awaited<ReturnType<ReturnType<typeof getMessaging>["sendEachForMulticast"]>>;
+  try {
+    response = await withTimeout(getMessaging().sendEachForMulticast(message), PUSH_SEND_TIMEOUT_MS, "FCM send");
+  } catch (err) {
+    const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+    console.error(`[Push] userId=${userId} FCM send failed: ${msg}`);
+    return { status: "error", message: msg };
+  }
   console.log(`[Push] userId=${userId} FCM result: success=${response.successCount} fail=${response.failureCount}`);
 
   // Handle invalid / unregistered tokens

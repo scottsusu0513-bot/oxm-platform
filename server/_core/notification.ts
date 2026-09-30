@@ -86,6 +86,8 @@ export async function notifyOwner(
 
   try {
     const response = await fetch(endpoint, {
+      // Batch 3.9：背景通知最多等 5 秒，上游卡住時不會累積懸空的連線
+      signal: AbortSignal.timeout(5_000),
       method: "POST",
       headers: {
         accept: "application/json",

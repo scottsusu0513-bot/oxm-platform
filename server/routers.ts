@@ -520,7 +520,7 @@ export async function dispatchNewsNotifications(params: {
       await new Promise(res => setTimeout(res, INTER_EMAIL_DELAY_MS));
     }
     console.log(`[news] email queue done newsId=${params.newsId} success=${successCount} failed=${failCount}`);
-  })();
+  })().catch((err: unknown) => console.error("[news] email dispatch failed:", err instanceof Error ? `${err.name}: ${err.message}` : err));
 
   // Push：逐一寄送以取得每個使用者各自的成功/失敗狀態（sendPushToRecipients
   // 只回傳整批彙總數字，無法對應回各自的通知紀錄），單一使用者失敗不影響其他人。
@@ -558,7 +558,7 @@ export async function dispatchNewsNotifications(params: {
       }
     }
     console.log(`[news] push queue done newsId=${params.newsId} success=${successCount} failed=${failCount}`);
-  })();
+  })().catch((err: unknown) => console.error("[news] push dispatch failed:", err instanceof Error ? `${err.name}: ${err.message}` : err));
 }
 
 /**
@@ -5612,7 +5612,7 @@ export const appRouter = router({
         } catch (err) {
           console.error(`[adminMessage] getRecipientsWithEmails failed for campaignId=${campaignId}:`, err);
         }
-      })();
+      })().catch((err: unknown) => console.error("[admin] broadcast email queue failed:", err instanceof Error ? `${err.name}: ${err.message}` : err));
       return { campaignId, recipientCount: receiverIds.length };
     }),
 
@@ -6192,7 +6192,7 @@ export const appRouter = router({
         } catch (err) {
           console.error(`[announcement] broadcast failed id=${announcementId}:`, err);
         }
-      })();
+      })().catch((err: unknown) => console.error("[admin] announcement email queue failed:", err instanceof Error ? `${err.name}: ${err.message}` : err));
       }
 
       return { success: true };
@@ -6372,7 +6372,7 @@ export const appRouter = router({
           isCrossIndustry: input.isCrossIndustry,
           industryNames: input.industryNames,
           emailScope: resolveNewsEmailScope(input),
-        });
+        }).catch((err: unknown) => console.error("[news] notification dispatch failed:", err instanceof Error ? `${err.name}: ${err.message}` : err));
       }
       return { success: true, id: result.id, slug: created?.slug ?? input.slug ?? "" };
     }),
@@ -6424,7 +6424,7 @@ export const appRouter = router({
             // （shouldNotify）——已發布過的消息這個 if 區塊本身就不會進來，
             // 天生擋掉補寄。emailScope 只決定「要寄的話寄給誰」。
             emailScope: resolveNewsEmailScope({ sendEmailNotification, emailRecipientScope }),
-          });
+          }).catch((err: unknown) => console.error("[news] notification dispatch failed:", err instanceof Error ? `${err.name}: ${err.message}` : err));
         }
       }
       return { success: true };
@@ -8609,7 +8609,7 @@ export const appRouter = router({
           );
         }).catch((err) => {
           console.warn(`[Email] New-case notification FAILED for app #${id} consultant #${notifyConsultant.id}:`, err);
-        });
+        }).catch((err: unknown) => console.error("[upgrade] consultant notification failed:", err instanceof Error ? `${err.name}: ${err.message}` : err));
       } else if (status === "new") {
         console.warn(`[Email] Skipping consultant email for app #${id}: consultant=${assignedConsultant ? `id=${assignedConsultant.id} userId=${assignedConsultant.userId} isActive=${assignedConsultant.isActive}` : "null"}`);
       } else if (status === "unassigned") {
@@ -9046,7 +9046,7 @@ export const appRouter = router({
               console.warn(`[Email] backfill notification failed for app ${app.id}:`, err);
             }
           }
-        });
+        }).catch((err: unknown) => console.error("[finance] consultant notification failed:", err instanceof Error ? `${err.name}: ${err.message}` : err));
       }
 
       return {
