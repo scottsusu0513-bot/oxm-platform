@@ -2,7 +2,7 @@
  * Batch 3.10：儲存空間對帳（server/storageReconcile.ts、server/jobs/reconcileStorageObjects.ts）。
  * S3 一律用假的 listPage／deleteObject；DB 引用掃描用本機測試 DB 的真實資料。
  */
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { sql } from "drizzle-orm";
 import * as db from "./db";
 import {
@@ -265,4 +265,114 @@ describe("collectStorageReferences（本機測試 DB）：現行、修改申請�
     expect(applied).toMatchObject({ deleted: 1, failed: 0, aborted: null });
     expect(f.deleted).toEqual([K.orphan]);
   }, 60000);
+});
+
+describe("private 對帳：只按三個 prefix 分別 ListObjectsV2（IAM s3:prefix 限制）", () => {
+  const P = ["chat-attachments/", "news-attachments/", "certification-evidence/"];
+  const chatKey = (c: string) => `chat-attachments/3/${n21(c)}.pdf`;
+  const newsKey = (c: string) => `news-attachments/4/${n21(c)}.pdf`;
+  const certKey = (c: string) => `certification-evidence/5/${n21(c)}.jpg`;
+
+  it("清單集中定義為三個 prefix，且所有 private 規則、key 產生器都落在其中（避免與 IAM 漂移）", async () => {
+    const { PRIVATE_RECONCILE_LIST_PREFIXES } = await import("./storageReconcile");
+    const { CERTIFICATION_EVIDENCE_KEY_PREFIX } = await import("../shared/badges");
+    const { createChatPdfTmpKey, chatPdfFinalKey } = await import("./chatPdfAttachment");
+    const { newsAttachmentPermanentKey } = await import("./newsAttachmentStorage");
+    expect([...PRIVATE_RECONCILE_LIST_PREFIXES]).toEqual(P);
+    const covered = (k: string) => PRIVATE_RECONCILE_LIST_PREFIXES.some(p => k.startsWith(p));
+    for (const r of PRIVATE_RECONCILE_RULES) expect(covered(r.prefix)).toBe(true);
+    for (const k of [createChatPdfTmpKey(), chatPdfFinalKey(3, n21("x")), newsAttachmentPermanentKey(4, "news-attachments/tmp/abcdefgh.pdf"), `${CERTIFICATION_EVIDENCE_KEY_PREFIX}/5/x.jpg`, "news-attachments/tmp/abcdefgh.pdf"]) {
+      expect(covered(k)).toBe(true);
+    }
+  });
+
+  function privateDeps(pages: Record<string, ListedObject[][]>, opts: { failPrefix?: string } = {}) {
+    const calls: { prefix?: string; token?: string }[] = [];
+    const deleted: string[] = [];
+    const deps: ReconcileDeps = {
+      now: () => NOW,
+      listPage: async (token?: string, prefix?: string) => {
+        calls.push({ prefix, token });
+        if (prefix && prefix === opts.failPrefix) throw Object.assign(new Error("denied"), { name: "AccessDenied" });
+        const list = pages[prefix ?? ""] ?? [[]];
+        const i = Number(token ?? 0);
+        return { objects: list[i] ?? [], nextToken: i + 1 < list.length ? String(i + 1) : undefined };
+      },
+      collectReferences: async () => ({ refs: new Map([[chatKey("r"), new Set(["CURRENT" as const])]]), tables: 1, columns: 1 }),
+      deleteObject: async (k: string) => { deleted.push(k); },
+    };
+    return { deps, calls, deleted };
+  }
+  const pages = () => ({
+    "chat-attachments/": [[obj(chatKey("r")), obj(chatKey("a"))], [obj(chatKey("b")), obj(chatKey("a"))]],
+    "news-attachments/": [[obj(newsKey("a"))], [obj(newsKey("b"))], [obj(newsKey("c"))]],
+    "certification-evidence/": [[obj(certKey("a"))], [obj(certKey("b"))]],
+  });
+
+  it("每個 request 都帶三個 prefix 之一、各自分頁、合併去重；沒有任何無 Prefix 的請求", async () => {
+    const f = privateDeps(pages());
+    const r = await runStorageReconcile({ bucket: "private" }, f.deps);
+    expect(f.calls.every(c => c.prefix && P.includes(c.prefix))).toBe(true);
+    expect(f.calls.filter(c => c.prefix === "chat-attachments/")).toHaveLength(2);
+    expect(f.calls.filter(c => c.prefix === "news-attachments/")).toHaveLength(3);
+    expect(f.calls.filter(c => c.prefix === "certification-evidence/")).toHaveLength(2);
+    expect(r).toMatchObject({ listed: 8, listingComplete: true }); // 3＋3＋2；chatKey("a") 出現兩次只算一次
+    expect(r.perPrefix["chat-attachments/"]).toMatchObject({ total: 3, referenced: 1, candidates: 2 });
+    expect(r.candidateCount).toBe(2 + 3 + 2);
+  });
+
+  it.each(P)("%s 列出失敗 → 整個對帳拋出（fail closed），不刪任何物件", async (failPrefix) => {
+    const f = privateDeps(pages(), { failPrefix });
+    const all = Array.from(new Set(Object.values(pages()).flat(2).map(o => o.key)));
+    await expect(runStorageReconcile({ bucket: "private", apply: true, approvedFingerprint: candidateFingerprint(all.filter(k => k !== chatKey("r"))) }, f.deps)).rejects.toMatchObject({ name: "AccessDenied" });
+    expect(f.deleted).toEqual([]);
+  });
+
+  it("某個 prefix 回傳不屬於它的 key → 拋出，不刪任何物件", async () => {
+    const p = pages();
+    p["news-attachments/"][0].push(obj(chatKey("z")));
+    const f = privateDeps(p);
+    await expect(runStorageReconcile({ bucket: "private" }, f.deps)).rejects.toThrow(/outside the requested prefix/);
+    expect(f.deleted).toEqual([]);
+  });
+
+  it("任一 prefix 超過頁數上限 → listing_complete=false，apply 中止", async () => {
+    const f = privateDeps(pages());
+    const orig = f.deps.listPage;
+    f.deps.listPage = async (token, prefix) => prefix === "certification-evidence/" ? { objects: [], nextToken: "again" } : orig(token, prefix);
+    const r = await runStorageReconcile({ bucket: "private", apply: true, approvedFingerprint: "0".repeat(64) }, f.deps);
+    expect(r).toMatchObject({ listingComplete: false, aborted: "listing_incomplete", deleted: 0 });
+  });
+
+  it("真實 S3 client 接線：private 只送出帶 Prefix 的 ListObjectsV2；public 維持不帶 Prefix 列整個 bucket", async () => {
+    const { S3Client } = await import("@aws-sdk/client-s3");
+    const { depsFor } = await import("./jobs/reconcileStorageObjects");
+    const sent: { bucket: string; prefix?: string; token?: string }[] = [];
+    const spy = vi.spyOn(S3Client.prototype, "send").mockImplementation(async (cmd: any) => {
+      const i = cmd.input;
+      sent.push({ bucket: i.Bucket, prefix: i.Prefix, token: i.ContinuationToken });
+      return (i.ContinuationToken ? { Contents: [], IsTruncated: false } : { Contents: [], IsTruncated: true, NextContinuationToken: "p2" }) as never;
+    });
+    vi.stubEnv("AWS_PRIVATE_FILES_BUCKET", "priv-bucket-test");
+    vi.stubEnv("AWS_PRIVATE_FILES_REGION", "ap-southeast-2");
+    vi.stubEnv("AWS_PRIVATE_FILES_ACCESS_KEY_ID", "AKIAEXAMPLEEXAMPLE00");
+    vi.stubEnv("AWS_PRIVATE_FILES_SECRET_ACCESS_KEY", "x".repeat(40));
+    vi.stubEnv("AWS_S3_BUCKET", "pub-bucket-test");
+    try {
+      const fakeRefs = async () => ({ refs: new Map(), tables: 0, columns: 0 });
+      await runStorageReconcile({ bucket: "private" }, { ...depsFor("private"), collectReferences: fakeRefs });
+      const priv = sent.filter(s => s.bucket === "priv-bucket-test");
+      expect(priv).toHaveLength(6); // 3 prefix × 2 頁
+      expect(priv.every(s => typeof s.prefix === "string" && P.includes(s.prefix))).toBe(true);
+      expect(new Set(priv.map(s => s.prefix))).toEqual(new Set(P));
+      sent.length = 0;
+      await runStorageReconcile({ bucket: "public" }, { ...depsFor("public"), collectReferences: fakeRefs });
+      expect(sent).toEqual([{ bucket: "pub-bucket-test", prefix: undefined, token: undefined }, { bucket: "pub-bucket-test", prefix: undefined, token: "p2" }]);
+      const { privateStorageListObjectsPage } = await import("./privateStorage");
+      for (const bad of ["", "chat-attachments", "../", "a/b/"]) await expect(privateStorageListObjectsPage(bad)).rejects.toThrow(/explicit top-level prefix/);
+    } finally {
+      spy.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
 });

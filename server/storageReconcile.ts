@@ -26,6 +26,7 @@
 import { createHash } from "node:crypto";
 import { sql } from "drizzle-orm";
 import { getDb } from "./db";
+import { CERTIFICATION_EVIDENCE_KEY_PREFIX } from "../shared/badges";
 
 export type StorageBucketName = "public" | "private";
 
@@ -66,6 +67,18 @@ export const PRIVATE_RECONCILE_RULES: readonly ReconcileRule[] = [
   { prefix: "news-attachments/", keyPattern: new RegExp(`^news-attachments/${ID}/${NAME}\\.pdf$`), graceDays: 7 },
   // 認證證明綁定審核流程，寬限較長
   imgRule("certification-evidence", 30),
+];
+
+/**
+ * private bucket 對帳只列出這三個頂層 prefix（每個 ListObjectsV2 都明確帶 Prefix），
+ * 不對整個 bucket 做無 Prefix 的列出。IAM 的 s3:ListBucket 條件（s3:prefix）必須與
+ * 這份清單一致——見 docs/storage.md。PRIVATE_RECONCILE_RULES 的每條規則都必須落在
+ * 其中一個 prefix 底下（storageReconcile310 測試會檢查）。
+ */
+export const PRIVATE_RECONCILE_LIST_PREFIXES: readonly string[] = [
+  "chat-attachments/",
+  "news-attachments/",
+  `${CERTIFICATION_EVIDENCE_KEY_PREFIX}/`,
 ];
 
 export function rulesFor(bucket: StorageBucketName): readonly ReconcileRule[] {
@@ -184,7 +197,8 @@ export function candidateFingerprint(keys: readonly string[]): string {
 }
 
 export type ReconcileDeps = {
-  listPage: (continuationToken?: string) => Promise<{ objects: ListedObject[]; nextToken?: string }>;
+  /** public：prefix 一律 undefined（列整個 bucket，行為不變）；private：一律帶 PRIVATE_RECONCILE_LIST_PREFIXES 其中之一 */
+  listPage: (continuationToken?: string, prefix?: string) => Promise<{ objects: ListedObject[]; nextToken?: string }>;
   collectReferences: () => Promise<{ refs: StorageReferences; tables: number; columns: number }>;
   deleteObject: (key: string) => Promise<void>;
   now?: () => Date;
@@ -224,16 +238,8 @@ export async function runStorageReconcile(
   const rules = rulesFor(opts.bucket);
   const now = deps.now?.() ?? new Date();
 
-  const objects: ListedObject[] = [];
-  let token: string | undefined;
-  let pages = 0;
-  do {
-    const page = await deps.listPage(token);
-    objects.push(...page.objects);
-    token = page.nextToken;
-    pages++;
-  } while (token && pages < MAX_LIST_PAGES);
-  const listingComplete = !token;
+  // 任何一頁列出失敗都直接拋出（不刪任何東西）；頁數超過上限則標為列不完整，apply 會中止
+  const { objects, listingComplete } = await listBucketObjects(opts.bucket, deps);
 
   const scan = await deps.collectReferences();
   const decisions = objects.map(o => decideObject(o, scan.refs, rules, now));
@@ -284,6 +290,42 @@ export async function runStorageReconcile(
     }
   }
   return { ...report, deleted, failed };
+}
+
+async function listPrefix(deps: ReconcileDeps, prefix: string | undefined): Promise<{ objects: ListedObject[]; complete: boolean }> {
+  const objects: ListedObject[] = [];
+  let token: string | undefined;
+  let pages = 0;
+  do {
+    const page = await deps.listPage(token, prefix);
+    objects.push(...page.objects);
+    token = page.nextToken;
+    pages++;
+  } while (token && pages < MAX_LIST_PAGES);
+  return { objects, complete: !token };
+}
+
+/**
+ * public：與原本相同，列整個 bucket。private（Batch 3.10）：逐一列出
+ * PRIVATE_RECONCILE_LIST_PREFIXES，每個 prefix 各自處理分頁，再依 key 去重合併；
+ * 任一 prefix 回傳不屬於該 prefix 的 key 視為列表異常，直接拋出（fail closed）。
+ */
+export async function listBucketObjects(bucket: StorageBucketName, deps: ReconcileDeps): Promise<{ objects: ListedObject[]; listingComplete: boolean }> {
+  if (bucket === "public") {
+    const r = await listPrefix(deps, undefined);
+    return { objects: r.objects, listingComplete: r.complete };
+  }
+  const byKey = new Map<string, ListedObject>();
+  let listingComplete = true;
+  for (const prefix of PRIVATE_RECONCILE_LIST_PREFIXES) {
+    const r = await listPrefix(deps, prefix);
+    for (const o of r.objects) {
+      if (!o.key.startsWith(prefix)) throw new Error("private listing returned a key outside the requested prefix");
+      byKey.set(o.key, o);
+    }
+    if (!r.complete) listingComplete = false;
+  }
+  return { objects: Array.from(byKey.values()), listingComplete };
 }
 
 /** 報告輸出：只有數量、prefix 與指紋。 */

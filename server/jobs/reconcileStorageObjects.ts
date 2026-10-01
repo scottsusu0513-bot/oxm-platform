@@ -41,7 +41,14 @@ export function depsFor(bucket: StorageBucketName): ReconcileDeps {
     return { listPage: storageListObjectsPage, collectReferences: collectStorageReferences, deleteObject: storageDelete };
   }
   if (!isPrivateStorageConfigured()) throw new Error("私有附件儲存尚未設定");
-  return { listPage: privateStorageListObjectsPage, collectReferences: collectStorageReferences, deleteObject: privateStorageDeleteObject };
+  return {
+    listPage: (token, prefix) => {
+      if (!prefix) throw new Error("private listing requires an explicit prefix");
+      return privateStorageListObjectsPage(prefix, token);
+    },
+    collectReferences: collectStorageReferences,
+    deleteObject: privateStorageDeleteObject,
+  };
 }
 
 /** dry-run 一律 0；apply 時中止或有刪除失敗為 1。 */

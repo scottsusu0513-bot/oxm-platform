@@ -42,7 +42,7 @@ presigned PUT 把 `content-type` 與 `content-length` 列為 signed headers：S3
 | Web 服務（公開憑證） | 公開 | `s3:PutObject`、`s3:GetObject`（HEAD）、`s3:DeleteObject`、`s3:ListBucket`（對帳用） |
 | Web 服務（私有憑證） | 私有 | `s3:PutObject`、`s3:GetObject`、`s3:DeleteObject`，Resource 限定上表三個 prefix |
 | Cron：cleanup-expired-news-attachments／cleanup-expired-chat-pdfs | 私有 | `s3:DeleteObject` |
-| Cron：reconcile-storage（私有） | 私有 | 另需 `s3:ListBucket`（只有啟用私有 bucket 對帳時才需要） |
+| Cron：reconcile-storage（私有） | 私有 | 另需 `s3:ListBucket`，以 `s3:prefix` 條件限定 `chat-attachments/*`、`news-attachments/*`、`certification-evidence/*`（程式只會帶這三個 Prefix 分別列出，見 `PRIVATE_RECONCILE_LIST_PREFIXES`；不列整個 bucket） |
 
 兩組憑證不可共用；公開憑證不應有私有 bucket 的任何權限，反之亦然。
 

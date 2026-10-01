@@ -92,10 +92,14 @@ export async function privateStorageCreateUploadUrl(
 
 export type PrivateListedObject = { key: string; size: number; lastModified: Date };
 
-/** ListObjectsV2 一頁；儲存空間對帳用，唯讀。需要 IAM s3:ListBucket（見 docs/storage.md）。 */
-export async function privateStorageListObjectsPage(continuationToken?: string): Promise<{ objects: PrivateListedObject[]; nextToken?: string }> {
+/**
+ * ListObjectsV2 一頁；儲存空間對帳用，唯讀。一律必須帶非空的 prefix——IAM 的
+ * s3:ListBucket 只允許特定 s3:prefix（見 docs/storage.md），不對整個 bucket 列出。
+ */
+export async function privateStorageListObjectsPage(prefix: string, continuationToken?: string): Promise<{ objects: PrivateListedObject[]; nextToken?: string }> {
+  if (typeof prefix !== "string" || !/^[a-z0-9-]+\/$/.test(prefix)) throw new Error("private listing requires an explicit top-level prefix");
   const config = requirePrivateStorageConfig();
-  const r = await getClient(config).send(new ListObjectsV2Command({ Bucket: config.bucket, ContinuationToken: continuationToken, MaxKeys: 1000 }));
+  const r = await getClient(config).send(new ListObjectsV2Command({ Bucket: config.bucket, Prefix: prefix, ContinuationToken: continuationToken, MaxKeys: 1000 }));
   return {
     objects: (r.Contents ?? []).filter(o => o.Key).map(o => ({ key: o.Key!, size: o.Size ?? 0, lastModified: o.LastModified ?? new Date(0) })),
     nextToken: r.IsTruncated ? r.NextContinuationToken : undefined,
