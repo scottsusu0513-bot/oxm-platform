@@ -24,8 +24,8 @@ vi.mock("./privateStorage", async (importOriginal) => {
   return {
     ...actual,
     isPrivateStorageConfigured: () => true,
-    privateStorageCreateUploadUrl: async (key: string, contentType: string, ttl: number) => {
-      h.uploadCalls.push({ key, contentType, ttl });
+    privateStorageCreateUploadUrl: async (key: string, contentType: string, contentLength: number, ttl: number) => {
+      h.uploadCalls.push({ key, contentType, contentLength, ttl });
       return `https://oxm-private-test.s3.ap-northeast-1.amazonaws.com/${key}?test-ttl=${ttl}&test-signature=placeholder`;
     },
     privateStorageHeadObject: async (key: string) => {
@@ -168,7 +168,8 @@ describe("upload session（G–N）", () => {
     const r = await (await call(owner)).createPdfUploadSession(session({ fileName: "報價‮fdp.exe<1>.pdf" }));
     expect(r.fileName).toBe("報價fdp.exe_1_.pdf");
     expect(r.uploadKey).toMatch(/^chat-attachments\/tmp\/[A-Za-z0-9_-]{21}\.pdf$/);
-    expect(h.uploadCalls).toEqual([{ key: r.uploadKey, contentType: "application/pdf", ttl: 600 }]);
+    // Batch 3.10：宣告的檔案大小一併簽進 presigned PUT（S3 拒絕大小不符的上傳）
+    expect(h.uploadCalls).toEqual([{ key: r.uploadKey, contentType: "application/pdf", contentLength: session().fileSize, ttl: 600 }]);
     expect(r.expiresInSeconds).toBeLessThanOrEqual(600);
     expect(r.contentType).toBe("application/pdf");
     expect(Object.keys(r).sort()).toEqual(["contentType", "expiresInSeconds", "fileName", "uploadKey", "uploadUrl"]);

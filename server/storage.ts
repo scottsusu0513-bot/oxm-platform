@@ -1,4 +1,4 @@
-import { S3Client, PutObjectCommand, DeleteObjectCommand, HeadObjectCommand, CopyObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, DeleteObjectCommand, HeadObjectCommand, CopyObjectCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
 import { publicImageUrl } from "./factoryAvatarUrl";
 
 function getClient(): S3Client {
@@ -12,6 +12,12 @@ function getClient(): S3Client {
     },
   });
 }
+
+/**
+ * 公開圖片的 key 一律是 nanoid 產生、內容永不改寫（換圖就是換新 key），可以讓瀏覽器
+ * 與 CDN 長期快取（Batch 3.10；原本完全沒有 Cache-Control）。
+ */
+export const PUBLIC_IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable";
 
 // 公開網址規則集中在 factoryAvatarUrl.ts（頭貼搬移的 parser 也用同一套），行為不變。
 function getPublicUrl(key: string): string {
@@ -35,6 +41,7 @@ export async function storagePut(
         Key: relKey,
         Body: body,
         ContentType: contentType,
+        CacheControl: PUBLIC_IMMUTABLE_CACHE_CONTROL,
       })
     );
   } catch (err) {
@@ -71,6 +78,19 @@ export async function storageGet(relKey: string): Promise<{ key: string; url: st
     }
   }
   return { key: relKey, url: getPublicUrl(relKey) };
+}
+
+export type StorageListedObject = { key: string; size: number; lastModified: Date };
+
+/** ListObjectsV2 一頁（最多 1000 筆）；儲存空間對帳（server/storageReconcile.ts）用，唯讀。 */
+export async function storageListObjectsPage(continuationToken?: string): Promise<{ objects: StorageListedObject[]; nextToken?: string }> {
+  const bucket = process.env.AWS_S3_BUCKET;
+  if (!bucket) throw new Error("AWS_S3_BUCKET is not set");
+  const r = await getClient().send(new ListObjectsV2Command({ Bucket: bucket, ContinuationToken: continuationToken, MaxKeys: 1000 }));
+  return {
+    objects: (r.Contents ?? []).filter(o => o.Key).map(o => ({ key: o.Key!, size: o.Size ?? 0, lastModified: o.LastModified ?? new Date(0) })),
+    nextToken: r.IsTruncated ? r.NextContinuationToken : undefined,
+  };
 }
 
 export type StorageObjectHead = { contentLength: number; contentType: string | null; etag: string | null };

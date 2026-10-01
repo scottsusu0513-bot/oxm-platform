@@ -201,7 +201,7 @@ export function setupOriginCheck(app: Express) {
  * 圖片上傳驗證。maxBytes 預設 5MB，維持既有所有呼叫端目前的行為不變；
  * 找消息封面／內文圖片需要 10MB 上限，會明確傳入這個參數覆蓋預設值。
  */
-export async function validateImageUpload(file: Buffer, maxBytes = 5 * 1024 * 1024): Promise<{ valid: boolean; error?: string }> {
+export async function validateImageUpload(file: Buffer, maxBytes = 5 * 1024 * 1024): Promise<{ valid: boolean; error?: string; mimeType?: DetectedImageMimeType }> {
   if (!file || file.length === 0) {
     return { valid: false, error: "檔案為空" };
   }
@@ -210,20 +210,29 @@ export async function validateImageUpload(file: Buffer, maxBytes = 5 * 1024 * 10
     return { valid: false, error: `檔案大小超過 ${Math.round(maxBytes / (1024 * 1024))}MB` };
   }
 
-  // 檢查 magic number
-  const validMagicNumbers = [
-    { magic: Buffer.from([0xFF, 0xD8, 0xFF]), type: "JPEG" },
-    { magic: Buffer.from([0x89, 0x50, 0x4E, 0x47]), type: "PNG" },
-    { magic: Buffer.from([0x52, 0x49, 0x46, 0x46]), type: "WEBP" }, // RIFF
-  ];
-
-  const isValid = validMagicNumbers.some(({ magic }) => {
-    return file.slice(0, magic.length).equals(magic);
-  });
-
-  if (!isValid) {
+  // 檢查 magic number（Batch 3.10：由檔案內容判斷實際格式，不信任前端宣稱的 MIME）
+  const mimeType = detectImageMimeType(file);
+  if (!mimeType) {
     return { valid: false, error: "不支持的圖片格式，僅支持 JPG、PNG、WEBP" };
   }
 
-  return { valid: true };
+  return { valid: true, mimeType };
+}
+
+export type DetectedImageMimeType = "image/jpeg" | "image/png" | "image/webp";
+
+/**
+ * 依檔案開頭的 signature 判斷圖片格式（Batch 3.10）。WEBP 必須是
+ * `RIFF....WEBP`——只檢查 RIFF 會連 WAV／AVI 等其他 RIFF 容器一起放行。
+ * 上傳到 S3 的 Content-Type 與副檔名一律以這裡的結果為準。
+ */
+export function detectImageMimeType(file: Buffer): DetectedImageMimeType | null {
+  if (file.length >= 3 && file[0] === 0xFF && file[1] === 0xD8 && file[2] === 0xFF) return "image/jpeg";
+  if (file.length >= 8 && file.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]))) return "image/png";
+  if (file.length >= 12 && file.subarray(0, 4).toString("latin1") === "RIFF" && file.subarray(8, 12).toString("latin1") === "WEBP") return "image/webp";
+  return null;
+}
+
+export function imageExtensionForMimeType(mimeType: DetectedImageMimeType): "jpg" | "png" | "webp" {
+  return mimeType === "image/png" ? "png" : mimeType === "image/webp" ? "webp" : "jpg";
 }

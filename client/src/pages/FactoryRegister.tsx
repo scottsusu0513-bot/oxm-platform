@@ -11,6 +11,7 @@ import { ChevronDown } from "lucide-react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { performLogin } from "@/const";
 import { trpc } from "@/lib/trpc";
+import { compressImage } from "@/lib/compressImage";
 import { INDUSTRIES, INDUSTRY_OPTIONS, TAIWAN_REGIONS, CAPITAL_OPTIONS, MFG_MODE_OPTIONS } from "@shared/constants";
 import { normalizeTaxId, isValidTaiwanTaxId } from "@shared/taxId";
 import { useState, useEffect, useRef } from "react";
@@ -113,17 +114,19 @@ export default function FactoryRegister() {
     if (errors.foundedYear) setErrors(prev => ({ ...prev, foundedYear: undefined }));
   };
 
-  const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Batch 3.10：跟工廠後台換頭貼同一套 compressImage（1280px、JPEG）——原本直接上傳
+  // 原檔，正式站有多張 1–4.7MB 的頭貼被搜尋卡片載入。
+  const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     if (file.size > 5 * 1024 * 1024) { toast.error("圖片大小不能超過 5MB"); return; }
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      const base64 = ev.target?.result as string;
+    try {
+      const base64 = await compressImage(file);
       setAvatarPreview(base64);
       setAvatarBase64(base64);
-    };
-    reader.readAsDataURL(file);
+    } catch {
+      toast.error("圖片讀取失敗，請重試");
+    }
   };
 
   const validate = (): boolean => {

@@ -16,7 +16,8 @@ export type ChatPdfCleanupResult = {
 };
 
 export type ChatPdfCleanupDeps = {
-  listDue: (expiresBeforeIso: string, limit: number) => Promise<{ id: number; attachmentData: unknown }[]>;
+  /** afterId：cursor（Batch 3.10），只回傳 id 大於它的列，依 id 遞增。 */
+  listDue: (expiresBeforeIso: string, limit: number, afterId: number) => Promise<{ id: number; attachmentData: unknown }[]>;
   deleteObject: (key: string) => Promise<void>;
   markDeleted: (messageId: number, expectedFileKey: string, deletedAtIso: string) => Promise<boolean>;
 };
@@ -45,7 +46,7 @@ const defaultDeps: ChatPdfCleanupDeps = {
  * 顯示失敗，而不是每天安靜地掃到 0 筆）。
  */
 export async function runChatPdfAttachmentCleanup(
-  opts: { now?: Date; limit?: number } = {},
+  opts: { now?: Date; limit?: number; maxPages?: number } = {},
   deps: ChatPdfCleanupDeps = defaultDeps,
 ): Promise<ChatPdfCleanupResult> {
   if (deps === defaultDeps && !isPrivateStorageConfigured()) {
@@ -56,33 +57,44 @@ export async function runChatPdfAttachmentCleanup(
   const expiresBeforeIso = new Date(now.getTime() - CHAT_PDF_ADMIN_GRACE_MS).toISOString();
   const nowIso = now.toISOString();
 
-  const candidates = await deps.listDue(expiresBeforeIso, limit);
-  let deleted = 0, skipped = 0, failed = 0;
+  const maxPages = Math.max(1, opts.maxPages ?? 25);
+  let deleted = 0, skipped = 0, failed = 0, scanned = 0;
 
-  for (const row of candidates) {
-    const attachment = parsePrivateChatPdfAttachment(row.attachmentData);
-    if (!attachment || !attachment.fileKey || attachment.deleted === true || attachment.deletedAt != null
-      || !isChatPdfDueForPhysicalDeletion(attachment, now)) {
-      skipped++;
-      continue;
-    }
-    try {
-      await deps.deleteObject(attachment.fileKey);
-    } catch (err) {
-      if (!isS3NotFoundError(err)) {
-        failed++;
+  // Batch 3.10：cursor 分頁。原本固定只看最前面 limit 筆——持續刪除失敗的列會一直
+  // 排在最前面，數量超過 limit 時後面到期的附件永遠輪不到。
+  let afterId = 0;
+  for (let page = 0; page < maxPages; page++) {
+    const candidates = await deps.listDue(expiresBeforeIso, limit, afterId);
+    if (candidates.length === 0) break;
+    scanned += candidates.length;
+    afterId = candidates[candidates.length - 1].id;
+
+    for (const row of candidates) {
+      const attachment = parsePrivateChatPdfAttachment(row.attachmentData);
+      if (!attachment || !attachment.fileKey || attachment.deleted === true || attachment.deletedAt != null
+        || !isChatPdfDueForPhysicalDeletion(attachment, now)) {
+        skipped++;
         continue;
       }
+      try {
+        await deps.deleteObject(attachment.fileKey);
+      } catch (err) {
+        if (!isS3NotFoundError(err)) {
+          failed++;
+          continue;
+        }
+      }
+      try {
+        if (await deps.markDeleted(row.id, attachment.fileKey, nowIso)) deleted++;
+        else skipped++; // 另一個排程已經處理過
+      } catch {
+        failed++;
+      }
     }
-    try {
-      if (await deps.markDeleted(row.id, attachment.fileKey, nowIso)) deleted++;
-      else skipped++; // 另一個排程已經處理過
-    } catch {
-      failed++;
-    }
+    if (candidates.length < limit) break;
   }
 
-  return { scanned: candidates.length, deleted, skipped, failed };
+  return { scanned, deleted, skipped, failed };
 }
 
 export function decideExitCode(result: ChatPdfCleanupResult): number {

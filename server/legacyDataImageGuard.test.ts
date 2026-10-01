@@ -11,7 +11,7 @@
  *   - approveRevisionAtomic：再次略過 data: URL 的 avatarUrl／coverImageUrl，保留目前值
  *   - updateFactory：拒絕 data: URL
  */
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { sql } from "drizzle-orm";
 import * as db from "./db";
 import { appRouter } from "./routers";
@@ -66,9 +66,15 @@ async function insertRevision(factoryId: number, submittedBy: number, proposed: 
 
 beforeAll(async () => {
   expect(isLegacyDataUrl(DATA_AVATAR)).toBe(true);
+  // Batch 3.10：頭貼網址必須是本平台公開 bucket 的物件——讓測試環境的 bucket 設定與
+  // 測試用網址（TEMP_AVATAR）一致
+  vi.stubEnv("AWS_S3_PUBLIC_BASE_URL", "");
+  vi.stubEnv("AWS_S3_BUCKET", "oxm-images-prod-2026");
+  vi.stubEnv("AWS_REGION", "ap-southeast-2");
 });
 
 afterAll(async () => {
+  vi.unstubAllEnvs();
   const conn = await db.getDb();
   if (conn) for (const id of factoryIds) await conn.execute(sql`DELETE FROM factoryRevisions WHERE factoryId = ${id}`);
   for (const id of factoryIds) await deleteTestFactory(id);

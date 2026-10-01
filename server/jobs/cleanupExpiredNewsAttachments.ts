@@ -33,6 +33,9 @@ export type NewsAttachmentCleanupResult = {
  * 只由 Render Cron Job 直接執行本檔案（CLI 進入點，見檔案最下方），不透過任何
  * HTTP endpoint，不需要對外開放的 cron secret。
  */
+const CLEANUP_PAGE_SIZE = 200;
+const CLEANUP_MAX_PAGES = 25;
+
 export async function runNewsAttachmentCleanup(): Promise<NewsAttachmentCleanupResult> {
   if (!isPrivateStorageConfigured()) {
     // 跟 privateStorage.ts 用同一句精簡訊息，不列出缺的是哪一項變數
@@ -45,30 +48,41 @@ export async function runNewsAttachmentCleanup(): Promise<NewsAttachmentCleanupR
     throw new Error("資料庫連線失敗");
   }
 
-  const candidates = await db.getNewsAttachmentsDueForCleanup();
   let deleted = 0;
   let failed = 0;
+  let scanned = 0;
 
-  for (const attachment of candidates) {
-    try {
-      await privateStorageDeleteObject(attachment.storageKey);
-      await db.markNewsAttachmentStorageDeleted(attachment.id);
-      deleted++;
-    } catch (e: unknown) {
-      failed++;
-      const msg = e instanceof Error ? e.message : String(e);
-      // deleteFailureReason 只寫進 DB（管理員後台可見），不印到 log——避免 log
-      // 裡出現 S3 SDK 錯誤訊息可能夾帶的 key 路徑等內部資訊。單筆記錄失敗本身
-      // 不影響其他附件，繼續處理下一筆。
+  // Batch 3.10：cursor 分頁（id 遞增）。原本只看第一批 200 筆、沒有排序——持續刪除
+  // 失敗的附件超過 200 筆時，其他到期附件會永遠輪不到。
+  let afterId = 0;
+  for (let page = 0; page < CLEANUP_MAX_PAGES; page++) {
+    const candidates = await db.getNewsAttachmentsDueForCleanup(CLEANUP_PAGE_SIZE, afterId);
+    if (candidates.length === 0) break;
+    scanned += candidates.length;
+    afterId = candidates[candidates.length - 1].id;
+
+    for (const attachment of candidates) {
       try {
-        await db.recordNewsAttachmentDeleteFailure(attachment.id, msg);
-      } catch {
-        // 記錄失敗原因這一步本身失敗，不中斷整批次，下次排程仍會重新嘗試這筆。
+        await privateStorageDeleteObject(attachment.storageKey);
+        await db.markNewsAttachmentStorageDeleted(attachment.id);
+        deleted++;
+      } catch (e: unknown) {
+        failed++;
+        const msg = e instanceof Error ? e.message : String(e);
+        // deleteFailureReason 只寫進 DB（管理員後台可見），不印到 log——避免 log
+        // 裡出現 S3 SDK 錯誤訊息可能夾帶的 key 路徑等內部資訊。單筆記錄失敗本身
+        // 不影響其他附件，繼續處理下一筆。
+        try {
+          await db.recordNewsAttachmentDeleteFailure(attachment.id, msg);
+        } catch {
+          // 記錄失敗原因這一步本身失敗，不中斷整批次，下次排程仍會重新嘗試這筆。
+        }
       }
     }
+    if (candidates.length < CLEANUP_PAGE_SIZE) break;
   }
 
-  return { scanned: candidates.length, deleted, failed };
+  return { scanned, deleted, failed };
 }
 
 /**

@@ -1880,13 +1880,15 @@ export async function getPrivateChatPdfKeysForConversation(conversationId: numbe
  * cleanup 候選：私有儲存、仍有 fileKey、expiresAt 早於 expiresBefore（呼叫端傳
  * now − 30 天）。expiresAt 一律由 toISOString() 寫入，字串比較等同時間比較。
  */
-export async function getChatPdfAttachmentsDueForCleanup(expiresBeforeIso: string, limit: number): Promise<{ id: number; attachmentData: unknown }[]> {
+export async function getChatPdfAttachmentsDueForCleanup(expiresBeforeIso: string, limit: number, afterId = 0): Promise<{ id: number; attachmentData: unknown }[]> {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
   return db.select({ id: messages.id, attachmentData: messages.attachmentData })
     .from(messages)
     .where(and(
       eq(messages.type, "pdf"),
+      // Batch 3.10：cursor 分頁，持續失敗的列不會永遠佔住每一批的名額
+      gt(messages.id, afterId),
       sql`JSON_UNQUOTE(JSON_EXTRACT(${messages.attachmentData}, '$.storage')) = 'private'`,
       sql`JSON_TYPE(JSON_EXTRACT(${messages.attachmentData}, '$.fileKey')) = 'STRING'`,
       sql`JSON_UNQUOTE(JSON_EXTRACT(${messages.attachmentData}, '$.expiresAt')) < ${expiresBeforeIso}`,
@@ -3034,6 +3036,41 @@ export async function saveMessage(
     const [conv] = await db.select({ factoryId: conversations.factoryId }).from(conversations).where(eq(conversations.id, conversationId)).limit(1);
     if (conv) recalcFactoryResponseTime(conv.factoryId).catch(() => {});
   }
+}
+
+/**
+ * 聊天 PDF 訊息（Batch 3.10）：同一個對話裡同一個 fileKey 只建立一則訊息。
+ * conversations 列 FOR UPDATE 讓「檢查是否已存在」與 insert 串行化——同一份上傳
+ * 被重複或併發 finalize 時，promoteChatPdfUpload 本來就會沿用同一個正式物件，
+ * 原本會因此產生兩則共用同一個 fileKey 的訊息（其中一則日後清除會讓另一則失效）。
+ */
+export async function saveChatPdfMessageOnce(
+  conversationId: number,
+  senderId: number,
+  attachment: Record<string, any> & { fileKey: string | null },
+): Promise<{ created: boolean }> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  if (!attachment.fileKey) throw new Error("缺少檔案");
+  const created = await db.transaction(async (tx) => {
+    const [conv] = await tx.select({ id: conversations.id }).from(conversations)
+      .where(eq(conversations.id, conversationId)).limit(1).for("update");
+    if (!conv) throw new Error("對話不存在");
+    const [dup] = await tx.select({ id: messages.id }).from(messages).where(and(
+      eq(messages.conversationId, conversationId),
+      eq(messages.type, "pdf"),
+      sql`JSON_UNQUOTE(JSON_EXTRACT(${messages.attachmentData}, '$.fileKey')) = ${attachment.fileKey}`,
+    )).limit(1);
+    if (dup) return false;
+    await tx.insert(messages).values({ conversationId, senderId, senderRole: "factory", content: "", type: "pdf", attachmentData: attachment });
+    await tx.update(conversations).set({ lastMessageAt: new Date() }).where(eq(conversations.id, conversationId));
+    return true;
+  });
+  if (created) {
+    const [conv] = await db.select({ factoryId: conversations.factoryId }).from(conversations).where(eq(conversations.id, conversationId)).limit(1);
+    if (conv) recalcFactoryResponseTime(conv.factoryId).catch(() => {});
+  }
+  return { created };
 }
 
 export async function recalcFactoryResponseTime(factoryId: number) {
@@ -4413,6 +4450,12 @@ export async function createNewsAttachment(data: CreateNewsAttachmentInput): Pro
       .from(news).where(eq(news.id, data.newsId)).limit(1).for("update");
     if (!newsRow) throw new Error("找不到此則消息");
 
+    // Batch 3.10：正式 key 由暫存 key 決定，同一份上傳重複／併發 finalize 時回傳既有
+    // 那一筆，不建立重複附件（news 列的 FOR UPDATE 鎖讓這個檢查與 insert 串行化）。
+    const [existing] = await tx.select({ id: newsAttachments.id }).from(newsAttachments)
+      .where(and(eq(newsAttachments.newsId, data.newsId), eq(newsAttachments.storageKey, data.storageKey))).limit(1);
+    if (existing) return existing.id;
+
     const [[{ n }]] = [await tx.select({ n: sql<number>`COUNT(*)` }).from(newsAttachments).where(eq(newsAttachments.newsId, data.newsId))];
     if (Number(n) >= MAX_NEWS_ATTACHMENTS_PER_NEWS) {
       throw new Error(`每篇消息最多只能有 ${MAX_NEWS_ATTACHMENTS_PER_NEWS} 份附件`);
@@ -4589,7 +4632,7 @@ export interface CleanupCandidateAttachment {
  * 用 lte() 讓「現在」也走 drizzle 的同一套序列化，兩邊的偏移量互相抵銷，
  * 不管 MySQL session time_zone 設定什麼都能得到正確的先後順序判斷。
  */
-export async function getNewsAttachmentsDueForCleanup(limit = 200): Promise<CleanupCandidateAttachment[]> {
+export async function getNewsAttachmentsDueForCleanup(limit = 200, afterId = 0): Promise<CleanupCandidateAttachment[]> {
   const db = await getDb();
   if (!db) return [];
   return db.select({
@@ -4597,11 +4640,13 @@ export async function getNewsAttachmentsDueForCleanup(limit = 200): Promise<Clea
     storageKey: newsAttachments.storageKey,
     displayName: newsAttachments.displayName,
   }).from(newsAttachments).where(and(
+    // Batch 3.10：cursor 分頁（id 遞增），持續失敗的附件不會讓後面的附件永遠輪不到
+    gt(newsAttachments.id, afterId),
     isNotNull(newsAttachments.downloadExpiresAt),
     lte(newsAttachments.downloadExpiresAt, new Date()),
     ne(newsAttachments.expirationType, "never"),
     isNull(newsAttachments.storageDeletedAt),
-  )).limit(limit);
+  )).orderBy(asc(newsAttachments.id)).limit(limit);
 }
 
 /** 單筆 S3 DeleteObject 成功（或物件本來就已經不存在，視同成功）後呼叫。 */

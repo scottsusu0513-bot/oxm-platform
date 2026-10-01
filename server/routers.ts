@@ -114,7 +114,7 @@ import {
 } from "./factoryVisibility";
 import { notifyOwner } from "./_core/notification";
 import { storagePut, storageDelete } from "./storage";
-import { validateImageUpload } from "./_core/security";
+import { validateImageUpload, imageExtensionForMimeType } from "./_core/security";
 import { INDUSTRY_OPTIONS, TAIWAN_REGIONS, CAPITAL_OPTIONS, INDUSTRY_SLUGS } from "../shared/constants";
 import {
   SHORT_VIDEO_SERVICE_KEYS, SHORT_VIDEO_GOAL_KEYS, SHORT_VIDEO_PLATFORM_KEYS, SHORT_VIDEO_GOALS,
@@ -150,7 +150,7 @@ import {
   type ChatPdfStorage,
 } from "./chatPdfAttachment";
 import { isLegacyDataUrl } from "../shared/persistentImageUrl";
-import { looksLikeTemporaryFactoryAvatarUrl } from "./factoryAvatarUrl";
+import { looksLikeTemporaryFactoryAvatarUrl, isAllowedFactoryAvatarUrl } from "./factoryAvatarUrl";
 import { promoteTemporaryFactoryAvatar, FactoryAvatarPromotionError } from "./factoryAvatarPromotion";
 import { stripCertificationEvidence, stripCertificationEvidenceFromRevision, stripHiddenBadgesForPublic, isValidCertificationEvidenceKey, isValidBadgeId, CERTIFICATION_EVIDENCE_KEY_PREFIX, applyCertificationEvidenceDescriptions, summarizeCertificationEvidenceForOwner, sortBadgeIds } from "../shared/badges";
 import { nanoid } from "nanoid";
@@ -172,6 +172,7 @@ import {
   privateStoragePutObject,
   privateStorageCreateViewUrl,
 } from "./privateStorage";
+import { newsAttachmentPermanentKey, NEWS_PDF_DOWNLOAD_CACHE_CONTROL } from "./newsAttachmentStorage";
 
 // 聊天 PDF 型錄使用的私有 storage primitives（與找消息 PDF 同一組獨立憑證）
 const chatPdfPrivateStorage: ChatPdfStorage = {
@@ -1944,6 +1945,11 @@ export const appRouter = router({
       contactEmail: z.string().email().optional().or(z.literal("")),
     })).mutation(async ({ ctx, input }) => {
       requireVerifiedEmail(ctx.user);
+      // Batch 3.10：建立時工廠還不存在，頭貼一律在建立後透過 uploadAvatar 上傳到本平台
+      // bucket；不接受任意外部網址（前端 FactoryRegister 本來就不送這個欄位）。
+      if (input.avatarUrl) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: '頭貼請在建立工廠後上傳' });
+      }
       try {
         // createFactoryAtomic 使用 transaction + users row lock
         // admin 亦受同一規則約束：無法繞過一人一間工廠限制
@@ -2013,6 +2019,10 @@ export const appRouter = router({
       const isOwner = factory.ownerId === ctx.user.id;
       const isCoMgr = !isOwner && await db.isActiveCoManager(id, ctx.user.id);
       if (!isOwner && !isCoMgr) throw new TRPCError({ code: 'FORBIDDEN', message: '無權限修改此工廠' });
+      // Batch 3.10：頭貼只能沿用目前值、清空，或本平台 bucket 內屬於這間工廠的頭貼
+      if (!isAllowedFactoryAvatarUrl(data.avatarUrl, { factoryId: factory.id, currentValue: factory.avatarUrl, allowTemporary: false })) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: '頭貼網址無效，請重新上傳頭貼' });
+      }
       if (resubmissionCompletion && isFactoryArchived(factory)) {
         // 補全模式：只有 owner 本人、只能改送審必填欄位（跟 submitForReview
         // 同一份清單）。其他欄位（簡介、聯絡方式、徽章…）一律拒絕，不是
@@ -2146,6 +2156,10 @@ export const appRouter = router({
       // 其他欄位的修改照常送出。
       if (isLegacyDataUrl(proposedData.avatarUrl)) {
         delete proposedData.avatarUrl;
+      }
+      // Batch 3.10：修改申請的頭貼只能是目前值、清空，或本工廠的暫存／正式頭貼物件
+      if ("avatarUrl" in proposedData && !isAllowedFactoryAvatarUrl(proposedData.avatarUrl, { factoryId: factory.id, currentValue: factory.avatarUrl, allowTemporary: true })) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: '頭貼網址無效，請重新上傳頭貼' });
       }
 
       if (Object.keys(proposedData).length === 0) {
@@ -2440,7 +2454,8 @@ export const appRouter = router({
       const buffer = Buffer.from(base64Data, "base64");
       const validation = await validateImageUpload(buffer);
       if (!validation.valid) throw new Error(validation.error ?? "圖片格式不正確");
-      const ext = input.mimeType.includes("png") ? "png" : input.mimeType.includes("webp") ? "webp" : "jpg";
+      const mimeType = validation.mimeType!; // Batch 3.10：以檔案內容判斷的格式為準，不信任前端宣稱的 MIME
+      const ext = imageExtensionForMimeType(mimeType);
       const crop = input.crop ?? null;
 
       switch (factory.status) {
@@ -2448,7 +2463,7 @@ export const appRouter = router({
         case 'rejected': {
           // Direct update: upload and save to DB
           const key = `factory-avatars/${factory.id}/${nanoid()}.${ext}`;
-          const { url } = await storagePut(key, buffer, input.mimeType);
+          const { url } = await storagePut(key, buffer, mimeType);
           await db.updateFactory(factory.id, ctx.user.id, { avatarUrl: url, avatarCrop: crop });
           return { url, crop, savedToDb: true };
         }
@@ -2464,7 +2479,7 @@ export const appRouter = router({
           // avatarCrop 跟 avatarUrl 一樣只暫存在前端，等 submitRevision 時一併
           // 帶入 proposedData（見 BASIC_DATA_FIELDS／FactoryBasicDataSchema）。
           const key = `factory-avatars-temp/${factory.id}/${nanoid()}.${ext}`;
-          const { url } = await storagePut(key, buffer, input.mimeType);
+          const { url } = await storagePut(key, buffer, mimeType);
           return { url, crop, savedToDb: false };
         }
         default:
@@ -2510,8 +2525,9 @@ export const appRouter = router({
       const buffer = Buffer.from(base64Data, "base64");
       const validation = await validateImageUpload(buffer);
       if (!validation.valid) throw new Error(validation.error ?? "圖片格式不正確");
-      const key = `factory-covers/${factory.id}/${nanoid()}.jpg`;
-      const { url } = await storagePut(key, buffer, "image/jpeg");
+      const mimeType = validation.mimeType!; // Batch 3.10：封面原本一律標成 image/jpeg、.jpg，與實際內容可能不符
+      const key = `factory-covers/${factory.id}/${nanoid()}.${imageExtensionForMimeType(mimeType)}`;
+      const { url } = await storagePut(key, buffer, mimeType);
       const crop = input.crop ?? null;
       await db.updateFactory(factory.id, isAdmin ? -1 : factory.ownerId, { coverImageUrl: url, coverCrop: crop });
       return { url, crop };
@@ -2568,13 +2584,14 @@ export const appRouter = router({
       const buffer = Buffer.from(base64Data, "base64");
       const validation = await validateImageUpload(buffer);
       if (!validation.valid) throw new Error(validation.error ?? "圖片格式不正確");
-      const ext = input.mimeType.includes("png") ? "png" : input.mimeType.includes("webp") ? "webp" : "jpg";
+      const mimeType = validation.mimeType!; // Batch 3.10：以檔案內容判斷的格式為準，不信任前端宣稱的 MIME
+      const ext = imageExtensionForMimeType(mimeType);
       // key 只用 factoryId（純數字）與亂數字串組成，不使用任何徽章／認證名稱，
       // 格式必須符合 shared/badges.ts 的 isValidCertificationEvidenceKey。
       const key = `${CERTIFICATION_EVIDENCE_KEY_PREFIX}/${factory.id}/${nanoid()}.${ext}`;
       // privateStoragePutObject 本身失敗（拋出例外）時，執行不會走到下面任何一行——
       // 不會呼叫 DB 綁定，也不需要呼叫刪除（根本沒有東西寫進 S3）。
-      await privateStoragePutObject(key, buffer, input.mimeType);
+      await privateStoragePutObject(key, buffer, mimeType);
 
       // object key 從產生到綁定全程只存在伺服器端：上傳成功「當下」就直接用
       // row lock 附加進 certificationEvidence（見 db.appendFactoryCertificationEvidenceImage），
@@ -2765,9 +2782,10 @@ export const appRouter = router({
       const buffer = Buffer.from(base64Data, "base64");
       const validation = await validateImageUpload(buffer);
       if (!validation.valid) throw new Error(validation.error ?? "圖片格式不正確");
-      const ext = input.mimeType.includes("png") ? "png" : input.mimeType.includes("webp") ? "webp" : "jpg";
+      const mimeType = validation.mimeType!; // Batch 3.10：以檔案內容判斷的格式為準，不信任前端宣稱的 MIME
+      const ext = imageExtensionForMimeType(mimeType);
       const key = `factory-photos/${factory.id}/${nanoid()}.${ext}`;
-      const { url } = await storagePut(key, buffer, input.mimeType);
+      const { url } = await storagePut(key, buffer, mimeType);
       const id = await db.addFactoryPhoto(factory.id, url, input.caption, input.crop ?? null);
       return { id, url, crop: input.crop ?? null };
     }),
@@ -3117,9 +3135,10 @@ export const appRouter = router({
       const buffer = Buffer.from(base64Data, "base64");
       const validation = await validateImageUpload(buffer);
       if (!validation.valid) throw new Error(validation.error ?? "圖片格式不正確");
-      const ext = input.mimeType.includes("png") ? "png" : input.mimeType.includes("webp") ? "webp" : "jpg";
+      const mimeType = validation.mimeType!; // Batch 3.10：以檔案內容判斷的格式為準，不信任前端宣稱的 MIME
+      const ext = imageExtensionForMimeType(mimeType);
       const key = `product-images/${factory.id}/${nanoid()}.${ext}`;
-      const { url } = await storagePut(key, buffer, input.mimeType);
+      const { url } = await storagePut(key, buffer, mimeType);
       return { url };
     }),
   }),
@@ -3599,7 +3618,7 @@ export const appRouter = router({
         throw new TRPCError({ code: "PRECONDITION_FAILED", message: "私有附件儲存尚未設定" });
       }
       const uploadKey = createChatPdfTmpKey();
-      const uploadUrl = await privateStorageCreateUploadUrl(uploadKey, CHAT_PDF_MIME_TYPE, CHAT_PDF_UPLOAD_URL_TTL_SECONDS);
+      const uploadUrl = await privateStorageCreateUploadUrl(uploadKey, CHAT_PDF_MIME_TYPE, input.fileSize, CHAT_PDF_UPLOAD_URL_TTL_SECONDS);
       return { uploadUrl, uploadKey, fileName, contentType: CHAT_PDF_MIME_TYPE, expiresInSeconds: CHAT_PDF_UPLOAD_URL_TTL_SECONDS };
     }),
 
@@ -3634,7 +3653,8 @@ export const appRouter = router({
         fileSize: promoted.sizeBytes,
         expiresAt: chatPdfExpiresAt(new Date()),
       });
-      await db.saveMessage(input.conversationId, ctx.user.id, "factory", "", "pdf", attachment);
+      // Batch 3.10：同一個 fileKey 只會建立一則訊息（重複／併發 finalize 都安全）
+      await db.saveChatPdfMessageOnce(input.conversationId, ctx.user.id, attachment);
       return { success: true };
     }),
 
@@ -5219,6 +5239,13 @@ export const appRouter = router({
         // 申請維持待審、工廠資料不變。approveRevisionAtomic 會在鎖住的 transaction 內
         // 再確認申請內容仍是同一個暫存網址。
         const proposedAvatar = (proposed as Record<string, unknown> | null)?.avatarUrl;
+        // Batch 3.10：核准時再擋一次非暫存的外部網址（例如修正前就已送出的申請）
+        if (proposed && typeof proposed === 'object' && 'avatarUrl' in proposed && !looksLikeTemporaryFactoryAvatarUrl(proposedAvatar)) {
+          const currentFactory = await db.getFactoryById(revision.factoryId);
+          if (!isAllowedFactoryAvatarUrl(proposedAvatar, { factoryId: revision.factoryId, currentValue: currentFactory?.avatarUrl, allowTemporary: false })) {
+            throw new TRPCError({ code: 'BAD_REQUEST', message: '修改申請的頭貼網址無效，請要求工廠重新上傳頭貼' });
+          }
+        }
         if (looksLikeTemporaryFactoryAvatarUrl(proposedAvatar)) {
           try {
             const persistentUrl = await promoteTemporaryFactoryAvatar({ factoryId: revision.factoryId, temporaryAvatarUrl: proposedAvatar });
@@ -6452,9 +6479,10 @@ export const appRouter = router({
       const validation = await validateImageUpload(buffer, 10 * 1024 * 1024);
       if (!validation.valid) throw new TRPCError({ code: "BAD_REQUEST", message: validation.error ?? "圖片格式不正確" });
 
-      const ext = input.mimeType.includes("png") ? "png" : input.mimeType.includes("webp") ? "webp" : "jpg";
+      const mimeType = validation.mimeType!; // Batch 3.10：以檔案內容判斷的格式為準，不信任前端宣稱的 MIME
+      const ext = imageExtensionForMimeType(mimeType);
       const key = `news-covers/${input.newsId}/${nanoid()}.${ext}`;
-      const { url } = await storagePut(key, buffer, input.mimeType);
+      const { url } = await storagePut(key, buffer, mimeType);
 
       const { previousKey } = await db.setNewsCover(input.newsId, { key, url, alt: input.altText?.trim() || null });
       if (previousKey && previousKey !== key) {
@@ -6485,9 +6513,10 @@ export const appRouter = router({
       const validation = await validateImageUpload(buffer, 10 * 1024 * 1024);
       if (!validation.valid) throw new TRPCError({ code: "BAD_REQUEST", message: validation.error ?? "圖片格式不正確" });
 
-      const ext = input.mimeType.includes("png") ? "png" : input.mimeType.includes("webp") ? "webp" : "jpg";
+      const mimeType = validation.mimeType!; // Batch 3.10：以檔案內容判斷的格式為準，不信任前端宣稱的 MIME
+      const ext = imageExtensionForMimeType(mimeType);
       const key = `news-content/${input.newsId}/${nanoid()}.${ext}`;
-      const { url } = await storagePut(key, buffer, input.mimeType);
+      const { url } = await storagePut(key, buffer, mimeType);
 
       const altText = input.fileName ? input.fileName.replace(/\.[^.]+$/, "") : "";
       return { url, altText };
@@ -6533,7 +6562,7 @@ export const appRouter = router({
       }
 
       const storageKey = `news-attachments/tmp/${nanoid()}.pdf`;
-      const uploadUrl = await privateStorageCreateUploadUrl(storageKey, "application/pdf", 600);
+      const uploadUrl = await privateStorageCreateUploadUrl(storageKey, "application/pdf", input.declaredSizeBytes, 600);
       return { uploadUrl, storageKey, expiresInSeconds: 600 };
     }),
 
@@ -6576,8 +6605,17 @@ export const appRouter = router({
       const isPdfMagic = head.length >= 5 && head[0] === 0x25 && head[1] === 0x50 && head[2] === 0x44 && head[3] === 0x46 && head[4] === 0x2d;
       if (!isPdfMagic) return cleanupTmpAndThrow("檔案內容不是有效的 PDF");
 
-      const permanentKey = `news-attachments/${input.newsId}/${nanoid()}.pdf`;
-      await privateStorageCopyObject(input.storageKey, permanentKey);
+      // Batch 3.10：正式 key 由暫存 key 決定（同一份上傳重試／併發 finalize 都得到同一個
+      // key）；目標已存在且大小相同就沿用、不同就 fail closed，不覆蓋任何既有物件。
+      const permanentKey = newsAttachmentPermanentKey(input.newsId, input.storageKey);
+      const existingPermanent = await privateStorageHeadObject(permanentKey);
+      if (existingPermanent.exists) {
+        if (existingPermanent.sizeBytes !== meta.sizeBytes) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "檔案儲存失敗，請重新上傳" });
+        }
+      } else {
+        await privateStorageCopyObject(input.storageKey, permanentKey);
+      }
       await privateStorageDeleteObject(input.storageKey).catch(err =>
         console.warn(`[news] failed to delete tmp attachment after copy ${input.storageKey}:`, err instanceof Error ? err.message : err));
 
@@ -6595,8 +6633,9 @@ export const appRouter = router({
           customDownloadExpiresAt: input.customDownloadExpiresAt ? new Date(input.customDownloadExpiresAt) : null,
         });
       } catch (err) {
-        await privateStorageDeleteObject(permanentKey).catch(delErr =>
-          console.warn(`[news] failed to delete orphaned permanent attachment ${permanentKey}:`, delErr instanceof Error ? delErr.message : delErr));
+        // Batch 3.10：不在這裡刪除正式物件——key 是決定性的，同一份上傳的另一個併發
+        // finalize 可能已經成功引用它。沒有任何 DB 引用的物件交給儲存空間對帳
+        // （server/jobs/reconcileStorageObjects.ts）在寬限期後、重新確認引用才清除。
         throw new TRPCError({ code: "BAD_REQUEST", message: err instanceof Error ? err.message : "建立附件失敗" });
       }
       return { success: true, id: attachmentId };
@@ -6676,7 +6715,10 @@ export const appRouter = router({
         throw new TRPCError({ code: "PRECONDITION_FAILED", message: "已超過下載期限，如有需要請聯繫管理員。" });
       }
 
-      const url = await privateStorageCreateDownloadUrl(attachment.storageKey, attachment.displayName, ttlSeconds);
+      const url = await privateStorageCreateDownloadUrl(attachment.storageKey, attachment.displayName, ttlSeconds, {
+        disposition: "attachment",
+        cacheControl: NEWS_PDF_DOWNLOAD_CACHE_CONTROL,
+      });
       return { url, expiresInSeconds: ttlSeconds };
     }),
   }),
@@ -7105,9 +7147,10 @@ export const appRouter = router({
         }
         const validation = await validateImageUpload(buffer, COMMUNITY_IMAGE_MAX_BYTES);
         if (!validation.valid) throw new TRPCError({ code: "BAD_REQUEST", message: validation.error ?? "圖片格式不正確" });
-        const ext = input.mimeType.includes("png") ? "png" : input.mimeType.includes("webp") ? "webp" : "jpg";
+        const mimeType = validation.mimeType!; // Batch 3.10：以檔案內容判斷的格式為準，不信任前端宣稱的 MIME
+        const ext = imageExtensionForMimeType(mimeType);
         const key = `community-posts/${ctx.user.id}/${nanoid()}.${ext}`;
-        const { url } = await storagePut(key, buffer, input.mimeType);
+        const { url } = await storagePut(key, buffer, mimeType);
         return { url };
       }),
 

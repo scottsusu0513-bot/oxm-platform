@@ -1,4 +1,4 @@
-import { S3Client, PutObjectCommand, HeadObjectCommand, GetObjectCommand, DeleteObjectCommand, CopyObjectCommand, NotFound } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, HeadObjectCommand, GetObjectCommand, DeleteObjectCommand, CopyObjectCommand, ListObjectsV2Command, NotFound } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 // 找消息 PDF 附件專用的「私有」storage 模組——刻意跟 server/storage.ts（既有
@@ -62,6 +62,16 @@ function getClient(config: PrivateStorageConfig): S3Client {
 }
 
 /**
+ * Batch 3.10：presigned PUT 預設只簽 host——Content-Type 與檔案大小都沒有被簽進
+ * 網址，持有網址的人可以上傳任意大小（單次 PUT 上限 5GB）、任意類型的內容。
+ * 這裡把 content-type 與 content-length 列為 signed headers：S3 會拒絕任何
+ * Content-Type 或 Content-Length 與簽章不一致的 PUT（SignatureDoesNotMatch），
+ * 也不接受沒有 Content-Length 的 chunked 上傳，因此實際寫入的大小必定等於
+ * 呼叫端在伺服器端驗證過上限的 contentLength。finalize 仍會 HEAD 二次驗證。
+ */
+export const PRESIGNED_PUT_SIGNED_HEADERS: ReadonlySet<string> = new Set(["content-type", "content-length"]);
+
+/**
  * 產生一次性、限定單一 UUID key 的 presigned PUT 網址，讓前端把 PDF 直接
  * 傳到私有 bucket，不經過我們自己的 server（25MB PDF 若走 base64 + tRPC JSON
  * 會膨脹到約 33MB，超過現有 15MB 圖片上傳的 body limit，也不適合長期占用
@@ -71,11 +81,25 @@ function getClient(config: PrivateStorageConfig): S3Client {
 export async function privateStorageCreateUploadUrl(
   key: string,
   contentType: string,
+  contentLength: number,
   expiresInSeconds = 300,
 ): Promise<string> {
   const config = requirePrivateStorageConfig();
-  const command = new PutObjectCommand({ Bucket: config.bucket, Key: key, ContentType: contentType });
-  return getSignedUrl(getClient(config), command, { expiresIn: expiresInSeconds });
+  if (!Number.isInteger(contentLength) || contentLength <= 0) throw new Error("無效的檔案大小");
+  const command = new PutObjectCommand({ Bucket: config.bucket, Key: key, ContentType: contentType, ContentLength: contentLength });
+  return getSignedUrl(getClient(config), command, { expiresIn: expiresInSeconds, signableHeaders: new Set(PRESIGNED_PUT_SIGNED_HEADERS) });
+}
+
+export type PrivateListedObject = { key: string; size: number; lastModified: Date };
+
+/** ListObjectsV2 一頁；儲存空間對帳用，唯讀。需要 IAM s3:ListBucket（見 docs/storage.md）。 */
+export async function privateStorageListObjectsPage(continuationToken?: string): Promise<{ objects: PrivateListedObject[]; nextToken?: string }> {
+  const config = requirePrivateStorageConfig();
+  const r = await getClient(config).send(new ListObjectsV2Command({ Bucket: config.bucket, ContinuationToken: continuationToken, MaxKeys: 1000 }));
+  return {
+    objects: (r.Contents ?? []).filter(o => o.Key).map(o => ({ key: o.Key!, size: o.Size ?? 0, lastModified: o.LastModified ?? new Date(0) })),
+    nextToken: r.IsTruncated ? r.NextContinuationToken : undefined,
+  };
 }
 
 export interface PrivateObjectMetadata {

@@ -65,8 +65,9 @@ async function cleanupNews(id: number | undefined): Promise<void> {
 }
 
 const JPEG_MAGIC = Buffer.from([0xff, 0xd8, 0xff, 0x00, 0x00, 0x00]);
-const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x00]);
-const WEBP_MAGIC = Buffer.from([0x52, 0x49, 0x46, 0x46, 0x00, 0x00]); // RIFF
+// Batch 3.10：PNG 用完整 8-byte signature；WEBP 必須是 RIFF....WEBP（只有 RIFF 會連 WAV／AVI 也放行）
+const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00]);
+const WEBP_MAGIC = Buffer.concat([Buffer.from("RIFF", "latin1"), Buffer.from([0x24, 0x00, 0x00, 0x00]), Buffer.from("WEBPVP8 ", "latin1")]);
 const FAKE_MAGIC = Buffer.from("this is not an image, just renamed", "utf-8");
 const PDF_MAGIC = Buffer.from("%PDF-1.4\n...", "utf-8");
 

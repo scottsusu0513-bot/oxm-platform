@@ -50,6 +50,35 @@ export type ParsedTemporaryFactoryAvatar = { sourceKey: string; filename: string
  * 不同 factoryId、空檔名、非預期副檔名。
  */
 export function parseTemporaryFactoryAvatarUrl(value: unknown, expectedFactoryId: number): ParsedTemporaryFactoryAvatar | null {
+  return parseOwnedFactoryAvatarUrl(value, TEMP_FACTORY_AVATAR_PREFIX, expectedFactoryId);
+}
+
+/** 同一套嚴格規則，解析正式頭貼 `factory-avatars/{expectedFactoryId}/{filename}`。 */
+export function parsePersistentFactoryAvatarUrl(value: unknown, expectedFactoryId: number): ParsedTemporaryFactoryAvatar | null {
+  return parseOwnedFactoryAvatarUrl(value, PERSISTENT_FACTORY_AVATAR_PREFIX, expectedFactoryId);
+}
+
+/**
+ * Batch 3.10：工廠送出的頭貼網址只能是
+ *   - 沿用目前的值（未變更；涵蓋既有舊資料）
+ *   - 清空（null／空字串）
+ *   - 本平台公開 bucket 內、屬於這間工廠的頭貼物件：draft／rejected 直接修改只接受
+ *     正式 prefix（uploadAvatar 已直接寫入）；修改申請另外接受暫存 prefix
+ * 不接受任何外部網址或其他工廠的物件——原本只檢查 `^https?://`，任意外部圖片在
+ * 管理員核准後會成為公開頭貼，外部主機之後還能換掉內容、記錄訪客 IP。
+ */
+export function isAllowedFactoryAvatarUrl(
+  value: unknown,
+  opts: { factoryId: number; currentValue: string | null | undefined; allowTemporary: boolean },
+): boolean {
+  if (value === null || value === undefined || value === "") return true;
+  if (typeof value !== "string") return false;
+  if (opts.currentValue && value === opts.currentValue) return true;
+  if (parsePersistentFactoryAvatarUrl(value, opts.factoryId)) return true;
+  return opts.allowTemporary && parseTemporaryFactoryAvatarUrl(value, opts.factoryId) !== null;
+}
+
+function parseOwnedFactoryAvatarUrl(value: unknown, expectedPrefix: string, expectedFactoryId: number): ParsedTemporaryFactoryAvatar | null {
   if (typeof value !== "string" || !Number.isInteger(expectedFactoryId) || expectedFactoryId <= 0) return null;
   const base = publicImageBaseUrl();
   if (!value.startsWith(base)) return null;
@@ -64,7 +93,7 @@ export function parseTemporaryFactoryAvatarUrl(value: unknown, expectedFactoryId
   const parts = key.split("/");
   if (parts.length !== 3) return null;
   const [prefix, factoryIdPart, filename] = parts;
-  if (`${prefix}/` !== TEMP_FACTORY_AVATAR_PREFIX) return null;
+  if (`${prefix}/` !== expectedPrefix) return null;
   if (factoryIdPart !== String(expectedFactoryId)) return null;
   if (!TEMP_AVATAR_FILENAME.test(filename)) return null;
   return { sourceKey: key, filename };
