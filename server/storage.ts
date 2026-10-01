@@ -108,6 +108,74 @@ export async function storageHead(relKey: string): Promise<StorageObjectHead | n
   }
 }
 
+export type StorageObjectDetail = {
+  contentLength: number;
+  contentType: string | null;
+  etag: string | null;
+  cacheControl: string | null;
+  contentDisposition: string | null;
+  contentEncoding: string | null;
+  contentLanguage: string | null;
+  metadata: Record<string, string>;
+  serverSideEncryption: string | null;
+  storageClass: string | null;
+  versionId: string | null;
+};
+
+/** HeadObject（完整 metadata）：Cache-Control 補寫工具用。物件不存在回傳 null。 */
+export async function storageHeadDetailed(relKey: string): Promise<StorageObjectDetail | null> {
+  const bucket = process.env.AWS_S3_BUCKET;
+  if (!bucket) throw new Error("AWS_S3_BUCKET is not set");
+  try {
+    const h = await getClient().send(new HeadObjectCommand({ Bucket: bucket, Key: relKey }));
+    return {
+      contentLength: h.ContentLength ?? 0,
+      contentType: h.ContentType ?? null,
+      etag: h.ETag ?? null,
+      cacheControl: h.CacheControl ?? null,
+      contentDisposition: h.ContentDisposition ?? null,
+      contentEncoding: h.ContentEncoding ?? null,
+      contentLanguage: h.ContentLanguage ?? null,
+      metadata: h.Metadata ?? {},
+      serverSideEncryption: h.ServerSideEncryption ?? null,
+      storageClass: h.StorageClass ?? null,
+      versionId: h.VersionId ?? null,
+    };
+  } catch (err: any) {
+    if (err?.name === "NotFound" || err?.$metadata?.httpStatusCode === 404) return null;
+    throw err;
+  }
+}
+
+/**
+ * 原地改寫 Cache-Control（Batch 3.10 補寫既有公開物件）：同 key CopyObject、
+ * MetadataDirective REPLACE，並把 HEAD 讀到的 Content-Type 等 metadata 原樣帶回
+ * （REPLACE 不會自動保留）。CopySourceIfMatch 綁定 HEAD 時的 ETag：物件在這期間
+ * 被改過就失敗、不會覆寫。bytes 不經過本機，內容逐位元不變。
+ */
+export async function storageRewriteCacheControl(relKey: string, current: StorageObjectDetail, cacheControl: string): Promise<{ versionId: string | null }> {
+  const bucket = process.env.AWS_S3_BUCKET;
+  if (!bucket) throw new Error("AWS_S3_BUCKET is not set");
+  if (!current.etag || !current.contentType) throw new Error("missing etag or content-type");
+  const encodedSource = relKey.split("/").map(encodeURIComponent).join("/");
+  const r = await getClient().send(new CopyObjectCommand({
+    Bucket: bucket,
+    Key: relKey,
+    CopySource: `${bucket}/${encodedSource}`,
+    CopySourceIfMatch: current.etag,
+    MetadataDirective: "REPLACE",
+    ContentType: current.contentType,
+    CacheControl: cacheControl,
+    ...(current.contentDisposition ? { ContentDisposition: current.contentDisposition } : {}),
+    ...(current.contentEncoding ? { ContentEncoding: current.contentEncoding } : {}),
+    ...(current.contentLanguage ? { ContentLanguage: current.contentLanguage } : {}),
+    Metadata: current.metadata,
+    ...(current.serverSideEncryption === "AES256" ? { ServerSideEncryption: "AES256" as const } : {}),
+    ...(current.storageClass && current.storageClass !== "STANDARD" ? { StorageClass: current.storageClass as any } : {}),
+  }));
+  return { versionId: r.VersionId ?? null };
+}
+
 /**
  * 同一個 bucket 內的伺服器端複製（bytes 逐位元相同，不經過本機）。
  * MetadataDirective: "COPY"（AWS 預設值，這裡明寫）：Content-Type 與 user metadata

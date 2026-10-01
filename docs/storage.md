@@ -71,3 +71,17 @@ pnpm reconcile:storage -- --bucket=public --apply --approve=<fingerprint> [--max
 6. 輸出只有數量、prefix 與指紋，不含 key、檔名、網址或憑證。
 
 正式站第一次 apply 前，必須由 owner 核准 dry-run 的候選數量、大小與指紋。
+
+## 既有公開物件補寫 Cache-Control（`server/jobs/backfillPublicCacheControl.ts`）
+
+2bc7f09 之前上傳的公開物件沒有 Cache-Control。補寫工具只處理「目前被 DB 任何地方引用、key 格式符合公開規則」的物件；工廠 #26（owner 測試工廠）永遠排除。
+
+```
+node dist/jobs/backfillPublicCacheControl.js                                   # dry-run（預設）
+node dist/jobs/backfillPublicCacheControl.js --apply --approve=<fingerprint> --max-batch=25
+```
+
+- 每個物件：HEAD → 同 key `CopyObject`（`MetadataDirective: REPLACE`，帶回原 Content-Type／metadata／加密，`CopySourceIfMatch` 綁定 ETag）→ HEAD 驗證內容 ETag、大小、Content-Type 不變 → 匿名 HEAD 確認公開網址仍可讀。
+- 非 jpeg/png/webp、multipart ETag、大小不符的物件一律排除。
+- 已是目標值的物件跳過：冪等、可分批續跑；指紋涵蓋所有符合條件物件（含已完成），批次間不變。
+- 不寫 DB、不刪物件。versioning 開啟時，每次改寫會產生新版本（報告 `version_ids_returned`）。
