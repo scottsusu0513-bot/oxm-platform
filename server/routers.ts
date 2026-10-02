@@ -172,7 +172,7 @@ import {
   privateStoragePutObject,
   privateStorageCreateViewUrl,
 } from "./privateStorage";
-import { newsAttachmentPermanentKey, NEWS_PDF_DOWNLOAD_CACHE_CONTROL } from "./newsAttachmentStorage";
+import { newsAttachmentPermanentKey, newsPdfDownloadFileName, NEWS_PDF_DOWNLOAD_CACHE_CONTROL } from "./newsAttachmentStorage";
 
 // 聊天 PDF 型錄使用的私有 storage primitives（與找消息 PDF 同一組獨立憑證）
 const chatPdfPrivateStorage: ChatPdfStorage = {
@@ -6715,7 +6715,7 @@ export const appRouter = router({
         throw new TRPCError({ code: "PRECONDITION_FAILED", message: "已超過下載期限，如有需要請聯繫管理員。" });
       }
 
-      const url = await privateStorageCreateDownloadUrl(attachment.storageKey, attachment.displayName, ttlSeconds, {
+      const url = await privateStorageCreateDownloadUrl(attachment.storageKey, newsPdfDownloadFileName(attachment.displayName), ttlSeconds, {
         disposition: "attachment",
         cacheControl: NEWS_PDF_DOWNLOAD_CACHE_CONTROL,
       });

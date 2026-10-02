@@ -190,7 +190,8 @@ export type ContentDispositionType = "attachment" | "inline";
 
 export function buildContentDisposition(displayName: string, disposition: ContentDispositionType = "attachment"): string {
   const safe = sanitizeForHeader(displayName);
-  const asciiFallback = safe.replace(/[^\x20-\x7E]/g, "_") || "attachment.pdf";
+  // 引號內的 filename 不能含 " 或 \（否則 header 被截斷或跳脫錯亂）
+  const asciiFallback = safe.replace(/[^\x20-\x7E]/g, "_").replace(/["\\]/g, "_") || "attachment.pdf";
   const encoded = encodeURIComponent(safe);
   return `${disposition}; filename="${asciiFallback}"; filename*=UTF-8''${encoded}`;
 }

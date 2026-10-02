@@ -20,7 +20,7 @@ vi.mock("./storage", async (importOriginal) => {
 const priv = vi.hoisted(() => ({
   store: new Map<string, { size: number; contentType: string; head: Buffer }>(),
   uploadCalls: [] as { key: string; contentType: string; contentLength: number; ttl: number }[],
-  downloadCalls: [] as { key: string; opts: unknown }[],
+  downloadCalls: [] as { key: string; name: string; opts: unknown }[],
   deletes: [] as string[],
 }));
 vi.mock("./privateStorage", async (importOriginal) => {
@@ -44,8 +44,8 @@ vi.mock("./privateStorage", async (importOriginal) => {
       priv.store.set(dest, { ...o });
     },
     privateStorageDeleteObject: async (key: string) => { priv.deletes.push(key); priv.store.delete(key); },
-    privateStorageCreateDownloadUrl: async (key: string, _name: string, _ttl: number, opts: unknown) => {
-      priv.downloadCalls.push({ key, opts });
+    privateStorageCreateDownloadUrl: async (key: string, name: string, _ttl: number, opts: unknown) => {
+      priv.downloadCalls.push({ key, name, opts });
       return "https://private.example.test/download";
     },
   };
@@ -56,7 +56,7 @@ import { appRouter } from "./routers";
 import type { TrpcContext } from "./_core/context";
 import { detectImageMimeType, validateImageUpload } from "./_core/security";
 import { isAllowedFactoryAvatarUrl } from "./factoryAvatarUrl";
-import { newsAttachmentPermanentKey, NEWS_PDF_DOWNLOAD_CACHE_CONTROL } from "./newsAttachmentStorage";
+import { newsAttachmentPermanentKey, newsPdfDownloadFileName, NEWS_PDF_DOWNLOAD_CACHE_CONTROL } from "./newsAttachmentStorage";
 import { buildPrivateChatPdfAttachment } from "./chatPdfAttachment";
 import { runChatPdfAttachmentCleanup } from "./jobs/cleanupExpiredChatPdfAttachments";
 import { ensureTestUser, createTestFactory, deleteTestFactory, deleteTestUser } from "./_core/financeTestFixtures";
@@ -314,7 +314,8 @@ describe("找消息 PDF：簽入大小、決定性正式 key、重複／併發 f
   it("下載連結：attachment＋private, no-store", async () => {
     const [att] = await run(sql`SELECT id, storageKey FROM newsAttachments WHERE newsId = ${newsId} ORDER BY id LIMIT 1`);
     await adminCaller.news.getPdfDownloadUrl({ attachmentId: att.id });
-    expect(priv.downloadCalls.at(-1)).toEqual({ key: att.storageKey, opts: { disposition: "attachment", cacheControl: "private, no-store" } });
+    // 正式站 smoke 發現：displayName 不含 .pdf（後台上傳時去掉），下載檔名必須補上
+    expect(priv.downloadCalls.at(-1)).toEqual({ key: att.storageKey, name: "d.pdf", opts: { disposition: "attachment", cacheControl: "private, no-store" } });
     expect(NEWS_PDF_DOWNLOAD_CACHE_CONTROL).toBe("private, no-store");
   });
 
@@ -361,5 +362,20 @@ describe("cleanup 分頁：持續失敗的列不會讓後面的到期附件永�
     const ids = all.map(a => a.id);
     expect(ids).toEqual([...ids].sort((a, b) => a - b));
     if (ids.length > 0) expect((await db.getNewsAttachmentsDueForCleanup(1000, ids[0])).map(a => a.id)).not.toContain(ids[0]);
+  });
+});
+
+describe("下載檔名與 Content-Disposition（Batch 3.10 正式站 smoke 發現）", () => {
+  it("找消息下載檔名一律以 .pdf 結尾，不重複補", () => {
+    expect(newsPdfDownloadFileName("oxm-smoke-310")).toBe("oxm-smoke-310.pdf");
+    expect(newsPdfDownloadFileName("報價單.PDF")).toBe("報價單.PDF");
+    expect(newsPdfDownloadFileName("  型錄 2026 ")).toBe("型錄 2026.pdf");
+    expect(newsPdfDownloadFileName("   ")).toBe("attachment.pdf");
+  });
+  it("引號內的 ASCII 檔名不含 \" 或 \，也沒有換行", async () => {
+    const { buildContentDisposition } = await vi.importActual<typeof import("./privateStorage")>("./privateStorage");
+    const h = buildContentDisposition('a"b\\c\r\nX.pdf');
+    expect(h.startsWith('attachment; filename="a_b_cX.pdf"; filename*=UTF-8\'\'')).toBe(true);
+    expect(h).not.toMatch(/[\r\n]/);
   });
 });
