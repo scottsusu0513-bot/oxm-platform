@@ -1,4 +1,4 @@
-import { S3Client, PutObjectCommand, DeleteObjectCommand, HeadObjectCommand, CopyObjectCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, DeleteObjectCommand, HeadObjectCommand, CopyObjectCommand, ListObjectsV2Command, GetObjectCommand } from "@aws-sdk/client-s3";
 import { publicImageUrl } from "./factoryAvatarUrl";
 
 function getClient(): S3Client {
@@ -104,6 +104,27 @@ export async function storageHead(relKey: string): Promise<StorageObjectHead | n
     return { contentLength: h.ContentLength ?? 0, contentType: h.ContentType ?? null, etag: h.ETag ?? null };
   } catch (err: any) {
     if (err?.name === "NotFound" || err?.$metadata?.httpStatusCode === 404) return null;
+    throw err;
+  }
+}
+
+/** 讀取公開 bucket 物件內容（一次性頭貼遷移用）；不存在回傳 null，超過 maxBytes 拋出。 */
+export async function storageGetObjectBytes(relKey: string, maxBytes: number): Promise<Buffer | null> {
+  const bucket = process.env.AWS_S3_BUCKET;
+  if (!bucket) throw new Error("AWS_S3_BUCKET is not set");
+  try {
+    const r = await getClient().send(new GetObjectCommand({ Bucket: bucket, Key: relKey }));
+    if ((r.ContentLength ?? 0) > maxBytes) throw new Error("object too large");
+    const chunks: Buffer[] = [];
+    let total = 0;
+    for await (const chunk of r.Body as AsyncIterable<Uint8Array>) {
+      total += chunk.length;
+      if (total > maxBytes) throw new Error("object too large");
+      chunks.push(Buffer.from(chunk));
+    }
+    return Buffer.concat(chunks);
+  } catch (err: any) {
+    if (err?.name === "NoSuchKey" || err?.name === "NotFound" || err?.$metadata?.httpStatusCode === 404) return null;
     throw err;
   }
 }

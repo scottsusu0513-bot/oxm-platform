@@ -340,6 +340,20 @@ const PUBLIC_CONTENT_FACTORY_FIELDS = new Set<keyof InsertFactory>([
  * 刻意用獨立的 UPDATE（只動這一欄），不透過 updateFactory()——避免不小心
  * 也一併覆寫呼叫端沒打算變更的其他欄位。
  */
+/**
+ * 一次性頭貼遷移／回復用（Batch 3.10）：只有在 avatarUrl 仍是預期值時才更新，回傳是否
+ * 真的更新。不動 avatarCrop、publicContentUpdatedAt 或其他欄位。工廠 #26（owner 測試
+ * 工廠）在這一層也硬性拒絕。
+ */
+export async function conditionalUpdateFactoryAvatarUrl(factoryId: number, expectedUrl: string, newUrl: string): Promise<boolean> {
+  if (factoryId === 26) throw new Error("factory #26 is protected");
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  const [res] = await db.update(factories).set({ avatarUrl: newUrl })
+    .where(and(eq(factories.id, factoryId), eq(factories.avatarUrl, expectedUrl))) as unknown as [{ affectedRows: number }];
+  return Number(res?.affectedRows ?? 0) === 1;
+}
+
 export async function touchFactoryPublicContentUpdatedAt(factoryId: number): Promise<void> {
   const db = await getDb();
   if (!db) return;
