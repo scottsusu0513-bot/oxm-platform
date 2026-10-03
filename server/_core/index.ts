@@ -7,6 +7,7 @@ import { registerDevLoginRoutes } from "./devLogin";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
+import * as require_clientIp from "./clientIp";
 import { setupSecurityHeaders, setupOriginCheck, setupNoIndexRoutes } from "./security";
 import { setupGoneRoutes } from "./goneRoutes";
 import { ROBOTS_TXT, setupApiNoIndexHeader } from "./robots";
@@ -48,6 +49,29 @@ async function startServer() {
   const server = createServer(app);
   // Batch 3.9：每個 request 一個隨機 id（X-Request-Id），server log 與錯誤回報可對應同一次請求
   app.use(requestIdMiddleware);
+  // TEMPORARY Batch 3.11 diagnostic (REMOVE BEFORE FINAL COMMIT): proxy hop shape for the caller only, no raw IPs.
+  app.get("/api/__ipdiag/b54e94da47e0eb233cd6d999", (req, res) => {
+    const ci = require_clientIp;
+    const xffRaw = typeof req.headers["x-forwarded-for"] === "string" ? req.headers["x-forwarded-for"] : "";
+    const xff = xffRaw ? xffRaw.split(",").map(s => s.trim()) : [];
+    const cf = typeof req.headers["cf-connecting-ip"] === "string" ? req.headers["cf-connecting-ip"].trim() : "";
+    const sock = req.socket.remoteAddress ?? "";
+    const idx = (v: string) => xff.findIndex(x => ci.normalizeIp(x) === ci.normalizeIp(v));
+    const proposed = ci.resolveClientIp(sock, xffRaw, { allowCloudflareHop: !ci.isCloudflareWorkerSubrequest(req) }) ?? "";
+    res.setHeader("Cache-Control", "no-store");
+    res.json({
+      socket: ci.classifyIp(sock),
+      xffCount: xff.length,
+      xffKinds: xff.map(x => ci.classifyIp(x)),
+      cfConnectingIp: cf ? { kind: ci.classifyIp(cf), xffIndex: idx(cf) } : null,
+      cfWorker: ci.isCloudflareWorkerSubrequest(req),
+      xRealIp: typeof req.headers["x-real-ip"] === "string",
+      currentReqIp: { kind: ci.classifyIp(req.ip), xffIndex: idx(req.ip ?? ""), equalsCf: !!cf && ci.normalizeIp(req.ip) === ci.normalizeIp(cf) },
+      proposedReqIp: { kind: ci.classifyIp(proposed), xffIndex: idx(proposed), equalsCf: !!cf && ci.normalizeIp(proposed) === ci.normalizeIp(cf) },
+      proto: { reqProtocol: req.protocol, secure: req.secure, xfProto: req.headers["x-forwarded-proto"] ?? null },
+      host: { hostHeader: req.headers.host ?? null, xfHostPresent: typeof req.headers["x-forwarded-host"] === "string" },
+    });
+  });
 
   console.log("[boot] applying security headers");
   setupSecurityHeaders(app);
