@@ -89,7 +89,15 @@ jobs:
       OPENAI_API_KEY: sk-ci-test-placeholder-not-a-real-key
       AI_DIAGNOSIS_MODEL: gpt-5.6-terra
       AI_ROUTING_MODEL: gpt-5.6-terra
+      # Finance integration tests use the same test DB, as in local runs.
+      FINANCE_TEST_DATABASE_URL: mysql://oxm_ci:ci_test_password@127.0.0.1:3306/oxm_test
+      FINANCE_INTEGRATION_TESTS_CONFIRMED: "1"
     steps:
+      # Local runs use a Windows checkout (core.autocrlf=true, CRLF working tree);
+      # several static source-contract tests match CRLF line endings literally.
+      - name: Use CRLF working tree like local checkouts
+        run: git config --global core.autocrlf true
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -153,4 +161,9 @@ jobs:
           pnpm prerender:upgrade-center
 
       - name: Run full test suite
-        run: pnpm test
+        run: pnpm test --reporter=default --reporter=json --outputFile.json=test-results/vitest.json
+
+      # One annotation listing every failure (GitHub caps per-test annotations at 10).
+      - name: Summarize test results
+        if: always()
+        run: node scripts/ci/summarize-test-results.mjs test-results/vitest.json
