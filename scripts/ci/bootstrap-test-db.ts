@@ -83,10 +83,12 @@ async function main() {
     await conn.end();
   }
 
-  // Same idempotent seeds the server runs on boot (server/_core/index.ts).
+  // Same idempotent seeds the server runs on boot (server/_core/index.ts), as
+  // present in the local oxm_test. ensureConsultantsSeeded() is deliberately NOT
+  // run: consultant tests create their own one-per-region consultants
+  // (unique regionKey), and the local test DB keeps those tables empty.
   const db = await import("../../server/db");
   const { ensureUpgradeProgramsSeeded } = await import("../../server/upgradePrograms");
-  await db.ensureConsultantsSeeded();
   await db.ensureCertificationServiceCatalogSeeded();
   await ensureUpgradeProgramsSeeded();
   await db.closeDbPools();
