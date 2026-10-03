@@ -21,9 +21,15 @@
  */
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import path from "node:path";
 import mysql from "mysql2/promise";
 
 const MAX_IDENTIFIER = 64;
+const REPO_ROOT = path.resolve(import.meta.dirname, "..", "..");
+// drizzle-kit's own CLI entry, run with the current Node binary: works the same on
+// Linux, macOS and Windows (where `pnpm` is a .cmd shim that execFileSync cannot
+// launch without a shell), with no shell and no command-string concatenation.
+const DRIZZLE_KIT_CLI = path.join(REPO_ROOT, "node_modules", "drizzle-kit", "bin.cjs");
 
 function assertCiTestDatabase(): string {
   const raw = process.env.DATABASE_URL ?? "";
@@ -41,7 +47,11 @@ function shortenIdentifier(name: string): string {
 }
 
 function exportSchemaDdl(): string {
-  const out = execFileSync("pnpm", ["exec", "drizzle-kit", "export"], { encoding: "utf-8", maxBuffer: 64 * 1024 * 1024 });
+  const out = execFileSync(process.execPath, [DRIZZLE_KIT_CLI, "export"], {
+    cwd: REPO_ROOT, // drizzle.config.ts is resolved from the working directory
+    encoding: "utf-8",
+    maxBuffer: 64 * 1024 * 1024,
+  });
   const start = out.indexOf("CREATE TABLE");
   if (start < 0) throw new Error("drizzle-kit export produced no CREATE TABLE statements");
   return out.slice(start);
