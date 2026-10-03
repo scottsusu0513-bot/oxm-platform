@@ -1555,7 +1555,10 @@ function PhotoManager({ factoryId, onDirtyChange }: { factoryId: number; onDirty
       if (file.size > 5 * 1024 * 1024) { toast.error(`${file.name} 超過 5MB，請選擇較小的圖片`); continue; }
       try {
         compressed.push(await compressImage(file));
-      } catch {}
+      } catch {
+        // 例如 Android 相簿的 HEIC：WebView 無法解碼，不能無聲略過
+        toast.error(`${file.name} 無法讀取，請改用 JPG／PNG 圖片`);
+      }
     }
     if (compressed.length > 0) {
       setUploadQueue(compressed);
@@ -1914,7 +1917,7 @@ function ProductForm({ factoryId, product, onDone, resubmissionCompletion = fals
     const compressed: string[] = [];
     for (const file of Array.from(files)) {
       if (file.size > 5 * 1024 * 1024) { toast.error(`${file.name} 超過 5MB 限制`); continue; }
-      try { compressed.push(await compressImage(file)); } catch {}
+      try { compressed.push(await compressImage(file)); } catch { toast.error(`${file.name} 無法讀取，請改用 JPG／PNG 圖片`); }
     }
     if (fileInputRef.current) fileInputRef.current.value = "";
     if (compressed.length > 0) {

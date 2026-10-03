@@ -37,6 +37,10 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>上傳工廠、商品或貼文圖片時，可直接使用相機拍照。</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>上傳工廠、商品或貼文圖片時，從照片圖庫選擇圖片。</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>remote-notification</string>

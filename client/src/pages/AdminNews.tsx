@@ -18,7 +18,7 @@ import MarkdownContent, { toMarkdownPreviewText } from "@/components/MarkdownCon
 import { MarkdownToolbar, insertAtCursor } from "@/components/MarkdownToolbar";
 import { OrderDatePicker } from "@/components/OrderDatePicker";
 import { formatLocalDate } from "@/lib/orderDateChain";
-import { openExternalUrl } from "@/lib/platform";
+import { openExternalUrlFromAsync } from "@/lib/platform";
 import { INDUSTRIES } from "@shared/constants";
 
 const COVER_MIME_TYPES = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
@@ -646,8 +646,8 @@ function AdminNewsContent() {
   const handleAdminPreview = async (attachmentId: number) => {
     setPreviewingId(attachmentId);
     try {
-      const result = await getPdfDownloadUrlMut.mutateAsync({ attachmentId });
-      await openExternalUrl(result.url);
+      // 點擊同步階段先開分頁，避免 await 之後被 popup blocker 擋下
+      await openExternalUrlFromAsync(async () => (await getPdfDownloadUrlMut.mutateAsync({ attachmentId })).url);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "取得預覽連結失敗");
     } finally {

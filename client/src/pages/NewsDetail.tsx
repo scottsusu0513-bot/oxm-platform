@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
 import MarkdownContent from "@/components/MarkdownContent";
 import { shareContent } from "@/lib/share";
-import { openExternalUrl } from "@/lib/platform";
+import { openExternalUrl, openExternalUrlFromAsync } from "@/lib/platform";
 import { useAuth } from "@/_core/hooks/useAuth";
 import LoginDialog from "@/components/LoginDialog";
 import { toast } from "sonner";
@@ -66,8 +66,9 @@ function NewsAttachmentRow({ attachment, isAuthenticated, onRequireLogin }: {
     if (!isAuthenticated) { onRequireLogin(); return; }
     setDownloading(true);
     try {
-      const result = await getDownloadUrlMut.mutateAsync({ attachmentId: attachment.id });
-      await openExternalUrl(result.url);
+      // 必須在點擊的同步階段呼叫（web 先開分頁；await 之後才 window.open 會被
+      // iPhone Safari 等的 popup blocker 無聲擋下）。App 內一樣走 @capacitor/browser。
+      await openExternalUrlFromAsync(async () => (await getDownloadUrlMut.mutateAsync({ attachmentId: attachment.id })).url);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "下載失敗，請稍後再試");
     } finally {
