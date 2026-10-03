@@ -11,11 +11,30 @@ interface LoginDialogProps {
 export default function LoginDialog({ open, onOpenChange }: LoginDialogProps) {
   const [loading, setLoading] = useState<string | null>(null);
 
+  // loading 只用來防止「開啟登入頁的這一小段時間」重複點擊。App 內 performLogin 在
+  // Browser.open 呈現登入頁後就返回；之後使用者取消、登入失敗或放棄流程，都不會有
+  // 任何回呼通知這裡。這個元件常駐（AppBottomNav／GlobalAiShell），不會重新掛載，
+  // 若不在這裡歸位，按鈕會一直停在 disabled，直到 App 重啟。
   const login = async (provider: "google" | "apple" | "line") => {
+    if (loading) return;
     setLoading(provider);
     onOpenChange(false);
-    await performLogin(provider);
+    try {
+      await performLogin(provider);
+    } catch {
+      // performLogin 內部已記錄並處理錯誤；這裡只負責讓按鈕歸位
+    } finally {
+      setLoading(null);
+    }
   };
+
+  // 再次打開對話框時一律可操作（即使上一次 Browser.open 沒有正常返回）。用 render
+  // 期間依 prop 變化調整 state 的寫法，不用 effect（這個元件不得有掛載時自動執行的邏輯）。
+  const [prevOpen, setPrevOpen] = useState(open);
+  if (open !== prevOpen) {
+    setPrevOpen(open);
+    if (open) setLoading(null);
+  }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
