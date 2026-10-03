@@ -50,3 +50,32 @@ describe("工廠相簿／商品圖片：無法解碼的圖片要提示，不可�
     expect(src).not.toMatch(/compressImage\(file\)\);\s*\}\s*catch\s*\{\s*\}/);
   });
 });
+
+describe("iOS UIScene lifecycle（iOS 27 SDK 起未採用會在啟動時中止）", () => {
+  const plist = read("ios/App/App/Info.plist");
+  const pbx = read("ios/App/App.xcodeproj/project.pbxproj");
+  const scene = read("ios/App/App/SceneDelegate.swift");
+
+  it("Info.plist 宣告單一 window scene，delegate 為 SceneDelegate、storyboard 為 Main；不再有 app 層級的 UIMainStoryboardFile", () => {
+    expect(plist).toMatch(/<key>UIApplicationSceneManifest<\/key>/);
+    expect(plist).toMatch(/<key>UIApplicationSupportsMultipleScenes<\/key>\s*<false\/>/);
+    expect(plist).toMatch(/<key>UISceneDelegateClassName<\/key>\s*<string>\$\(PRODUCT_MODULE_NAME\)\.SceneDelegate<\/string>/);
+    expect(plist).toMatch(/<key>UISceneStoryboardFile<\/key>\s*<string>Main<\/string>/);
+    expect(plist).not.toMatch(/<key>UIMainStoryboardFile<\/key>/);
+  });
+
+  it("SceneDelegate.swift 有編進 App target", () => {
+    expect(pbx).toMatch(/SceneDelegate\.swift in Sources \*\/ = \{isa = PBXBuildFile;/);
+    expect(pbx).toMatch(/files = \([\s\S]*?SceneDelegate\.swift in Sources[\s\S]*?\);/);
+  });
+
+  it("URL／user activity（含冷啟動）轉交 Capacitor ApplicationDelegateProxy（oxm://oauth/callback 依賴它）", () => {
+    expect(scene).toMatch(/class SceneDelegate: UIResponder, UIWindowSceneDelegate/);
+    expect(scene).toMatch(/connectionOptions\.urlContexts/);
+    expect(scene).toMatch(/connectionOptions\.userActivities/);
+    expect(scene).toMatch(/func scene\(_ scene: UIScene, openURLContexts/);
+    expect(scene).toMatch(/func scene\(_ scene: UIScene, continue userActivity/);
+    expect(scene).toMatch(/ApplicationDelegateProxy\.shared\.application\(UIApplication\.shared, open:/);
+    expect(scene).toMatch(/ApplicationDelegateProxy\.shared\.application\(UIApplication\.shared, continue:/);
+  });
+});
