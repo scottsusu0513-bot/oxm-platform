@@ -337,19 +337,25 @@ describe("下載授權與期限（AF–AX）", () => {
   });
 });
 
+// conversations 有 (userId, factoryId) 唯一索引（migration 0064）：beforeAll 已用
+// (buyer, factoryId) 建過對話，需要另一段對話的案例改用各自的新 buyer。
+let freshBuyerSeq = 0;
+const mkFreshBuyer = () => mkUser(`buyer-${++freshBuyerSeq}`);
+
 describe("刪除對話（AY–BC）", () => {
   it("AY／AZ：刪 DB 前收集私有 PDF key，刪除後逐一刪除物件", async () => {
-    const c = await mkConversation(buyer, factoryId);
+    const convBuyer = await mkFreshBuyer();
+    const c = await mkConversation(convBuyer, factoryId);
     const a = await seedPdf(c, owner, factoryId, new Date(Date.now() + DAY));
     const b = await seedPdf(c, owner, factoryId, new Date(Date.now() - 40 * DAY));
-    await db.saveMessage(c, buyer, "user", "hello", "text");
+    await db.saveMessage(c, convBuyer, "user", "hello", "text");
     await (await call(owner)).deleteConversation({ conversationId: c });
     expect(h.deleted.sort()).toEqual([a.fileKey, b.fileKey].sort());
     expect(await db.getConversationById(c)).toBeFalsy();
   });
   it("BA／BB：S3 刪除失敗不影響對話刪除，並記錄 log", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const c = await mkConversation(buyer, factoryId);
+    const c = await mkConversation(await mkFreshBuyer(), factoryId);
     const a = await seedPdf(c, owner, factoryId, new Date(Date.now() + DAY));
     h.failDelete.set(a.fileKey, "InternalError");
     await expect((await call(owner)).deleteConversation({ conversationId: c })).resolves.toEqual({ success: true });
@@ -358,8 +364,9 @@ describe("刪除對話（AY–BC）", () => {
     warn.mockRestore();
   });
   it("BC：沒有 PDF 的對話刪除不呼叫 S3", async () => {
-    const c = await mkConversation(buyer, factoryId);
-    await db.saveMessage(c, buyer, "user", "hello", "text");
+    const convBuyer = await mkFreshBuyer();
+    const c = await mkConversation(convBuyer, factoryId);
+    await db.saveMessage(c, convBuyer, "user", "hello", "text");
     await (await call(owner)).deleteConversation({ conversationId: c });
     expect(h.deleted).toEqual([]);
   });
@@ -367,7 +374,8 @@ describe("刪除對話（AY–BC）", () => {
 
 describe("cleanup job（BD–BK）", () => {
   async function seedForCleanup() {
-    const c = await mkConversation(buyer, factoryId);
+    const convBuyer = await mkFreshBuyer();
+    const c = await mkConversation(convBuyer, factoryId);
     const day36 = await seedPdf(c, owner, factoryId, new Date(Date.now() - 29 * DAY)); // 上傳後第 36 天
     const day38 = await seedPdf(c, owner, factoryId, new Date(Date.now() - 31 * DAY)); // 第 38 天
     const day39 = await seedPdf(c, owner, factoryId, new Date(Date.now() - 32 * DAY));
@@ -377,7 +385,7 @@ describe("cleanup job（BD–BK）", () => {
       deleteObject: async (key: string) => { const fail = h.failDelete.get(key); if (fail) throw Object.assign(new Error(fail), { name: fail }); h.deleted.push(key); h.store.delete(key); },
       markDeleted: db.markChatPdfAttachmentDeleted,
     };
-    return { c, day36, day38, day39, deps };
+    return { c, convBuyer, day36, day38, day39, deps };
   }
   const attachmentOf = async (id: number) => (await db.getMessageById(id))!.attachmentData as Record<string, unknown>;
 
@@ -390,7 +398,7 @@ describe("cleanup job（BD–BK）", () => {
     const after = await attachmentOf(s.day38.messageId);
     expect(after).toMatchObject({ deleted: true, fileKey: null, fileName: "型錄.pdf", fileSize: 2000, mimeType: "application/pdf", storage: "private" });
     expect(typeof after.deletedAt).toBe("string");
-    const dto = (await (await call(buyer)).getMessages({ conversationId: s.c })).find(m => m.id === s.day38.messageId)!;
+    const dto = (await (await call(s.convBuyer)).getMessages({ conversationId: s.c })).find(m => m.id === s.day38.messageId)!;
     expect(dto.attachmentData).toMatchObject({ fileName: "型錄.pdf", deleted: true });
   });
   it("BG／BH：NoSuchKey 視為已刪除並標記；其他 S3 錯誤不標記、計入 failed", async () => {

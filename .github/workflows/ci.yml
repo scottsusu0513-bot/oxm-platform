@@ -45,3 +45,125 @@ jobs:
         run: pnpm build
         env:
           NODE_ENV: production
+
+  # Full test suite against a throwaway MySQL that exists only inside this job.
+  # Not a required check yet (CI test-DB bootstrap is being validated).
+  full-test:
+    name: full-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      mysql:
+        # Same major as the local oxm_test the suite is verified against (8.0.x).
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: ci_root_password
+          MYSQL_DATABASE: oxm_test
+          MYSQL_USER: oxm_ci
+          MYSQL_PASSWORD: ci_test_password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pci_root_password"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+    env:
+      # Mirrors the local test environment the full suite passes on. All values
+      # are CI-only placeholders or non-secret fixtures; no production secrets.
+      NODE_ENV: test
+      # Local runs (Node and MySQL session) are Asia/Taipei; some tests assume it.
+      TZ: Asia/Taipei
+      TEST_DATABASE_URL: mysql://oxm_ci:ci_test_password@127.0.0.1:3306/oxm_test
+      DATABASE_URL: mysql://oxm_ci:ci_test_password@127.0.0.1:3306/oxm_test
+      JWT_SECRET: ci-only-placeholder-jwt-secret-not-used-anywhere-else
+      # Admin-procedure tests build their admin context with this address.
+      ADMIN_WHITELIST_EMAILS: '["scottsusu0513@gmail.com"]'
+      GOOGLE_CLIENT_ID: ci-placeholder-google-client-id
+      GOOGLE_CLIENT_SECRET: ci-placeholder-google-client-secret
+      OAUTH_SERVER_URL: https://accounts.google.com
+      CONSENT_GATE_LAUNCH_AT: "2026-01-01T00:00:00.000Z"
+      ONBOARDING_LAUNCH_AT: "2026-01-01T00:00:00.000Z"
+      # Placeholder only: the OpenAI SDK is mocked in tests; AI search stays
+      # disabled (AI_SEARCH_PROVIDER unset), so no request reaches OpenAI.
+      OPENAI_API_KEY: sk-ci-test-placeholder-not-a-real-key
+      AI_DIAGNOSIS_MODEL: gpt-5.6-terra
+      AI_ROUTING_MODEL: gpt-5.6-terra
+      # Finance integration tests use the same test DB, as in local runs.
+      FINANCE_TEST_DATABASE_URL: mysql://oxm_ci:ci_test_password@127.0.0.1:3306/oxm_test
+      FINANCE_INTEGRATION_TESTS_CONFIRMED: "1"
+    steps:
+      # Local runs use a Windows checkout (core.autocrlf=true, CRLF working tree);
+      # several static source-contract tests match CRLF line endings literally.
+      - name: Use CRLF working tree like local checkouts
+        run: git config --global core.autocrlf true
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Defense in depth: refuse to touch anything but the local CI oxm_test.
+      - name: Assert target is the local CI test database
+        run: |
+          node -e '
+            const u = new URL(process.env.DATABASE_URL);
+            if (u.hostname !== "127.0.0.1" || u.pathname !== "/oxm_test") {
+              console.error("Refusing: DATABASE_URL is not 127.0.0.1/oxm_test");
+              process.exit(1);
+            }
+            console.log("target ok:", u.hostname, u.pathname);
+          '
+
+      # Match the local MySQL session timezone (Asia/Taipei, +08:00).
+      - name: Set MySQL time zone
+        run: |
+          node -e '
+            const mysql = require("mysql2/promise");
+            (async () => {
+              const root = await mysql.createConnection({ host: "127.0.0.1", port: 3306, user: "root", password: "ci_root_password" });
+              await root.query("SET GLOBAL time_zone = \"+08:00\"");
+              await root.end();
+              const c = await mysql.createConnection(process.env.DATABASE_URL);
+              const [[{ off }]] = await c.query("SELECT TIMESTAMPDIFF(SECOND, UTC_TIMESTAMP(), NOW()) off");
+              await c.end();
+              console.log("session offset seconds:", off);
+              if (Number(off) !== 28800) process.exit(1);
+            })().catch(e => { console.error(e.code || e.message); process.exit(1); });
+          '
+
+      # Schema from drizzle/schema.ts + the app's boot-time seeds. See the
+      # script header for why `pnpm db:push` / `drizzle-kit push` are not used.
+      - name: Bootstrap test database
+        run: pnpm exec tsx scripts/ci/bootstrap-test-db.ts
+
+      # server/_core/prerenderedBody.ts resolves dist/prerendered/* at import
+      # time; locally that directory exists from earlier builds. Generate it
+      # (prerender scripts only, no bundling) so those tests see the same layout.
+      - name: Generate prerendered fragments
+        run: |
+          pnpm prerender:about
+          pnpm prerender:home
+          pnpm prerender:faq
+          pnpm prerender:resources
+          pnpm prerender:news
+          pnpm prerender:search
+          pnpm prerender:upgrade-center
+
+      - name: Run full test suite
+        run: pnpm test --reporter=default --reporter=json --outputFile.json=test-results/vitest.json
+
+      # One annotation listing every failure (GitHub caps per-test annotations at 10).
+      - name: Summarize test results
+        if: always()
+        run: node scripts/ci/summarize-test-results.mjs test-results/vitest.json
