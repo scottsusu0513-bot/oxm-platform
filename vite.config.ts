@@ -150,6 +150,23 @@ function vitePluginManusDebugCollector(): Plugin {
   };
 }
 
+/**
+ * Batch 3.12：client/public/__manus__/（Manus 開發用 debug collector 與版本檔）只在 dev
+ * server 使用，但 publicDir 會被整包複製進 production build，正式站因此公開提供
+ * /__manus__/debug-collector.js。build 結束後從輸出目錄移除。
+ */
+function stripManusDevAssets(): Plugin {
+  let outDir = "";
+  return {
+    name: "oxm-strip-manus-dev-assets",
+    apply: "build",
+    configResolved(config) { outDir = config.build.outDir; },
+    closeBundle() {
+      if (outDir) fs.rmSync(path.join(outDir, "__manus__"), { recursive: true, force: true });
+    },
+  };
+}
+
 export default defineConfig(({ command }) => {
 const isDev = command === 'serve';
 // jsxLocPlugin 會在每個 JSX 元素加上 data-loc="檔案路徑:行號"（開發工具用來
@@ -158,7 +175,7 @@ const isDev = command === 'serve';
 const plugins = [
   react(),
   tailwindcss(),
-  ...(isDev ? [jsxLocPlugin(), vitePluginManusDebugCollector()] : []),
+  ...(isDev ? [jsxLocPlugin(), vitePluginManusDebugCollector()] : [stripManusDevAssets()]),
 ];
 
 return {

@@ -20,6 +20,7 @@
  */
 import { TRPCError } from "@trpc/server";
 import { getRequestId } from "./resilience";
+import { recordOpsEvent } from "./opsAlert";
 
 export const GENERIC_INTERNAL_ERROR_MESSAGE = "伺服器發生錯誤，請稍後再試";
 
@@ -67,6 +68,7 @@ export function formatTrpcError<S extends ErrorShapeLike>(
   if (shouldSanitizeTrpcError(opts.error)) {
     const requestId = getRequestId((opts.ctx as { req?: unknown } | undefined)?.req) ?? "-";
     console.error(`[trpc] internal error sanitized for client (path=${opts.path ?? "unknown"} requestId=${requestId}):`, opts.error.cause);
+    recordOpsEvent("server_5xx", `${opts.path ?? "unknown"} ${(opts.error.cause as { name?: string } | undefined)?.name ?? "Error"}`);
     return { ...opts.shape, message: GENERIC_INTERNAL_ERROR_MESSAGE, data } as S;
   }
   return { ...opts.shape, data } as S;

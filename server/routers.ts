@@ -7,6 +7,7 @@ import { normalizeTaxId, isValidTaiwanTaxId } from "@shared/taxId";
 import { sdk } from "./_core/sdk";
 import * as analyticsDb from "./analyticsDb";
 import { getClientIp } from "./_core/requestMeta";
+import { maskEmail } from "./_core/resilience";
 import { ANALYTICS_MIN_DATE, clampAnalyticsDateRange, isAnalyticsDateAllowed } from "@shared/analyticsTz";
 import { buildSearchFingerprint } from "@shared/searchFingerprint";
 import { getSearchIntent } from './semantic-search';
@@ -30,7 +31,7 @@ import { parseConversationState } from "./ai/contextBuilder";
 import { resolveApprovedAiFactoryContext } from "./ai/factoryContext";
 import { resolveAiEntitlement } from "./ai/entitlement";
 import { reserveAiTurn, completeAiTurn, failAiTurn, checkFactoryAiQuota } from "./ai/aiQuota";
-import { runWithAiCallContext, logAiError } from "./ai/aiCallContext";
+import { runWithAiCallContext, logAiError, AI_TURN_DEADLINE_MS } from "./ai/aiCallContext";
 import { ENV } from "./_core/env";
 import { getAiUsageDashboard, getRecentAiUsageTurns } from "./ai/aiUsageAudit";
 import { buildFieldSpecs, buildHandoffPrefillFromConfirmedFacts, buildHandoffSummary } from "./ai/handoffPrefill";
@@ -1148,7 +1149,8 @@ export const appRouter = router({
 
         try {
           const result = await runWithAiCallContext(
-            { turnId: reservation.turnId, factoryId, actorUserId: userId },
+            // Batch 3.12：整個 turn 最多 AI_TURN_DEADLINE_MS（每次模型呼叫依剩餘時間縮短、不再重試）
+            { turnId: reservation.turnId, factoryId, actorUserId: userId, deadlineAt: Date.now() + AI_TURN_DEADLINE_MS },
             () => runPersistentAiChat({
               userId,
               message: input.message,
@@ -4859,7 +4861,12 @@ export const appRouter = router({
       comment: z.string().max(1000).optional(),
     })).mutation(async ({ ctx, input }) => {
       requireVerifiedEmail(ctx.user);
-      assertFactoryAcceptsNewInteraction(await db.getFactoryById(input.factoryId));
+      const reviewedFactory = await db.getFactoryById(input.factoryId);
+      assertFactoryAcceptsNewInteraction(reviewedFactory);
+      // Batch 3.12：工廠負責人與共同管理者不能評價自己管理的工廠（原本沒有檢查，可自行灌高評分）
+      if (reviewedFactory && (reviewedFactory.ownerId === ctx.user.id || await db.isActiveCoManager(reviewedFactory.id, ctx.user.id))) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "不能評價自己管理的工廠" });
+      }
       const existing = await db.getReviewByUserAndFactory(ctx.user.id, input.factoryId);
       if (existing) throw new TRPCError({ code: "BAD_REQUEST", message: "您已為此工廠留過評價" });
       await db.createReview({ ...input, userId: ctx.user.id });
@@ -5610,7 +5617,7 @@ export const appRouter = router({
                   campaignContent: input.content,
                   campaignId,
                 });
-                console.log(`[adminMessage] email sent success campaignId=${campaignId} email=${r.email} attempt=${attempt}`);
+                console.log(`[adminMessage] email sent success campaignId=${campaignId} email=${maskEmail(r.email)} attempt=${attempt}`);
                 successCount++;
                 sent = true;
                 break;
@@ -5618,7 +5625,7 @@ export const appRouter = router({
                 lastErr = err;
                 if (attempt <= RETRY_DELAYS_MS.length && isRateLimitError(err)) {
                   const wait = RETRY_DELAYS_MS[attempt - 1];
-                  console.warn(`[adminMessage] email retry campaignId=${campaignId} email=${r.email} attempt=${attempt + 1} reason=429 waitMs=${wait}`);
+                  console.warn(`[adminMessage] email retry campaignId=${campaignId} email=${maskEmail(r.email)} attempt=${attempt + 1} reason=429 waitMs=${wait}`);
                   await new Promise(res => setTimeout(res, wait));
                 } else {
                   break;
@@ -5628,7 +5635,7 @@ export const appRouter = router({
 
             if (!sent) {
               failCount++;
-              console.error(`[adminMessage] email failed campaignId=${campaignId} email=${r.email} attempts=${RETRY_DELAYS_MS.length + 1} error=`, lastErr);
+              console.error(`[adminMessage] email failed campaignId=${campaignId} email=${maskEmail(r.email)} attempts=${RETRY_DELAYS_MS.length + 1} error=`, lastErr);
             }
 
             // 每封之間固定間隔，避免 rate limit
@@ -6199,7 +6206,7 @@ export const appRouter = router({
                 lastErr = err;
                 if (attempt <= RETRY_DELAYS_MS.length && isRateLimitError(err)) {
                   const wait = RETRY_DELAYS_MS[attempt - 1];
-                  console.warn(`[announcement] email retry id=${announcementId} email=${u.email} attempt=${attempt + 1} waitMs=${wait}`);
+                  console.warn(`[announcement] email retry id=${announcementId} email=${maskEmail(u.email)} attempt=${attempt + 1} waitMs=${wait}`);
                   await new Promise(res => setTimeout(res, wait));
                 } else {
                   break;
@@ -6209,7 +6216,7 @@ export const appRouter = router({
 
             if (!sent) {
               failCount++;
-              console.error(`[announcement] email failed id=${announcementId} email=${u.email}`, lastErr);
+              console.error(`[announcement] email failed id=${announcementId} email=${maskEmail(u.email)}`, lastErr);
             }
 
             await new Promise(res => setTimeout(res, INTER_EMAIL_DELAY_MS));

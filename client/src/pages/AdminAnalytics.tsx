@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { AppLoading } from "@/components/AppLoading";
 import { FloatingBackButton } from "@/components/FloatingBackButton";
+import { QueryErrorState } from "@/components/QueryErrorState";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -130,7 +131,10 @@ function AdminAnalyticsContent() {
           </Popover>
         </div>
 
-        {reportQuery.isLoading || !r ? (
+        {/* Batch 3.12：查詢失敗原本落在「載入中...」永遠轉圈 */}
+        {reportQuery.isError ? (
+          <QueryErrorState error={reportQuery.error} onRetry={() => reportQuery.refetch()} retrying={reportQuery.isFetching} />
+        ) : reportQuery.isLoading || !r ? (
           <p className="text-muted-foreground">載入中...</p>
         ) : (
           <div className="space-y-6">

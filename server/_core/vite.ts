@@ -15,6 +15,8 @@ import { parseLibraryIndexPath, parseLibraryArticlePath } from "@shared/seo/libr
 import { resolveFactoriesTwoSegment } from "@shared/seo/factoriesPathResolver";
 import { buildSearchPageMeta } from "@shared/seo/searchPage";
 import { parsePageParam } from "@shared/industryPagination";
+import { industryPageOverflowRedirect } from "./seoRedirects";
+import { countPublicFactoriesForIndustry } from "../db";
 import { matchesClientRoute } from "@shared/clientRoutes";
 import { setupStaticAssetMiss404, injectNotFoundNoIndex, staticCacheControlFor, DOCUMENT_CACHE_CONTROL } from "./spaFallback";
 
@@ -98,6 +100,14 @@ export async function setupVite(app: Express, server: Server) {
       if (legacySubIndustryRedirectTarget) {
         res.redirect(301, legacySubIndustryRedirectTarget);
         return;
+      }
+      // Batch 3.12：產業頁頁碼超出實際總頁數 → 301 到最後一頁（見 seoRedirects.ts）
+      {
+        const overflowTarget = await industryPageOverflowRedirect(pathname, req.originalUrl, countPublicFactoriesForIndustry);
+        if (overflowTarget) {
+          res.redirect(301, overflowTarget);
+          return;
+        }
       }
 
       const factoryPath = parseFactoryPath(pathname);
@@ -312,6 +322,14 @@ export function serveStatic(app: Express, distPathOverride?: string) {
     if (legacySubIndustryRedirectTarget) {
       res.redirect(301, legacySubIndustryRedirectTarget);
       return;
+    }
+    // Batch 3.12：產業頁頁碼超出實際總頁數 → 301 到最後一頁（見 seoRedirects.ts）
+    {
+      const overflowTarget = await industryPageOverflowRedirect(pathname, req.originalUrl, countPublicFactoriesForIndustry);
+      if (overflowTarget) {
+        res.redirect(301, overflowTarget);
+        return;
+      }
     }
 
     // /factory/:id: inject factory-specific OG/Twitter meta into the same

@@ -535,10 +535,12 @@ export function publicFactoryCondition() {
   return and(eq(factories.status, 'approved'), isNull(factories.deletedAt))!;
 }
 
-export async function getApprovedFactoriesForSitemap(): Promise<{ id: number; updatedAt: Date }[]> {
+export async function getApprovedFactoriesForSitemap(): Promise<{ id: number; updatedAt: Date | null }[]> {
   const db = await getDb();
   if (!db) return [];
-  return db.select({ id: factories.id, updatedAt: factories.updatedAt })
+  // Batch 3.12：sitemap lastmod 用「公開內容最後更新時間」——factories.updatedAt 會因為
+  // CRM 備註、回覆時間重算等任何寫入而變動，不代表公開頁內容有更新。
+  return db.select({ id: factories.id, updatedAt: factories.publicContentUpdatedAt })
     .from(factories)
     .where(publicFactoryCondition());
 }
@@ -553,6 +555,18 @@ export async function getApprovedFactoriesForSitemap(): Promise<{ id: number; up
  * industry 比對用 JSON_OVERLAPS，語意與 searchFactories 的 industry 篩選
  * 完全相同（factories.industry 是 JSON 陣列欄位，一家工廠可能有多個主產業）。
  */
+/** 產業頁（/industry/:slug(/:sub)）的公開工廠數：條件與 searchFactories 的 industry／subIndustry 篩選相同。 */
+export async function countPublicFactoriesForIndustry(industry: string, subIndustry?: string): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+  const [row] = await db.select({ n: sql<number>`COUNT(*)` }).from(factories).where(and(
+    publicFactoryCondition(),
+    sql`JSON_OVERLAPS(${factories.industry}, ${JSON.stringify([industry])})`,
+    ...(subIndustry ? [sql`JSON_CONTAINS(${factories.subIndustry}, ${JSON.stringify([subIndustry])})`] : []),
+  ));
+  return Number(row?.n ?? 0);
+}
+
 export async function hasApprovedFactoryForRegionIndustry(region: string, industry: string): Promise<boolean> {
   const db = await getDb();
   if (!db) return false;

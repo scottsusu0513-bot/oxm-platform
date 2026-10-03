@@ -3,6 +3,7 @@
  */
 import { randomBytes } from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
+import { recordOpsEvent } from "./opsAlert";
 
 /**
  * 設定了 DATABASE_URL 但連不上資料庫。刻意是 Error 的子類別：tRPC 錯誤消毒
@@ -116,9 +117,11 @@ export function installProcessHandlers(opts: {
   proc.on("unhandledRejection", (reason: unknown) => {
     const r = reason as { name?: string; message?: string } | undefined;
     console.error(`[process] unhandledRejection (kept running): ${r?.name ?? typeof reason}: ${r?.message ?? String(reason)}`);
+    recordOpsEvent("process_error", `unhandledRejection ${r?.name ?? typeof reason}`);
   });
   proc.on("uncaughtException", (err: Error) => {
     console.error(`[process] uncaughtException: ${err.name}: ${err.message}`, err.stack);
+    recordOpsEvent("process_error", `uncaughtException ${err.name}`);
     void shutdown("uncaughtException", 1);
   });
   return { shutdown };

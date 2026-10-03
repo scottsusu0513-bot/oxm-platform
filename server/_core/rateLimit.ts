@@ -79,3 +79,6 @@ export const apiLimiter = createLimiter(60 * 60 * 1000, 1000);
 // 很多（一般人快速切換頁面/搜尋不可能達到這個量），只用來擋明顯的腳本
 // 灌爆行為。
 export const analyticsIngestLimiter = createLimiter(60 * 1000, 120);
+
+// 前端執行期錯誤回報（Batch 3.12，/api/client-errors）：每個 client 20 次/分鐘
+export const clientErrorLimiter = createLimiter(60 * 1000, 20);

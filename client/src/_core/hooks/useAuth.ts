@@ -38,11 +38,11 @@ export function useAuth(options?: UseAuthOptions) {
     isAuthenticated: Boolean(meQuery.data),
   }), [meQuery.data, meQuery.error, meQuery.isLoading, isLoggingOut]);
 
+  // Batch 3.12：不再把完整的會員資料（auth.me）寫進 localStorage——任何程式都沒有讀取它，
+  // 只是讓個資常駐在瀏覽器儲存空間。清掉舊版本留下的資料。
   useEffect(() => {
-    try {
-      localStorage.setItem("manus-runtime-user-info", JSON.stringify(meQuery.data));
-    } catch {}
-  }, [meQuery.data]);
+    try { localStorage.removeItem("manus-runtime-user-info"); } catch {}
+  }, []);
 
   useEffect(() => {
     if (!redirectOnUnauthenticated) return;

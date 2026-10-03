@@ -8,11 +8,13 @@ import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import { trustProxyHop, pinCloudflareWorkerForwardedFor } from "./clientIp";
+import { trailingSlashRedirect } from "./seoRedirects";
+import { recordOpsEvent, parseClientErrorReport } from "./opsAlert";
 import { setupSecurityHeaders, setupOriginCheck, setupNoIndexRoutes, setupApiNoStore } from "./security";
 import { setupGoneRoutes } from "./goneRoutes";
 import { ROBOTS_TXT, setupApiNoIndexHeader } from "./robots";
 import { setupLegacyBlogRedirect } from "./legacyBlogRedirect";
-import { apiLimiter, loginLimiter, uploadLimiter, messageLimiter, submitReviewLimiter, adminLimiter, searchLimiter, reportLimiter, analyticsIngestLimiter } from "./rateLimit";
+import { apiLimiter, loginLimiter, uploadLimiter, messageLimiter, submitReviewLimiter, adminLimiter, searchLimiter, reportLimiter, analyticsIngestLimiter, clientErrorLimiter } from "./rateLimit";
 import { searchBatchGuard } from "./searchBatchGuard";
 import { COOKIE_NAME } from "@shared/const";
 import { INDUSTRY_SLUGS, REGION_SLUGS, SUB_INDUSTRY_SEARCH_ENTRY_BY_PARENT_AND_LABEL } from "../../shared/constants";
@@ -48,6 +50,11 @@ async function startServer() {
       console.error(`[boot] unsafe configuration (too short): ${weak.join(", ")}`);
       process.exit(1);
     }
+    // Batch 3.12：未設定獨立的 ANALYTICS_IP_SALT 時，分析用 IP 雜湊鹽由 JWT_SECRET 以 HMAC
+    // 衍生（用途已分離），但 JWT_SECRET 輪替會讓前後雜湊無法比對。只提醒，不中止。
+    if (!process.env.ANALYTICS_IP_SALT) {
+      console.warn("[boot] ANALYTICS_IP_SALT is not set; analytics IP hashes will change whenever JWT_SECRET is rotated");
+    }
   }
 
   const app = express();
@@ -62,6 +69,12 @@ async function startServer() {
   app.use(requestIdMiddleware);
   app.use(pinCloudflareWorkerForwardedFor);
   setupApiNoStore(app);
+  // Batch 3.12：結尾斜線網址 301 到不帶斜線的版本（見 seoRedirects.ts）
+  app.use((req, res, next) => {
+    const target = trailingSlashRedirect(req.method, req.originalUrl);
+    if (target) return res.redirect(301, target);
+    next();
+  });
 
   console.log("[boot] applying security headers");
   setupSecurityHeaders(app);
@@ -132,6 +145,16 @@ async function startServer() {
   });
 
   registerOAuthRoutes(app);
+  // Batch 3.12：前端執行期錯誤回報（同源 beacon）。只記錄精簡、去識別化的欄位並計入
+  // 故障通知；不落地使用者資料。
+  app.post("/api/client-errors", clientErrorLimiter, (req, res) => {
+    const report = parseClientErrorReport(req.body);
+    if (report) {
+      console.warn(`[client-error] kind=${report.kind} path=${report.path} message=${report.message}`);
+      recordOpsEvent("client_errors", `${report.kind} ${report.path}`);
+    }
+    res.status(204).end();
+  });
   registerDevLoginRoutes(app);
 
   app.get("/api/health", async (_req, res) => {
@@ -156,6 +179,7 @@ async function startServer() {
   app.get("/api/health/ready", async (_req, res) => {
     res.set({ "Cache-Control": "no-store, no-cache, max-age=0" });
     const r = await readiness();
+    if (r.status !== 200) recordOpsEvent("readiness_failed", "database");
     res.status(r.status).json(r.body);
   });
 
@@ -202,7 +226,6 @@ async function startServer() {
   // ── sitemap.xml ─────────────────────────────────────────────────────────
   app.get("/sitemap.xml", async (_req, res) => {
     const BASE = "https://www.oxmmatch.com";
-    const today = new Date().toISOString().slice(0, 10);
 
     // lastmod 省略時不輸出 <lastmod> 標籤，避免對沒有真實更新時間的固定頁
     // 偽造成「每次請求都是今天」；既有呼叫則明確傳入 today，維持原本行為不變。
@@ -212,18 +235,19 @@ async function startServer() {
     const urls: string[] = [];
 
     // 固定公開頁
-    urls.push(entry(`${BASE}/`, "1.0", "daily", today));
+    // Batch 3.12：首頁／搜尋／公告列表沒有可查的真實內容更新時間，不再每次都填今天
+    urls.push(entry(`${BASE}/`, "1.0", "daily"));
     urls.push(entry(`${BASE}/about`, "0.6", "monthly"));
     urls.push(entry(`${BASE}/faq`, "0.6", "monthly"));
-    urls.push(entry(`${BASE}/search`, "0.9", "daily", today));
-    urls.push(entry(`${BASE}/announcements`, "0.6", "weekly", today));
-    urls.push(entry(`${BASE}/news`, "0.6", "daily", today));
+    urls.push(entry(`${BASE}/search`, "0.9", "daily"));
+    urls.push(entry(`${BASE}/announcements`, "0.6", "weekly"));
+    urls.push(entry(`${BASE}/news`, "0.6", "daily"));
     // 傳產圖書館（見任務定案「傳產圖書館 Phase 1 實作」）：索引頁固定列入，
     // 文章逐篇迴圈 LIBRARY_ARTICLES（shared/content/library.ts 是唯一資料
     // 來源，不在這裡另外 hardcode 一份文章 URL 清單），lastmod 用
     // updatedAt（缺值時 fallback publishedAt，兩者皆為文章自己的真實日期，
     // 不使用 today 偽造）。
-    urls.push(entry(`${BASE}/library`, "0.6", "monthly", today));
+    urls.push(entry(`${BASE}/library`, "0.6", "monthly"));
     for (const article of LIBRARY_ARTICLES) {
       urls.push(entry(`${BASE}/library/${article.slug}`, "0.5", "monthly", article.updatedAt ?? article.publishedAt));
     }
@@ -339,9 +363,8 @@ async function startServer() {
     try {
       const approved = await getApprovedFactoriesForSitemap();
       for (const f of approved) {
-        const lastmod = f.updatedAt instanceof Date
-          ? f.updatedAt.toISOString().slice(0, 10)
-          : today;
+        // 沒有真實時間就省略 lastmod，不以今天代替
+        const lastmod = f.updatedAt instanceof Date ? f.updatedAt.toISOString().slice(0, 10) : undefined;
         urls.push(entry(`${BASE}/factory/${f.id}`, "0.7", "weekly", lastmod));
       }
     } catch {
@@ -352,9 +375,7 @@ async function startServer() {
     try {
       const publishedNews = await getPublishedNewsForSitemap();
       for (const n of publishedNews) {
-        const lastmod = n.updatedAt instanceof Date
-          ? n.updatedAt.toISOString().slice(0, 10)
-          : today;
+        const lastmod = n.updatedAt instanceof Date ? n.updatedAt.toISOString().slice(0, 10) : undefined;
         urls.push(entry(`${BASE}/news/${n.slug}`, "0.6", "weekly", lastmod));
       }
     } catch {

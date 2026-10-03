@@ -22,6 +22,33 @@ export interface AiModelCallContext {
   turnId: number | null;
   factoryId: number | null;
   actorUserId: number | null;
+  /**
+   * Batch 3.12：使用者可見 turn 的整體期限（epoch ms）。一個 turn 會依序呼叫多個
+   * layer（routing／planner／diagnosis／composer／memory…），每次呼叫各自最多
+   * 60 秒＋重試，整個 request 原本沒有總上限。有設定時每次模型呼叫的 timeout 取
+   * 「剩餘時間」與預設值較小者、不再重試；超過期限直接失敗。背景流程不設定。
+   */
+  deadlineAt?: number | null;
+}
+
+/** 使用者可見 AI turn 的整體期限。 */
+export const AI_TURN_DEADLINE_MS = 90_000;
+const MIN_REMAINING_MS = 1_000;
+
+export class AiTurnDeadlineExceededError extends Error {
+  constructor() {
+    super("AI turn deadline exceeded");
+    this.name = "AiTurnDeadlineExceededError";
+  }
+}
+
+/** 依目前 context 的 turn 期限算出這次模型呼叫的 SDK 選項（timeout／maxRetries）。 */
+export function aiRequestOptions(defaultTimeoutMs: number, defaultMaxRetries: number, now: number = Date.now()): { timeout: number; maxRetries: number } {
+  const deadlineAt = getCurrentAiCallContext()?.deadlineAt;
+  if (!deadlineAt) return { timeout: defaultTimeoutMs, maxRetries: defaultMaxRetries };
+  const remaining = deadlineAt - now;
+  if (remaining < MIN_REMAINING_MS) throw new AiTurnDeadlineExceededError();
+  return { timeout: Math.min(defaultTimeoutMs, remaining), maxRetries: 0 };
 }
 
 const aiCallContextStorage = new AsyncLocalStorage<AiModelCallContext>();

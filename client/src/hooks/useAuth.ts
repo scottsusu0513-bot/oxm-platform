@@ -31,11 +31,8 @@ export function useAuth(options?: UseAuthOptions) {
     window.location.href = "/";
   }, [utils]);
 
+  // Batch 3.12：不再把會員資料寫進 localStorage（見 client/src/_core/hooks/useAuth.ts）
   const state = useMemo(() => {
-    localStorage.setItem(
-      "manus-runtime-user-info",
-      JSON.stringify(meQuery.data)
-    );
     return {
       user: meQuery.data ?? null,
       loading: meQuery.isLoading || isLoggingOut,

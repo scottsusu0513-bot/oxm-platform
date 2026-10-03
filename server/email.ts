@@ -2,6 +2,7 @@ import { Resend } from 'resend';
 import { renderAnnouncementEmailHtml } from './announcementMarkdown';
 import { ENV } from './_core/env';
 import { maskEmail, withTimeout } from './_core/resilience';
+import { recordOpsEvent, type OpsAlert } from './_core/opsAlert';
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY ?? '';
 const FROM_EMAIL = process.env.FROM_EMAIL ?? '';
@@ -21,7 +22,7 @@ const getResend = () => {
 //   逾時只停止等待，信件可能其實已寄出，因此逾時不重試（避免重複寄信）。
 export const EMAIL_SEND_TIMEOUT_MS = 15_000;
 type ResendClient = NonNullable<ReturnType<typeof getResend>>;
-async function deliverEmail(resend: ResendClient, payload: Parameters<ResendClient["emails"]["send"]>[0]) {
+async function sendViaResend(resend: ResendClient, payload: Parameters<ResendClient["emails"]["send"]>[0]) {
   const result = await withTimeout(resend.emails.send(payload), EMAIL_SEND_TIMEOUT_MS, "email send");
   const err = (result as { error?: { name?: string; message?: string; statusCode?: number } | null } | undefined)?.error;
   if (err) {
@@ -31,6 +32,44 @@ async function deliverEmail(resend: ResendClient, payload: Parameters<ResendClie
     throw e;
   }
   return result;
+}
+
+async function deliverEmail(resend: ResendClient, payload: Parameters<ResendClient["emails"]["send"]>[0]) {
+  try {
+    return await sendViaResend(resend, payload);
+  } catch (err) {
+    // Batch 3.12：寄信失敗計入故障通知（只記錯誤類型，不含收件人）
+    recordOpsEvent("email_failures", (err as { name?: string } | null)?.name ?? "Error");
+    throw err;
+  }
+}
+
+/**
+ * 故障通知信（Batch 3.12，見 server/_core/opsAlert.ts）。收件人 ALERT_EMAIL，未設定時
+ * 用 ADMIN_EMAIL；兩者都沒有或寄信停用時只留 log。刻意不走 deliverEmail——通知信本身
+ * 失敗不能再回頭計入 email_failures（避免自我觸發）。
+ */
+export async function sendOpsAlertEmail(alert: OpsAlert): Promise<void> {
+  const to = process.env.ALERT_EMAIL || ADMIN_EMAIL;
+  if (!to || !isEmailEnabled()) return;
+  const resend = getResend();
+  if (!resend) return;
+  const taipei = alert.at.toLocaleString("zh-TW", { timeZone: "Asia/Taipei", hour12: false });
+  await sendViaResend(resend, {
+    from: FROM_EMAIL,
+    to,
+    subject: `【OXM 警示】${alert.label}`,
+    html: `
+      <div style="font-family: sans-serif; max-width: 600px;">
+        <h2 style="color: #dc2626;">OXM 正式站故障通知</h2>
+        <p><strong>類別：</strong>${escapeHtml(alert.label)}（${escapeHtml(alert.kind)}）</p>
+        <p><strong>次數：</strong>最近 ${alert.windowMinutes} 分鐘內 ${alert.count} 次</p>
+        <p><strong>時間：</strong>${escapeHtml(taipei)}（台北時間）</p>
+        ${alert.latestDetail ? `<p><strong>最近一筆：</strong>${escapeHtml(alert.latestDetail)}</p>` : ""}
+        <p style="color: #666;">詳細內容請到 Render 的服務 log 搜尋 <code>[ops-alert]</code> 與同一時間的錯誤。同一類別 30 分鐘內不會重複通知。</p>
+      </div>
+    `,
+  });
 }
 
 /**

@@ -1,5 +1,6 @@
 import { S3Client, PutObjectCommand, DeleteObjectCommand, HeadObjectCommand, CopyObjectCommand, ListObjectsV2Command, GetObjectCommand } from "@aws-sdk/client-s3";
 import { publicImageUrl } from "./factoryAvatarUrl";
+import { recordOpsEvent } from "./_core/opsAlert";
 
 function getClient(): S3Client {
   return new S3Client({
@@ -46,6 +47,7 @@ export async function storagePut(
     );
   } catch (err) {
     console.error("[S3] upload failed:", err);
+    recordOpsEvent("storage_failures", `put ${(err as { name?: string } | null)?.name ?? "Error"}`);
     throw err;
   }
 

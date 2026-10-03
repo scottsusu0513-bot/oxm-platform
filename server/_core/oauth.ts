@@ -1,6 +1,7 @@
 import type { CookieOptions, Express, Request, Response } from "express";
 import * as db from "../db";
 import { ENV } from "./env";
+import { recordOpsEvent } from "./opsAlert";
 import { getClientIp as getTrustedClientIp } from "./requestMeta";
 import { BRAND } from "@shared/seo/brand";
 import { randomBytes } from "crypto";
@@ -82,6 +83,7 @@ async function initOAuthState(
       source,
       error: err instanceof Error ? err.message : String(err),
     });
+    recordOpsEvent("oauth_failures", "OAuth initialization failed");
     res.status(500).json({ error: "OAuth initialization failed" });
     return null;
   }
@@ -203,6 +205,7 @@ export function registerOAuthRoutes(app: Express) {
       }
     } catch (error) {
       console.error("[OAuth/google/callback] Failed:", error);
+      recordOpsEvent("oauth_failures", "OAuth callback failed");
       res.status(500).json({ error: "OAuth callback failed" });
     }
   });
@@ -362,6 +365,7 @@ export function registerOAuthRoutes(app: Express) {
       }
     } catch (error) {
       console.error("[OAuth/line/callback] Failed:", error);
+      recordOpsEvent("oauth_failures", "LINE OAuth callback failed");
       res.status(500).json({ error: "LINE OAuth callback failed" });
     }
   });
@@ -382,6 +386,7 @@ export function registerOAuthRoutes(app: Express) {
       clientSecret = await generateAppleClientSecret();
     } catch (err) {
       console.error("[OAuth/apple/init] Failed to generate client_secret:", err);
+      recordOpsEvent("oauth_failures", "Apple OAuth init failed");
       res.status(500).json({ error: "Apple OAuth init failed" });
       return;
     }
@@ -527,6 +532,7 @@ export function registerOAuthRoutes(app: Express) {
       }
     } catch (error) {
       console.error("[OAuth/apple/callback] Failed:", error);
+      recordOpsEvent("oauth_failures", "Apple OAuth callback failed");
       res.status(500).json({ error: "Apple OAuth callback failed" });
     }
   });
@@ -574,6 +580,7 @@ export function registerOAuthRoutes(app: Express) {
       res.json({ success: true });
     } catch (error) {
       console.error("[OAuth/app-complete] Failed:", error);
+      recordOpsEvent("oauth_failures", "App login completion failed");
       res.status(500).json({ error: "App login completion failed" });
     }
   });

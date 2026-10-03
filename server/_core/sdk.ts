@@ -3,6 +3,7 @@ import { ForbiddenError } from "@shared/_core/errors";
 import axios, { type AxiosInstance } from "axios";
 import type { Request } from "express";
 import { SignJWT, jwtVerify } from "jose";
+import { isAdminUser } from "./admin";
 import type { User } from "../../drizzle/schema";
 import * as db from "../db";
 import { ENV } from "./env";
@@ -14,6 +15,16 @@ import type {
   GetUserInfoWithJwtResponse,
 } from "./types/manusTypes";
 // Utility function
+export const LAST_SIGNED_IN_REFRESH_MS = 15 * 60 * 1000;
+
+/** lastSignedIn 不存在、無法解析或已超過 LAST_SIGNED_IN_REFRESH_MS 才需要寫入。 */
+export function shouldRefreshLastSignedIn(lastSignedIn: Date | string | null | undefined, now: Date): boolean {
+  if (!lastSignedIn) return true;
+  const last = new Date(lastSignedIn).getTime();
+  if (!Number.isFinite(last)) return true;
+  return now.getTime() - last >= LAST_SIGNED_IN_REFRESH_MS;
+}
+
 const isNonEmptyString = (value: unknown): value is string =>
   typeof value === "string" && value.length > 0;
 
@@ -289,10 +300,19 @@ class SDKServer {
       throw ForbiddenError("Account has been deleted");
     }
 
-    await db.upsertUser({
-      openId: user.openId,
-      lastSignedIn: signedInAt,
-    });
+    // Batch 3.12：原本每個已登入的 request 都 upsert 一次（寫入 lastSignedIn＋role），
+    // 等於每次 API 呼叫都對 users 列做一次寫入與鎖定。管理員身分每個 request 都由
+    // context.ts 依白名單重新計算，不依賴這次寫入；lastSignedIn 只需要粗粒度，
+    // 距離上次記錄超過 LAST_SIGNED_IN_REFRESH_MS 才更新（OAuth 登入時仍完整同步）。
+    // DB 的 role 欄位與白名單不一致時（剛被加入／移出白名單）也立即同步，維持 Batch 3.7
+    // 「DB role 跟著白名單」的語意；這種情況很少，不會造成每個 request 都寫入。
+    const whitelistRole = isAdminUser(user) ? "admin" : "user";
+    if (shouldRefreshLastSignedIn(user.lastSignedIn, signedInAt) || user.role !== whitelistRole) {
+      await db.upsertUser({
+        openId: user.openId,
+        lastSignedIn: signedInAt,
+      });
+    }
 
     return user;
   }

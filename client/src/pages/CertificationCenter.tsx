@@ -13,6 +13,7 @@ import {
   Accordion, AccordionItem, AccordionTrigger, AccordionContent,
 } from "@/components/ui/accordion";
 import { trpc } from "@/lib/trpc";
+import { QueryErrorState } from "@/components/QueryErrorState";
 import {
   FactorySilhouette,
   GridTexture,
@@ -86,8 +87,13 @@ export default function CertificationCenter() {
   const [keyword, setKeyword] = useState("");
   const [activeCategory, setActiveCategory] = useState<string>("all");
 
-  const { data: categories = [] } = trpc.certificationCenter.listCategories.useQuery();
-  const { data: services = [] } = trpc.certificationCenter.listServices.useQuery();
+  const categoriesQuery = trpc.certificationCenter.listCategories.useQuery();
+  const servicesQuery = trpc.certificationCenter.listServices.useQuery();
+  const categories = categoriesQuery.data ?? [];
+  const services = servicesQuery.data ?? [];
+  // Batch 3.12：查詢失敗原本顯示「找不到符合條件的項目」，誤導成沒有資料
+  const loadFailed = categoriesQuery.isError || servicesQuery.isError;
+  const retryLoad = () => { void categoriesQuery.refetch(); void servicesQuery.refetch(); };
 
   const openConsultPreview = (_serviceCode: string) => navigate("/certification-center/apply");
 
@@ -262,7 +268,9 @@ export default function CertificationCenter() {
 
           <p className="text-xs text-muted-foreground mb-4">共 {filtered.length} 筆結果</p>
 
-          {filtered.length === 0 ? (
+          {loadFailed ? (
+            <QueryErrorState error={categoriesQuery.error ?? servicesQuery.error} onRetry={retryLoad} retrying={categoriesQuery.isFetching || servicesQuery.isFetching} />
+          ) : filtered.length === 0 ? (
             <Card>
               <CardContent className="p-12 text-center text-muted-foreground text-sm">
                 找不到符合條件的認證或標籤項目，請調整搜尋關鍵字或分類。

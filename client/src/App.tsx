@@ -1,4 +1,5 @@
 import { Toaster } from "@/components/ui/sonner";
+import { isAppOAuthCallbackUrl } from "@/lib/appDeepLink";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Route, Switch, useLocation, useSearch } from "wouter";
 import { trpc } from "@/lib/trpc";
@@ -222,6 +223,8 @@ function readAndClearAppLoginVerifier(): string | undefined {
   }
 }
 
+let appLoginCompletionInFlight = false;
+
 // Handles oxm://oauth/callback?ticket=... deep links on iOS and Android
 function AppDeepLinkHandler() {
   const utils = trpc.useUtils();
@@ -250,6 +253,11 @@ function AppDeepLinkHandler() {
         let accountLinkState: string | null = null;
         try {
           const parsed = new URL(url);
+          // Batch 3.12：完整比對 scheme／host／path，不接受 oxm://oauth/callbackXYZ 之類的變形
+          if (!isAppOAuthCallbackUrl(parsed)) {
+            console.warn("[AppDeepLinkHandler] ignored unexpected deep link");
+            return;
+          }
           ticket = parsed.searchParams.get("ticket");
           oauthError = parsed.searchParams.get("error");
           accountLinkState = parsed.searchParams.get("link");
@@ -275,6 +283,10 @@ function AppDeepLinkHandler() {
           console.warn("[AppDeepLinkHandler] no ticket in url");
           return;
         }
+        // Batch 3.12：OS 可能重複送出同一個 callback；完成登入期間忽略後續的重複事件，
+        // 避免第二次（票券已被消耗）顯示誤導的「登入失敗」。
+        if (appLoginCompletionInFlight) return;
+        appLoginCompletionInFlight = true;
 
         await Browser.close();
         console.log("[AppDeepLinkHandler] Browser.close called");
@@ -300,6 +312,8 @@ function AppDeepLinkHandler() {
         } catch (err) {
           console.error("[AppDeepLinkHandler] fetch error:", err);
           toast.error("網路錯誤，請重試");
+        } finally {
+          appLoginCompletionInFlight = false;
         }
       });
 

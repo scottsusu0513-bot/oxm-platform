@@ -19,6 +19,7 @@ import {
   type Platform, type FinalClassification,
 } from "./analyticsClassify";
 import { hashIp, anonymizeIpPrefix } from "./_core/requestMeta";
+import { sanitizeAnalyticsFilters, sanitizeAnalyticsQueryString, sanitizeReferrer } from "./analyticsPrivacy";
 import { ALLOWED_PAGE_TYPES } from "../shared/analyticsPageType";
 
 export { ALLOWED_PAGE_TYPES }; // 讓 routers.ts 繼續可以從這裡 import，不用改呼叫端
@@ -142,7 +143,8 @@ async function getOrCreateSession(
   });
   const classification = finalizeClassification(botName, suspicious.level);
 
-  const referrer = firstEventContext.referrer ?? null;
+  // Batch 3.12：referrer 只保留 origin＋pathname（不落地任何 query／fragment）
+  const referrer = sanitizeReferrer(firstEventContext.referrer);
   const sourceClassification = classifyReferrer({ referrer, utmSource: firstEventContext.utmSource, platform });
 
   const nowDate = new Date(nowMs);
@@ -153,7 +155,7 @@ async function getOrCreateSession(
     ipPrefix: ipPrefix || null,
     userAgent: ua.slice(0, 500),
     deviceType, browser, os, platform,
-    referrer: referrer ? referrer.slice(0, 2000) : null,
+    referrer,
     referrerHost: extractReferrerHost(referrer),
     utmSource: firstEventContext.utmSource?.slice(0, 255) ?? null,
     utmMedium: firstEventContext.utmMedium?.slice(0, 255) ?? null,
@@ -250,14 +252,15 @@ export async function recordAnalyticsEvent(input: TrackEventInput, meta: Request
     visitorId: input.visitorId,
     eventType: input.eventType,
     pathname: input.pathname?.slice(0, 500) ?? null,
-    queryString: input.queryString?.slice(0, 1000) ?? null,
+    // Batch 3.12：只保留白名單參數（搜尋條件／分頁／UTM），不落地 token、ticket 等憑證
+    queryString: sanitizeAnalyticsQueryString(input.queryString),
     pageType: input.pageType ?? null,
     factoryId: input.factoryId ?? null,
     isLandingPage: input.isLandingPage ?? false,
     prevPathname: input.prevPathname?.slice(0, 500) ?? null,
     keyword: input.keyword?.slice(0, 200) ?? null,
     keywordNormalized,
-    filtersJson: input.filters ?? null,
+    filtersJson: sanitizeAnalyticsFilters(input.filters),
     useAIMode: input.useAIMode ?? null,
     resultCount: input.resultCount ?? null,
     classification,
