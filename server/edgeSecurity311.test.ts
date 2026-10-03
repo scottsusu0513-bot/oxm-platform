@@ -197,12 +197,22 @@ describe("JWT session 驗證", () => {
 });
 
 describe("production 啟動密鑰檢查", () => {
-  it("JWT_SECRET 少於 32 字元視為不安全（缺少由 missingRequiredProductionEnv 處理）", () => {
+  it("缺少 JWT_SECRET → missingRequiredProductionEnv 回報（啟動失敗）", async () => {
+    const { missingRequiredProductionEnv } = await import("./_core/resilience");
+    expect(missingRequiredProductionEnv({ DATABASE_URL: "mysql://x" } as any)).toEqual(["JWT_SECRET"]);
+    expect(missingRequiredProductionEnv({ DATABASE_URL: "mysql://x", JWT_SECRET: "   " } as any)).toEqual(["JWT_SECRET"]);
+  });
+  it("JWT_SECRET 少於 32 字元視為不安全（啟動失敗）；32 字元以上接受", () => {
     expect(weakProductionSecrets({ JWT_SECRET: "short-secret" } as any)).toEqual(["JWT_SECRET"]);
     expect(weakProductionSecrets({ JWT_SECRET: "x".repeat(32) } as any)).toEqual([]);
     expect(weakProductionSecrets({} as any)).toEqual([]);
     const src = fs.readFileSync(path.resolve(__dirname, "_core/index.ts"), "utf-8");
     expect(src).toMatch(/weakProductionSecrets\(\)/);
+    // 缺少與過短都必須讓 production 啟動失敗（process.exit(1)），而且只印名稱
+    const boot = src.slice(src.indexOf('if (process.env.NODE_ENV === "production")'), src.indexOf("const app = express()"));
+    expect(boot).toMatch(/const missing = missingRequiredProductionEnv\(\);\s*if \(missing\.length > 0\) \{[\s\S]*?process\.exit\(1\);\s*\}/);
+    expect(boot).toMatch(/const weak = weakProductionSecrets\(\);\s*if \(weak\.length > 0\) \{[\s\S]*?process\.exit\(1\);\s*\}/);
+    expect(boot).not.toMatch(/JWT_SECRET\s*[}\])]|process\.env\.JWT_SECRET/);
     expect(src).toMatch(/app\.set\("trust proxy", trustProxyHop\)/);
     expect(src).not.toMatch(/__ipdiag/);
   });
