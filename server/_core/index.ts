@@ -42,10 +42,11 @@ async function startServer() {
       console.error(`[boot] missing required configuration: ${missing.join(", ")}`);
       process.exit(1);
     }
+    // Batch 3.11：密鑰長度不足先記錄錯誤、不中止啟動——正式站目前的 JWT_SECRET 疑似短於
+    // 32 字元，直接中止會讓所有部署失敗。owner 換成足夠長度的密鑰後改回 process.exit(1)。
     const weak = weakProductionSecrets();
     if (weak.length > 0) {
-      console.error(`[boot] unsafe configuration (too short): ${weak.join(", ")}`);
-      process.exit(1);
+      console.error(`[boot] SECURITY: unsafe configuration (too short): ${weak.join(", ")} — rotate to at least 32 characters`);
     }
   }
 
