@@ -14,7 +14,8 @@
  * So: take `drizzle-kit export` (DDL generated from drizzle/schema.ts, no DB
  * connection), shorten only over-long constraint names deterministically,
  * apply it, verify every table and foreign key exists, then run the same
- * idempotent seed functions the server runs at boot (server/_core/index.ts).
+ * idempotent seed functions the server runs at boot (server/_core/index.ts),
+ * except consultant seeds (see main()).
  *
  * Refuses to run unless NODE_ENV=test and DATABASE_URL is 127.0.0.1/oxm_test.
  */
