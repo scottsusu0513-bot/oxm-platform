@@ -130,6 +130,15 @@ export function missingRequiredProductionEnv(env: NodeJS.ProcessEnv = process.en
   return required.filter(k => !env[k] || !String(env[k]).trim());
 }
 
+/** JWT_SECRET 最短長度（HS256 金鑰；Batch 3.11）。 */
+export const MIN_JWT_SECRET_LENGTH = 32;
+
+/** production 必要密鑰強度不足時回傳名稱（不含值）：目前只檢查 JWT_SECRET 長度。 */
+export function weakProductionSecrets(env: NodeJS.ProcessEnv = process.env): string[] {
+  const secret = String(env.JWT_SECRET ?? "").trim();
+  return secret.length > 0 && secret.length < MIN_JWT_SECRET_LENGTH ? ["JWT_SECRET"] : [];
+}
+
 /**
  * Readiness 檢查（Batch 3.9）：只做唯讀 SELECT 1，整體最多 timeoutMs；不寫入、不呼叫
  * 任何外部服務。回傳 HTTP 狀態碼與內容。

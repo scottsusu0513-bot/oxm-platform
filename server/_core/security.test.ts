@@ -97,16 +97,21 @@ describe("setupSecurityHeaders (Phase 7.3：LAN Development Security)", () => {
     expect(headers["strict-transport-security"]).toBe("max-age=31536000; includeSubDomains; preload");
   });
 
-  it("production／development 的其他 CSP 指令（script-src／connect-src 等）維持一致，不因環境改變", async () => {
+  // Batch 3.11：script-src／connect-src 刻意依環境不同——正式站移除 'unsafe-inline'、
+  // connect-src 只允許同源與私有 bucket；本機 Vite 開發需要 inline module script 與寬鬆
+  // connect-src。其餘指令仍必須一致。
+  it("production／development 除了 script-src／connect-src（正式站較嚴格）之外，其他 CSP 指令維持一致", async () => {
     const devCsp = String((await fetchHeadersForEnv("development"))["content-security-policy"]);
     const prodCsp = String((await fetchHeadersForEnv("production"))["content-security-policy"]);
     const stripUpgradeDirective = (csp: string) =>
       csp
         .split(";")
         .map(d => d.trim())
-        .filter(d => d && d !== "upgrade-insecure-requests")
+        .filter(d => d && d !== "upgrade-insecure-requests" && !d.startsWith("script-src ") && !d.startsWith("connect-src "))
         .sort()
         .join(";");
     expect(stripUpgradeDirective(devCsp)).toBe(stripUpgradeDirective(prodCsp));
+    expect(prodCsp).toMatch(/script-src 'self'(;|$)/);
+    expect(prodCsp).not.toMatch(/script-src[^;]*'unsafe-inline'/);
   });
 });

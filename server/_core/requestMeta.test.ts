@@ -9,13 +9,13 @@ function fakeReq(opts: { headers?: Record<string, string>; ip?: string; remoteAd
   } as any;
 }
 
-describe("getClientIp（優先序：CF-Connecting-IP > req.ip > socket.remoteAddress）", () => {
-  it("有 CF-Connecting-IP 時優先採用（未來 Cloudflare Proxied 相容）", () => {
+describe("getClientIp（優先序：req.ip > socket.remoteAddress；Batch 3.11 起不採信任何 client 可自帶的 header）", () => {
+  it("CF-Connecting-IP header 不採信：client 可自行偽造；經 Cloudflare 時 req.ip 已由 trust proxy 規則解析成真實 client", () => {
     const req = fakeReq({ headers: { "cf-connecting-ip": "203.0.113.5" }, ip: "10.0.0.1" });
-    expect(getClientIp(req)).toBe("203.0.113.5");
+    expect(getClientIp(req)).toBe("10.0.0.1");
   });
 
-  it("沒有 CF-Connecting-IP 時用 req.ip（目前 Render 部署現況，trust proxy=1 已解析好）", () => {
+  it("用 req.ip（server/_core/clientIp.ts 逐跳信任規則解析的結果）", () => {
     const req = fakeReq({ ip: "203.0.113.9" });
     expect(getClientIp(req)).toBe("203.0.113.9");
   });

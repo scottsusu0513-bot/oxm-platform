@@ -82,6 +82,20 @@ export function isCloudflareWorkerSubrequest(req: IncomingMessage): boolean {
   return typeof req.headers["cf-worker"] === "string";
 }
 
+/**
+ * Cloudflare Workers 的子請求同樣來自 Cloudflare 位址段，但 X-Forwarded-For 內容由
+ * Worker 程式決定：只保留最後一段（Render 附加的連線來源，也就是 Cloudflare 位址），
+ * 不讓它指定 client IP。必須在任何讀取 req.ip 的 middleware 之前執行。
+ */
+export function pinCloudflareWorkerForwardedFor(req: IncomingMessage, _res: unknown, next: () => void): void {
+  const xff = req.headers["x-forwarded-for"];
+  if (isCloudflareWorkerSubrequest(req) && typeof xff === "string") {
+    const parts = xff.split(",").map(s => s.trim()).filter(Boolean);
+    req.headers["x-forwarded-for"] = parts.slice(-1).join(",");
+  }
+  next();
+}
+
 /** 依 trustProxyHop 規則，從 socket 位址＋X-Forwarded-For 解出 client IP（diagnostic／測試用）。 */
 export function resolveClientIp(socketAddr: string | undefined, xff: string | undefined, opts: { allowCloudflareHop?: boolean } = {}): string | null {
   const allowCf = opts.allowCloudflareHop ?? true;

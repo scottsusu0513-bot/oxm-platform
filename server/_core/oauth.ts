@@ -1,6 +1,8 @@
 import type { CookieOptions, Express, Request, Response } from "express";
 import * as db from "../db";
 import { ENV } from "./env";
+import { getClientIp as getTrustedClientIp } from "./requestMeta";
+import { BRAND } from "@shared/seo/brand";
 import { randomBytes } from "crypto";
 import {
   handleOAuthCallback, issueSessionOrTicket, isGoogleEmailVerified, isLineEmailVerified,
@@ -36,10 +38,19 @@ function getStateCookieOptions(isProd: boolean): CookieOptions {
   };
 }
 
-function getClientIp(req: Request): string {
-  const forwarded = req.headers["x-forwarded-for"];
-  if (typeof forwarded === "string") return forwarded.split(",")[0].trim();
-  return req.ip ?? "";
+// Batch 3.11：原本取 X-Forwarded-For 最左邊一段（client 可任意偽造）。改用與全站相同、
+// 依 trust proxy 逐跳規則解析的 client IP。
+const getClientIp = getTrustedClientIp;
+
+/**
+ * OAuth redirect_uri 的 base：OAUTH_SERVER_URL 優先；未設定時 production 一律用正式網域，
+ * 不再從 request 的 Host header 組出（Batch 3.11）。非 production（本機、LAN 測試）
+ * 維持原本依 request 推導。
+ */
+export function oauthBaseUrl(req: Request): string {
+  if (process.env.OAUTH_SERVER_URL) return process.env.OAUTH_SERVER_URL;
+  if (process.env.NODE_ENV === "production") return BRAND.url;
+  return `${req.protocol}://${req.get("host")}`;
 }
 
 async function initOAuthState(
@@ -85,7 +96,7 @@ export function registerOAuthRoutes(app: Express) {
     const state = await initOAuthState(req, res, "google");
     if (!state) return;
 
-    const baseUrl = process.env.OAUTH_SERVER_URL || `${req.protocol}://${req.get("host")}`;
+    const baseUrl = oauthBaseUrl(req);
     const redirectUri = `${baseUrl}/api/oauth/callback`;
     const isApp = getQueryParam(req, "source") === "app";
 
@@ -143,7 +154,7 @@ export function registerOAuthRoutes(app: Express) {
     res.clearCookie(OAUTH_STATE_COOKIE, clearOpts);
 
     try {
-      const baseUrl = process.env.OAUTH_SERVER_URL || `${req.protocol}://${req.get("host")}`;
+      const baseUrl = oauthBaseUrl(req);
       const redirectUri = `${baseUrl}/api/oauth/callback`;
 
       const tokenRes = await fetch("https://oauth2.googleapis.com/token", {

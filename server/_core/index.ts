@@ -7,8 +7,8 @@ import { registerDevLoginRoutes } from "./devLogin";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
-import * as require_clientIp from "./clientIp";
-import { setupSecurityHeaders, setupOriginCheck, setupNoIndexRoutes } from "./security";
+import { trustProxyHop, pinCloudflareWorkerForwardedFor } from "./clientIp";
+import { setupSecurityHeaders, setupOriginCheck, setupNoIndexRoutes, setupApiNoStore } from "./security";
 import { setupGoneRoutes } from "./goneRoutes";
 import { ROBOTS_TXT, setupApiNoIndexHeader } from "./robots";
 import { setupLegacyBlogRedirect } from "./legacyBlogRedirect";
@@ -24,7 +24,7 @@ import {
   getPublishedNewsForSitemap, ensureConsultantsSeeded, ensureCertificationServiceCatalogSeeded,
   checkDbTimezoneAssumptions, closeDbPools,
 } from "../db";
-import { installProcessHandlers, missingRequiredProductionEnv, requestIdMiddleware, createReadinessCheck } from "./resilience";
+import { installProcessHandlers, missingRequiredProductionEnv, weakProductionSecrets, requestIdMiddleware, createReadinessCheck } from "./resilience";
 import { sql } from "drizzle-orm";
 import { ensureUpgradeProgramsSeeded } from "../upgradePrograms";
 import { runCollaborationOrderOverdueEmailCheck } from "../orderOverdueCheck";
@@ -42,36 +42,25 @@ async function startServer() {
       console.error(`[boot] missing required configuration: ${missing.join(", ")}`);
       process.exit(1);
     }
+    const weak = weakProductionSecrets();
+    if (weak.length > 0) {
+      console.error(`[boot] unsafe configuration (too short): ${weak.join(", ")}`);
+      process.exit(1);
+    }
   }
 
   const app = express();
-  app.set("trust proxy", 1);
+  // Batch 3.11：正式站拓樸是 client → Cloudflare → Render proxy → Express（直接打
+  // *.onrender.com 同樣經過 Render 的 Cloudflare edge）。原本 `trust proxy 1` 只信任
+  // Render 那一跳，req.ip 因此是 Cloudflare edge 位址——所有 rate limit 實際上以少數
+  // Cloudflare edge IP 計數，不同使用者共用額度。改為逐跳判斷：Render 內部 proxy（私有
+  // 位址）與 Cloudflare 官方位址段才可信，第一個不可信的位址即 client（見 clientIp.ts）。
+  app.set("trust proxy", trustProxyHop);
   const server = createServer(app);
   // Batch 3.9：每個 request 一個隨機 id（X-Request-Id），server log 與錯誤回報可對應同一次請求
   app.use(requestIdMiddleware);
-  // TEMPORARY Batch 3.11 diagnostic (REMOVE BEFORE FINAL COMMIT): proxy hop shape for the caller only, no raw IPs.
-  app.get("/api/__ipdiag/b54e94da47e0eb233cd6d999", (req, res) => {
-    const ci = require_clientIp;
-    const xffRaw = typeof req.headers["x-forwarded-for"] === "string" ? req.headers["x-forwarded-for"] : "";
-    const xff = xffRaw ? xffRaw.split(",").map(s => s.trim()) : [];
-    const cf = typeof req.headers["cf-connecting-ip"] === "string" ? req.headers["cf-connecting-ip"].trim() : "";
-    const sock = req.socket.remoteAddress ?? "";
-    const idx = (v: string) => xff.findIndex(x => ci.normalizeIp(x) === ci.normalizeIp(v));
-    const proposed = ci.resolveClientIp(sock, xffRaw, { allowCloudflareHop: !ci.isCloudflareWorkerSubrequest(req) }) ?? "";
-    res.setHeader("Cache-Control", "no-store");
-    res.json({
-      socket: ci.classifyIp(sock),
-      xffCount: xff.length,
-      xffKinds: xff.map(x => ci.classifyIp(x)),
-      cfConnectingIp: cf ? { kind: ci.classifyIp(cf), xffIndex: idx(cf) } : null,
-      cfWorker: ci.isCloudflareWorkerSubrequest(req),
-      xRealIp: typeof req.headers["x-real-ip"] === "string",
-      currentReqIp: { kind: ci.classifyIp(req.ip), xffIndex: idx(req.ip ?? ""), equalsCf: !!cf && ci.normalizeIp(req.ip) === ci.normalizeIp(cf) },
-      proposedReqIp: { kind: ci.classifyIp(proposed), xffIndex: idx(proposed), equalsCf: !!cf && ci.normalizeIp(proposed) === ci.normalizeIp(cf) },
-      proto: { reqProtocol: req.protocol, secure: req.secure, xfProto: req.headers["x-forwarded-proto"] ?? null },
-      host: { hostHeader: req.headers.host ?? null, xfHostPresent: typeof req.headers["x-forwarded-host"] === "string" },
-    });
-  });
+  app.use(pinCloudflareWorkerForwardedFor);
+  setupApiNoStore(app);
 
   console.log("[boot] applying security headers");
   setupSecurityHeaders(app);

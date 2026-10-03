@@ -18,14 +18,27 @@
  * （只採信「離我們自己這台伺服器最近的那一個受信任 proxy 回報」的值）才
  * 可靠。
  */
-import { createHash } from "crypto";
+import { createHash, createHmac } from "crypto";
 import type { Request } from "express";
 
-const IP_HASH_SALT = process.env.ANALYTICS_IP_SALT || process.env.JWT_SECRET || "oxm-analytics-fallback-salt";
+/**
+ * Batch 3.11：雜湊鹽不再直接重用 JWT_SECRET（也不再有寫死的 fallback）——
+ * 沒有設定 ANALYTICS_IP_SALT 時，從 JWT_SECRET 以 HMAC 衍生出專用的鹽，
+ * 不同用途不共用同一把原始密鑰。
+ */
+function ipHashSalt(): string {
+  if (process.env.ANALYTICS_IP_SALT) return process.env.ANALYTICS_IP_SALT;
+  return createHmac("sha256", process.env.JWT_SECRET ?? "").update("oxm:analytics-ip-salt:v1").digest("hex");
+}
+const IP_HASH_SALT = ipHashSalt();
 
+/**
+ * Batch 3.11：只使用 Express 依 `trust proxy`（server/_core/clientIp.ts 的逐跳規則）
+ * 解析出的 req.ip。原本優先採用 CF-Connecting-IP header——任何 client 都能自己帶，
+ * 不經過 Cloudflare 的請求就能偽造。經過 Cloudflare 時 req.ip 本來就等於 Cloudflare
+ * 看到的 client（正式站實測），不需要另外讀 header。
+ */
 export function getClientIp(req: Request): string {
-  const cfIp = req.headers["cf-connecting-ip"];
-  if (typeof cfIp === "string" && cfIp.trim()) return cfIp.trim();
   if (req.ip) return req.ip;
   return req.socket?.remoteAddress ?? "";
 }

@@ -223,8 +223,12 @@ class SDKServer {
       const { payload } = await jwtVerify(cookieValue, secretKey, {
         algorithms: ["HS256"],
       });
-      const { openId, appId, name } = payload as Record<string, unknown>;
+      const { openId, appId, name, typ } = payload as Record<string, unknown>;
 
+      // Batch 3.11：同一把 JWT_SECRET 也簽其他用途的 token（pending_account_link、
+      // app_account_link…，都帶 typ）。session token 沒有 typ；帶有其他 typ 的一律拒絕，
+      // 避免任何其他用途的 token 被當成登入 session。
+      if (typ !== undefined && typ !== "session") return null;
       if (!isNonEmptyString(openId)) return null;
 
       return {

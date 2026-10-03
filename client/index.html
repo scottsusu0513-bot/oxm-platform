@@ -99,39 +99,14 @@
       幾次（例如 React 已經正常觸發過，5 秒後 fallback 又跟著跑一次），
       實際的顯示/淡出動作都只會真正執行一次。
     -->
-    <script>
-      window.__showOxmApp = function () {
-        if (window.__oxmAppShown) return;
-        window.__oxmAppShown = true;
-
-        var rootElement = document.getElementById("root");
-        var loadingElement = document.getElementById("app-loading");
-
-        rootElement && rootElement.classList.add("app-ready");
-
-        requestAnimationFrame(function () {
-          loadingElement && loadingElement.classList.add("is-hiding");
-
-          window.setTimeout(function () {
-            loadingElement && loadingElement.classList.add("is-hidden");
-          }, 200);
-        });
-      };
-    </script>
-    <script type="module" src="/src/main.tsx"></script>
     <!--
-      保險機制：正常情況下 main.tsx 的 AppReadySignal 會在 React 完成首次
-      掛載後立刻呼叫 window.__showOxmApp()；這裡只是萬一 JS 發生例外導致
-      React 完全沒有執行到那一步時的最後防線，避免載入畫面永久卡住整個
-      網站。純 inline script、不依賴任何模組，就算 /src/main.tsx 本身載入
-      失敗也會執行；呼叫的是同一個函式，靠函式內建的一次性 guard 防止跟
-      正常流程重複觸發。
+      Batch 3.11：原本這裡與 </body> 前各有一段 inline script（載入畫面 bootstrap
+      與 5 秒保險機制）。兩段一起搬到同源的 /oxm-boot.js（一般同步 script，不依賴
+      任何模組；就算 /src/main.tsx 載入失敗也會執行），CSP script-src 不再需要
+      'unsafe-inline'。
     -->
-    <script>
-      window.setTimeout(function () {
-        window.__showOxmApp && window.__showOxmApp();
-      }, 5000);
-    </script>
+    <script src="/oxm-boot.js"></script>
+    <script type="module" src="/src/main.tsx"></script>
   </body>
 
 </html>

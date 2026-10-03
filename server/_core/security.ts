@@ -20,23 +20,58 @@ import { ENV } from "./env";
  * 明確關閉，不影響正式站安全策略；沿用專案既有的 ENV.isProduction
  * （server/_core/env.ts）判斷方式，不新增第二套環境判斷。
  */
+/**
+ * Batch 3.11：關閉網站用不到的瀏覽器能力；只保留前端實際使用的剪貼簿寫入與分享
+ * （navigator.clipboard、navigator.share）。檔案上傳的拍照走 OS 相機程式，不受影響。
+ */
+export const PERMISSIONS_POLICY = [
+  "camera=()", "microphone=()", "geolocation=()", "payment=()", "usb=()", "serial=()",
+  "bluetooth=()", "magnetometer=()", "gyroscope=()", "accelerometer=()", "display-capture=()",
+  "clipboard-write=(self)", "web-share=(self)",
+].join(", ");
+
+/** 私有附件 bucket 的 virtual-hosted 來源（前端以 presigned PUT 直傳）；設定不完整或格式不符就不加。 */
+export function privateBucketConnectSources(env: NodeJS.ProcessEnv = process.env): string[] {
+  const bucket = env.AWS_PRIVATE_FILES_BUCKET ?? "";
+  const region = env.AWS_PRIVATE_FILES_REGION ?? "";
+  if (!/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(bucket) || !/^[a-z]{2}-[a-z]+-\d$/.test(region)) return [];
+  return [`https://${bucket}.s3.${region}.amazonaws.com`];
+}
+
+/** API 回應預設不可快取（含登入狀態、會員資料）；個別路由需要快取時自行覆寫（Batch 3.11）。 */
+export function setupApiNoStore(app: Express) {
+  app.use("/api", (_req: Request, res: Response, next: NextFunction) => {
+    res.setHeader("Cache-Control", "no-store");
+    next();
+  });
+}
+
 export function setupSecurityHeaders(app: Express) {
   // Helmet 基礎安全 headers
   app.use(helmet({
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
-        scriptSrc: ["'self'", "'unsafe-inline'", "cdn.jsdelivr.net", "cdn.tailwindcss.com"],
-        styleSrc: ["'self'", "'unsafe-inline'", "cdn.tailwindcss.com", "fonts.googleapis.com"],
+        // Batch 3.11：正式站唯一的兩段 inline script（載入畫面 bootstrap）已移到同源
+        // /oxm-boot.js，script-src 不再需要 'unsafe-inline'；cdn.jsdelivr.net、
+        // cdn.tailwindcss.com 沒有任何程式使用，一併移除。本機開發（Vite）會注入
+        // inline module script（React Refresh preamble），非正式環境維持 'unsafe-inline'。
+        scriptSrc: ENV.isProduction ? ["'self'"] : ["'self'", "'unsafe-inline'"],
+        // style-src 仍需要 'unsafe-inline'：index.html 載入畫面的 <style>，以及前端
+        // 套件（例如 sonner）執行期注入的 <style> 元素。見 Batch 3.11 報告。
+        styleSrc: ["'self'", "'unsafe-inline'", "fonts.googleapis.com"],
         // blob: 用於瀏覽器端 URL.createObjectURL()——找消息後台選擇封面圖片後、
         // 儲存草稿真正上傳前的本機預覽（見 AdminNews.tsx 的 stagedCoverPreviewUrl），
         // 檔案來源是使用者自己選的本機檔案，不是外部網址，允許 blob: 不會擴大
         // 任何跨站資源注入風險。
         imgSrc: ["'self'", "data:", "https:", "blob:"],
-        connectSrc: ["'self'", "https:"],
+        // 正式站只需要同源 API，以及前端直傳 PDF 的私有 bucket（presigned PUT）。
+        connectSrc: ENV.isProduction ? ["'self'", ...privateBucketConnectSources()] : ["'self'", "https:"],
         fontSrc: ["'self'", "data:", "https:", "fonts.gstatic.com"],
         mediaSrc: ["'self'"],
         frameSrc: ["'none'"],
+        // 與 X-Frame-Options: DENY 一致（原本 helmet 預設的 'self' 互相矛盾）。
+        frameAncestors: ["'none'"],
         // 只在正式環境維持 helmet 預設的 upgrade-insecure-requests；非正式
         // 環境明確設 null 關閉（helmet 文件記載的標準關閉寫法），讓本機
         // plain http 開發（含 LAN IP 真機測試）的子資源請求不被改寫成 https。
@@ -45,7 +80,8 @@ export function setupSecurityHeaders(app: Express) {
     },
     referrerPolicy: { policy: "strict-origin-when-cross-origin" },
     noSniff: true,
-    xssFilter: true,
+    // helmet 預設 X-XSS-Protection: 0（舊版 XSS auditor 本身可被濫用，現代瀏覽器已移除）。
+    xXssProtection: true,
     // 正式環境維持原本 HSTS 設定；非正式環境關閉，本機 plain http 開發不
     // 應該送出「以後永遠只能用 https」這個長效指示。
     hsts: ENV.isProduction
@@ -57,13 +93,10 @@ export function setupSecurityHeaders(app: Express) {
   app.use((req: Request, res: Response, next: NextFunction) => {
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("X-Frame-Options", "DENY");
-    res.setHeader("X-XSS-Protection", "1; mode=block");
-    // 這裡原本跟上面 helmet 的 hsts 選項重複設定同一個 header——保留正式站
-    // 既有行為不變，但同樣需要依環境關閉，否則即使 helmet 的 hsts 選項被
-    // 關掉，這裡仍會在非正式環境送出 Strict-Transport-Security。
-    if (ENV.isProduction) {
-      res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload");
-    }
+    // Batch 3.11：原本覆寫成 "1; mode=block"（已淘汰、可被濫用），改回與 helmet 一致的 0；
+    // Strict-Transport-Security 由上面 helmet 的 hsts 選項負責，不再重複設定。
+    res.setHeader("X-XSS-Protection", "0");
+    res.setHeader("Permissions-Policy", PERMISSIONS_POLICY);
     next();
   });
 }
