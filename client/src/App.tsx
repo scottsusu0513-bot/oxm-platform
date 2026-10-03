@@ -270,7 +270,8 @@ function AppDeepLinkHandler() {
         // （不寫 localStorage），不重新載入頁面，直接進入輸入驗證碼畫面。
         if (accountLinkState) {
           await Browser.close();
-          setAppAccountLinkState(accountLinkState);
+          // 重複送達的同一個 link callback 不會清掉第一次已取得的 verifier
+          setAppAccountLinkState(accountLinkState, readAndClearAppLoginVerifier());
           navigateTo("/account-link/app");
           return;
         }

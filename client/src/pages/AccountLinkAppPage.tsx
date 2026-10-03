@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { CheckCircle, Loader2, Mail, XCircle } from "lucide-react";
 import { toast } from "sonner";
-import { clearAppAccountLinkState, getAppAccountLinkState, setAppAccountLinkState } from "@/lib/appAccountLink";
+import { clearAppAccountLinkState, getAppAccountLinkState, getAppAccountLinkVerifier, setAppAccountLinkState } from "@/lib/appAccountLink";
 
 /**
  * App（Capacitor）帳號連結：LINE 登入的 email 屬於既有 OXM 帳號時，輸入寄到
@@ -58,7 +58,7 @@ export default function AccountLinkAppPage() {
   const submit = () => {
     if (!state || code.length !== 6 || verifyMut.isPending) return;
     setError(null);
-    verifyMut.mutate({ state, code });
+    verifyMut.mutate({ state, code, verifier: getAppAccountLinkVerifier() });
   };
 
   const noState = !state || (!pendingQuery.isLoading && !pending);

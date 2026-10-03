@@ -1603,8 +1603,10 @@ export const appRouter = router({
     appVerify: publicProcedure.input(z.object({
       state: z.string().min(1).max(2048),
       code: z.string().min(1).max(12),
+      // 發起 App 登入時產生的 PKCE verifier（state 綁定 challenge 時必填）
+      verifier: z.string().max(128).optional(),
     })).mutation(async ({ ctx, input }) => {
-      const result = await verifyAppAccountLinkChallenge(input.state, input.code);
+      const result = await verifyAppAccountLinkChallenge(input.state, input.code, new Date(), input.verifier);
       if (!result.ok) {
         return { success: false as const, reason: result.reason, message: result.message, remainingAttempts: result.remainingAttempts ?? null };
       }

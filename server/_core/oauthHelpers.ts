@@ -222,6 +222,36 @@ export function isOAuthStateBoundToBrowser(req: Request, stateParam: string): bo
   });
 }
 
+/** initOAuthState 產生的 state 格式：`<64 hex>`（Web）或 `<64 hex>.<challenge>`（App）。 */
+const OAUTH_STATE_RE = /^[0-9a-f]{64}(?:\.[A-Za-z0-9_-]{43})?$/;
+
+export type OAuthStateRejectReason =
+  | "malformed" | "cookie_missing" | "cookie_mismatch"
+  | "not_found" | "consumed" | "expired" | "provider_mismatch" | "purpose_mismatch" | "lookup_failed";
+
+export type OAuthStateBinding =
+  | { ok: true; mode: "browser_cookie" | "app_pkce"; appChallenge: string | null }
+  | { ok: false; reason: OAuthStateRejectReason };
+
+/**
+ * callback 的 state 綁定檢查（DB 消耗之前）：
+ *   - browser_cookie：state 等於這個瀏覽器的 oauth_state cookie（Web 與一般 App 流程）。
+ *   - app_pkce：cookie 不在，但 state 帶有 App 登入 challenge。iOS 選「使用 LINE
+ *     應用程式進行登入」時，LINE App 授權後在「另一個」瀏覽器環境（Safari）開啟
+ *     callback，App 內 SFSafariViewController 的 cookie 不會跟過去。這種 state 只能
+ *     以 source=app 消耗，簽出的票券（與帳號連結 state）綁定同一個 challenge，必須由
+ *     持有 verifier 的那台 App 才能兌換——偷渡 callback 網址給別人的瀏覽器拿不到
+ *     session（取代 cookie 的 login CSRF 防護）。
+ * 不帶 challenge 的 state 仍然必須有相符的 cookie。
+ */
+export function resolveOAuthStateBinding(req: Request, stateParam: string): OAuthStateBinding {
+  if (!OAUTH_STATE_RE.test(stateParam)) return { ok: false, reason: "malformed" };
+  const appChallenge = appLoginChallengeFromState(stateParam);
+  if (isOAuthStateBoundToBrowser(req, stateParam)) return { ok: true, mode: "browser_cookie", appChallenge };
+  if (appChallenge) return { ok: true, mode: "app_pkce", appChallenge };
+  return { ok: false, reason: readCookieValues(req.headers.cookie, OAUTH_STATE_COOKIE).length > 0 ? "cookie_mismatch" : "cookie_missing" };
+}
+
 /** App 登入：state 格式為 `<64 hex>.<challenge>`；其他情況回傳 null。 */
 export function appLoginChallengeFromState(state: string): string | null {
   const dot = state.indexOf(".");

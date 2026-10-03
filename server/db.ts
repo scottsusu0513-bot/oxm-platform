@@ -6422,17 +6422,32 @@ export async function createOauthState(params: {
  * 消耗 OAuth state（Batch 3.7）：單一條件式 UPDATE（未使用、未過期）＋
  * affectedRows 檢查，同一個 state 併發兩次只有一次有效。
  */
-export async function consumeOauthState(state: string): Promise<{ valid: boolean; redirectTo?: string | null; source?: string | null; provider?: string | null }> {
+export async function consumeOauthState(
+  state: string,
+  bind?: { provider: string; source?: "app" },
+): Promise<{ valid: boolean; redirectTo?: string | null; source?: string | null; provider?: string | null; reason?: "not_found" | "consumed" | "expired" | "provider_mismatch" | "purpose_mismatch" }> {
   const db = await getDb();
   if (!db) return { valid: false };
   const now = new Date();
-  const [result]: any = await db
-    .update(oauthStates)
-    .set({ usedAt: now })
-    .where(and(eq(oauthStates.state, state), isNull(oauthStates.usedAt), gt(oauthStates.expiresAt, now)));
-  if ((result?.affectedRows ?? 0) !== 1) return { valid: false };
+  const conds = [eq(oauthStates.state, state), isNull(oauthStates.usedAt), gt(oauthStates.expiresAt, now)];
+  // provider／用途綁定：Google 發出的 state 不能拿到 LINE callback 使用；App（無 cookie）
+  // 模式只接受當初以 source=app 建立的 state。
+  if (bind) conds.push(eq(oauthStates.provider, bind.provider));
+  if (bind?.source) conds.push(eq(oauthStates.source, bind.source));
+  const [result]: any = await db.update(oauthStates).set({ usedAt: now }).where(and(...conds));
+  if ((result?.affectedRows ?? 0) !== 1) {
+    // 只為了分類失敗原因（log 用，不含 state 本身），不修改任何資料。
+    const [row] = await db.select({ usedAt: oauthStates.usedAt, expiresAt: oauthStates.expiresAt, provider: oauthStates.provider, source: oauthStates.source })
+      .from(oauthStates).where(eq(oauthStates.state, state)).limit(1);
+    const reason = !row ? "not_found"
+      : row.usedAt ? "consumed"
+      : row.expiresAt.getTime() <= now.getTime() ? "expired"
+      : bind && row.provider !== bind.provider ? "provider_mismatch"
+      : "purpose_mismatch";
+    return { valid: false, reason };
+  }
   const [row] = await db.select().from(oauthStates).where(eq(oauthStates.state, state)).limit(1);
-  if (!row) return { valid: false };
+  if (!row) return { valid: false, reason: "not_found" };
   return { valid: true, redirectTo: row.redirectTo, source: row.source, provider: row.provider };
 }
 

@@ -41,7 +41,8 @@ import {
 } from "../emailVerificationPolicy";
 import { getSessionCookieOptions } from "./cookies";
 import { ENV } from "./env";
-import { generateRawToken, sha256Hex } from "./oauthHelpers";
+import { generateRawToken, isAppLoginVerifierValid, sha256Hex } from "./oauthHelpers";
+import { APP_LOGIN_CHALLENGE_RE } from "@shared/appLoginPkce";
 
 export const PENDING_ACCOUNT_LINK_COOKIE = "oxm_pending_account_link";
 export const ACCOUNT_LINK_FAILED_MESSAGE = "驗證失敗或已過期，請重新驗證。";
@@ -322,7 +323,8 @@ export async function completePendingAccountLink(req: Request, res: Response, ra
 // App：6 位數 OTP 挑戰（accountLinkChallenges）
 // ─────────────────────────────────────────────────────────────────────────
 
-type AppAccountLinkStatePayload = { typ: "app_account_link"; cid: string };
+/** ach：發起這次 App 登入的 PKCE challenge（有的話，驗證時必須提出對應 verifier）。 */
+type AppAccountLinkStatePayload = { typ: "app_account_link"; cid: string; ach?: string };
 
 /** 6 位數、密碼學安全亂數（crypto.randomInt），保留前導 0。 */
 export function generateAccountLinkOtp(): string {
@@ -343,8 +345,8 @@ export function hashAccountLinkOtp(ctx: {
     .digest("hex");
 }
 
-async function signAppState(challengeId: string, expiresAt: Date): Promise<string> {
-  return new SignJWT({ typ: "app_account_link", cid: challengeId })
+async function signAppState(challengeId: string, expiresAt: Date, appChallenge: string | null = null): Promise<string> {
+  return new SignJWT({ typ: "app_account_link", cid: challengeId, ...(appChallenge ? { ach: appChallenge } : {}) })
     .setProtectedHeader({ alg: "HS256", typ: "JWT" })
     .setExpirationTime(Math.floor(expiresAt.getTime() / 1000))
     .sign(secretKey());
@@ -352,11 +354,16 @@ async function signAppState(challengeId: string, expiresAt: Date): Promise<strin
 
 /** App 持有的不透明 state → challengeId；簽章錯誤或過期回 null。 */
 export async function readAppAccountLinkState(state: string): Promise<string | null> {
+  return (await readAppAccountLinkStateClaims(state))?.cid ?? null;
+}
+
+async function readAppAccountLinkStateClaims(state: string): Promise<{ cid: string; ach: string | null } | null> {
   try {
     const { payload } = await jwtVerify(state, secretKey(), { algorithms: ["HS256"] });
     const p = payload as Partial<AppAccountLinkStatePayload>;
     if (p.typ !== "app_account_link" || typeof p.cid !== "string" || !p.cid) return null;
-    return p.cid;
+    if (p.ach !== undefined && (typeof p.ach !== "string" || !APP_LOGIN_CHALLENGE_RE.test(p.ach))) return null;
+    return { cid: p.cid, ach: p.ach ?? null };
   } catch {
     return null;
   }
@@ -409,18 +416,19 @@ export async function startAppAccountLinkChallenge(params: {
   provider: LinkableProvider;
   providerAccountId: string;
   displayName: string | null;
+  appChallenge?: string | null;
   now?: Date;
 }): Promise<{ kind: "started"; state: string; emailSent: boolean } | { kind: "cooldown" }> {
   const now = params.now ?? new Date();
   const latest = await db.getLatestAccountLinkChallengeForTarget(params.target.id);
   if (latest && latest.createdAt.getTime() > now.getTime() - EMAIL_VERIFICATION_RESEND_COOLDOWN_MS) {
     if (latest.provider === params.provider && latest.providerAccountId === params.providerAccountId && isChallengeActive(latest, now)) {
-      return { kind: "started", state: await signAppState(latest.challengeId, latest.expiresAt), emailSent: false };
+      return { kind: "started", state: await signAppState(latest.challengeId, latest.expiresAt, params.appChallenge ?? null), emailSent: false };
     }
     return { kind: "cooldown" };
   }
   const ch = await issueAppChallenge(params.target, params.provider, params.providerAccountId, params.displayName, now);
-  return { kind: "started", state: await signAppState(ch.challengeId, ch.expiresAt), emailSent: true };
+  return { kind: "started", state: await signAppState(ch.challengeId, ch.expiresAt, params.appChallenge ?? null), emailSent: true };
 }
 
 async function loadAppChallenge(state: string): Promise<AccountLinkChallenge | null> {
@@ -455,7 +463,7 @@ export async function resendAppAccountLinkChallenge(state: string, now: Date = n
   const latest = await db.getLatestAccountLinkChallengeForTarget(target.id);
   if (latest && latest.createdAt.getTime() > now.getTime() - EMAIL_VERIFICATION_RESEND_COOLDOWN_MS) return { kind: "cooldown" };
   const next = await issueAppChallenge(target, ch.provider as LinkableProvider, ch.providerAccountId, ch.displayName, now);
-  return { kind: "sent", state: await signAppState(next.challengeId, next.expiresAt) };
+  return { kind: "sent", state: await signAppState(next.challengeId, next.expiresAt, (await readAppAccountLinkStateClaims(state))?.ach ?? null) };
 }
 
 /** 取消：作廢挑戰，不修改任何帳號。 */
@@ -481,7 +489,11 @@ function inactiveReason(ch: AccountLinkChallenge, now: Date): CompleteAccountLin
  *      - 正確：DB 原子性消耗挑戰（同樣要求錯誤未滿上限）
  *   4. finalizeProviderLink（與 Web 共用）
  */
-export async function verifyAppAccountLinkChallenge(state: string, code: string, now: Date = new Date()): Promise<CompleteAccountLinkResult> {
+export async function verifyAppAccountLinkChallenge(state: string, code: string, now: Date = new Date(), verifier?: unknown): Promise<CompleteAccountLinkResult> {
+  // state 綁定 App 登入 challenge 時，必須由發起登入的那台 App（持有 verifier）完成；
+  // 不符時不比對 OTP、也不消耗錯誤次數。
+  const claims = await readAppAccountLinkStateClaims(state);
+  if (!claims || !isAppLoginVerifierValid(claims.ach, verifier)) return FAIL_INVALID;
   const ch = await loadAppChallenge(state);
   if (!ch) return FAIL_INVALID;
   if (!isChallengeActive(ch, now)) return inactiveReason(ch, now);

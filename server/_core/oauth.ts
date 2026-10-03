@@ -7,7 +7,7 @@ import { BRAND } from "@shared/seo/brand";
 import { randomBytes } from "crypto";
 import {
   handleOAuthCallback, issueSessionOrTicket, isGoogleEmailVerified, isLineEmailVerified,
-  OAUTH_STATE_COOKIE, isOAuthStateBoundToBrowser, appLoginChallengeFromState,
+  OAUTH_STATE_COOKIE, resolveOAuthStateBinding, appLoginChallengeFromState,
   parseAppLoginTicket, isAppLoginVerifierValid,
 } from "./oauthHelpers";
 import { APP_LOGIN_CHALLENGE_PARAM, APP_LOGIN_CHALLENGE_RE } from "@shared/appLoginPkce";
@@ -92,6 +92,40 @@ async function initOAuthState(
   return state;
 }
 
+type CallbackStateResult = { redirectTo?: string | null; source?: string | null; provider?: string | null };
+
+/**
+ * 三個 provider callback 共用的 state 驗證：先檢查綁定（cookie，或 App 的 PKCE
+ * challenge，見 resolveOAuthStateBinding），再以 provider（與 App 模式下的 source）
+ * 為條件原子性消耗 DB state（一次性、10 分鐘到期）。任何失敗都回 400，log 只記
+ * 失敗類別，不記 state、code 或 cookie。
+ */
+async function verifyCallbackState(req: Request, res: Response, stateParam: unknown, provider: "google" | "line" | "apple"): Promise<CallbackStateResult | null> {
+  const reject = (reason: string) => {
+    console.warn(`[OAuth/${provider}/callback] state rejected reason=${reason}`);
+    res.status(400).json({ error: "Invalid OAuth state" });
+    return null;
+  };
+  if (typeof stateParam !== "string") return reject("malformed");
+  const binding = resolveOAuthStateBinding(req, stateParam);
+  if (!binding.ok) return reject(binding.reason);
+
+  let dbResult: Awaited<ReturnType<typeof db.consumeOauthState>>;
+  try {
+    dbResult = await db.consumeOauthState(stateParam, binding.mode === "app_pkce" ? { provider, source: "app" } : { provider });
+  } catch (err) {
+    console.error(`[OAuth/${provider}/callback] DB state lookup failed:`, (err as { name?: string } | null)?.name ?? "Error");
+    return reject("lookup_failed");
+  }
+  if (!dbResult.valid) return reject(dbResult.reason ?? "not_found");
+  if (binding.mode === "app_pkce") console.log(`[OAuth/${provider}/callback] state accepted mode=app_pkce`);
+
+  const { maxAge: _omit, ...clearOpts } = getStateCookieOptions(process.env.NODE_ENV === "production");
+  void _omit;
+  res.clearCookie(OAUTH_STATE_COOKIE, clearOpts);
+  return dbResult;
+}
+
 export function registerOAuthRoutes(app: Express) {
   // ── Google: Initiate ────────────────────────────────────────────────────────
   app.get("/api/oauth/google", async (req: Request, res: Response) => {
@@ -122,7 +156,6 @@ export function registerOAuthRoutes(app: Express) {
 
   // ── Google: Callback ────────────────────────────────────────────────────────
   app.get("/api/oauth/callback", async (req: Request, res: Response) => {
-    const isProd = process.env.NODE_ENV === "production";
     const code = getQueryParam(req, "code");
     const stateParam = getQueryParam(req, "state");
 
@@ -131,29 +164,8 @@ export function registerOAuthRoutes(app: Express) {
       return;
     }
 
-    // Batch 3.7：state 必須與這個瀏覽器發起登入時拿到的 cookie 相同（防 login CSRF），
-    // 不相符時不消耗 DB 的 state。
-    if (!isOAuthStateBoundToBrowser(req, stateParam)) {
-      res.status(400).json({ error: "Invalid OAuth state" });
-      return;
-    }
-
-    let dbResult: { valid: boolean; redirectTo?: string | null; source?: string | null; provider?: string | null };
-    try {
-      dbResult = await db.consumeOauthState(stateParam);
-    } catch (err) {
-      console.error("[OAuth/google/callback] DB state lookup failed:", err);
-      dbResult = { valid: false };
-    }
-
-    if (!dbResult.valid) {
-      res.status(400).json({ error: "Invalid OAuth state" });
-      return;
-    }
-
-    const { maxAge: _omit, ...clearOpts } = getStateCookieOptions(isProd);
-    void _omit;
-    res.clearCookie(OAUTH_STATE_COOKIE, clearOpts);
+    const dbResult = await verifyCallbackState(req, res, stateParam, "google");
+    if (!dbResult) return;
 
     try {
       const baseUrl = oauthBaseUrl(req);
@@ -226,7 +238,6 @@ export function registerOAuthRoutes(app: Express) {
 
   // ── LINE: Callback ──────────────────────────────────────────────────────────
   app.get("/api/oauth/line/callback", async (req: Request, res: Response) => {
-    const isProd = process.env.NODE_ENV === "production";
     const code = getQueryParam(req, "code");
     const stateParam = getQueryParam(req, "state");
 
@@ -235,26 +246,8 @@ export function registerOAuthRoutes(app: Express) {
       return;
     }
 
-    if (!isOAuthStateBoundToBrowser(req, stateParam)) {
-      res.status(400).json({ error: "Invalid OAuth state" });
-      return;
-    }
-
-    let dbResult: { valid: boolean; redirectTo?: string | null; source?: string | null; provider?: string | null };
-    try {
-      dbResult = await db.consumeOauthState(stateParam);
-    } catch {
-      dbResult = { valid: false };
-    }
-
-    if (!dbResult.valid) {
-      res.status(400).json({ error: "Invalid OAuth state" });
-      return;
-    }
-
-    const { maxAge: _omit2, ...clearOpts2 } = getStateCookieOptions(isProd);
-    void _omit2;
-    res.clearCookie(OAUTH_STATE_COOKIE, clearOpts2);
+    const dbResult = await verifyCallbackState(req, res, stateParam, "line");
+    if (!dbResult) return;
 
     try {
       // Exchange code for token
@@ -331,6 +324,8 @@ export function registerOAuthRoutes(app: Express) {
           const started = await startAppAccountLinkChallenge({
             target: loginAction.target, provider: "line",
             providerAccountId: lineUserId, displayName: lineName,
+            // 連結 state 綁定同一個 App 登入 challenge：只有持有 verifier 的 App 能完成驗證
+            appChallenge: appLoginChallengeFromState(stateParam),
           });
           if (started.kind === "cooldown") {
             res.redirect(302, "oxm://oauth/callback?error=account_link_cooldown");
@@ -418,7 +413,6 @@ export function registerOAuthRoutes(app: Express) {
       return;
     }
 
-    const isProd = process.env.NODE_ENV === "production";
     const { code, state: stateParam, user: userJson } = req.body ?? {};
 
     console.log("[OAuth/apple/callback] received form_post:", {
@@ -434,28 +428,10 @@ export function registerOAuthRoutes(app: Express) {
       return;
     }
 
-    if (!isOAuthStateBoundToBrowser(req, stateParam)) {
-      res.status(400).json({ error: "Invalid OAuth state" });
-      return;
-    }
-
-    let dbResult: { valid: boolean; redirectTo?: string | null; source?: string | null; provider?: string | null };
-    try {
-      dbResult = await db.consumeOauthState(stateParam);
-    } catch {
-      dbResult = { valid: false };
-    }
-
-    if (!dbResult.valid) {
-      res.status(400).json({ error: "Invalid OAuth state" });
-      return;
-    }
+    const dbResult = await verifyCallbackState(req, res, stateParam, "apple");
+    if (!dbResult) return;
 
     console.log("[OAuth/apple/callback] state valid, source:", dbResult.source);
-
-    const { maxAge: _omit3, ...clearOpts3 } = getStateCookieOptions(isProd);
-    void _omit3;
-    res.clearCookie(OAUTH_STATE_COOKIE, clearOpts3);
 
     try {
       const clientSecret = await generateAppleClientSecret();
