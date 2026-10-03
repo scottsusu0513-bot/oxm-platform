@@ -45,3 +45,86 @@ jobs:
         run: pnpm build
         env:
           NODE_ENV: production
+
+  # Full test suite against a throwaway MySQL that exists only inside this job.
+  # Not a required check yet (CI test-DB bootstrap is being validated).
+  full-test:
+    name: full-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      mysql:
+        # Same major as the local oxm_test the suite is verified against (8.0.x).
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: ci_root_password
+          MYSQL_DATABASE: oxm_test
+          MYSQL_USER: oxm_ci
+          MYSQL_PASSWORD: ci_test_password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pci_root_password"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+    env:
+      # CI-only placeholder values. No production secrets are used here.
+      NODE_ENV: test
+      TEST_DATABASE_URL: mysql://oxm_ci:ci_test_password@127.0.0.1:3306/oxm_test
+      DATABASE_URL: mysql://oxm_ci:ci_test_password@127.0.0.1:3306/oxm_test
+      JWT_SECRET: ci-only-placeholder-jwt-secret-not-used-anywhere-else
+      ADMIN_WHITELIST_EMAILS: '["ci-admin@example.test"]'
+      GOOGLE_CLIENT_ID: ci-placeholder-google-client-id
+      GOOGLE_CLIENT_SECRET: ci-placeholder-google-client-secret
+      OAUTH_SERVER_URL: http://localhost:3000
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Defense in depth: refuse to touch anything but the local CI oxm_test.
+      - name: Assert target is the local CI test database
+        run: |
+          node -e '
+            const u = new URL(process.env.DATABASE_URL);
+            if (u.hostname !== "127.0.0.1" || u.pathname !== "/oxm_test") {
+              console.error("Refusing: DATABASE_URL is not 127.0.0.1/oxm_test");
+              process.exit(1);
+            }
+            console.log("target ok:", u.hostname, u.pathname);
+          '
+
+      # `pnpm db:push` runs `drizzle-kit migrate`, whose journal stops at 0028;
+      # later migrations are hand-applied SQL. Build the current schema from
+      # drizzle/schema.ts instead (empty DB, so --force has nothing to drop).
+      - name: Create schema from drizzle/schema.ts
+        run: pnpm exec drizzle-kit push --force
+
+      - name: Verify schema
+        run: |
+          node -e '
+            const mysql = require("mysql2/promise");
+            (async () => {
+              const c = await mysql.createConnection(process.env.DATABASE_URL);
+              const [[{ n }]] = await c.query("SELECT COUNT(*) n FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE()");
+              const [rows] = await c.query("SELECT TABLE_NAME t FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (\"users\",\"factories\",\"conversations\",\"messages\")");
+              console.log("tables:", n, "core:", rows.map(r => r.t).sort().join(","));
+              await c.end();
+              if (Number(n) === 0 || rows.length !== 4) process.exit(1);
+            })().catch(e => { console.error(e.code || e.message); process.exit(1); });
+          '
+
+      - name: Run full test suite
+        run: pnpm test
