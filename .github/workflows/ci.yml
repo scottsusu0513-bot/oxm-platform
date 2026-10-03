@@ -69,15 +69,26 @@ jobs:
           --health-timeout=5s
           --health-retries=30
     env:
-      # CI-only placeholder values. No production secrets are used here.
+      # Mirrors the local test environment the full suite passes on. All values
+      # are CI-only placeholders or non-secret fixtures; no production secrets.
       NODE_ENV: test
+      # Local runs (Node and MySQL session) are Asia/Taipei; some tests assume it.
+      TZ: Asia/Taipei
       TEST_DATABASE_URL: mysql://oxm_ci:ci_test_password@127.0.0.1:3306/oxm_test
       DATABASE_URL: mysql://oxm_ci:ci_test_password@127.0.0.1:3306/oxm_test
       JWT_SECRET: ci-only-placeholder-jwt-secret-not-used-anywhere-else
-      ADMIN_WHITELIST_EMAILS: '["ci-admin@example.test"]'
+      # Admin-procedure tests build their admin context with this address.
+      ADMIN_WHITELIST_EMAILS: '["scottsusu0513@gmail.com"]'
       GOOGLE_CLIENT_ID: ci-placeholder-google-client-id
       GOOGLE_CLIENT_SECRET: ci-placeholder-google-client-secret
-      OAUTH_SERVER_URL: http://localhost:3000
+      OAUTH_SERVER_URL: https://accounts.google.com
+      CONSENT_GATE_LAUNCH_AT: "2026-01-01T00:00:00.000Z"
+      ONBOARDING_LAUNCH_AT: "2026-01-01T00:00:00.000Z"
+      # Placeholder only: the OpenAI SDK is mocked in tests; AI search stays
+      # disabled (AI_SEARCH_PROVIDER unset), so no request reaches OpenAI.
+      OPENAI_API_KEY: sk-ci-test-placeholder-not-a-real-key
+      AI_DIAGNOSIS_MODEL: gpt-5.6-terra
+      AI_ROUTING_MODEL: gpt-5.6-terra
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -106,25 +117,40 @@ jobs:
             console.log("target ok:", u.hostname, u.pathname);
           '
 
-      # `pnpm db:push` runs `drizzle-kit migrate`, whose journal stops at 0028;
-      # later migrations are hand-applied SQL. Build the current schema from
-      # drizzle/schema.ts instead (empty DB, so --force has nothing to drop).
-      - name: Create schema from drizzle/schema.ts
-        run: pnpm exec drizzle-kit push --force
-
-      - name: Verify schema
+      # Match the local MySQL session timezone (Asia/Taipei, +08:00).
+      - name: Set MySQL time zone
         run: |
           node -e '
             const mysql = require("mysql2/promise");
             (async () => {
+              const root = await mysql.createConnection({ host: "127.0.0.1", port: 3306, user: "root", password: "ci_root_password" });
+              await root.query("SET GLOBAL time_zone = \"+08:00\"");
+              await root.end();
               const c = await mysql.createConnection(process.env.DATABASE_URL);
-              const [[{ n }]] = await c.query("SELECT COUNT(*) n FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE()");
-              const [rows] = await c.query("SELECT TABLE_NAME t FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (\"users\",\"factories\",\"conversations\",\"messages\")");
-              console.log("tables:", n, "core:", rows.map(r => r.t).sort().join(","));
+              const [[{ off }]] = await c.query("SELECT TIMESTAMPDIFF(SECOND, UTC_TIMESTAMP(), NOW()) off");
               await c.end();
-              if (Number(n) === 0 || rows.length !== 4) process.exit(1);
+              console.log("session offset seconds:", off);
+              if (Number(off) !== 28800) process.exit(1);
             })().catch(e => { console.error(e.code || e.message); process.exit(1); });
           '
+
+      # Schema from drizzle/schema.ts + the app's boot-time seeds. See the
+      # script header for why `pnpm db:push` / `drizzle-kit push` are not used.
+      - name: Bootstrap test database
+        run: pnpm exec tsx scripts/ci/bootstrap-test-db.ts
+
+      # server/_core/prerenderedBody.ts resolves dist/prerendered/* at import
+      # time; locally that directory exists from earlier builds. Generate it
+      # (prerender scripts only, no bundling) so those tests see the same layout.
+      - name: Generate prerendered fragments
+        run: |
+          pnpm prerender:about
+          pnpm prerender:home
+          pnpm prerender:faq
+          pnpm prerender:resources
+          pnpm prerender:news
+          pnpm prerender:search
+          pnpm prerender:upgrade-center
 
       - name: Run full test suite
         run: pnpm test
