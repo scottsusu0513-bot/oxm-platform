@@ -1,0 +1,160 @@
+import { validateTransition, type ApprovalPhase } from "../domain/taskState";
+import type { TaskState, WorkerKind } from "../domain/types";
+import type { NewAuditEvent, NewTaskRun, TaskPatch } from "../store/types";
+import { managerAudit, type ManagerAuditMetadataInput } from "./intent";
+import { buildRepairRequest, type Intent } from "./repair";
+import type { ManagerEvidence, ManagerValidation, RepairRequest } from "./types";
+import { REPAIRABLE_STATES, validateEvidence } from "./validator";
+
+/**
+ * Pure thin-Manager flow:
+ *   task ready -> evidence collected -> validate ->
+ *     accepted             -> next-step intent for the existing PR/QA/approval lifecycle
+ *     needs_repair         -> RepairRequest; same worker, same task branch
+ *     blocked              -> stop / replan intent (no automatic retry)
+ *     needs_human_approval -> approval intent
+ *
+ * Nothing is executed or written: transitions are pre-checked with
+ * domain/taskState and applied by the caller through TaskRepository; audit
+ * events are appended by the caller. The Manager never merges — "complete"
+ * is the existing task state, and merging stays a separate human-approved
+ * action outside this layer.
+ */
+
+export const MANAGER_NEXT_STEPS = [
+  "open_pr",
+  "advance_qa",
+  "complete_task",
+  "request_post_qa_approval",
+  "await_human_approval",
+  "dispatch_repair",
+  "replan_branch",
+  "stop",
+] as const;
+export type ManagerNextStep = (typeof MANAGER_NEXT_STEPS)[number];
+
+export interface ManagerStep {
+  validation: ManagerValidation;
+  next: ManagerNextStep;
+  transition: TaskState | null;
+  repairRequest: RepairRequest | null;
+  taskPatch: TaskPatch | null;
+  audit: Omit<NewAuditEvent, "id">[];
+}
+
+export function managerStep(input: { evidence: ManagerEvidence; approvalPhase?: ApprovalPhase }): Intent<ManagerStep> {
+  const v = validateEvidence(input.evidence);
+  const e = input.evidence;
+  const from = e.taskState;
+  const meta: ManagerAuditMetadataInput = {
+    taskId: v.taskId,
+    branch: e.branch?.assignedBranch ?? null,
+    headSha: e.branch?.verifiedHeadSha ?? null,
+    decision: v.decision,
+    failedEvidenceIds: v.failedEvidenceIds,
+    attempt: e.repair?.attempt ?? 0,
+    riskLevel: v.riskLevel,
+    reasonCodes: v.reasonCodes,
+    triggers: v.triggers,
+    intents: v.intents,
+  };
+  const audit: Omit<NewAuditEvent, "id">[] = [managerAudit("manager_validation_started", from, null, { ...meta, decision: null })];
+  if (v.triggers.length > 0) audit.push(managerAudit("escalation_triggered", from, null, meta));
+
+  let next: ManagerNextStep;
+  let transition: TaskState | null = null;
+  let repairRequest: RepairRequest | null = null;
+  let taskPatch: TaskPatch | null = null;
+  let approved: boolean | undefined;
+  let approvalPhase: ApprovalPhase | undefined;
+
+  switch (v.decision) {
+    case "accepted":
+      if (from === "running") next = "open_pr";
+      else if (from === "pr_opened" || from === "qa_running") next = "advance_qa";
+      else if (from === "qa_passed" && v.riskLevel === "red") {
+        next = "request_post_qa_approval";
+        transition = "awaiting_approval";
+      } else if (from === "qa_passed") {
+        next = "complete_task";
+        transition = "complete";
+      } else if (from === "awaiting_approval") {
+        if (input.approvalPhase !== "post_qa") return { ok: false, reason: "accepting from awaiting_approval requires the post_qa phase" };
+        next = "complete_task";
+        transition = "complete";
+        approved = true;
+        approvalPhase = "post_qa";
+      } else return { ok: false, reason: `cannot accept in state ${from}` };
+      audit.push(managerAudit("manager_accepted", from, transition, meta));
+      break;
+    case "needs_human_approval":
+      next = "await_human_approval";
+      if (from === "qa_passed" && v.riskLevel === "red") transition = "awaiting_approval";
+      audit.push(managerAudit("manager_human_approval_required", from, transition, meta));
+      break;
+    case "needs_repair": {
+      const built = buildRepairRequest(e);
+      if (!built.ok) return { ok: false, reason: built.reason };
+      repairRequest = built.request;
+      next = "dispatch_repair";
+      taskPatch = { retries: built.request.attempt };
+      audit.push(managerAudit("manager_repair_requested", from, null, { ...meta, attempt: built.request.attempt }));
+      break;
+    }
+    case "blocked":
+      next = v.intents.includes("replan_branch") && !v.intents.includes("stop_task") ? "replan_branch" : "stop";
+      audit.push(managerAudit("manager_blocked", from, null, meta));
+      if (v.reasonCodes.includes("repair_budget_exhausted")) audit.push(managerAudit("repair_budget_exhausted", from, null, meta));
+      break;
+    default:
+      return { ok: false, reason: "unknown manager decision" };
+  }
+
+  if (transition) {
+    const check = validateTransition(from, transition, { riskLevel: v.riskLevel, approved, approvalPhase });
+    if (!check.ok) return { ok: false, reason: check.reason };
+  }
+  return { ok: true, validation: v, next, transition, repairRequest, taskPatch, audit };
+}
+
+/**
+ * Start record for a repair run. The existing workerStartIntent always
+ * transitions into "running", which is not a valid edge for a task that is
+ * already running or in QA; a repair instead records a new TaskRun and an
+ * audit event with NO state transition. Refuses unless the same worker runs
+ * on the request's assigned branch at its expected head, in a state where a
+ * repair is possible.
+ */
+export function repairStartIntent(input: {
+  request: RepairRequest;
+  currentState: TaskState;
+  worker: WorkerKind;
+  runId: string;
+  model: string;
+  promptHash: string | null;
+  workspaceBranch: string;
+  workspaceHeadSha: string;
+  riskLevel: ManagerAuditMetadataInput["riskLevel"];
+}): Intent<{ taskRun: NewTaskRun; transition: null; audit: Omit<NewAuditEvent, "id"> }> {
+  const { request: r } = input;
+  if (!REPAIRABLE_STATES.includes(input.currentState)) return { ok: false, reason: `cannot start a repair in state ${input.currentState}` };
+  if (input.worker !== r.worker) return { ok: false, reason: "repairs never switch workers" };
+  if (input.workspaceBranch !== r.branch) return { ok: false, reason: "repair must run on the assigned task branch" };
+  if (input.workspaceHeadSha !== r.expectedHeadSha) return { ok: false, reason: "workspace head does not match the repair request" };
+  if (r.attempt < 1 || r.attempt > r.maxRepairAttempts) return { ok: false, reason: "repair attempt is outside the budget" };
+  if (!input.promptHash || !/^[0-9a-f]{64}$/.test(input.promptHash)) return { ok: false, reason: "a valid promptHash is required to record a run" };
+  return {
+    ok: true,
+    taskRun: { id: input.runId, taskId: r.taskId, worker: r.worker, model: input.model, promptHash: input.promptHash },
+    transition: null,
+    audit: managerAudit("repair_attempt_started", input.currentState, null, {
+      taskId: r.taskId,
+      branch: r.branch,
+      headSha: r.expectedHeadSha,
+      decision: "needs_repair",
+      failedEvidenceIds: r.failedEvidenceIds,
+      attempt: r.attempt,
+      riskLevel: input.riskLevel,
+    }),
+  };
+}
