@@ -1,0 +1,409 @@
+import { describe, expect, it } from "vitest";
+import { OPTIONAL_CAPABILITIES } from "./types";
+import { createSimulation, driveQa, fakeIntake, MAIN_SHA, sha } from "./fake";
+
+const events = (sim: ReturnType<typeof createSimulation>, taskId: string) =>
+  sim.audit.filter((e) => e.taskId === taskId).map((e) => e.event);
+
+const GREEN_CAPS = ["scheduler", "branch_planner", "workspace_lease", "worker", "validator", "github_write", "github_qa"];
+
+describe("Manager Loop — end-to-end with fakes", () => {
+  it("1. happy-path green task: dispatch → branch → worker → evidence → push → PR → QA → accepted", async () => {
+    const sim = createSimulation();
+    await sim.create(fakeIntake({ taskId: "t1" }));
+    let t = sim.loop.task("t1")!;
+    expect(t.status).toBe("qa_pending");
+    expect(t.state).toBe("pr_opened");
+    expect(t.branch).toBe("agent/task-t1-fix-t1");
+    expect(t.prNumber).toBe(100); // from the trusted write client, never the worker
+    expect(sim.remote.refs.get(t.branch!)).toBe(t.headSha);
+
+    await driveQa(sim, "t1");
+    t = sim.loop.task("t1")!;
+    expect(t.status).toBe("accepted");
+    expect(t.state).toBe("complete");
+    expect(sim.workerCalls).toHaveLength(1);
+    expect(sim.workerCalls[0]).toMatchObject({ kind: "claude", branch: "agent/task-t1-fix-t1", expectedHeadSha: MAIN_SHA, repair: false });
+    expect(sim.ports.leases.current("ws-t1")).toBeNull(); // lease released on acceptance
+    expect(events(sim, "t1")).toEqual(
+      expect.arrayContaining(["task_queued", "task_dispatched", "worker_started", "worker_completed", "branch_push_requested", "pr_create_requested", "qa_wait", "manager_accepted"]),
+    );
+    // No merge, no main push: the remote only saw branch creation, one push and one PR.
+    expect(sim.remote.refs.get("main")).toBe(MAIN_SHA);
+    expect(sim.remote.calls.filter((c) => /merge|DELETE|force/i.test(c))).toEqual([]);
+    expect(sim.remote.calls.filter((c) => c.startsWith("PUSH"))).toEqual([`PUSH ${t.headSha}:refs/heads/${t.branch}`]);
+  });
+
+  it("2. worker failure then successful repair on the same branch and worker", async () => {
+    const sim = createSimulation({ worker: { t2: ["failure", "success"] } });
+    await sim.create(fakeIntake({ taskId: "t2" }));
+    await driveQa(sim, "t2");
+    const t = sim.loop.task("t2")!;
+    expect(t.status).toBe("accepted");
+    expect(sim.workerCalls).toHaveLength(2);
+    const [first, repair] = sim.workerCalls;
+    expect(repair.repair).toBe(true);
+    expect(repair.branch).toBe(first.branch);
+    expect(repair.kind).toBe(first.kind);
+    expect(repair.runId).not.toBe(first.runId);
+    expect(t.repair.attempt).toBe(1);
+    expect(t.budget.workerExecutions).toBe(2);
+    expect(t.budget.activatedCapabilities).toContain("repair_loop");
+    expect(t.escalations.map((e) => e.action)).toEqual(["return_to_worker"]);
+    expect(events(sim, "t2")).toEqual(expect.arrayContaining(["repair_requested", "repair_completed"]));
+    // Only one task branch was ever created.
+    expect(sim.remote.calls.filter((c) => c.startsWith("CREATE ref"))).toHaveLength(1);
+  });
+
+  it("3. CI failure then successful repair: same PR, new head, QA re-polled", async () => {
+    const sim = createSimulation({ ci: { t3: ["fail", "pass"] } });
+    await sim.create(fakeIntake({ taskId: "t3" }));
+    const firstHead = sim.loop.task("t3")!.headSha;
+    await sim.send({ type: "qa_updated", taskId: "t3" }); // CI fails → repair → push → qa_pending again
+    let t = sim.loop.task("t3")!;
+    expect(t.status).toBe("qa_pending");
+    expect(t.state).toBe("qa_running");
+    expect(t.headSha).not.toBe(firstHead);
+    expect(t.prNumber).toBe(100);
+    await driveQa(sim, "t3");
+    t = sim.loop.task("t3")!;
+    expect(t.status).toBe("accepted");
+    expect(sim.workerCalls).toHaveLength(2);
+    expect(sim.workerCalls[1].expectedHeadSha).toBe(firstHead);
+    expect(sim.remote.calls.filter((c) => c.startsWith("CREATE pr"))).toHaveLength(1);
+  });
+
+  it("3b. old-head CI cannot satisfy a repaired head; a second CI failure uses the final repair budget", async () => {
+    const sim = createSimulation({ ci: { t3b: ["fail", "fail", "pass"] } });
+    await sim.create(fakeIntake({ taskId: "t3b" }));
+    const pr = sim.loop.task("t3b")!.prNumber;
+    const branch = sim.loop.task("t3b")!.branch;
+
+    await sim.send({ type: "qa_updated", taskId: "t3b" });
+    const secondHead = sim.loop.task("t3b")!.headSha;
+    expect(sim.loop.task("t3b")!).toMatchObject({ status: "qa_pending", prNumber: pr, branch });
+
+    await sim.send({ type: "qa_updated", taskId: "t3b" });
+    const thirdHead = sim.loop.task("t3b")!.headSha;
+    expect(thirdHead).not.toBe(secondHead);
+    expect(sim.workerCalls).toHaveLength(3);
+    expect(sim.workerCalls.every((c) => c.branch === branch)).toBe(true);
+    expect(sim.remote.calls.filter((c) => c.startsWith("CREATE pr"))).toHaveLength(1);
+
+    await driveQa(sim, "t3b");
+    expect(sim.loop.task("t3b")!).toMatchObject({ status: "accepted", prNumber: pr, headSha: thirdHead });
+  });
+
+  it("4. repair budget exhausted → blocked; total worker runs capped at 1 + maxRepairAttempts", async () => {
+    const sim = createSimulation({ worker: { t4: ["failure"] } });
+    await sim.create(fakeIntake({ taskId: "t4" }));
+    const t = sim.loop.task("t4")!;
+    expect(t.status).toBe("blocked");
+    expect(t.state).toBe("failed");
+    expect(sim.workerCalls).toHaveLength(3);
+    expect(t.budget.workerExecutions).toBe(3);
+    expect(t.budget.maxWorkerExecutions).toBe(3);
+    expect(t.blockingReason).toContain("repair_budget_exhausted");
+    expect(sim.remote.calls.filter((c) => c.startsWith("PUSH") || c.startsWith("CREATE pr"))).toEqual([]);
+    expect(sim.ports.leases.current("ws-t4")).toBeNull();
+  });
+
+  it("5. branch conflict queues the second task until the first finishes", async () => {
+    const sim = createSimulation({ holdWorkers: true });
+    await sim.create(fakeIntake({ taskId: "a1", expectedPaths: ["server/db.ts"] }));
+    await sim.create(fakeIntake({ taskId: "b1", expectedPaths: ["server/db.ts", "server/b1.ts"] }));
+    expect(sim.loop.task("a1")!.status).toBe("running");
+    const b = sim.loop.task("b1")!;
+    expect(b.status).toBe("waiting_branch_conflict");
+    expect(b.escalations).toEqual([{ trigger: "branch_conflict", action: "wait" }]);
+    expect(sim.workerCalls.map((c) => c.taskId)).toEqual(["a1"]);
+    expect(events(sim, "b1")).toContain("conflict_wait");
+
+    sim.releaseWorker("a1");
+    await sim.loop.settle();
+    await driveQa(sim, "a1");
+    expect(sim.loop.task("a1")!.status).toBe("accepted");
+    expect(sim.loop.task("b1")!.status).toBe("running");
+    sim.releaseWorker("b1");
+    await sim.loop.settle();
+    await driveQa(sim, "b1");
+    expect(sim.loop.task("b1")!.status).toBe("accepted");
+  });
+
+  it("6. dependency prevents dispatch until the dependency is accepted", async () => {
+    const sim = createSimulation({ holdWorkers: true });
+    await sim.create(fakeIntake({ taskId: "base" }));
+    await sim.create(fakeIntake({ taskId: "dep" }, { dependsOn: ["base"] }));
+    expect(sim.loop.task("dep")!.status).toBe("waiting_dependency");
+    expect(sim.workerCalls.map((c) => c.taskId)).toEqual(["base"]);
+    expect(sim.loop.task("dep")!.budget.activatedCapabilities).toContain("dependency_resolver");
+    sim.releaseWorker("base");
+    await sim.loop.settle();
+    await driveQa(sim, "base");
+    expect(sim.loop.task("dep")!.status).toBe("running");
+  });
+
+  it("6b. a blocked dependency blocks its dependents", async () => {
+    const sim = createSimulation({ worker: { base: ["failure"] } });
+    await sim.create(fakeIntake({ taskId: "base" }));
+    await sim.create(fakeIntake({ taskId: "dep" }, { dependsOn: ["base"] }));
+    expect(sim.loop.task("base")!.status).toBe("blocked");
+    const dep = sim.loop.task("dep")!;
+    expect(dep.status).toBe("blocked");
+    expect(dep.blockingReason).toContain("dependency blocked: base");
+    expect(sim.workerCalls.filter((c) => c.taskId === "dep")).toEqual([]);
+  });
+
+  it("7. high-priority task wins deterministic contention for a shared workspace", async () => {
+    const sim = createSimulation({ holdWorkers: true, policy: { maxConcurrentTasks: 1 } });
+    await sim.create(fakeIntake({ taskId: "blocker", workspaceId: "shared" }));
+    await sim.create(fakeIntake({ taskId: "normal1", workspaceId: "shared" }, { prioritySignals: ["feature"] }));
+    await sim.create(fakeIntake({ taskId: "urgent1", workspaceId: "shared" }, { prioritySignals: ["production_incident"] }));
+    expect(sim.loop.task("normal1")!.status).toBe("waiting_workspace");
+    expect(sim.loop.task("urgent1")!.status).toBe("waiting_workspace");
+    sim.releaseWorker("blocker");
+    await sim.loop.settle();
+    await driveQa(sim, "blocker"); // acceptance frees the workspace → workspace_available → tick
+    expect(sim.workerCalls.map((c) => c.taskId)).toEqual(["blocker", "urgent1"]);
+    expect(sim.loop.task("urgent1")!.priority.priority).toBe("critical");
+    expect(sim.loop.task("normal1")!.status).toBe("waiting_workspace");
+  });
+
+  it("8. red task pauses for human approval before execution and after QA", async () => {
+    const sim = createSimulation();
+    const red = fakeIntake({ taskId: "red1", actions: [{ kind: "code_edit" }, { kind: "prod_db_write" }] });
+    expect(red.classification.risk.level).toBe("red");
+    await sim.create(red);
+    let t = sim.loop.task("red1")!;
+    expect(t.status).toBe("needs_human_approval");
+    expect(t.state).toBe("awaiting_approval");
+    expect(sim.workerCalls).toEqual([]);
+    expect(events(sim, "red1")).toContain("human_approval_requested");
+
+    sim.approve("red1", "pre_execution");
+    await sim.send({ type: "approval_granted", taskId: "red1", phase: "pre_execution" });
+    expect(sim.workerCalls).toHaveLength(1);
+    await driveQa(sim, "red1");
+    t = sim.loop.task("red1")!;
+    expect(t.status).toBe("needs_human_approval"); // post-QA gate
+    expect(t.state).toBe("awaiting_approval");
+    expect(t.budget.managerProfile).toBe("controlled");
+
+    sim.approve("red1", "post_qa");
+    await sim.send({ type: "approval_granted", taskId: "red1", phase: "post_qa" });
+    t = sim.loop.task("red1")!;
+    expect(t.status).toBe("accepted");
+    expect(t.state).toBe("complete");
+    expect(sim.remote.refs.get("main")).toBe(MAIN_SHA); // still no merge
+  });
+
+  it("8b. rejected approval blocks without running the worker", async () => {
+    const sim = createSimulation();
+    await sim.create(fakeIntake({ taskId: "red2", actions: [{ kind: "prod_deploy" }] }));
+    sim.rejectApproval("red2", "pre_execution");
+    await sim.send({ type: "approval_rejected", taskId: "red2", phase: "pre_execution" });
+    expect(sim.loop.task("red2")!).toMatchObject({ status: "blocked", state: "failed" });
+    expect(sim.workerCalls).toEqual([]);
+  });
+
+  it("9. stale base triggers a bounded replan from the fresh main", async () => {
+    const fresh = sha(0xa0001);
+    const sim = createSimulation({ remoteMain: fresh, mainHeads: [MAIN_SHA, fresh] });
+    await sim.create(fakeIntake({ taskId: "s1" }));
+    const t = sim.loop.task("s1")!;
+    expect(t.replans).toBe(1);
+    expect(t.escalations).toEqual([{ trigger: "stale_base", action: "replan_branch" }]);
+    expect(t.budget.activatedCapabilities).toContain("replan");
+    expect(sim.workerCalls).toHaveLength(1);
+    expect(sim.workerCalls[0].expectedHeadSha).toBe(fresh);
+    await driveQa(sim, "s1");
+    expect(sim.loop.task("s1")!.status).toBe("accepted");
+  });
+
+  it("9b. a base that keeps moving exhausts the replan budget and blocks", async () => {
+    const sim = createSimulation({ remoteMain: sha(0xa0009), mainHeads: [MAIN_SHA] });
+    await sim.create(fakeIntake({ taskId: "s2" }));
+    expect(sim.loop.task("s2")!).toMatchObject({ status: "blocked", replans: 2 });
+    expect(sim.workerCalls).toEqual([]);
+  });
+
+  it("10. simple green happy path activates no optional/deep capability and one worker call", async () => {
+    const sim = createSimulation();
+    await sim.create(fakeIntake({ taskId: "cheap" }));
+    await driveQa(sim, "cheap");
+    const t = sim.loop.task("cheap")!;
+    expect(t.status).toBe("accepted");
+    expect(t.budget.activatedCapabilities).toEqual(GREEN_CAPS);
+    for (const c of OPTIONAL_CAPABILITIES) expect(t.budget.activatedCapabilities).not.toContain(c);
+    expect(t.budget).toMatchObject({ managerProfile: "fast", workerExecutions: 1, managerLlmCalls: 0, escalationCount: 0, deepReviewEnabled: false, llmCallBudget: null });
+    expect(t.escalations).toEqual([]);
+    expect(t.budget.activatedCapabilities).not.toContain("repair_loop");
+    expect(t.budget.activatedCapabilities).not.toContain("human_approval");
+  });
+});
+
+describe("Manager Loop — cost guardrails", () => {
+  it("one repair means exactly two worker executions", async () => {
+    const sim = createSimulation({ worker: { r1: ["validation_failed", "success"] } });
+    await sim.create(fakeIntake({ taskId: "r1" }));
+    await driveQa(sim, "r1");
+    expect(sim.loop.task("r1")!.status).toBe("accepted");
+    expect(sim.workerCalls).toHaveLength(2);
+  });
+
+  it("policy maxRepairAttempts caps total executions below the manager budget", async () => {
+    const sim = createSimulation({ worker: { r2: ["failure"] }, policy: { maxRepairAttempts: 1 } });
+    await sim.create(fakeIntake({ taskId: "r2" }));
+    const t = sim.loop.task("r2")!;
+    expect(t.status).toBe("blocked");
+    expect(sim.workerCalls).toHaveLength(2);
+    expect(t.budget.maxWorkerExecutions).toBe(2);
+  });
+
+  it("CI that fails forever cannot loop: worker runs stay bounded", async () => {
+    const sim = createSimulation({ ci: { r3: ["fail"] } });
+    await sim.create(fakeIntake({ taskId: "r3" }));
+    await driveQa(sim, "r3", 20);
+    const t = sim.loop.task("r3")!;
+    expect(t.status).toBe("blocked");
+    expect(sim.workerCalls).toHaveLength(3);
+  });
+
+  it("pending QA is bounded by the poll policy, and the loop never polls on its own", async () => {
+    const sim = createSimulation({ ci: { q1: ["pending"] }, policy: { qaPoll: { maxAttempts: 3, baseDelayMs: 10, maxDelayMs: 40 } } });
+    await sim.create(fakeIntake({ taskId: "q1" }));
+    expect(sim.qaReads).toEqual([]); // nothing reads QA without a qa_updated event
+    await sim.send({ type: "qa_updated", taskId: "q1" });
+    expect(sim.loop.task("q1")!).toMatchObject({ status: "qa_pending", nextQaPollDelayMs: 10 });
+    await driveQa(sim, "q1", 10);
+    expect(sim.qaReads).toHaveLength(3);
+    expect(sim.loop.task("q1")!.status).toBe("blocked");
+  });
+
+  it("scope violation blocks without repair", async () => {
+    const sim = createSimulation({ worker: { sv: ["scope_violation"] } });
+    await sim.create(fakeIntake({ taskId: "sv" }));
+    expect(sim.loop.task("sv")!.status).toBe("blocked");
+    expect(sim.workerCalls).toHaveLength(1);
+  });
+
+  it("observed risk escalation to red pauses for approval instead of pushing", async () => {
+    const sim = createSimulation({ worker: { esc: ["risk_red"] } });
+    await sim.create(fakeIntake({ taskId: "esc" }));
+    const t = sim.loop.task("esc")!;
+    expect(t.status).toBe("needs_human_approval");
+    expect(t.risk).toBe("red");
+    expect(sim.remote.calls.filter((c) => c.startsWith("PUSH"))).toEqual([]);
+  });
+});
+
+describe("Manager Loop — trusted approval notifications", () => {
+  const red = (taskId: string) => fakeIntake({ taskId, actions: [{ kind: "prod_deploy" }] });
+
+  it("does not trust a forged approval_granted notification", async () => {
+    const sim = createSimulation();
+    await sim.create(red("forged"));
+    await sim.send({ type: "approval_granted", taskId: "forged", phase: "pre_execution" });
+    expect(sim.loop.task("forged")!).toMatchObject({ status: "needs_human_approval", state: "awaiting_approval" });
+    expect(sim.workerCalls).toEqual([]);
+  });
+
+  it("rejects another task, stale binding, wrong kind/action, and expired approvals", async () => {
+    const scenarios = ["other", "stale", "wrong", "expired"] as const;
+    for (const id of scenarios) {
+      const sim = createSimulation();
+      await sim.create(red(id));
+      if (id === "other") {
+        await sim.create(red("approved-other"));
+        sim.approve("approved-other", "pre_execution");
+      } else if (id === "stale") {
+        sim.approve(id, "pre_execution", { bindingShaOrActionId: "start:stale-action" });
+      } else if (id === "wrong") {
+        sim.approve(id, "pre_execution", { kind: "execute_red_action", requestedAction: "different-action" });
+      } else {
+        sim.expireApproval(id, "pre_execution");
+      }
+      await sim.send({ type: "approval_granted", taskId: id, phase: "pre_execution" });
+      expect(sim.loop.task(id)!.status).toBe("needs_human_approval");
+      expect(sim.workerCalls.filter((c) => c.taskId === id)).toEqual([]);
+    }
+  });
+
+  it("allows only a valid stored approval bound to the current task contract", async () => {
+    const sim = createSimulation();
+    await sim.create(red("bound"));
+    sim.approve("bound", "pre_execution");
+    await sim.send({ type: "approval_granted", taskId: "bound", phase: "pre_execution" });
+    expect(sim.workerCalls.map((c) => c.taskId)).toEqual(["bound"]);
+  });
+});
+
+describe("Manager Loop — routing, intake, and events", () => {
+  it("codex-routed task stays queued with an explicit reason (no silent substitution)", async () => {
+    const sim = createSimulation();
+    await sim.create(fakeIntake({ taskId: "ui1", category: "ui" }));
+    const t = sim.loop.task("ui1")!;
+    expect(t.worker).toBe("codex");
+    expect(t.status).toBe("queued");
+    expect(t.queueReason).toBe("worker codex is not executable in this phase");
+    expect(sim.workerCalls).toEqual([]);
+  });
+
+  it("policy cannot make codex executable in this phase", async () => {
+    const sim = createSimulation({ policy: { executableWorkers: ["claude", "codex"] } });
+    expect(sim.loop.policy.executableWorkers).toEqual(["claude"]);
+  });
+
+  it("no eligible worker keeps the task queued", async () => {
+    const sim = createSimulation();
+    await sim.create(fakeIntake({ taskId: "nw", availability: { claude: "quota_limited", codex: "unavailable" } }));
+    expect(sim.loop.task("nw")!).toMatchObject({ status: "queued", queueReason: "no eligible worker routed" });
+  });
+
+  it("rejects invalid, duplicate, and self-dependent intakes", async () => {
+    const sim = createSimulation();
+    await sim.create(fakeIntake({ taskId: "ok1" }));
+    await sim.create(fakeIntake({ taskId: "ok1" }));
+    await sim.create(fakeIntake({ taskId: "self" }, { dependsOn: ["self"] }));
+    await sim.create(fakeIntake({ taskId: "Bad_ID" }));
+    expect(sim.loop.rejectedIntakes().map((r) => r.reason)).toEqual(["duplicate task id", "task depends on itself", "invalid task id"]);
+  });
+
+  it("forged worker notifications are ignored", async () => {
+    const sim = createSimulation({ holdWorkers: true });
+    await sim.create(fakeIntake({ taskId: "fw" }));
+    await sim.send({ type: "worker_completed", taskId: "fw", runId: "fw-run-99" });
+    expect(sim.loop.task("fw")!.status).toBe("running");
+    await sim.send({ type: "qa_updated", taskId: "fw" });
+    expect(sim.qaReads).toEqual([]);
+  });
+
+  it("audit metadata is sanitized and carries no code, prompts or logs", async () => {
+    const sim = createSimulation();
+    await sim.create(fakeIntake({ taskId: "au" }, { objective: "SECRET_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123456789 do it" }));
+    await driveQa(sim, "au");
+    const dump = JSON.stringify(sim.audit);
+    expect(dump).not.toContain("ghp_");
+    expect(dump).not.toContain("do it");
+    const orch = sim.audit.filter((e) => (e.metadata as Record<string, unknown>)?.layer === "orchestration");
+    for (const e of orch) {
+      expect(Object.keys(e.metadata as object).sort()).toEqual(
+        ["activatedCapabilities", "attempt", "branch", "dependencyIds", "headSha", "layer", "outcome", "priority", "queueReason", "taskId", "worker"].sort(),
+      );
+    }
+  });
+
+  it("is deterministic: same inputs give the same audit trail", async () => {
+    const run = async () => {
+      const sim = createSimulation({ worker: { d1: ["failure", "success"] }, ci: { d2: ["fail", "pass"] } });
+      sim.loop.post({ type: "task_created", task: fakeIntake({ taskId: "d1" }) });
+      sim.loop.post({ type: "task_created", task: fakeIntake({ taskId: "d2" }) });
+      await sim.loop.settle();
+      await driveQa(sim, "d1");
+      await driveQa(sim, "d2");
+      await driveQa(sim, "d2");
+      return { audit: sim.audit, tasks: sim.loop.tasks() };
+    };
+    expect(await run()).toEqual(await run());
+  });
+});

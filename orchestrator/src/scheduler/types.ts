@@ -1,0 +1,444 @@
+/**
+ * Phase 2C.7 Task Scheduler + Manager Loop — types.
+ *
+ * The scheduler and Manager Loop are deterministic orchestration, not an LLM
+ * agent. They never read repository source code: every input is structured
+ * task metadata (ids, enums, paths, SHAs, statuses) or a trusted record
+ * returned by an injected port. Side effects (GitHub writes, workspace git,
+ * worker execution, QA reads, audit) only ever happen through the narrow
+ * ports declared here.
+ *
+ * Orchestration status is a separate abstraction from domain TaskState: the
+ * loop drives TaskState only along edges domain/taskState already allows.
+ *
+ * Pure type/constant definitions: no I/O, env, network, or nondeterminism.
+ */
+import type { AssignedBranchPlan, BranchLineage } from "../branches/types";
+import type { ApprovalPhase } from "../domain/taskState";
+import type { ClassificationResult, RiskLevel, RoutingDecision, TaskAction, TaskCategory, TaskState, WorkerKind } from "../domain/types";
+import type { PullRequestState, QaDecision } from "../github/types";
+import type { PollPolicy } from "../github/qa";
+import type { BranchCreation, GitHubWriteClient, PushReceipt, TrustedPullRequest } from "../githubWrite/types";
+import type { WorkspaceLease, WorkspaceLeaseRegistry } from "../githubWrite/lease";
+import type { PreconditionResult, PrepareResult } from "../githubWrite/workspace";
+import type { AcceptanceEvidence, ApprovalEvidenceState, ManagerProfile, RepairCounters, ValidationEvidence } from "../manager/types";
+import type { NewAuditEvent } from "../store/types";
+import type { Approval, ApprovalKind, IsoTimestamp } from "../store/types";
+import type { RequiredValidation, WorkerHandle, WorkerResult, WorkerTaskContract } from "../workers/types";
+
+// ---------------------------------------------------------------------------
+// Priority
+
+export const PRIORITY_CLASSES = ["critical", "high", "normal", "low"] as const;
+export type PriorityClass = (typeof PRIORITY_CLASSES)[number];
+
+/** Structured priority signals declared at intake. Never inferred from code. */
+export const PRIORITY_SIGNALS = [
+  // critical
+  "production_incident",
+  "security_incident",
+  "main_ci_broken",
+  // high
+  "functional_regression",
+  "auth_integrity",
+  "data_integrity",
+  "release_blocker",
+  // normal
+  "feature",
+  "bug",
+  "ux_improvement",
+  // low
+  "polish",
+  "copy_cleanup",
+  "refactor",
+] as const;
+export type PrioritySignal = (typeof PRIORITY_SIGNALS)[number];
+
+export interface PriorityAssessment {
+  /** Effective priority used for scheduling. */
+  priority: PriorityClass;
+  /** Priority derived from policy signals alone. */
+  policyPriority: PriorityClass;
+  requestedPriority: PriorityClass | null;
+  /** Deterministically ordered, human-readable reasons. */
+  reasons: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Orchestration status / outcomes (separate from TaskState)
+
+export const ORCHESTRATION_STATUSES = [
+  "queued",
+  "running",
+  "waiting_dependency",
+  "waiting_workspace",
+  "waiting_branch_conflict",
+  "repair_requested",
+  "qa_pending",
+  "needs_human_approval",
+  "accepted",
+  "blocked",
+] as const;
+export type OrchestrationStatus = (typeof ORCHESTRATION_STATUSES)[number];
+
+export const TERMINAL_ORCHESTRATION_STATUSES: readonly OrchestrationStatus[] = ["accepted", "blocked"];
+
+export const BRANCH_PLAN_STATES = ["none", "queued", "assigned", "rejected"] as const;
+export type BranchPlanState = (typeof BRANCH_PLAN_STATES)[number];
+
+// ---------------------------------------------------------------------------
+// Scheduler decisions
+
+export const SCHEDULE_ACTIONS = [
+  "dispatch",
+  "keep_queued",
+  "wait_dependency",
+  "wait_branch_conflict",
+  "wait_workspace",
+  "blocked",
+  "completed",
+] as const;
+export type ScheduleAction = (typeof SCHEDULE_ACTIONS)[number];
+
+export interface ScheduleDecision {
+  taskId: string;
+  action: ScheduleAction;
+  reason: string;
+  /** Tasks this decision waits on (dependencies or conflicting work), sorted. */
+  waitingOn: string[];
+}
+
+/** What the pure scheduler needs to know about one task. */
+export interface SchedulerTaskView {
+  taskId: string;
+  /** Monotonic creation sequence; final tie-breaker before taskId. */
+  seq: number;
+  priority: PriorityClass;
+  state: TaskState;
+  status: OrchestrationStatus;
+  /** Holds a lease / has been dispatched and is not terminal. */
+  inFlight: boolean;
+  worker: WorkerKind | null;
+  dependsOn: readonly string[];
+  workspaceId: string;
+  lineageId: string;
+  expectedPaths: readonly string[];
+  workerExecutions: number;
+  maxWorkerExecutions: number;
+}
+
+export interface SchedulerPolicy {
+  maxConcurrentTasks: number;
+  /** Worker kinds that can actually execute in this phase. */
+  executableWorkers: readonly WorkerKind[];
+  /** Overrides branches/overlap DEFAULT_HIGH_CONFLICT_PATHS. */
+  highConflictPaths?: readonly string[];
+}
+
+export interface SchedulerInput {
+  tasks: readonly SchedulerTaskView[];
+  /** Task currently holding the workspace lease, or null. */
+  workspaceHolder: (workspaceId: string) => string | null;
+  policy: SchedulerPolicy;
+}
+
+// ---------------------------------------------------------------------------
+// Capabilities / budget
+
+/** Capabilities the loop may activate. Deterministic modules are not LLM calls. */
+export const CAPABILITIES = [
+  "scheduler",
+  "dependency_resolver",
+  "branch_planner",
+  "workspace_lease",
+  "worker",
+  "validator",
+  "repair_loop",
+  "github_write",
+  "github_qa",
+  "human_approval",
+  "replan",
+] as const;
+export type Capability = (typeof CAPABILITIES)[number];
+
+/**
+ * Optional escalation capabilities. Never activated in this phase: there is
+ * no code path in the loop that can add them. Listed so tests and metadata
+ * can prove their absence.
+ */
+export const OPTIONAL_CAPABILITIES = [
+  "history_lookup",
+  "deep_review",
+  "second_reviewer",
+  "architecture_analysis",
+  "source_inspection",
+  "extra_llm_call",
+] as const;
+export type OptionalCapability = (typeof OPTIONAL_CAPABILITIES)[number];
+
+export const ESCALATION_ACTIONS = [
+  "return_to_worker",
+  "replan_branch",
+  "wait",
+  "block",
+  "request_human_approval",
+  "future_deep_review_candidate",
+] as const;
+export type EscalationAction = (typeof ESCALATION_ACTIONS)[number];
+
+export interface EscalationRecord {
+  trigger: string;
+  action: EscalationAction;
+}
+
+export interface OrchestrationPolicy {
+  maxConcurrentTasks: number;
+  /** Capped by the Manager budget's maxRepairAttempts (the stricter one wins). */
+  maxRepairAttempts: number;
+  /** Automatic pre-execution replans after a stale base. */
+  maxReplans: number;
+  executableWorkers: readonly WorkerKind[];
+  highConflictPaths?: readonly string[];
+  /** QA must not see a draft PR (github/qa blocks drafts), so the default is ready. */
+  prDraft: boolean;
+  qaPoll: PollPolicy;
+  /** Disabled in this phase; there is no implementation behind it. */
+  deepReviewEnabled: false;
+  /** Placeholder for a future LLM call budget; the loop itself makes no LLM calls. */
+  llmCallBudget: number | null;
+}
+
+export interface OrchestrationBudget {
+  managerProfile: ManagerProfile;
+  maxRepairAttempts: number;
+  maxConcurrentTasks: number;
+  /** 1 initial run + maxRepairAttempts repairs. Hard cap enforced by the loop. */
+  maxWorkerExecutions: number;
+  workerExecutions: number;
+  /** Always 0: scheduler, planner, validator and loop are deterministic. */
+  managerLlmCalls: 0;
+  llmCallBudget: number | null;
+  deepReviewEnabled: false;
+  activatedCapabilities: Capability[];
+  escalationCount: number;
+}
+
+// ---------------------------------------------------------------------------
+// Intake
+
+export interface AcceptanceCriterionSpec {
+  /** Stable criterion id, e.g. "AC-1". */
+  id: string;
+  text: string;
+}
+
+/** A classified and routed task handed to the loop. Classification/routing happen upstream. */
+export interface TaskIntake {
+  taskId: string;
+  title: string;
+  category: TaskCategory;
+  actions: readonly TaskAction[];
+  classification: ClassificationResult;
+  routing: RoutingDecision;
+  /** Repo-relative paths the task expects to change (trailing "/" = directory). */
+  expectedPaths: readonly string[];
+  /** Defaults to expectedPaths. */
+  allowedScope?: readonly string[];
+  objective: string;
+  /** Short sanitized summary for the PR body. */
+  summary: string;
+  acceptanceCriteria: readonly AcceptanceCriterionSpec[];
+  requiredValidations: readonly RequiredValidation[];
+  dependsOn?: readonly string[];
+  workspaceId: string;
+  prioritySignals?: readonly PrioritySignal[];
+  requestedPriority?: PriorityClass;
+  lineage?: BranchLineage;
+}
+
+// ---------------------------------------------------------------------------
+// Events
+
+export type OrchestrationEvent =
+  | { type: "task_created"; task: TaskIntake }
+  | { type: "dependency_completed"; taskId: string }
+  | { type: "scheduler_tick" }
+  | { type: "workspace_available"; workspaceId: string }
+  /** Results are taken from the loop's own worker handle, never from the event. */
+  | { type: "worker_completed"; taskId: string; runId: string }
+  | { type: "worker_failed"; taskId: string; runId: string }
+  | { type: "repair_completed"; taskId: string; runId: string }
+  | { type: "branch_pushed"; taskId: string }
+  | { type: "pr_opened"; taskId: string }
+  /** A notification only; QA is read through the trusted read-only port. */
+  | { type: "qa_updated"; taskId: string }
+  | { type: "approval_granted"; taskId: string; phase: ApprovalPhase }
+  | { type: "approval_rejected"; taskId: string; phase: ApprovalPhase };
+
+export type OrchestrationEventType = OrchestrationEvent["type"];
+
+// ---------------------------------------------------------------------------
+// Ports (injected side-effect adapters)
+
+/** Trusted record of one worker run, produced by the git/validation layer — never worker prose. */
+export interface TrustedRunRecord {
+  changedPaths: readonly string[];
+  validations: readonly ValidationEvidence[];
+  acceptance: readonly AcceptanceEvidence[];
+  /** Workspace HEAD verified from git after the run. */
+  verifiedHeadSha: string | null;
+  observedRisk: RiskLevel;
+}
+
+export interface WorkerPort {
+  /** Starts exactly one run. Only Claude is executable in this phase. */
+  start(kind: WorkerKind, contract: WorkerTaskContract, approval?: Approval | null): WorkerHandle;
+}
+
+export interface WorkspacePort {
+  /** Wraps githubWrite/workspace.prepareAssignedWorkspace. */
+  prepare(input: { plan: unknown; lease: unknown; creation: BranchCreation | null }): Promise<PrepareResult>;
+  /** Wraps githubWrite/workspace.checkWorkerPreconditions with the live git status. */
+  checkPreconditions(input: { prepared: unknown; plan: unknown; contract: WorkerTaskContract; lease: unknown }): Promise<PreconditionResult>;
+  /** Branch/HEAD of the leased workspace from git (repair start check). */
+  head(lease: WorkspaceLease): Promise<{ branch: string; headSha: string } | null>;
+}
+
+export interface EvidencePort {
+  record(input: { taskId: string; runId: string; contract: WorkerTaskContract; result: WorkerResult; lease: WorkspaceLease }): Promise<TrustedRunRecord>;
+}
+
+export interface QaPort {
+  /** Reads the PR and its checks through the read-only client and returns github/qa.evaluateQa. */
+  read(prNumber: number): Promise<QaDecision>;
+}
+
+export interface RepoStatePort {
+  /** Current main HEAD SHA (read-only). */
+  mainHeadSha(): Promise<string>;
+}
+
+export interface ApprovalCheck {
+  taskId: string;
+  phase: ApprovalPhase;
+  kind: ApprovalKind;
+  requestedAction: string;
+  bindingShaOrActionId: string;
+}
+
+export interface TrustedApprovalResult {
+  state: ApprovalEvidenceState;
+  /** Present only when approvalAuthorizes() accepted this exact request. */
+  approval: Approval | null;
+  reason: string;
+}
+
+export interface ApprovalPort {
+  /** Resolves current trusted store state. Notification event fields never authorize work. */
+  resolve(check: ApprovalCheck): Promise<TrustedApprovalResult>;
+}
+
+export type PendingSideEffect = "worker" | "push" | "pr" | null;
+
+/**
+ * Versioned, sanitized Manager Loop checkpoint. This contains structured
+ * contracts/evidence only: never source, diffs, raw logs, built prompts or
+ * secrets. Implementations may persist it in the existing audit repository.
+ */
+export interface OrchestrationCheckpoint {
+  version: 1;
+  sequence: number;
+  tasks: readonly PersistedTaskRecord[];
+}
+
+export interface PersistedTaskRecord {
+  intake: TaskIntake;
+  seq: number;
+  lineageId: string;
+  priority: PriorityAssessment;
+  risk: RiskLevel;
+  worker: WorkerKind | null;
+  state: TaskState;
+  status: OrchestrationStatus;
+  branchPlanState: BranchPlanState;
+  plan: AssignedBranchPlan | null;
+  baseContract: WorkerTaskContract | null;
+  contract: WorkerTaskContract | null;
+  runId: string | null;
+  runCount: number;
+  workerRunning: boolean;
+  workerExecutions: number;
+  maxRepairAttempts: number;
+  lastResult: WorkerResult | null;
+  record: TrustedRunRecord | null;
+  repair: RepairCounters;
+  replans: number;
+  receipt: PushReceipt | null;
+  pr: TrustedPullRequest | null;
+  prState: PullRequestState | null;
+  qa: QaDecision | null;
+  qaPolls: number;
+  nextQaPollDelayMs: number | null;
+  approval: Record<ApprovalPhase, ApprovalEvidenceState>;
+  approvalPhase: ApprovalPhase | null;
+  queueReason: string | null;
+  blockingReason: string | null;
+  escalations: EscalationRecord[];
+  capabilities: Capability[];
+  pendingSideEffect: PendingSideEffect;
+  pendingSideEffectId: string | null;
+}
+
+export interface OrchestrationPersistencePort {
+  load(): OrchestrationCheckpoint | null;
+  save(checkpoint: OrchestrationCheckpoint): void;
+}
+
+export interface OrchestrationPorts {
+  /** Narrow write client: no merge, approve, close, force push or main push exist on it. */
+  github: Pick<GitHubWriteClient, "createTaskBranch" | "pushTaskBranch" | "openPullRequest">;
+  leases: WorkspaceLeaseRegistry;
+  workspace: WorkspacePort;
+  worker: WorkerPort;
+  evidence: EvidencePort;
+  qa: QaPort;
+  repo: RepoStatePort;
+  approvals: ApprovalPort;
+  /** Omitted only by isolated unit fakes that intentionally do not test restart behavior. */
+  persistence?: OrchestrationPersistencePort;
+  now: () => IsoTimestamp;
+  audit: (event: Omit<NewAuditEvent, "id">) => void;
+}
+
+// ---------------------------------------------------------------------------
+// Snapshot (read-only view of one orchestrated task)
+
+export interface TaskSnapshot {
+  taskId: string;
+  seq: number;
+  title: string;
+  category: TaskCategory;
+  risk: RiskLevel;
+  priority: PriorityAssessment;
+  state: TaskState;
+  status: OrchestrationStatus;
+  branchPlanState: BranchPlanState;
+  branch: string | null;
+  worker: WorkerKind | null;
+  dependsOn: string[];
+  workspaceId: string;
+  expectedPaths: string[];
+  inFlight: boolean;
+  workerRunning: boolean;
+  repair: RepairCounters;
+  replans: number;
+  prNumber: number | null;
+  headSha: string | null;
+  qaStatus: QaDecision["status"] | null;
+  /** Suggested delay before the next qa_updated, for an external timer. */
+  nextQaPollDelayMs: number | null;
+  queueReason: string | null;
+  blockingReason: string | null;
+  escalations: EscalationRecord[];
+  budget: OrchestrationBudget;
+}
