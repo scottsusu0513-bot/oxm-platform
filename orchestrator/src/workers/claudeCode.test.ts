@@ -107,6 +107,16 @@ describe("branch safety", () => {
     expect(runner.specs).toHaveLength(0);
   });
 
+  it("refuses when HEAD is not the orchestrator-prepared expectedHeadSha (never moves HEAD itself)", async () => {
+    const { adapter, runner } = setup();
+    const r = await adapter.start({ contract: contract({ expectedHeadSha: "f".repeat(40) }), now: NOW }).result;
+    expect(r.errorType).toBe("branch_mismatch");
+    expect(runner.specs).toHaveLength(0);
+    expect(validateContract(contract({ expectedHeadSha: "HEAD" }))).toContain("invalid expectedHeadSha");
+    const ok = await setup().adapter.start({ contract: contract({ expectedHeadSha: BASE }), now: NOW }).result;
+    expect(ok.status).toBe("success");
+  });
+
   it("fails (red) if the worker leaves the task branch during the run", async () => {
     const { adapter } = setup({ statuses: [clean, { ...after, branch: "main" }] });
     const r = await adapter.start({ contract: contract(), now: NOW }).result;

@@ -42,6 +42,12 @@ export interface WorkerTaskContract {
   branch: string;
   /** Pre-existing dirty paths that are explicitly part of this task. */
   allowedDirtyPaths?: readonly string[];
+  /**
+   * HEAD the orchestrator prepared the workspace at (see githubWrite/workspace.ts).
+   * When set, the worker refuses to run unless HEAD is exactly this SHA.
+   * The worker never moves HEAD or switches branches to satisfy it.
+   */
+  expectedHeadSha?: string;
 }
 
 export interface WorkerRunRequest {
