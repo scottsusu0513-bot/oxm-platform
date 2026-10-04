@@ -229,4 +229,19 @@ export interface ClaudeCodeDeps {
   timer: Timer;
 }
 
+export interface CodexConfig {
+  /** Executable name or absolute path; default "codex". */
+  command?: string;
+  /** Optional model override. When absent, Codex uses its configured model. */
+  model?: string;
+  /** Absolute repository root; the worker runs here and temp files must be outside it. */
+  repoRoot: string;
+  timeoutMs: number;
+}
+
+export interface CodexDeps extends ClaudeCodeDeps {
+  /** Establishes native command policy before each spawn; must throw on absence or drift. */
+  assertCommandPolicy(): void;
+}
+
 export type { ActionKind };

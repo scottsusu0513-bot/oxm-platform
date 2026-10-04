@@ -12,7 +12,10 @@ const all = readdirSync(dir).filter((f) => f.endsWith(".ts") && !f.endsWith(".te
 const adapterFiles = new Set(["adapters.ts", "fake.ts", "persistence.ts"]);
 const core = all.filter((f) => !adapterFiles.has(f));
 const read = (f: string) => readFileSync(join(dir, f), "utf8");
-const code = (f: string) => read(f).replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+const code = (f: string) =>
+  read(f)
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|[^:])\/\/.*$/gm, "$1");
 
 /** Runtime (value) imports allowed from outside scheduler/. All are pure policy modules. */
 const ALLOWED_RUNTIME = new Set([
@@ -33,16 +36,7 @@ const ALLOWED_RUNTIME = new Set([
   "../workers/prompt",
 ]);
 /** Type-only imports allowed (erased at runtime). */
-const ALLOWED_TYPE_ONLY = new Set([
-  ...ALLOWED_RUNTIME,
-  "../github/types",
-  "../githubWrite/types",
-  "../githubWrite/lease",
-  "../githubWrite/workspace",
-  "../manager/types",
-  "../store/types",
-  "../workers/types",
-]);
+const ALLOWED_TYPE_ONLY = new Set([...ALLOWED_RUNTIME, "../github/types", "../githubWrite/types", "../githubWrite/lease", "../githubWrite/workspace", "../manager/types", "../store/types", "../workers/types"]);
 
 function imports(f: string): { spec: string; typeOnly: boolean }[] {
   return [...code(f).matchAll(/^import\s+(type\s+)?[\s\S]*?\bfrom\s+["']([^"']+)["'];?/gm)].map((m) => ({ spec: m[2], typeOnly: Boolean(m[1]) }));
@@ -87,7 +81,7 @@ describe("scheduler / manager-loop boundaries", () => {
   it("never constructs workers, git, or GitHub clients itself", () => {
     for (const f of core) {
       const src = code(f);
-      expect(src, f).not.toMatch(/createClaudeCodeAdapter|createLocalClaudeCodeAdapter|createNodeProcessRunner|createGitInspector|ProcessRunner|GitInspector/);
+      expect(src, f).not.toMatch(/createClaudeCodeAdapter|createCodexAdapter|createLocalClaudeCodeAdapter|createLocalCodexAdapter|createNodeProcessRunner|createGitInspector|ProcessRunner|GitInspector/);
       expect(src, f).not.toMatch(/createGitHubWriteClient|createGitHubReadClient|GitHubWriteTransport|GitPushTransport|prepareAssignedWorkspace|changedPathsSince/);
     }
   });
@@ -138,7 +132,12 @@ describe("scheduler / manager-loop boundaries", () => {
 describe("behavioural boundaries", () => {
   it("a denied workspace lease means no branch, no workspace prep, and no worker", async () => {
     const sim = createSimulation({ holdWorkers: true });
-    sim.ports.leases.acquire({ workspaceId: "taken", taskId: "other", lineageId: "other", branch: "agent/task-other-x" });
+    sim.ports.leases.acquire({
+      workspaceId: "taken",
+      taskId: "other",
+      lineageId: "other",
+      branch: "agent/task-other-x",
+    });
     await sim.create(fakeIntake({ taskId: "w1", workspaceId: "taken" }));
     expect(sim.loop.task("w1")!.status).toBe("waiting_workspace");
     expect(sim.workerCalls).toEqual([]);
@@ -148,7 +147,10 @@ describe("behavioural boundaries", () => {
   it("a branch-planner reject blocks before any write or worker", async () => {
     const sim = createSimulation();
     await sim.create(fakeIntake({ taskId: "p1" }, { lineage: { rootTaskId: "BAD ID", title: "x" } }));
-    expect(sim.loop.task("p1")!).toMatchObject({ status: "blocked", branchPlanState: "rejected" });
+    expect(sim.loop.task("p1")!).toMatchObject({
+      status: "blocked",
+      branchPlanState: "rejected",
+    });
     expect(sim.workerCalls).toEqual([]);
     expect(sim.remote.calls).toEqual([]);
   });

@@ -72,15 +72,14 @@ export const DEFAULT_ORCHESTRATION_POLICY: OrchestrationPolicy = Object.freeze({
   maxConcurrentTasks: 2,
   maxRepairAttempts: DEFAULT_MAX_REPAIR_ATTEMPTS,
   maxReplans: 1,
-  executableWorkers: Object.freeze(["claude"]) as readonly WorkerKind[],
+  executableWorkers: Object.freeze(["claude", "codex"]) as readonly WorkerKind[],
   prDraft: false,
   qaPoll: DEFAULT_POLL_POLICY,
   deepReviewEnabled: false as const,
   llmCallBudget: null,
 });
 
-/** Only Claude is executable in this phase, whatever the policy lists. */
-const EXECUTABLE_THIS_PHASE: readonly WorkerKind[] = ["claude"];
+const EXECUTABLE_THIS_PHASE: readonly WorkerKind[] = ["claude", "codex"];
 
 const RANK: Record<RiskLevel, number> = { green: 0, yellow: 1, red: 2 };
 
@@ -234,7 +233,9 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     ports.persistence.save({
       version: 1,
       sequence: seq,
-      tasks: Array.from(recs.values()).sort((a, b) => a.seq - b.seq).map(persistedRecord),
+      tasks: Array.from(recs.values())
+        .sort((a, b) => a.seq - b.seq)
+        .map(persistedRecord),
     });
   }
 
@@ -244,14 +245,29 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
   const maxWorkerExecutions = (t: TaskRecord) => 1 + t.maxRepairAttempts;
   const capabilityList = (t: TaskRecord) => CAPABILITIES.filter((c) => t.capabilities.has(c));
 
-  function audit(t: TaskRecord, event: OrchestrationAuditEvent, extra: { from?: TaskState | null; to?: TaskState | null; attempt?: number; reason?: string | null; dependencyIds?: readonly string[] } = {}) {
+  function audit(
+    t: TaskRecord,
+    event: OrchestrationAuditEvent,
+    extra: {
+      from?: TaskState | null;
+      to?: TaskState | null;
+      attempt?: number;
+      reason?: string | null;
+      dependencyIds?: readonly string[];
+      fallbackFrom?: WorkerKind | null;
+      reasonCode?: string | null;
+    } = {},
+  ) {
     ports.audit(
       orchestrationAudit(event, extra.from ?? t.state, extra.to ?? null, {
         taskId: t.intake.taskId,
         priority: t.priority.priority,
         worker: t.worker,
+        fallbackFrom: extra.fallbackFrom ?? t.intake.routing.fallbackFrom ?? null,
+        reasonCode: extra.reasonCode ?? t.intake.routing.reasonCode ?? null,
+        risk: t.risk,
         branch: t.plan?.branch ?? null,
-        headSha: t.receipt?.headSha ?? t.record?.verifiedHeadSha ?? null,
+        headSha: t.receipt?.headSha ?? t.record?.verifiedHeadSha ?? t.contract?.expectedHeadSha ?? null,
         attempt: extra.attempt ?? t.repair.attempt,
         dependencyIds: extra.dependencyIds ?? t.intake.dependsOn ?? [],
         queueReason: extra.reason ?? t.queueReason,
@@ -374,14 +390,21 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     escalate(t, opts.trigger ?? "blocked", opts.action ?? "block");
     const freed = t.lease?.workspaceId ?? null;
     releaseLease(t);
-    audit(t, "manager_blocked", { from, to: t.state === from ? null : t.state, reason });
+    audit(t, "manager_blocked", {
+      from,
+      to: t.state === from ? null : t.state,
+      reason,
+    });
     post({ type: "dependency_completed", taskId: t.intake.taskId });
     if (freed) post({ type: "workspace_available", workspaceId: freed });
   }
 
   function failPersistence(t: TaskRecord) {
     if (!isTerminalStatus(t.status)) {
-      block(t, "orchestration persistence failed", { terminal: true, trigger: "missing_trusted_evidence" });
+      block(t, "orchestration persistence failed", {
+        terminal: true,
+        trigger: "missing_trusted_evidence",
+      });
       return;
     }
     // A terminal outcome that was not durably recorded is not trustworthy.
@@ -407,7 +430,9 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     t.status = "needs_human_approval";
     t.approvalPhase = phase;
     escalate(t, trigger, "request_human_approval");
-    audit(t, "human_approval_requested", { reason: `${phase} approval required` });
+    audit(t, "human_approval_requested", {
+      reason: `${phase} approval required`,
+    });
   }
 
   function setWaiting(t: TaskRecord, status: OrchestrationStatus, d: Pick<ScheduleDecision, "reason" | "waitingOn">, event: OrchestrationAuditEvent, esc?: { trigger: string; action: EscalationAction }) {
@@ -423,14 +448,20 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
   function intake(task: TaskIntake) {
     const reason = validateIntake(task, recs);
     if (reason) {
-      rejected.push({ taskId: String((task as { taskId?: unknown })?.taskId ?? "").slice(0, 64), reason });
+      rejected.push({
+        taskId: String((task as { taskId?: unknown })?.taskId ?? "").slice(0, 64),
+        reason,
+      });
       return;
     }
     const graph = new Map<string, readonly string[]>(Array.from(recs.values()).map((r) => [r.intake.taskId, r.intake.dependsOn ?? []]));
     graph.set(task.taskId, task.dependsOn ?? []);
     const cycle = findDependencyCycle(graph);
     if (cycle) {
-      rejected.push({ taskId: task.taskId, reason: `dependency cycle: ${cycle.join(" -> ")}` });
+      rejected.push({
+        taskId: task.taskId,
+        reason: `dependency cycle: ${cycle.join(" -> ")}`,
+      });
       return;
     }
     const risk = task.classification.risk.level;
@@ -438,7 +469,10 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       intake: structuredClone(task),
       seq: ++seq,
       lineageId: task.lineage?.rootTaskId ?? task.taskId,
-      priority: assessPriority({ signals: task.prioritySignals, requested: task.requestedPriority }),
+      priority: assessPriority({
+        signals: task.prioritySignals,
+        requested: task.requestedPriority,
+      }),
       risk,
       worker: task.routing.worker,
       state: "routed",
@@ -474,12 +508,33 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     };
     if ((task.dependsOn ?? []).length > 0) t.capabilities.add("dependency_resolver");
     recs.set(task.taskId, t);
+    if (task.routing.worker === null) {
+      audit(t, "worker_unavailable", {
+        reason: task.routing.reason,
+        reasonCode: task.routing.reasonCode,
+      });
+    } else if (task.routing.isFallback) {
+      audit(t, "worker_fallback_selected", {
+        reason: task.routing.reason,
+        reasonCode: task.routing.reasonCode,
+        fallbackFrom: task.routing.fallbackFrom,
+      });
+    } else {
+      audit(t, "worker_selected", {
+        reason: task.routing.reason,
+        reasonCode: task.routing.reasonCode,
+      });
+    }
     if (risk === "red") {
       move(t, "awaiting_approval");
       awaitApproval(t, "pre_execution", "approval_required");
     } else {
       move(t, "queued");
-      audit(t, "task_queued", { from: "routed", to: "queued", reason: "accepted for scheduling" });
+      audit(t, "task_queued", {
+        from: "routed",
+        to: "queued",
+        reason: "accepted for scheduling",
+      });
     }
     post({ type: "scheduler_tick" });
   }
@@ -490,7 +545,11 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     const decisions = decideSchedule({
       tasks: Array.from(recs.values()).map(view),
       workspaceHolder: (id) => ports.leases.current(id)?.taskId ?? null,
-      policy: { maxConcurrentTasks: policy.maxConcurrentTasks, executableWorkers: policy.executableWorkers, highConflictPaths: policy.highConflictPaths },
+      policy: {
+        maxConcurrentTasks: policy.maxConcurrentTasks,
+        executableWorkers: policy.executableWorkers,
+        highConflictPaths: policy.highConflictPaths,
+      },
     });
     last = decisions;
     for (const d of decisions) {
@@ -507,7 +566,10 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
           setWaiting(t, "waiting_dependency", d, "dependency_wait");
           break;
         case "wait_branch_conflict":
-          setWaiting(t, "waiting_branch_conflict", d, "conflict_wait", { trigger: "branch_conflict", action: "wait" });
+          setWaiting(t, "waiting_branch_conflict", d, "conflict_wait", {
+            trigger: "branch_conflict",
+            action: "wait",
+          });
           break;
         case "wait_workspace":
           setWaiting(t, "waiting_workspace", d, "workspace_wait");
@@ -528,7 +590,11 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     t.replans++;
     t.capabilities.add("replan");
     if (t.replans > policy.maxReplans) {
-      block(t, `replan budget exhausted (${reason})`, { terminal: true, trigger: "stale_base", action: "block" });
+      block(t, `replan budget exhausted (${reason})`, {
+        terminal: true,
+        trigger: "stale_base",
+        action: "block",
+      });
       return;
     }
     escalate(t, "stale_base", "replan_branch");
@@ -556,22 +622,39 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     );
     if (plan.decision === "queue") {
       t.branchPlanState = "queued";
-      setWaiting(t, "waiting_branch_conflict", { reason: plan.reasons.join("; "), waitingOn: plan.blockedBy.map((b) => b.taskId) }, "conflict_wait", {
-        trigger: "branch_conflict",
-        action: "wait",
-      });
+      setWaiting(
+        t,
+        "waiting_branch_conflict",
+        {
+          reason: plan.reasons.join("; "),
+          waitingOn: plan.blockedBy.map((b) => b.taskId),
+        },
+        "conflict_wait",
+        {
+          trigger: "branch_conflict",
+          action: "wait",
+        },
+      );
       return;
     }
     if (plan.decision === "reject") {
       t.branchPlanState = "rejected";
-      block(t, `branch plan rejected: ${plan.reasons.join("; ")}`, { terminal: true, trigger: "unsafe_branch_state" });
+      block(t, `branch plan rejected: ${plan.reasons.join("; ")}`, {
+        terminal: true,
+        trigger: "unsafe_branch_state",
+      });
       return;
     }
     t.plan = plan;
     t.branchPlanState = "assigned";
 
     t.capabilities.add("workspace_lease");
-    const lease = ports.leases.acquire({ workspaceId: task.workspaceId, taskId: task.taskId, lineageId: plan.lineageId, branch: plan.branch });
+    const lease = ports.leases.acquire({
+      workspaceId: task.workspaceId,
+      taskId: task.taskId,
+      lineageId: plan.lineageId,
+      branch: plan.branch,
+    });
     if (!lease.ok) {
       t.plan = null;
       t.branchPlanState = "none";
@@ -586,17 +669,41 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       const created = await ports.github.createTaskBranch(plan);
       if (!created.ok) {
         if (created.error === "replan_required") return replan(t, created.reason);
-        return block(t, `branch creation failed: ${created.error}`, { terminal: true, trigger: "unsafe_branch_state" });
+        return block(t, `branch creation failed: ${created.error}`, {
+          terminal: true,
+          trigger: "unsafe_branch_state",
+        });
       }
       creation = created.creation;
     }
-    const prepared = await ports.workspace.prepare({ plan, lease: t.lease, creation });
-    if (!prepared.ok) return block(t, `workspace preparation failed: ${prepared.error}`, { terminal: true, trigger: "unsafe_branch_state" });
+    const prepared = await ports.workspace.prepare({
+      plan,
+      lease: t.lease,
+      creation,
+    });
+    if (!prepared.ok)
+      return block(t, `workspace preparation failed: ${prepared.error}`, {
+        terminal: true,
+        trigger: "unsafe_branch_state",
+      });
 
     const assigned = assignWorkerBranch(baseContract(t), plan);
-    if (!assigned.ok) return block(t, assigned.reason, { terminal: true, trigger: "unsafe_branch_state" });
-    const pre = await ports.workspace.checkPreconditions({ prepared: prepared.prepared, plan, contract: assigned.contract, lease: t.lease });
-    if (!pre.ok) return block(t, `worker preconditions failed: ${pre.reason}`, { terminal: true, trigger: "unsafe_branch_state" });
+    if (!assigned.ok)
+      return block(t, assigned.reason, {
+        terminal: true,
+        trigger: "unsafe_branch_state",
+      });
+    const pre = await ports.workspace.checkPreconditions({
+      prepared: prepared.prepared,
+      plan,
+      contract: assigned.contract,
+      lease: t.lease,
+    });
+    if (!pre.ok)
+      return block(t, `worker preconditions failed: ${pre.reason}`, {
+        terminal: true,
+        trigger: "unsafe_branch_state",
+      });
     t.baseContract = pre.contract;
     if (!(await authorizeWorkerContract(t, pre.contract))) return;
 
@@ -650,10 +757,16 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
   function startRun(t: TaskRecord, contract: WorkerTaskContract, attempt: number) {
     // Hard cap independent of the validator: no path can exceed 1 + maxRepairAttempts runs.
     if (t.workerExecutions >= maxWorkerExecutions(t)) {
-      return block(t, "worker execution budget exhausted", { terminal: true, trigger: "repeated_repair_failure" });
+      return block(t, "worker execution budget exhausted", {
+        terminal: true,
+        trigger: "repeated_repair_failure",
+      });
     }
     if (!t.worker || !policy.executableWorkers.includes(t.worker)) {
-      return block(t, `worker ${t.worker ?? "none"} is not executable`, { terminal: true, trigger: "worker_unavailable" });
+      return block(t, `worker ${t.worker ?? "none"} is not executable`, {
+        terminal: true,
+        trigger: "worker_unavailable",
+      });
     }
     t.capabilities.add("worker");
     const runId = contract.runId;
@@ -670,11 +783,16 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     if (handle.runId !== runId) throw new Error("[scheduler] worker handle runId does not match the contract");
     cancels.set(runId, (reason) => handle.cancel(reason));
     audit(t, "worker_started", { attempt });
+    if (t.worker === "codex") audit(t, "codex_worker_started", { attempt });
     const taskId = t.intake.taskId;
     void handle.result.then(
       (result) => {
         results.set(runId, result);
-        post({ type: attempt > 0 ? "repair_completed" : result.status === "success" ? "worker_completed" : "worker_failed", taskId, runId });
+        post({
+          type: attempt > 0 ? "repair_completed" : result.status === "success" ? "worker_completed" : "worker_failed",
+          taskId,
+          runId,
+        });
       },
       () => post({ type: "worker_failed", taskId, runId }),
     );
@@ -691,11 +809,22 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     t.pendingSideEffect = null;
     t.pendingSideEffectId = null;
     if (isTerminalStatus(t.status)) return;
-    if (!result || !t.lease || !t.plan || !t.contract) return block(t, "worker run produced no trusted result", { terminal: true, trigger: "missing_trusted_evidence" });
+    if (!result || !t.lease || !t.plan || !t.contract)
+      return block(t, "worker run produced no trusted result", {
+        terminal: true,
+        trigger: "missing_trusted_evidence",
+      });
     t.lastResult = result;
     audit(t, t.repair.attempt > 0 ? "repair_completed" : "worker_completed");
+    if (t.worker === "codex") audit(t, result.status === "success" ? "codex_worker_completed" : "codex_worker_failed");
 
-    const record = await ports.evidence.record({ taskId, runId, contract: t.contract, result, lease: t.lease });
+    const record = await ports.evidence.record({
+      taskId,
+      runId,
+      contract: t.contract,
+      result,
+      lease: t.lease,
+    });
     t.record = record;
 
     // With an open PR, validate the repaired local result as a pre-push
@@ -732,7 +861,8 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     for (const intent of v.intents) {
       if (intent === "return_to_worker") escalate(t, trigger, "return_to_worker");
       else if (intent === "replan_branch") escalate(t, trigger, "replan_branch");
-      else if (intent === "request_human_approval") continue; // recorded by awaitApproval
+      else if (intent === "request_human_approval")
+        continue; // recorded by awaitApproval
       else if (intent === "future_deep_review_candidate") escalate(t, trigger, "future_deep_review_candidate"); // marker only
       // stop_task is recorded by block()
     }
@@ -740,12 +870,19 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
 
   async function evaluate(t: TaskRecord, approvalPhase?: ApprovalPhase, phase: "pre_push" | "post_qa" = "post_qa"): Promise<void> {
     if (!t.plan || !t.lastResult || !t.record || !t.worker) {
-      return block(t, "evidence incomplete", { terminal: true, trigger: "missing_trusted_evidence" });
+      return block(t, "evidence incomplete", {
+        terminal: true,
+        trigger: "missing_trusted_evidence",
+      });
     }
     t.capabilities.add("validator");
     const evidence = evidenceFor(t, phase);
     const step = managerStep({ evidence, approvalPhase });
-    if (!step.ok) return block(t, `manager: ${step.reason}`, { terminal: true, trigger: "task_state_blocked" });
+    if (!step.ok)
+      return block(t, `manager: ${step.reason}`, {
+        terminal: true,
+        trigger: "task_state_blocked",
+      });
     for (const a of step.audit) ports.audit(a);
     if (RANK[step.validation.riskLevel] > RANK[t.risk]) t.risk = step.validation.riskLevel; // risk only escalates
     recordEscalations(t, step.validation);
@@ -764,7 +901,10 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
           move(t, "qa_passed");
           return evaluate(t);
         }
-        return block(t, "QA has not passed on the pushed head", { terminal: true, trigger: "missing_trusted_evidence" });
+        return block(t, "QA has not passed on the pushed head", {
+          terminal: true,
+          trigger: "missing_trusted_evidence",
+        });
       case "complete_task":
         move(t, "complete", from === "awaiting_approval" ? { approved: true, approvalPhase: "post_qa" } : {});
         return accept(t, from);
@@ -778,33 +918,69 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
         return startRepair(t, step);
       case "replan_branch":
         // Work already exists on the branch: no automatic replan after execution.
-        return block(t, `replan required: ${reasons}`, { terminal: false, trigger: reasons, action: "replan_branch" });
+        return block(t, `replan required: ${reasons}`, {
+          terminal: false,
+          trigger: reasons,
+          action: "replan_branch",
+        });
       case "stop": {
-        const gated = gateTransition({ source: { taskId: t.intake.taskId, fromState: t.state, transition: "failed" }, evidence, approvalPhase });
-        return block(t, `manager stop: ${reasons}`, { terminal: gated.ok && gated.transition === "failed", trigger: reasons });
+        const gated = gateTransition({
+          source: {
+            taskId: t.intake.taskId,
+            fromState: t.state,
+            transition: "failed",
+          },
+          evidence,
+          approvalPhase,
+        });
+        return block(t, `manager stop: ${reasons}`, {
+          terminal: gated.ok && gated.transition === "failed",
+          trigger: reasons,
+        });
       }
     }
   }
 
   async function startRepair(t: TaskRecord, step: ManagerStep) {
     const req = step.repairRequest;
-    if (!req || !t.lease || !t.baseContract || !t.plan) return block(t, "repair request incomplete", { terminal: true, trigger: "missing_trusted_evidence" });
+    if (!req || !t.lease || !t.baseContract || !t.plan)
+      return block(t, "repair request incomplete", {
+        terminal: true,
+        trigger: "missing_trusted_evidence",
+      });
     if (req.attempt > t.maxRepairAttempts) {
-      return block(t, "orchestration repair budget exhausted", { terminal: true, trigger: "repeated_repair_failure" });
+      return block(t, "orchestration repair budget exhausted", {
+        terminal: true,
+        trigger: "repeated_repair_failure",
+      });
     }
     // Same task lineage, same branch, same worker. Never a fresh task branch.
     if (req.taskId !== t.intake.taskId || req.branch !== t.plan.branch || req.worker !== t.worker) {
-      return block(t, "repair request does not match the task lineage", { terminal: true, trigger: "unsafe_branch_state" });
+      return block(t, "repair request does not match the task lineage", {
+        terminal: true,
+        trigger: "unsafe_branch_state",
+      });
     }
     // Same guards as manager/lifecycle.repairStartIntent (whose promptHash is only known after the adapter starts).
-    if (!REPAIRABLE_STATES.includes(t.state)) return block(t, `cannot repair in state ${t.state}`, { terminal: true, trigger: "task_state_blocked" });
+    if (!REPAIRABLE_STATES.includes(t.state))
+      return block(t, `cannot repair in state ${t.state}`, {
+        terminal: true,
+        trigger: "task_state_blocked",
+      });
     const head = await ports.workspace.head(t.lease);
     if (!head || head.branch !== req.branch || head.headSha !== req.expectedHeadSha) {
-      return block(t, "workspace is not at the repair head", { terminal: true, trigger: "unsafe_branch_state" });
+      return block(t, "workspace is not at the repair head", {
+        terminal: true,
+        trigger: "unsafe_branch_state",
+      });
     }
     const runId = `${t.intake.taskId}-run-${t.runCount + 1}`;
     const contract = repairWorkerContract(t.baseContract, req, runId);
-    if (!contract.ok) return block(t, contract.reason, { terminal: true, trigger: "unsafe_branch_state" });
+    if (!contract.ok)
+      return block(t, contract.reason, {
+        terminal: true,
+        trigger: "unsafe_branch_state",
+      });
     if (!(await authorizeWorkerContract(t, contract.contract))) return;
     t.capabilities.add("repair_loop");
     t.repair = advanceRepairCounters(t.repair, req);
@@ -816,20 +992,39 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
   // ---------------------------------------------------------- GitHub path
 
   async function push(t: TaskRecord) {
-    if (!t.plan || !t.lastResult || !t.record) return block(t, "nothing verified to push", { terminal: true, trigger: "missing_trusted_evidence" });
+    if (!t.plan || !t.lastResult || !t.record)
+      return block(t, "nothing verified to push", {
+        terminal: true,
+        trigger: "missing_trusted_evidence",
+      });
     t.capabilities.add("github_write");
     const input = pushInputFromWorkerResult(t.plan, t.lastResult);
-    if (!input.ok) return block(t, `push refused: ${input.reason}`, { terminal: true, trigger: "missing_trusted_evidence" });
-    if (t.record.verifiedHeadSha !== input.localHeadSha) return block(t, "worker head is not git-verified", { terminal: true, trigger: "missing_trusted_evidence" });
+    if (!input.ok)
+      return block(t, `push refused: ${input.reason}`, {
+        terminal: true,
+        trigger: "missing_trusted_evidence",
+      });
+    if (t.record.verifiedHeadSha !== input.localHeadSha)
+      return block(t, "worker head is not git-verified", {
+        terminal: true,
+        trigger: "missing_trusted_evidence",
+      });
     const expectedRemoteSha = t.receipt?.headSha ?? input.expectedRemoteSha;
     audit(t, "branch_push_requested");
     t.pendingSideEffect = "push";
     t.pendingSideEffectId = input.localHeadSha;
     persistOrThrow();
-    const pushed = await ports.github.pushTaskBranch(t.plan, { localHeadSha: input.localHeadSha, expectedRemoteSha });
+    const pushed = await ports.github.pushTaskBranch(t.plan, {
+      localHeadSha: input.localHeadSha,
+      expectedRemoteSha,
+    });
     if (!pushed.ok) {
       const moved = pushed.error === "remote_moved" || pushed.error === "replan_required";
-      return block(t, `push failed: ${pushed.error}`, { terminal: true, trigger: moved ? "stale_base" : "unsafe_branch_state", action: moved ? "replan_branch" : "block" });
+      return block(t, `push failed: ${pushed.error}`, {
+        terminal: true,
+        trigger: moved ? "stale_base" : "unsafe_branch_state",
+        action: moved ? "replan_branch" : "block",
+      });
     }
     t.receipt = pushed.receipt;
     t.pendingSideEffect = null;
@@ -857,10 +1052,18 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     const opened = await ports.github.openPullRequest(
       t.plan,
       t.receipt,
-      { title: task.title, summary: task.summary, acceptanceCriteria: task.acceptanceCriteria.map((c) => `${c.id}: ${c.text}`) },
+      {
+        title: task.title,
+        summary: task.summary,
+        acceptanceCriteria: task.acceptanceCriteria.map((c) => `${c.id}: ${c.text}`),
+      },
       { draft: policy.prDraft },
     );
-    if (!opened.ok) return block(t, `PR creation failed: ${opened.error}`, { terminal: true, trigger: "missing_trusted_evidence" });
+    if (!opened.ok)
+      return block(t, `PR creation failed: ${opened.error}`, {
+        terminal: true,
+        trigger: "missing_trusted_evidence",
+      });
     // The PR number comes only from the trusted write client.
     t.pr = opened.pr;
     t.pendingSideEffect = null;
@@ -881,7 +1084,11 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     t.capabilities.add("github_qa");
     const qa = await ports.qa.read(t.pr.number);
     t.qaPolls++;
-    if (qa.prNumber !== t.pr.number) return block(t, "QA decision belongs to another PR", { terminal: true, trigger: "missing_trusted_evidence" });
+    if (qa.prNumber !== t.pr.number)
+      return block(t, "QA decision belongs to another PR", {
+        terminal: true,
+        trigger: "missing_trusted_evidence",
+      });
     if (t.state === "pr_opened") move(t, "qa_running");
     const current = qa.headSha === t.receipt.headSha;
     if (current && qa.status !== "pending") {
@@ -892,11 +1099,17 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     const poll = nextPollStep(current ? qa : { ...qa, status: "pending" }, t.qaPolls, policy.qaPoll);
     if (poll.action === "poll") {
       t.nextQaPollDelayMs = poll.delayMs;
-      audit(t, "qa_wait", { reason: current ? "QA pending" : "QA not yet on pushed head" });
+      audit(t, "qa_wait", {
+        reason: current ? "QA pending" : "QA not yet on pushed head",
+      });
       return;
     }
     t.nextQaPollDelayMs = null;
-    if (!current) return block(t, "QA never reported on the pushed head", { terminal: true, trigger: "missing_trusted_evidence" });
+    if (!current)
+      return block(t, "QA never reported on the pushed head", {
+        terminal: true,
+        trigger: "missing_trusted_evidence",
+      });
     t.qa = qa;
     return evaluate(t); // still pending after the poll budget: the validator blocks (ci_incomplete)
   }
@@ -951,7 +1164,10 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     t.approval[phase] = resolved.state;
     if (resolved.state === "rejected") {
       t.approval[phase] = "rejected";
-      return block(t, `${phase} approval rejected`, { terminal: true, trigger: "approval_rejected" });
+      return block(t, `${phase} approval rejected`, {
+        terminal: true,
+        trigger: "approval_rejected",
+      });
     }
     if (resolved.state !== "approved" || !resolved.approval) {
       // Notification only: forged, stale, wrong-kind/action/SHA and expired
@@ -963,7 +1179,11 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     if (t.state === "awaiting_approval" && phase === "pre_execution") {
       move(t, "queued", { approved: true, approvalPhase: "pre_execution" });
       t.status = "queued";
-      audit(t, "task_queued", { from: "awaiting_approval", to: "queued", reason: "pre-execution approval granted" });
+      audit(t, "task_queued", {
+        from: "awaiting_approval",
+        to: "queued",
+        reason: "pre-execution approval granted",
+      });
       post({ type: "scheduler_tick" });
       return;
     }
@@ -1043,18 +1263,19 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
   function restorePlan(saved: PersistedTaskRecord): AssignedBranchPlan | null {
     if (!saved.plan) return null;
     const prior = saved.plan;
-    const existing = prior.decision === "reuse_branch"
-      ? {
-          name: prior.branch,
-          headSha: prior.headSha,
-          baseSha: prior.baseSha,
-          lineageId: prior.lineageId,
-          prNumber: saved.pr?.number ?? prior.prNumber,
-          prState: saved.pr ? ("open" as const) : null,
-          changedPaths: prior.expectedPaths,
-          workerRunning: false,
-        }
-      : null;
+    const existing =
+      prior.decision === "reuse_branch"
+        ? {
+            name: prior.branch,
+            headSha: prior.headSha,
+            baseSha: prior.baseSha,
+            lineageId: prior.lineageId,
+            prNumber: saved.pr?.number ?? prior.prNumber,
+            prState: saved.pr ? ("open" as const) : null,
+            changedPaths: prior.expectedPaths,
+            workerRunning: false,
+          }
+        : null;
     const planned = planBranch(
       {
         taskId: saved.intake.taskId,
@@ -1208,7 +1429,10 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       const t = recs.get(id);
       return t ? snapshot(t) : null;
     },
-    tasks: () => Array.from(recs.values()).sort((a, b) => a.seq - b.seq).map(snapshot),
+    tasks: () =>
+      Array.from(recs.values())
+        .sort((a, b) => a.seq - b.seq)
+        .map(snapshot),
     lastSchedule: () => structuredClone(last),
     rejectedIntakes: () => structuredClone(rejected),
     resume,

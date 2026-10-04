@@ -6,20 +6,7 @@
  * no DB, no HTTP, no filesystem, no environment variables, no worker execution.
  */
 
-export const TASK_STATES = [
-  "received",
-  "classified",
-  "routed",
-  "queued",
-  "running",
-  "pr_opened",
-  "qa_running",
-  "qa_passed",
-  "awaiting_approval",
-  "complete",
-  "failed",
-  "cancelled",
-] as const;
+export const TASK_STATES = ["received", "classified", "routed", "queued", "running", "pr_opened", "qa_running", "qa_passed", "awaiting_approval", "complete", "failed", "cancelled"] as const;
 export type TaskState = (typeof TASK_STATES)[number];
 
 export const RISK_LEVELS = ["green", "yellow", "red"] as const;
@@ -84,14 +71,7 @@ export const ACTION_KINDS = [
 export type ActionKind = (typeof ACTION_KINDS)[number];
 
 /** Surfaces where a secret value would become visible beyond the worker. */
-export const SECRET_SURFACES = [
-  "code",
-  "git",
-  "pr",
-  "logs",
-  "frontend_bundle",
-  "internet",
-] as const;
+export const SECRET_SURFACES = ["code", "git", "pr", "logs", "frontend_bundle", "internet"] as const;
 export type SecretSurface = (typeof SECRET_SURFACES)[number];
 
 export interface TaskAction {
@@ -124,7 +104,7 @@ export interface ClassificationResult {
   risk: RiskDecision;
 }
 
-export type WorkerStatus = "available" | "unavailable" | "quota_limited";
+export type WorkerStatus = "available" | "unavailable" | "quota_exhausted" | "misconfigured";
 export type WorkerAvailability = Record<WorkerKind, WorkerStatus>;
 
 export interface RoutingDecision {
@@ -132,5 +112,7 @@ export interface RoutingDecision {
   worker: WorkerKind | null;
   primary: WorkerKind;
   isFallback: boolean;
+  fallbackFrom: WorkerKind | null;
+  reasonCode: "primary_available" | "fallback_selected" | "fallback_forbidden" | "worker_unavailable";
   reason: string;
 }

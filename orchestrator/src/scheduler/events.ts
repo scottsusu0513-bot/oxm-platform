@@ -16,8 +16,14 @@ export const ORCHESTRATION_AUDIT_EVENTS = [
   "dependency_wait",
   "conflict_wait",
   "workspace_wait",
+  "worker_selected",
+  "worker_fallback_selected",
+  "worker_unavailable",
   "worker_started",
   "worker_completed",
+  "codex_worker_started",
+  "codex_worker_completed",
+  "codex_worker_failed",
   "repair_requested",
   "repair_completed",
   "branch_push_requested",
@@ -33,6 +39,9 @@ export interface OrchestrationAuditMetadata {
   taskId: string;
   priority?: string;
   worker?: string | null;
+  fallbackFrom?: string | null;
+  reasonCode?: string | null;
+  risk?: string | null;
   branch?: string | null;
   headSha?: string | null;
   attempt?: number;
@@ -45,12 +54,17 @@ export interface OrchestrationAuditMetadata {
 const cap = (values: readonly string[] | undefined) => (values ?? []).slice(0, 50).map((v) => String(v).slice(0, 80));
 const short = (v: string | null | undefined) => (v == null ? null : String(v).replace(/\s+/g, " ").slice(0, 200));
 
-export function orchestrationAuditMetadata(m: OrchestrationAuditMetadata): { [key: string]: JsonValue } {
+export function orchestrationAuditMetadata(m: OrchestrationAuditMetadata): {
+  [key: string]: JsonValue;
+} {
   return sanitizeMetadata({
     layer: "orchestration",
     taskId: m.taskId,
     priority: m.priority ?? null,
     worker: m.worker ?? null,
+    fallbackFrom: m.fallbackFrom ?? null,
+    reasonCode: m.reasonCode ?? null,
+    risk: m.risk ?? null,
     branch: m.branch ?? null,
     headSha: m.headSha ?? null,
     attempt: m.attempt ?? 0,
@@ -68,13 +82,15 @@ const ACTOR: Partial<Record<OrchestrationAuditEvent, AuditActor>> = {
   human_approval_requested: "manager",
 };
 
-export function orchestrationAudit(
-  event: OrchestrationAuditEvent,
-  fromState: TaskState | null,
-  toState: TaskState | null,
-  meta: OrchestrationAuditMetadata,
-): Omit<NewAuditEvent, "id"> {
-  return { taskId: meta.taskId, actor: ACTOR[event] ?? "system", event, fromState, toState, metadata: orchestrationAuditMetadata(meta) };
+export function orchestrationAudit(event: OrchestrationAuditEvent, fromState: TaskState | null, toState: TaskState | null, meta: OrchestrationAuditMetadata): Omit<NewAuditEvent, "id"> {
+  return {
+    taskId: meta.taskId,
+    actor: ACTOR[event] ?? "system",
+    event,
+    fromState,
+    toState,
+    metadata: orchestrationAuditMetadata(meta),
+  };
 }
 
 /** Events that only (re)run the scheduler. */
