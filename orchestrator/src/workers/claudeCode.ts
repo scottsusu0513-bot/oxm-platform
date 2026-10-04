@@ -126,6 +126,9 @@ async function execute(
   if (before.branch !== c.branch) {
     return failure(c, "branch_mismatch", `working tree is on a different branch than the task branch`, risk);
   }
+  if (c.expectedHeadSha !== undefined && before.headSha !== c.expectedHeadSha) {
+    return failure(c, "branch_mismatch", "working tree HEAD is not the orchestrator-prepared SHA", risk);
+  }
   const allowedDirty = new Set(c.allowedDirtyPaths ?? []);
   const unrelated = before.dirtyPaths.filter((p) => !allowedDirty.has(p));
   if (unrelated.length) {

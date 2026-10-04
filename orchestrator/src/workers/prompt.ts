@@ -105,6 +105,7 @@ export function validateContract(c: WorkerTaskContract): string[] {
     errors.push("invalid allowedDirtyPaths");
   }
   if (c.changedPaths && !c.changedPaths.every((p) => typeof p === "string")) errors.push("invalid changedPaths");
+  if (c.expectedHeadSha !== undefined && !/^[0-9a-f]{40}$/.test(c.expectedHeadSha)) errors.push("invalid expectedHeadSha");
   return errors;
 }
 
