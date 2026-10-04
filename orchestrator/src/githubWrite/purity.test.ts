@@ -47,6 +47,8 @@ describe("github write layer boundaries", () => {
     expect(w).not.toMatch(/"(reset|merge|rebase|clean|checkout|push|pull|stash|restore|update-ref|branch)"|--hard|--force|--discard-changes|"-[fCB]"/);
     const t = code("transport.ts");
     expect(t.match(/command:\s*"[^"]+"/g)?.sort()).toEqual(['command: "gh"', 'command: "git"']);
-    expect(t.match(/"--method",\s*"[A-Z]+"/g)?.sort()).toEqual(['"--method",\n          "POST"', '"--method",\n          "PATCH"', '"--method", "POST"'].sort());
+    // Compare the captured HTTP method values only, so whitespace / indentation / LF vs CRLF cannot affect the result.
+    const methods = [...t.matchAll(/"--method",\s*"([A-Z]+)"/g)].map((m) => m[1]).sort();
+    expect(methods).toEqual(["PATCH", "POST", "POST"]);
   });
 });
