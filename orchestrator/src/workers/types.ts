@@ -1,0 +1,226 @@
+/**
+ * Phase 2C.4 Worker layer — shared types.
+ *
+ * Pure type/constant definitions. Real process, git, filesystem and timer
+ * access only ever happens behind the injected interfaces declared here
+ * (ProcessRunner, GitInspector, PromptFileStore, Timer), so every policy
+ * decision in this layer is testable without invoking Claude or git.
+ *
+ * Privacy: nothing here holds a full prompt, raw stdout/stderr, or secrets.
+ */
+import type { ActionKind, RiskLevel, TaskAction, TaskCategory, WorkerKind } from "../domain/types";
+import type { Approval, IsoTimestamp } from "../store/types";
+
+// ---------------------------------------------------------------------------
+// Task contract (input)
+
+/** Validations the worker must run; each maps to a fixed command in the prompt. */
+export const REQUIRED_VALIDATIONS = ["tests", "typecheck"] as const;
+export type RequiredValidation = (typeof REQUIRED_VALIDATIONS)[number];
+
+/**
+ * Structured task data the worker prompt is built from. Free-text fields
+ * (objective, allowedScope, acceptanceCriteria) are untrusted data: they are
+ * quoted into the prompt but can never change risk, permissions, branch or
+ * approval requirements — those come from `category`/`actions`/`branch` via
+ * deterministic policy.
+ */
+export interface WorkerTaskContract {
+  taskId: string;
+  runId: string;
+  category: TaskCategory;
+  actions: readonly TaskAction[];
+  /** Paths the task is expected to change (feeds risk classification). */
+  changedPaths?: readonly string[];
+  /** Risk previously stored for the task; the adapter only ever escalates from it. */
+  storedRiskLevel?: RiskLevel | null;
+  objective: string;
+  allowedScope: readonly string[];
+  acceptanceCriteria: readonly string[];
+  requiredValidations: readonly RequiredValidation[];
+  /** Task branch the worker must stay on. Never main/master. */
+  branch: string;
+  /** Pre-existing dirty paths that are explicitly part of this task. */
+  allowedDirtyPaths?: readonly string[];
+}
+
+export interface WorkerRunRequest {
+  contract: WorkerTaskContract;
+  /** Pre-execution approval for red tasks; ignored for green/yellow. */
+  redApproval?: Approval | null;
+  /** Injected "now" used to check approval expiry. */
+  now: IsoTimestamp;
+}
+
+// ---------------------------------------------------------------------------
+// Structured result (output)
+
+export const WORKER_RESULT_STATUSES = ["success", "failure", "cancelled", "timeout"] as const;
+export type WorkerResultStatus = (typeof WORKER_RESULT_STATUSES)[number];
+
+export const VALIDATION_OUTCOMES = ["passed", "failed", "not_run"] as const;
+export type ValidationOutcome = (typeof VALIDATION_OUTCOMES)[number];
+
+export const WORKER_ERROR_TYPES = [
+  "invalid_contract",
+  "protected_branch",
+  "red_approval_missing",
+  "branch_mismatch",
+  "dirty_worktree",
+  "git_error",
+  "temp_file_error",
+  "process_error",
+  "worker_error",
+  "malformed_output",
+  "branch_changed",
+  "result_mismatch",
+  "scope_violation",
+  "validation_incomplete",
+  "worker_failure",
+  "cancelled",
+  "timeout",
+] as const;
+export type WorkerErrorType = (typeof WORKER_ERROR_TYPES)[number];
+
+export interface TestRunRecord {
+  command: string;
+  outcome: ValidationOutcome;
+}
+
+export interface RiskObservation {
+  level: RiskLevel;
+  notes: string[];
+}
+
+/** Persistable worker outcome. Sanitized: no raw stdout/stderr, prompts, or secrets. */
+export interface WorkerResult {
+  status: WorkerResultStatus;
+  summary: string;
+  /** Real changed paths from git (never the worker's self-report). */
+  filesChanged: string[];
+  testsRun: TestRunRecord[];
+  checkResult: ValidationOutcome;
+  branch: string;
+  headSha: string | null;
+  /** Always null from a worker run; PR numbers come only from a trusted GitHub layer. */
+  prNumber: null;
+  riskObserved: RiskObservation;
+  needsApproval: boolean;
+  fallbackRecommended: boolean;
+  errorType: WorkerErrorType | null;
+  /** Worker's own snake_case failure code, if it reported one. */
+  workerErrorCode: string | null;
+}
+
+/** The JSON object the worker itself must return (validated by resultParser). */
+export interface WorkerReport {
+  status: "success" | "failure";
+  summary: string;
+  filesChanged: string[];
+  testsRun: TestRunRecord[];
+  checkResult: ValidationOutcome;
+  branch: string;
+  headSha: string;
+  /** Always null: the worker has no PR capability; a trusted GitHub layer supplies PR numbers. */
+  prNumber: null;
+  riskObserved: RiskObservation;
+  needsApproval: boolean;
+  fallbackRecommended: boolean;
+  errorType: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Adapter
+
+export interface WorkerHandle {
+  readonly runId: string;
+  /** SHA-256 of the prompt (null if the contract was rejected before a prompt was built). */
+  readonly promptHash: string | null;
+  /** Always resolves (never rejects) to a structured result. */
+  readonly result: Promise<WorkerResult>;
+  /** Requests cancellation; idempotent. */
+  cancel(reason?: string): void;
+}
+
+export interface WorkerAdapter {
+  readonly kind: WorkerKind;
+  start(request: WorkerRunRequest): WorkerHandle;
+}
+
+// ---------------------------------------------------------------------------
+// Injected infrastructure
+
+/** Exec-file style spec: the command is never interpreted by a shell. */
+export interface ProcessSpec {
+  command: string;
+  args: readonly string[];
+  cwd: string;
+  /** File whose contents are streamed to the child's stdin (keeps prompts out of argv). */
+  stdinFile?: string;
+}
+
+export interface ProcessExit {
+  exitCode: number | null;
+  signal: string | null;
+  stdout: string;
+  stderr: string;
+  /** True if output exceeded the runner's buffer cap (output is then unusable). */
+  truncated: boolean;
+}
+
+export interface RunningProcess {
+  readonly exit: Promise<ProcessExit>;
+  /** Terminates the process (and its process group); idempotent. */
+  kill(): void;
+}
+
+export interface ProcessRunner {
+  spawn(spec: ProcessSpec): RunningProcess;
+}
+
+/** Read-only view of the working tree. Intentionally has no write operations. */
+export interface GitStatus {
+  branch: string;
+  headSha: string;
+  /** Repo-relative paths with staged, unstaged, or untracked changes. */
+  dirtyPaths: string[];
+}
+
+export interface GitInspector {
+  status(): Promise<GitStatus>;
+  /** Paths changed between `fromSha` and the working tree (committed + uncommitted). */
+  changedPathsSince(fromSha: string): Promise<string[]>;
+}
+
+export interface PromptFile {
+  path: string;
+  remove(): Promise<void>;
+}
+
+export interface PromptFileStore {
+  /** Writes an ephemeral, owner-only prompt file outside the repository. */
+  write(content: string): Promise<PromptFile>;
+}
+
+export interface Timer {
+  /** Schedules `cb` after `ms`; returns a cancel function. */
+  schedule(ms: number, cb: () => void): () => void;
+}
+
+export interface ClaudeCodeConfig {
+  /** Executable name or absolute path; default "claude". */
+  command?: string;
+  model: string;
+  /** Absolute repository root; the worker runs here and temp files must be outside it. */
+  repoRoot: string;
+  timeoutMs: number;
+}
+
+export interface ClaudeCodeDeps {
+  runner: ProcessRunner;
+  git: GitInspector;
+  promptFiles: PromptFileStore;
+  timer: Timer;
+}
+
+export type { ActionKind };
