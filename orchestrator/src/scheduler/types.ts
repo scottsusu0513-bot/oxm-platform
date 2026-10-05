@@ -342,6 +342,8 @@ export interface PersistedTaskRecord {
   capabilities: Capability[];
   pendingSideEffect: PendingSideEffect;
   pendingSideEffectId: string | null;
+  /** Runtime intake control; does not alter the TaskState model. */
+  paused?: boolean;
 }
 
 export interface OrchestrationPersistencePort {
@@ -385,6 +387,7 @@ export interface TaskSnapshot {
   expectedPaths: string[];
   inFlight: boolean;
   workerRunning: boolean;
+  paused: boolean;
   repair: RepairCounters;
   replans: number;
   prNumber: number | null;
