@@ -109,6 +109,12 @@ describe("scheduler dispatch policy", () => {
     expect(d.red).toBeUndefined();
   });
 
+  it("cannot bypass Codespace readiness", () => {
+    const d = decide([task("runtime")], { runtimeAvailable: false });
+    expect(d.runtime).toMatchObject({ action: "wait_runtime", reason: "codespace runtime is not available" });
+    expect(decide([task("runtime-ready")], { runtimeAvailable: true })["runtime-ready"].action).toBe("dispatch");
+  });
+
   it("reports completed and blocked tasks", () => {
     const d = decide([task("done", { status: "accepted", state: "complete" }), task("bad", { status: "blocked", state: "failed" })]);
     expect(d.done.action).toBe("completed");
