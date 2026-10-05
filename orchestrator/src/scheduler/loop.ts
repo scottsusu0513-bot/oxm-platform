@@ -17,7 +17,7 @@ import type { ApprovalEvidenceState, ManagerValidation, RepairCounters } from ".
 import { REPAIRABLE_STATES } from "../manager/validator";
 import type { WorkerResult, WorkerTaskContract } from "../workers/types";
 import { redStartBindingId } from "../workers/prompt";
-import type { Approval } from "../store/types";
+import type { Approval, IsoTimestamp } from "../store/types";
 import { findDependencyCycle } from "./dependencies";
 import { buildManagerEvidence } from "./evidence";
 import { orchestrationAudit, type OrchestrationAuditEvent } from "./events";
@@ -27,6 +27,7 @@ import {
   CAPABILITIES,
   TERMINAL_ORCHESTRATION_STATUSES,
   type BranchPlanState,
+  type ApprovalCheck,
   type Capability,
   type EscalationAction,
   type EscalationRecord,
@@ -125,6 +126,7 @@ interface TaskRecord {
   pendingSideEffect: "worker" | "push" | "pr" | null;
   pendingSideEffectId: string | null;
   trustedApproval: Approval | null;
+  approvalRequestedAt: IsoTimestamp | null;
   paused: boolean;
 }
 
@@ -143,6 +145,8 @@ export interface ManagerLoop {
   pause(taskId: string): { ok: boolean; reason?: string };
   /** Stops future work and uses the active WorkerHandle cancellation path when running. */
   cancel(taskId: string): { ok: boolean; cancellationRequested: boolean; reason?: string };
+  /** Exact current approval check. Read-only; it never wakes the runtime. */
+  pendingApproval(taskId: string): Promise<(ApprovalCheck & { risk: RiskLevel; requestedAt: IsoTimestamp }) | null>;
   readonly policy: OrchestrationPolicy;
 }
 
@@ -224,6 +228,7 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       nextQaPollDelayMs: t.nextQaPollDelayMs,
       approval: structuredClone(t.approval),
       approvalPhase: t.approvalPhase,
+      approvalRequestedAt: t.approvalRequestedAt,
       queueReason: t.queueReason,
       blockingReason: t.blockingReason,
       escalations: structuredClone(t.escalations),
@@ -436,6 +441,7 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     t.capabilities.add("human_approval");
     t.status = "needs_human_approval";
     t.approvalPhase = phase;
+    t.approvalRequestedAt = ports.now();
     escalate(t, trigger, "request_human_approval");
     audit(t, "human_approval_requested", {
       reason: `${phase} approval required`,
@@ -512,6 +518,7 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       pendingSideEffect: null,
       pendingSideEffectId: null,
       trustedApproval: null,
+      approvalRequestedAt: null,
       paused: false,
     };
     if ((task.dependsOn ?? []).length > 0) t.capabilities.add("dependency_resolver");
@@ -1180,6 +1187,10 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     }
     let branch = t.plan?.branch;
     if (!branch) {
+      // The pre-execution binding covers the deterministic task contract and
+      // branch name, not repository HEAD. Avoid a Git/repository read merely
+      // to display or decide an approval; dispatch later plans against the
+      // real base and re-checks this exact contract through approvalAuthorizes.
       const bindingPlan = planBranch(
         {
           taskId: t.intake.taskId,
@@ -1187,7 +1198,7 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
           title: t.intake.title,
           expectedPaths: t.intake.expectedPaths,
           baseBranch: BASE_BRANCH,
-          baseSha: await ports.repo.mainHeadSha(),
+          baseSha: "0".repeat(40),
           lineage: t.intake.lineage,
         },
         { active: [], highConflictPaths: policy.highConflictPaths },
@@ -1226,6 +1237,7 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     }
     t.trustedApproval = resolved.approval;
     t.approvalPhase = null;
+    t.approvalRequestedAt = null;
     if (t.state === "awaiting_approval" && phase === "pre_execution") {
       move(t, "queued", { approved: true, approvalPhase: "pre_execution" });
       t.status = "queued";
@@ -1400,6 +1412,7 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       pendingSideEffect: saved.pendingSideEffect,
       pendingSideEffectId: saved.pendingSideEffectId,
       trustedApproval: null,
+      approvalRequestedAt: saved.approvalRequestedAt ?? null,
       paused: saved.paused === true,
     };
   }
@@ -1514,6 +1527,20 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       post({ type: "dependency_completed", taskId });
       if (freed) post({ type: "workspace_available", workspaceId: freed });
       return { ok: true, cancellationRequested };
+    },
+    async pendingApproval(taskId) {
+      const t = recs.get(taskId);
+      if (
+        !t ||
+        t.status !== "needs_human_approval" ||
+        !t.approvalPhase ||
+        !t.approvalRequestedAt
+      )
+        return null;
+      const check = await approvalCheck(t, t.approvalPhase);
+      return check
+        ? { ...check, risk: t.risk, requestedAt: t.approvalRequestedAt }
+        : null;
     },
   };
 }
