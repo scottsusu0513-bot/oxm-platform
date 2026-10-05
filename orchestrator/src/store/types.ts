@@ -23,12 +23,23 @@ export interface Task {
   /** Opaque requester identifier — not an email or other PII. */
   requesterId: string;
   rawText: string;
+  /** Sanitized display title and durable intake identity. */
+  title: string | null;
+  requestId: string | null;
   normalizedSummary: string | null;
   category: TaskCategory | null;
   riskLevel: RiskLevel | null;
   riskReasons: string[];
   routedWorker: WorkerKind | null;
   fallbackUsed: boolean;
+  priority: "critical" | "high" | "normal" | "low" | null;
+  acceptanceCriteria: { id: string; text: string }[];
+  requiredValidations: ("tests" | "typecheck")[];
+  expectedScope: string[];
+  expectedScopeState: "provided" | "derived" | "unresolved";
+  classificationPath: "deterministic" | "llm_fallback" | null;
+  llmClassifierCalls: number;
+  activatedIntakeCapabilities: string[];
   state: TaskState;
   branch: string | null;
   prNumber: number | null;
@@ -40,7 +51,22 @@ export interface Task {
 
 /** Fields fixed at creation; tasks always start in "received". */
 export type NewTask = Pick<Task, "id" | "source" | "requesterId" | "rawText"> &
-  Partial<Pick<Task, "deadlineAt">>;
+  Partial<
+    Pick<
+      Task,
+      | "deadlineAt"
+      | "title"
+      | "requestId"
+      | "priority"
+      | "acceptanceCriteria"
+      | "requiredValidations"
+      | "expectedScope"
+      | "expectedScopeState"
+      | "classificationPath"
+      | "llmClassifierCalls"
+      | "activatedIntakeCapabilities"
+    >
+  >;
 
 /**
  * Mutable task fields. `state` is deliberately excluded: state changes go

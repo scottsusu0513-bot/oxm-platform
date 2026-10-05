@@ -125,6 +125,7 @@ interface TaskRecord {
   pendingSideEffect: "worker" | "push" | "pr" | null;
   pendingSideEffectId: string | null;
   trustedApproval: Approval | null;
+  paused: boolean;
 }
 
 export interface ManagerLoop {
@@ -138,6 +139,10 @@ export interface ManagerLoop {
   rejectedIntakes(): { taskId: string; reason: string }[];
   /** Loads the latest checkpoint once and deterministically resumes safe pending work. */
   resume(): Promise<void>;
+  /** Stops future dispatch only; an already-running worker is not interrupted. */
+  pause(taskId: string): { ok: boolean; reason?: string };
+  /** Stops future work and uses the active WorkerHandle cancellation path when running. */
+  cancel(taskId: string): { ok: boolean; cancellationRequested: boolean; reason?: string };
   readonly policy: OrchestrationPolicy;
 }
 
@@ -225,6 +230,7 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       capabilities: capabilityList(t),
       pendingSideEffect: t.pendingSideEffect,
       pendingSideEffectId: t.pendingSideEffectId,
+      paused: t.paused,
     };
   }
 
@@ -348,6 +354,7 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       expectedPaths: [...t.intake.expectedPaths],
       inFlight: view(t).inFlight,
       workerRunning: t.workerRunning,
+      paused: t.paused,
       repair: t.repair,
       replans: t.replans,
       prNumber: t.pr?.number ?? null,
@@ -505,6 +512,7 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       pendingSideEffect: null,
       pendingSideEffectId: null,
       trustedApproval: null,
+      paused: false,
     };
     if ((task.dependsOn ?? []).length > 0) t.capabilities.add("dependency_resolver");
     recs.set(task.taskId, t);
@@ -543,7 +551,7 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
 
   async function tick() {
     const decisions = decideSchedule({
-      tasks: Array.from(recs.values()).map(view),
+      tasks: Array.from(recs.values()).filter((t) => !t.paused).map(view),
       workspaceHolder: (id) => ports.leases.current(id)?.taskId ?? null,
       policy: {
         maxConcurrentTasks: policy.maxConcurrentTasks,
@@ -1349,6 +1357,7 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       pendingSideEffect: saved.pendingSideEffect,
       pendingSideEffectId: saved.pendingSideEffectId,
       trustedApproval: null,
+      paused: saved.paused === true,
     };
   }
 
@@ -1436,5 +1445,32 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     lastSchedule: () => structuredClone(last),
     rejectedIntakes: () => structuredClone(rejected),
     resume,
+    pause(taskId) {
+      const t = recs.get(taskId);
+      if (!t) return { ok: false, reason: "task not found" };
+      if (isTerminalStatus(t.status) || isTerminalState(t.state)) return { ok: false, reason: "task is terminal" };
+      if (t.workerRunning) return { ok: false, reason: "task has a running worker" };
+      t.paused = true;
+      t.queueReason = "paused by operator";
+      persistOrThrow();
+      return { ok: true };
+    },
+    cancel(taskId) {
+      const t = recs.get(taskId);
+      if (!t) return { ok: false, cancellationRequested: false, reason: "task not found" };
+      if (isTerminalStatus(t.status) || isTerminalState(t.state)) return { ok: false, cancellationRequested: false, reason: "task is terminal" };
+      const cancellationRequested = t.workerRunning && t.runId !== null;
+      if (cancellationRequested) cancels.get(t.runId!)?.("task cancellation requested");
+      const freed = t.lease?.workspaceId ?? null;
+      move(t, "cancelled");
+      t.status = "blocked";
+      t.blockingReason = "cancelled by operator";
+      t.paused = false;
+      releaseLease(t);
+      persistOrThrow();
+      post({ type: "dependency_completed", taskId });
+      if (freed) post({ type: "workspace_available", workspaceId: freed });
+      return { ok: true, cancellationRequested };
+    },
   };
 }
