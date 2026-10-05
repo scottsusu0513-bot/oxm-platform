@@ -1,10 +1,8 @@
-import { spawnSync } from "node:child_process";
-import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { createCodexAdapter, DEFAULT_CODEX_COMMAND } from "./codex";
+import { createCodexAdapter } from "./codex";
 import { createFakeGit, createFakePromptFiles, createFakeRunner, createFakeTimer } from "./fake";
-import type { GitStatus, WorkerReport, WorkerTaskContract } from "./types";
-import { assertCodexCommandPolicy, CODEX_WORKER_RULES_PATH } from "./workerAdapter";
+import type { CodexRuntimeVerification, GitStatus, WorkerReport, WorkerTaskContract } from "./types";
+import { requiredCodexPolicyDecision } from "./workerAdapter";
 
 const REPO = "/workspaces/oxm-platform";
 const BRANCH = "agent/ui-42";
@@ -52,6 +50,7 @@ function setup(
     model?: string;
     hang?: boolean;
     repoRoot?: string;
+    runtimeVerification?: CodexRuntimeVerification;
   } = {},
 ) {
   const runner = createFakeRunner(() => (input.hang ? {} : { exit: { stdout: input.stdout ?? JSON.stringify(report()) } }));
@@ -59,26 +58,28 @@ function setup(
   const promptFiles = createFakePromptFiles();
   const timer = createFakeTimer();
   const repoRoot = input.repoRoot ?? REPO;
+  let runtimeChecks = 0;
   const adapter = createCodexAdapter(
     { repoRoot, timeoutMs: 60_000, model: input.model },
-    { runner, git, promptFiles, timer, assertCommandPolicy: () => assertCodexCommandPolicy(repoRoot) },
+    {
+      runner,
+      git,
+      promptFiles,
+      timer,
+      policyRuntime: {
+        async verify() {
+          runtimeChecks++;
+          return input.runtimeVerification ?? { ok: true };
+        },
+      },
+    },
   );
-  return { adapter, runner, git, promptFiles, timer };
+  return { adapter, runner, git, promptFiles, timer, get runtimeChecks() { return runtimeChecks; } };
 }
 
 const flush = async (until: () => boolean) => {
   for (let i = 0; i < 50 && !until(); i++) await new Promise((r) => setImmediate(r));
 };
-
-function checkExecPolicy(command: string[]): { matchedRules: unknown[]; decision?: string } {
-  const checked = spawnSync(DEFAULT_CODEX_COMMAND, ["execpolicy", "check", "--rules", join(REPO, CODEX_WORKER_RULES_PATH), "--", ...command], {
-    encoding: "utf8",
-  });
-  // Some nested Linux sandboxes report EPERM from waitpid even though the
-  // checker completed; stdout still contains the authoritative policy result.
-  expect(checked.stdout).not.toBe("");
-  return JSON.parse(checked.stdout);
-}
 
 describe("Codex worker adapter", () => {
   it("uses fixed headless argv, a locked workspace profile, stdin prompt, and no shell/interpolation", async () => {
@@ -111,10 +112,11 @@ describe("Codex worker adapter", () => {
     expect(prompt).toContain(`Expected starting HEAD: ${BASE}`);
     expect(prompt).toContain("Manager validates");
     expect(s.promptFiles.live.size).toBe(0);
+    expect(s.runtimeChecks).toBe(1);
   });
 
-  it.each(["switch", "checkout", "merge", "rebase", "reset", "push"])("native execpolicy forbids git %s", (operation) => {
-    expect(checkExecPolicy(["git", operation, "probe"])).toMatchObject({ decision: "forbidden" });
+  it.each(["switch", "checkout", "merge", "rebase", "reset", "push"])("required exec policy forbids git %s without invoking Codex", (operation) => {
+    expect(requiredCodexPolicyDecision(["git", operation, "probe"])).toBe("forbidden");
   });
 
   it.each([
@@ -124,14 +126,26 @@ describe("Codex worker adapter", () => {
     ["git", "rev-parse", "HEAD"],
     ["pnpm", "vitest", "run", "worker.test.ts"],
     ["pnpm", "check"],
-  ])("leaves ordinary inspection and validation command available: %s", (...command) => {
-    expect(checkExecPolicy(command).matchedRules).toEqual([]);
+  ])("leaves ordinary inspection and validation command available without invoking Codex: %s", (...command) => {
+    expect(requiredCodexPolicyDecision(command)).toBe("allowed");
   });
 
   it("fails closed before spawn when the required Codex policy cannot be established", async () => {
-    const s = setup({ repoRoot: "/tmp/repo-without-codex-worker-policy" });
+    const s = setup({ runtimeVerification: { ok: false, errorType: "policy_error", reason: "policy integrity check failed" } });
     const result = await s.adapter.start({ contract: contract(), now: NOW }).result;
-    expect(result).toMatchObject({ status: "failure", errorType: "invalid_contract" });
+    expect(result).toMatchObject({ status: "failure", errorType: "policy_error" });
+    expect(s.runner.specs).toHaveLength(0);
+  });
+
+  it.each([
+    ["runtime_unavailable", "Codex CLI is unavailable"],
+    ["runtime_misconfigured", "strict config is unsupported"],
+    ["policy_error", "native policy verification failed"],
+  ] as const)("fails closed with %s when runtime verification fails", async (errorType, reason) => {
+    const s = setup({ runtimeVerification: { ok: false, errorType, reason } });
+    const result = await s.adapter.start({ contract: contract(), now: NOW }).result;
+    expect(result).toMatchObject({ status: "failure", errorType });
+    expect(result.errorType).not.toBe("invalid_contract");
     expect(s.runner.specs).toHaveLength(0);
   });
 
@@ -179,6 +193,7 @@ describe("Codex worker adapter", () => {
       filesChanged: ["server/auth.ts"],
       prNumber: null,
     });
+    expect(violation.runtimeChecks).toBe(1);
   });
 
   it("rejects malformed, contradictory, fabricated-PR, and oversized output", async () => {
@@ -250,8 +265,9 @@ describe("Codex worker adapter", () => {
       ).errorType,
     ).toBe("invalid_contract");
     expect(unsafe.runner.specs).toHaveLength(0);
+    expect(unsafe.runtimeChecks).toBe(0);
     const model = setup({ model: "x; git push" });
-    expect((await model.adapter.start({ contract: contract(), now: NOW }).result).errorType).toBe("invalid_contract");
+    expect((await model.adapter.start({ contract: contract(), now: NOW }).result).errorType).toBe("runtime_misconfigured");
     expect(model.runner.specs).toHaveLength(0);
   });
 });

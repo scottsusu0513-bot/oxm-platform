@@ -61,6 +61,9 @@ const WORKER_ERROR_POLICY: Record<WorkerErrorType, { severity: Finding["severity
   cancelled: { severity: "blocked", trigger: "task_state_blocked" },
   git_error: { severity: "blocked", trigger: "missing_trusted_evidence" },
   temp_file_error: { severity: "blocked", trigger: "missing_trusted_evidence" },
+  runtime_unavailable: { severity: "blocked", trigger: "missing_trusted_evidence" },
+  runtime_misconfigured: { severity: "blocked", trigger: "missing_trusted_evidence" },
+  policy_error: { severity: "blocked", trigger: "missing_trusted_evidence" },
   process_error: { severity: "blocked", trigger: "missing_trusted_evidence" },
 };
 

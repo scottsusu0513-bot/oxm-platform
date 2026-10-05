@@ -24,6 +24,7 @@ export interface RuntimeWorkerConfig {
   command: string;
   repoRoot: string;
   timeoutMs: number;
+  prepareRuntime?(): Promise<{ ok: true } | { ok: false; errorType: WorkerErrorType; reason: string }>;
   buildArgs(): string[];
   parseOutput(stdout: string): ParseResult<WorkerReport>;
 }
@@ -121,6 +122,16 @@ async function execute(
   const allowedDirty = new Set(c.allowedDirtyPaths ?? []);
   const unrelated = before.dirtyPaths.filter((p) => !allowedDirty.has(p));
   if (unrelated.length) return failure(c, "dirty_worktree", `${unrelated.length} unrelated dirty path(s) present`, risk);
+
+  if (config.prepareRuntime) {
+    let readiness: Awaited<ReturnType<NonNullable<RuntimeWorkerConfig["prepareRuntime"]>>>;
+    try {
+      readiness = await config.prepareRuntime();
+    } catch {
+      return failure(c, "runtime_unavailable", "worker runtime verification failed unexpectedly", risk);
+    }
+    if (!readiness.ok) return failure(c, readiness.errorType, readiness.reason, risk);
+  }
 
   let exit: ProcessExit | null = null;
   let outcome: "exited" | "cancelled" | "timeout" = "exited";

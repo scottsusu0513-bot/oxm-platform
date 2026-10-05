@@ -75,6 +75,9 @@ export const WORKER_ERROR_TYPES = [
   "dirty_worktree",
   "git_error",
   "temp_file_error",
+  "runtime_unavailable",
+  "runtime_misconfigured",
+  "policy_error",
   "process_error",
   "worker_error",
   "malformed_output",
@@ -239,9 +242,24 @@ export interface CodexConfig {
   timeoutMs: number;
 }
 
+export type CodexRuntimeVerification =
+  | { ok: true }
+  | {
+      ok: false;
+      errorType: Extract<WorkerErrorType, "runtime_unavailable" | "runtime_misconfigured" | "policy_error">;
+      reason: string;
+    };
+
+/**
+ * Narrow boundary between the adapter and the installed Codex runtime.
+ * Production verifies the native CLI and policy; unit tests inject a fake.
+ */
+export interface CodexPolicyRuntime {
+  verify(input: { command: string; repoRoot: string; args: readonly string[] }): Promise<CodexRuntimeVerification>;
+}
+
 export interface CodexDeps extends ClaudeCodeDeps {
-  /** Establishes native command policy before each spawn; must throw on absence or drift. */
-  assertCommandPolicy(): void;
+  policyRuntime: CodexPolicyRuntime;
 }
 
 export type { ActionKind };
