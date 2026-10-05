@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { createSimulation, fakeIntake } from "../scheduler/fake";
+import {
+  createManagerApprovalRequirementReader,
+  createManagerLoopGatewayEvents,
+} from "../gateway/integration";
 import { createCodespaceLifecycleController } from "./controller";
 import { createFakeCodespaceClient, FAKE_CODESPACE_IDENTITY } from "./fake";
 import { createLifecycleLeaseRegistry } from "./lease";
@@ -51,5 +55,42 @@ describe("scheduler / lifecycle integration", () => {
     );
     expect(sim.loop.task("redlife")!.status).toBe("needs_human_approval");
     expect(fake.calls.some(c => c.startsWith("start:"))).toBe(false);
+  });
+
+  it("a gateway approval never starts Codespace directly; the scheduler lifecycle may wake it", async () => {
+    const { sim, fake } = attach();
+    await sim.create(
+      fakeIntake({ taskId: "approved-life", actions: [{ kind: "prod_deploy" }] })
+    );
+    const requirement = await createManagerApprovalRequirementReader(
+      sim.loop
+    ).current("approved-life");
+    expect(requirement).not.toBeNull();
+    const approval = sim.approvals.create({
+      id: requirement!.approvalRequestId,
+      taskId: requirement!.taskId,
+      kind: requirement!.kind,
+      requestedAction: requirement!.action,
+      bindingShaOrActionId: requirement!.bindingTarget,
+      expiresAt: requirement!.expiresAt,
+    });
+    sim.approvals.decide(approval.id, {
+      status: "approved",
+      decidedBy: "operator-1",
+      channel: "gateway",
+    });
+
+    // The gateway adapter only posts a re-evaluation notification. The
+    // Manager verifies the repository row, queues work, and only then the
+    // lifecycle controller decides to start the stopped runtime.
+    createManagerLoopGatewayEvents(sim.loop).reEvaluateApproval(
+      "approved-life",
+      "pre_execution",
+      "approved"
+    );
+    await sim.loop.settle();
+    expect(fake.calls.filter(c => c.startsWith("start:"))).toHaveLength(1);
+    expect(sim.loop.task("approved-life")!.status).toBe("runtime_starting");
+    expect(sim.workerCalls).toEqual([]);
   });
 });

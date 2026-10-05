@@ -355,6 +355,8 @@ export interface PersistedTaskRecord {
   nextQaPollDelayMs: number | null;
   approval: Record<ApprovalPhase, ApprovalEvidenceState>;
   approvalPhase: ApprovalPhase | null;
+  /** Time the current exact approval binding was presented to a human. */
+  approvalRequestedAt?: IsoTimestamp | null;
   queueReason: string | null;
   blockingReason: string | null;
   escalations: EscalationRecord[];
