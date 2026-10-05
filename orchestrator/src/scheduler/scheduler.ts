@@ -115,6 +115,12 @@ export function decideSchedule(input: SchedulerInput): ScheduleDecision[] {
       continue;
     }
 
+    if (input.runtimeAvailable === false) {
+      decide(t, "wait_runtime", "codespace runtime is not available");
+      reservations.push(mine);
+      continue;
+    }
+
     decide(t, "dispatch", "ready");
     reservations.push(mine);
     active++;

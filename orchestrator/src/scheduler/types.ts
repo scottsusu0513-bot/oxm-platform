@@ -25,6 +25,7 @@ import type { AcceptanceEvidence, ApprovalEvidenceState, ManagerProfile, RepairC
 import type { NewAuditEvent } from "../store/types";
 import type { Approval, ApprovalKind, IsoTimestamp } from "../store/types";
 import type { RequiredValidation, WorkerHandle, WorkerResult, WorkerTaskContract } from "../workers/types";
+import type { LifecycleOutcome, LifecycleWorkload } from "../codespace/types";
 
 // ---------------------------------------------------------------------------
 // Priority
@@ -67,7 +68,21 @@ export interface PriorityAssessment {
 // ---------------------------------------------------------------------------
 // Orchestration status / outcomes (separate from TaskState)
 
-export const ORCHESTRATION_STATUSES = ["queued", "running", "waiting_dependency", "waiting_workspace", "waiting_branch_conflict", "repair_requested", "qa_pending", "needs_human_approval", "accepted", "blocked"] as const;
+export const ORCHESTRATION_STATUSES = [
+  "queued",
+  "waiting_runtime",
+  "runtime_starting",
+  "runtime_available",
+  "running",
+  "waiting_dependency",
+  "waiting_workspace",
+  "waiting_branch_conflict",
+  "repair_requested",
+  "qa_pending",
+  "needs_human_approval",
+  "accepted",
+  "blocked",
+] as const;
 export type OrchestrationStatus = (typeof ORCHESTRATION_STATUSES)[number];
 
 export const TERMINAL_ORCHESTRATION_STATUSES: readonly OrchestrationStatus[] = ["accepted", "blocked"];
@@ -78,7 +93,7 @@ export type BranchPlanState = (typeof BRANCH_PLAN_STATES)[number];
 // ---------------------------------------------------------------------------
 // Scheduler decisions
 
-export const SCHEDULE_ACTIONS = ["dispatch", "keep_queued", "wait_dependency", "wait_branch_conflict", "wait_workspace", "blocked", "completed"] as const;
+export const SCHEDULE_ACTIONS = ["dispatch", "keep_queued", "wait_runtime", "wait_dependency", "wait_branch_conflict", "wait_workspace", "blocked", "completed"] as const;
 export type ScheduleAction = (typeof SCHEDULE_ACTIONS)[number];
 
 export interface ScheduleDecision {
@@ -121,6 +136,8 @@ export interface SchedulerInput {
   /** Task currently holding the workspace lease, or null. */
   workspaceHolder: (workspaceId: string) => string | null;
   policy: SchedulerPolicy;
+  /** Defaults true for isolated scheduler use. The Manager Loop supplies lifecycle readiness. */
+  runtimeAvailable?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -218,6 +235,8 @@ export type OrchestrationEvent =
   | { type: "task_created"; task: TaskIntake }
   | { type: "dependency_completed"; taskId: string }
   | { type: "scheduler_tick" }
+  /** Posted by an external trusted lifecycle status notification. */
+  | { type: "runtime_status_updated" }
   | { type: "workspace_available"; workspaceId: string }
   /** Results are taken from the loop's own worker handle, never from the event. */
   | { type: "worker_completed"; taskId: string; runId: string }
@@ -365,6 +384,10 @@ export interface OrchestrationPorts {
   persistence?: OrchestrationPersistencePort;
   now: () => IsoTimestamp;
   audit: (event: Omit<NewAuditEvent, "id">) => void;
+  /** Optional only for backwards-compatible local simulations; configured deployments provide it. */
+  lifecycle?: {
+    reconcile(work: LifecycleWorkload, now: IsoTimestamp): Promise<LifecycleOutcome>;
+  };
 }
 
 // ---------------------------------------------------------------------------

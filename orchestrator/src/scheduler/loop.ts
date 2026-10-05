@@ -550,15 +550,51 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
   // ------------------------------------------------------------ scheduling
 
   async function tick() {
-    const decisions = decideSchedule({
-      tasks: Array.from(recs.values()).filter((t) => !t.paused).map(view),
-      workspaceHolder: (id) => ports.leases.current(id)?.taskId ?? null,
+    const schedulerTasks = Array.from(recs.values()).filter((t) => !t.paused).map(view);
+    const schedulerInput = {
+      tasks: schedulerTasks,
+      workspaceHolder: (id: string) => ports.leases.current(id)?.taskId ?? null,
       policy: {
         maxConcurrentTasks: policy.maxConcurrentTasks,
         executableWorkers: policy.executableWorkers,
         highConflictPaths: policy.highConflictPaths,
       },
-    });
+    };
+    const candidates = decideSchedule({ ...schedulerInput, runtimeAvailable: true });
+    let runtimeAvailable = true;
+    let runtimeStarting = false;
+    let runtimeReason = "runtime_not_available";
+    if (ports.lifecycle) {
+      const runnableTaskIds = candidates.filter((d) => d.action === "dispatch").map((d) => d.taskId);
+      const imminentTaskIds = candidates
+        .filter((d) => d.action === "wait_workspace" || d.action === "wait_branch_conflict" || (d.action === "keep_queued" && d.reason.startsWith("max concurrency")))
+        .map((d) => d.taskId);
+      const active = Array.from(recs.values()).filter((t) => !isTerminalStatus(t.status));
+      const lifecycle = await ports.lifecycle.reconcile(
+        {
+          runnableTaskIds,
+          imminentTaskIds,
+          repairPendingTaskIds: active.filter((t) => t.status === "repair_requested").map((t) => t.intake.taskId),
+          workerRunningTaskIds: active.filter((t) => t.workerRunning).map((t) => t.intake.taskId),
+          activeWorkspaceLease: active.some((t) => t.lease !== null),
+          orchestrationActive: active.some((t) => t.workerRunning || t.pendingSideEffect !== null || t.status === "qa_pending" || t.status === "repair_requested"),
+        },
+        ports.now(),
+      );
+      runtimeAvailable = lifecycle.ready;
+      runtimeStarting = lifecycle.state.state === "starting";
+      runtimeReason = lifecycle.decision.reasonCode;
+      if (lifecycle.workerInterrupted) {
+        for (const t of active.filter((item) => item.workerRunning))
+          block(t, "codespace stopped unexpectedly while worker was running", {
+            terminal: true,
+            trigger: "runtime_interrupted",
+            action: "wait",
+          });
+        return;
+      }
+    }
+    const decisions = decideSchedule({ ...schedulerInput, runtimeAvailable });
     last = decisions;
     for (const d of decisions) {
       const t = recs.get(d.taskId);
@@ -569,6 +605,12 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
           break;
         case "keep_queued":
           setWaiting(t, "queued", d, "task_queued");
+          break;
+        case "wait_runtime":
+          setWaiting(t, runtimeStarting ? "runtime_starting" : "waiting_runtime", { ...d, reason: `${d.reason}: ${runtimeReason}` }, "task_queued", {
+            trigger: "runtime_unavailable",
+            action: "wait",
+          });
           break;
         case "wait_dependency":
           setWaiting(t, "waiting_dependency", d, "dependency_wait");
@@ -1206,6 +1248,7 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       case "task_created":
         return intake(e.task);
       case "scheduler_tick":
+      case "runtime_status_updated":
       case "dependency_completed":
       case "workspace_available":
         return tick();

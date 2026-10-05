@@ -37,6 +37,7 @@ const ALLOWED_RUNTIME = new Set([
 ]);
 /** Type-only imports allowed (erased at runtime). */
 const ALLOWED_TYPE_ONLY = new Set([...ALLOWED_RUNTIME, "../github/types", "../githubWrite/types", "../githubWrite/lease", "../githubWrite/workspace", "../manager/types", "../store/types", "../workers/types"]);
+ALLOWED_TYPE_ONLY.add("../codespace/types");
 
 function imports(f: string): { spec: string; typeOnly: boolean }[] {
   return [...code(f).matchAll(/^import\s+(type\s+)?[\s\S]*?\bfrom\s+["']([^"']+)["'];?/gm)].map((m) => ({ spec: m[2], typeOnly: Boolean(m[1]) }));
