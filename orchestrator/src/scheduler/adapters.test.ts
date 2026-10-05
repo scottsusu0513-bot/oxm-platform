@@ -36,20 +36,55 @@ const result: WorkerResult = {
 };
 
 describe("scheduler production adapters", () => {
-  it("bridges only Claude requests to the existing worker adapter without executing a process", async () => {
-    let request: Parameters<WorkerAdapter["start"]>[0] | null = null;
-    const adapter: WorkerAdapter = {
-      kind: "claude",
+  it("bridges exact worker kinds through the registry without substitution", async () => {
+    const requests: {
+      worker: string;
+      request: Parameters<WorkerAdapter["start"]>[0];
+    }[] = [];
+    const adapter = (kind: "claude" | "codex"): WorkerAdapter => ({
+      kind,
       start(value) {
-        request = value;
-        return { runId: value.contract.runId, promptHash: null, result: Promise.resolve(result), cancel() {} };
+        requests.push({ worker: kind, request: value });
+        return {
+          runId: value.contract.runId,
+          promptHash: null,
+          result: Promise.resolve(result),
+          cancel() {},
+        };
       },
-    };
+    });
     const approval = { id: "a1" } as Approval;
-    const port = createWorkerPort({ claude: adapter, now: () => "2026-10-04T12:00:00.000Z" });
+    const port = createWorkerPort({
+      claude: adapter("claude"),
+      codex: adapter("codex"),
+      now: () => "2026-10-04T12:00:00.000Z",
+    });
     await port.start("claude", contract, approval).result;
-    expect(request).toEqual({ contract, redApproval: approval, now: "2026-10-04T12:00:00.000Z" });
-    expect(() => port.start("codex", contract)).toThrow(/no executable adapter/);
+    await port.start("codex", contract).result;
+    expect(requests).toEqual([
+      {
+        worker: "claude",
+        request: {
+          contract,
+          redApproval: approval,
+          now: "2026-10-04T12:00:00.000Z",
+        },
+      },
+      {
+        worker: "codex",
+        request: {
+          contract,
+          redApproval: null,
+          now: "2026-10-04T12:00:00.000Z",
+        },
+      },
+    ]);
+    expect(() =>
+      createWorkerPort({
+        claude: adapter("claude"),
+        now: () => "2026-10-04T12:00:00.000Z",
+      }).start("codex", contract),
+    ).toThrow(/no executable adapter/);
   });
 
   it("bridges read-only QA through exact-head inspection", async () => {
@@ -66,31 +101,73 @@ describe("scheduler production adapters", () => {
         getPullRequest,
         getHeadSha: async () => sha(7),
         listChecksForSha: async () => [
-          { source: "check_run", name: "verify", headSha: sha(7), appSlug: "github-actions", status: "completed", conclusion: "success" },
+          {
+            source: "check_run",
+            name: "verify",
+            headSha: sha(7),
+            appSlug: "github-actions",
+            status: "completed",
+            conclusion: "success",
+          },
         ],
       },
       { owner: "oxm", repo: "platform" },
       [{ name: "verify", source: "check_run", appSlug: "github-actions" }],
     );
-    await expect(port.read(7)).resolves.toMatchObject({ status: "passed", headSha: sha(7) });
+    await expect(port.read(7)).resolves.toMatchObject({
+      status: "passed",
+      headSha: sha(7),
+    });
     expect(getPullRequest).toHaveBeenCalledTimes(2);
   });
 
   it("bridges trusted git evidence and main-head reads without adding policy", async () => {
     const evidence = createEvidencePort({
       git: {
-        status: async () => ({ branch: contract.branch, headSha: sha(2), dirtyPaths: [] }),
+        status: async () => ({
+          branch: contract.branch,
+          headSha: sha(2),
+          dirtyPaths: [],
+        }),
         changedPathsSince: async () => ["server/adapter1.ts"],
       },
-      validations: () => [{ name: "tests", requested: true, executed: true, status: "passed", trusted: true }],
-      acceptance: () => [{ criterionId: "AC-1", status: "satisfied", evidenceType: "validation", reference: "tests" }],
+      validations: () => [
+        {
+          name: "tests",
+          requested: true,
+          executed: true,
+          status: "passed",
+          trusted: true,
+        },
+      ],
+      acceptance: () => [
+        {
+          criterionId: "AC-1",
+          status: "satisfied",
+          evidenceType: "validation",
+          reference: "tests",
+        },
+      ],
     });
-    await expect(evidence.record({ taskId: "adapter1", runId: contract.runId, contract, result, lease: {} as never })).resolves.toMatchObject({
+    await expect(
+      evidence.record({
+        taskId: "adapter1",
+        runId: contract.runId,
+        contract,
+        result,
+        lease: {} as never,
+      }),
+    ).resolves.toMatchObject({
       verifiedHeadSha: sha(2),
       changedPaths: ["server/adapter1.ts"],
     });
 
-    const repo = createRepoStatePort({ getBranchHead: async (_repo, branch) => (branch === "main" ? sha(9) : null) }, { owner: "oxm", repo: "platform" });
+    const repo = createRepoStatePort(
+      {
+        getBranchHead: async (_repo, branch) => (branch === "main" ? sha(9) : null),
+      },
+      { owner: "oxm", repo: "platform" },
+    );
     await expect(repo.mainHeadSha()).resolves.toBe(sha(9));
   });
 });

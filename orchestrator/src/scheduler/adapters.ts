@@ -9,15 +9,7 @@ import type { Approval, IsoTimestamp } from "../store/types";
 import type { GitInspector, WorkerAdapter, WorkerResult, WorkerTaskContract } from "../workers/types";
 import { selectWorkerAdapter } from "../workers/workerAdapter";
 import type { AcceptanceEvidence, ValidationEvidence } from "../manager/types";
-import type {
-  ApprovalPort,
-  EvidencePort,
-  QaPort,
-  RepoStatePort,
-  TrustedRunRecord,
-  WorkerPort,
-  WorkspacePort,
-} from "./types";
+import type { ApprovalPort, EvidencePort, QaPort, RepoStatePort, TrustedRunRecord, WorkerPort, WorkspacePort } from "./types";
 
 /** Production workspace bridge; all branch/lease policy remains in githubWrite/workspace. */
 export function createWorkspacePort(deps: WorkspaceDeps): WorkspacePort {
@@ -27,7 +19,11 @@ export function createWorkspacePort(deps: WorkspaceDeps): WorkspacePort {
     },
     async checkPreconditions(input) {
       const status = await deps.git.status();
-      return checkWorkerPreconditions({ ...input, status, leases: deps.leases });
+      return checkWorkerPreconditions({
+        ...input,
+        status,
+        leases: deps.leases,
+      });
     },
     async head(lease) {
       if (!deps.leases.holds(lease)) return null;
@@ -37,32 +33,36 @@ export function createWorkspacePort(deps: WorkspaceDeps): WorkspacePort {
   };
 }
 
-/** Production Claude bridge; selection still fails closed for every non-Claude worker. */
-export function createWorkerPort(input: {
-  claude: WorkerAdapter;
-  now: () => IsoTimestamp;
-}): WorkerPort {
+/** Production worker-registry bridge; exact selection fails closed with no substitution. */
+export function createWorkerPort(input: { claude: WorkerAdapter; codex?: WorkerAdapter; now: () => IsoTimestamp }): WorkerPort {
   return {
     start(kind, contract, approval) {
-      const adapter = selectWorkerAdapter(kind, { claude: input.claude });
+      const adapter = selectWorkerAdapter(kind, {
+        claude: input.claude,
+        codex: input.codex,
+      });
       if (!adapter) throw new Error(`[scheduler] worker ${kind} has no executable adapter`);
-      return adapter.start({ contract, redApproval: approval ?? null, now: input.now() });
+      return adapter.start({
+        contract,
+        redApproval: approval ?? null,
+        now: input.now(),
+      });
     },
   };
 }
 
 /** Read-only QA bridge; exact-head filtering and polling decisions remain in github/qa. */
-export function createQaPort(
-  client: GitHubReadClient,
-  repo: RepoRef,
-  required: readonly RequiredCheck[] = DEFAULT_REQUIRED_CHECKS,
-): QaPort {
-  return { read: async (prNumber) => (await inspectPullRequestQa(client, repo, prNumber, required)).decision };
+export function createQaPort(client: GitHubReadClient, repo: RepoRef, required: readonly RequiredCheck[] = DEFAULT_REQUIRED_CHECKS): QaPort {
+  return {
+    read: async (prNumber) => (await inspectPullRequestQa(client, repo, prNumber, required)).decision,
+  };
 }
 
 /** Minimal read bridge for the branch planner's current main SHA. */
 export function createRepoStatePort(
-  reader: { getBranchHead(repo: RepoRef, branch: string): Promise<string | null> },
+  reader: {
+    getBranchHead(repo: RepoRef, branch: string): Promise<string | null>;
+  },
   repo: RepoRef,
 ): RepoStatePort {
   return {
@@ -79,11 +79,7 @@ export function createRepoStatePort(
  * validation/evidence collector; this adapter does not invent acceptance
  * policy from worker prose.
  */
-export function createEvidencePort(input: {
-  git: GitInspector;
-  validations(contract: WorkerTaskContract, result: WorkerResult): readonly ValidationEvidence[];
-  acceptance(contract: WorkerTaskContract, result: WorkerResult): readonly AcceptanceEvidence[];
-}): EvidencePort {
+export function createEvidencePort(input: { git: GitInspector; validations(contract: WorkerTaskContract, result: WorkerResult): readonly ValidationEvidence[]; acceptance(contract: WorkerTaskContract, result: WorkerResult): readonly AcceptanceEvidence[] }): EvidencePort {
   return {
     async record({ contract, result }): Promise<TrustedRunRecord> {
       const before = contract.expectedHeadSha;
@@ -120,8 +116,18 @@ export function createApprovalPort(repository: ApprovalRepository, now: () => Is
         .filter((a) => a.kind === check.kind && a.requestedAction === check.requestedAction && a.bindingShaOrActionId === check.bindingShaOrActionId)
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
       for (const approval of candidates) {
-        if (approval.status === "rejected") return { state: "rejected", approval: null, reason: "stored approval was rejected" };
-        if (approval.status === "expired") return { state: "expired", approval: null, reason: "stored approval is expired" };
+        if (approval.status === "rejected")
+          return {
+            state: "rejected",
+            approval: null,
+            reason: "stored approval was rejected",
+          };
+        if (approval.status === "expired")
+          return {
+            state: "expired",
+            approval: null,
+            reason: "stored approval is expired",
+          };
         if (approval.status === "pending") continue;
         if (!validApprovalTimestamp(approval, at)) continue;
         const authorized = approvalAuthorizes(approval, {
@@ -130,9 +136,18 @@ export function createApprovalPort(repository: ApprovalRepository, now: () => Is
           bindingShaOrActionId: check.bindingShaOrActionId,
           at,
         });
-        if (authorized.ok) return { state: "approved", approval, reason: "stored approval authorizes this action" };
+        if (authorized.ok)
+          return {
+            state: "approved",
+            approval,
+            reason: "stored approval authorizes this action",
+          };
       }
-      return { state: candidates.some((a) => a.status === "pending") ? "pending" : "none", approval: null, reason: "no stored approval authorizes this action" };
+      return {
+        state: candidates.some((a) => a.status === "pending") ? "pending" : "none",
+        approval: null,
+        reason: "no stored approval authorizes this action",
+      };
     },
   };
 }

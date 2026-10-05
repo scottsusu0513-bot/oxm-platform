@@ -1,5 +1,5 @@
 import { validateTransition } from "../domain/taskState";
-import type { RiskLevel, TaskState } from "../domain/types";
+import type { RiskLevel, TaskState, WorkerKind } from "../domain/types";
 import { sanitizeMetadata } from "../store/sanitize";
 import type { IsoTimestamp, JsonValue, NewAuditEvent, NewTaskRun, RunExitStatus, TaskPatch, TaskRunPatch } from "../store/types";
 import type { WorkerResult } from "./types";
@@ -20,23 +20,26 @@ export interface WorkerStartIntent {
   audit: Omit<NewAuditEvent, "id">;
 }
 
-export function workerStartIntent(input: {
-  currentState: TaskState;
-  riskLevel: RiskLevel;
-  taskId: string;
-  runId: string;
-  model: string;
-  promptHash: string | null;
-  branch: string;
-}): Intent<WorkerStartIntent> {
+export function workerStartIntent(input: { currentState: TaskState; riskLevel: RiskLevel; taskId: string; runId: string; worker: WorkerKind; model: string; promptHash: string | null; branch: string }): Intent<WorkerStartIntent> {
   if (!input.promptHash || !/^[0-9a-f]{64}$/.test(input.promptHash)) {
-    return { ok: false, reason: "a valid promptHash is required to record a run" };
+    return {
+      ok: false,
+      reason: "a valid promptHash is required to record a run",
+    };
   }
-  const check = validateTransition(input.currentState, "running", { riskLevel: input.riskLevel });
+  const check = validateTransition(input.currentState, "running", {
+    riskLevel: input.riskLevel,
+  });
   if (!check.ok) return { ok: false, reason: check.reason };
   return {
     ok: true,
-    taskRun: { id: input.runId, taskId: input.taskId, worker: "claude", model: input.model, promptHash: input.promptHash },
+    taskRun: {
+      id: input.runId,
+      taskId: input.taskId,
+      worker: input.worker,
+      model: input.model,
+      promptHash: input.promptHash,
+    },
     transition: "running",
     audit: {
       taskId: input.taskId,
@@ -44,7 +47,12 @@ export function workerStartIntent(input: {
       event: "worker_started",
       fromState: input.currentState,
       toState: "running",
-      metadata: { runId: input.runId, worker: "claude", branch: input.branch, riskLevel: input.riskLevel },
+      metadata: {
+        runId: input.runId,
+        worker: input.worker,
+        branch: input.branch,
+        riskLevel: input.riskLevel,
+      },
     },
   };
 }
@@ -68,18 +76,14 @@ export interface WorkerFinishIntent {
   audit: Omit<NewAuditEvent, "id">;
 }
 
-export function workerFinishIntent(input: {
-  currentState: TaskState;
-  riskLevel: RiskLevel;
-  taskId: string;
-  runId: string;
-  result: WorkerResult;
-  endedAt: IsoTimestamp;
-}): Intent<WorkerFinishIntent> {
+export function workerFinishIntent(input: { currentState: TaskState; riskLevel: RiskLevel; taskId: string; runId: string; result: WorkerResult; endedAt: IsoTimestamp }): Intent<WorkerFinishIntent> {
   const { result } = input;
   // Fail closed: a worker-supplied PR number is never trusted.
   if ((result.prNumber as unknown) !== null) {
-    return { ok: false, reason: "worker results cannot carry a PR number; PRs come only from the GitHub layer" };
+    return {
+      ok: false,
+      reason: "worker results cannot carry a PR number; PRs come only from the GitHub layer",
+    };
   }
   const exitStatus: RunExitStatus = result.status;
   let to: TaskState | null;
@@ -92,7 +96,9 @@ export function workerFinishIntent(input: {
   const effectiveRisk = escalate ? observed : input.riskLevel;
 
   if (to !== null) {
-    const check = validateTransition(input.currentState, to, { riskLevel: effectiveRisk });
+    const check = validateTransition(input.currentState, to, {
+      riskLevel: effectiveRisk,
+    });
     if (!check.ok) return { ok: false, reason: check.reason };
   }
 
@@ -115,7 +121,12 @@ export function workerFinishIntent(input: {
 
   return {
     ok: true,
-    taskRunPatch: { endedAt: input.endedAt, exitStatus, headSha: result.headSha, summary: result.summary },
+    taskRunPatch: {
+      endedAt: input.endedAt,
+      exitStatus,
+      headSha: result.headSha,
+      summary: result.summary,
+    },
     taskRiskUpdate: escalate ? { riskLevel: observed } : null,
     transition: to,
     audit: {

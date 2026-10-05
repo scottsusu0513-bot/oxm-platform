@@ -67,18 +67,7 @@ export interface PriorityAssessment {
 // ---------------------------------------------------------------------------
 // Orchestration status / outcomes (separate from TaskState)
 
-export const ORCHESTRATION_STATUSES = [
-  "queued",
-  "running",
-  "waiting_dependency",
-  "waiting_workspace",
-  "waiting_branch_conflict",
-  "repair_requested",
-  "qa_pending",
-  "needs_human_approval",
-  "accepted",
-  "blocked",
-] as const;
+export const ORCHESTRATION_STATUSES = ["queued", "running", "waiting_dependency", "waiting_workspace", "waiting_branch_conflict", "repair_requested", "qa_pending", "needs_human_approval", "accepted", "blocked"] as const;
 export type OrchestrationStatus = (typeof ORCHESTRATION_STATUSES)[number];
 
 export const TERMINAL_ORCHESTRATION_STATUSES: readonly OrchestrationStatus[] = ["accepted", "blocked"];
@@ -89,15 +78,7 @@ export type BranchPlanState = (typeof BRANCH_PLAN_STATES)[number];
 // ---------------------------------------------------------------------------
 // Scheduler decisions
 
-export const SCHEDULE_ACTIONS = [
-  "dispatch",
-  "keep_queued",
-  "wait_dependency",
-  "wait_branch_conflict",
-  "wait_workspace",
-  "blocked",
-  "completed",
-] as const;
+export const SCHEDULE_ACTIONS = ["dispatch", "keep_queued", "wait_dependency", "wait_branch_conflict", "wait_workspace", "blocked", "completed"] as const;
 export type ScheduleAction = (typeof SCHEDULE_ACTIONS)[number];
 
 export interface ScheduleDecision {
@@ -146,19 +127,7 @@ export interface SchedulerInput {
 // Capabilities / budget
 
 /** Capabilities the loop may activate. Deterministic modules are not LLM calls. */
-export const CAPABILITIES = [
-  "scheduler",
-  "dependency_resolver",
-  "branch_planner",
-  "workspace_lease",
-  "worker",
-  "validator",
-  "repair_loop",
-  "github_write",
-  "github_qa",
-  "human_approval",
-  "replan",
-] as const;
+export const CAPABILITIES = ["scheduler", "dependency_resolver", "branch_planner", "workspace_lease", "worker", "validator", "repair_loop", "github_write", "github_qa", "human_approval", "replan"] as const;
 export type Capability = (typeof CAPABILITIES)[number];
 
 /**
@@ -166,24 +135,10 @@ export type Capability = (typeof CAPABILITIES)[number];
  * no code path in the loop that can add them. Listed so tests and metadata
  * can prove their absence.
  */
-export const OPTIONAL_CAPABILITIES = [
-  "history_lookup",
-  "deep_review",
-  "second_reviewer",
-  "architecture_analysis",
-  "source_inspection",
-  "extra_llm_call",
-] as const;
+export const OPTIONAL_CAPABILITIES = ["history_lookup", "deep_review", "second_reviewer", "architecture_analysis", "source_inspection", "extra_llm_call"] as const;
 export type OptionalCapability = (typeof OPTIONAL_CAPABILITIES)[number];
 
-export const ESCALATION_ACTIONS = [
-  "return_to_worker",
-  "replan_branch",
-  "wait",
-  "block",
-  "request_human_approval",
-  "future_deep_review_candidate",
-] as const;
+export const ESCALATION_ACTIONS = ["return_to_worker", "replan_branch", "wait", "block", "request_human_approval", "future_deep_review_candidate"] as const;
 export type EscalationAction = (typeof ESCALATION_ACTIONS)[number];
 
 export interface EscalationRecord {
@@ -291,7 +246,7 @@ export interface TrustedRunRecord {
 }
 
 export interface WorkerPort {
-  /** Starts exactly one run. Only Claude is executable in this phase. */
+  /** Starts exactly one run through the adapter registered for the selected kind. */
   start(kind: WorkerKind, contract: WorkerTaskContract, approval?: Approval | null): WorkerHandle;
 }
 

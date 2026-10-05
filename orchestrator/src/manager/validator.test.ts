@@ -168,6 +168,9 @@ describe("evidence validator", () => {
     expect(w("timeout", "timeout")).toBe("needs_repair");
     expect(w("failure", "scope_violation")).toBe("blocked");
     expect(w("failure", "dirty_worktree")).toBe("blocked");
+    expect(w("failure", "runtime_unavailable")).toBe("blocked");
+    expect(w("failure", "runtime_misconfigured")).toBe("blocked");
+    expect(w("failure", "policy_error")).toBe("blocked");
     expect(w("failure", null)).toBe("blocked");
     expect(w("cancelled", "cancelled")).toBe("blocked");
     expect(w("success", "worker_failure")).toBe("blocked");

@@ -8,7 +8,10 @@ describe("Manager Loop persistence and resume", () => {
   it("stores a sanitized checkpoint in the existing audit repository and reloads it", () => {
     const store = createMemoryStore(() => "2026-10-04T12:00:00.000Z");
     let id = 0;
-    const repository = createAuditCheckpointRepository({ audit: store.audit, nextId: () => `checkpoint-${++id}` });
+    const repository = createAuditCheckpointRepository({
+      audit: store.audit,
+      nextId: () => `checkpoint-${++id}`,
+    });
     repository.save({ version: 1, sequence: 0, tasks: [] });
     expect(repository.load()).toEqual({ version: 1, sequence: 0, tasks: [] });
     expect(store.audit.list({ taskId: "scheduler" })).toHaveLength(1);
@@ -17,7 +20,10 @@ describe("Manager Loop persistence and resume", () => {
   it("reloads a completed worker/push/PR stage without repeating worker, push, or PR creation", async () => {
     const store = createMemoryStore(() => "2026-10-04T12:00:00.000Z");
     let checkpointId = 0;
-    const persistence = createAuditCheckpointRepository({ audit: store.audit, nextId: () => `resume-checkpoint-${++checkpointId}` });
+    const persistence = createAuditCheckpointRepository({
+      audit: store.audit,
+      nextId: () => `resume-checkpoint-${++checkpointId}`,
+    });
     const sim = createSimulation({ persistence });
     await sim.create(fakeIntake({ taskId: "resume1" }, { dependsOn: [] }));
     const before = sim.loop.task("resume1")!;
@@ -58,6 +64,34 @@ describe("Manager Loop persistence and resume", () => {
     expect(sim.remote.calls.filter((c) => c.startsWith("CREATE pr"))).toHaveLength(prs);
   });
 
+  it("resume retains a Codex assignment and never re-routes or repeats the worker", async () => {
+    const store = createMemoryStore(() => "2026-10-04T12:00:00.000Z");
+    let checkpointId = 0;
+    const persistence = createAuditCheckpointRepository({
+      audit: store.audit,
+      nextId: () => `codex-checkpoint-${++checkpointId}`,
+    });
+    const sim = createSimulation({ persistence });
+    await sim.create(fakeIntake({ taskId: "resume-ui", category: "visual_polish" }));
+    expect(persistence.load()?.tasks[0]).toMatchObject({
+      worker: "codex",
+      workerExecutions: 1,
+      status: "qa_pending",
+    });
+    const calls = sim.workerCalls.length;
+    const lease = sim.ports.leases.current("ws-resume-ui");
+    expect(lease).not.toBeNull();
+    sim.ports.leases.release(lease);
+    const resumed = createManagerLoop(sim.ports);
+    await resumed.resume();
+    await resumed.settle();
+    expect(resumed.task("resume-ui")).toMatchObject({
+      worker: "codex",
+      status: "qa_pending",
+    });
+    expect(sim.workerCalls).toHaveLength(calls);
+  });
+
   it("fails closed before dispatch when checkpoint persistence fails", async () => {
     const sim = createSimulation({
       persistence: {
@@ -68,7 +102,10 @@ describe("Manager Loop persistence and resume", () => {
       },
     });
     await sim.create(fakeIntake({ taskId: "storefail" }));
-    expect(sim.loop.task("storefail")!).toMatchObject({ status: "blocked", state: "failed" });
+    expect(sim.loop.task("storefail")!).toMatchObject({
+      status: "blocked",
+      state: "failed",
+    });
     expect(sim.workerCalls).toEqual([]);
   });
 

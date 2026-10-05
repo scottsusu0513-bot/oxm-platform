@@ -1,0 +1,55 @@
+# Codex worker command policy. The adapter verifies this file before starting.
+prefix_rule(
+    pattern = [["git", "/usr/bin/git", "/bin/git"], ["switch", "checkout", "branch", "merge", "rebase", "reset", "push", "config", "remote"]],
+    decision = "forbidden",
+    justification = "The orchestrator owns branches, history, remotes, and publication; use read-only Git inspection commands instead.",
+    match = [
+        "git switch other",
+        "git checkout other",
+        "git branch new-branch",
+        "git merge other",
+        "git rebase main",
+        "git reset --hard HEAD~1",
+        "git push --force origin HEAD",
+        "git config user.name worker",
+        "git remote set-url origin example.invalid/repo",
+        "/usr/bin/git push origin HEAD",
+    ],
+    not_match = [
+        "git status --short",
+        "git diff --stat",
+        "git log -1",
+        "git rev-parse HEAD",
+        "git add source.ts",
+        "git commit -m local",
+    ],
+)
+
+prefix_rule(
+    pattern = ["gh"],
+    decision = "forbidden",
+    justification = "GitHub reads and writes are owned by trusted orchestrator integrations.",
+    match = ["gh pr merge 12", "gh api --method POST repos/o/r/issues"],
+)
+
+prefix_rule(
+    pattern = [["pnpm", "npm", "yarn", "bun"], ["deploy", "db:push", "migrate"]],
+    decision = "forbidden",
+    justification = "Deployment and database mutation commands are not worker capabilities.",
+    match = ["pnpm deploy", "pnpm db:push", "npm migrate"],
+    not_match = ["pnpm test", "pnpm check", "pnpm vitest run worker.test.ts"],
+)
+
+prefix_rule(
+    pattern = [["vercel", "netlify", "flyctl", "railway", "kubectl", "helm", "terraform"]],
+    decision = "forbidden",
+    justification = "Infrastructure and deployment CLIs are not worker capabilities.",
+    match = ["vercel --prod", "kubectl apply -f deployment.yaml", "terraform apply"],
+)
+
+prefix_rule(
+    pattern = [["drizzle-kit", "prisma"], ["migrate", "push", "deploy"]],
+    decision = "forbidden",
+    justification = "Database migration and write commands are not worker capabilities.",
+    match = ["drizzle-kit migrate", "prisma migrate deploy", "prisma push"],
+)

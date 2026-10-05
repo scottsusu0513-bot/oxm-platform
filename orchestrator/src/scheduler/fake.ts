@@ -32,7 +32,7 @@ export const FAKE_REPO = { owner: "oxm", repo: "oxm-platform" } as const;
 export const sha = (n: number) => n.toString(16).padStart(40, "0");
 export const MAIN_SHA = sha(0xa0000);
 
-export type WorkerScript = "success" | "failure" | "validation_failed" | "scope_violation" | "risk_red";
+export type WorkerScript = "success" | "failure" | "head_mismatch" | "malformed_output" | "validation_failed" | "scope_violation" | "risk_red";
 export type CiScript = "pass" | "fail" | "pending";
 
 export interface SimulationOptions {
@@ -57,6 +57,8 @@ export interface WorkerCall {
   branch: string;
   expectedHeadSha: string | null;
   repair: boolean;
+  requiredValidations: readonly string[];
+  storedRiskLevel: string | null;
 }
 
 export interface Simulation {
@@ -143,9 +145,41 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
       case "success":
         return { ...base, headSha: commit() };
       case "risk_red":
-        return { ...base, headSha: commit(), riskObserved: { level: "red", notes: ["observed red"] } };
+        return {
+          ...base,
+          headSha: commit(),
+          riskObserved: { level: "red", notes: ["observed red"] },
+        };
       case "failure":
-        return { ...base, status: "failure", filesChanged: [], testsRun: [], checkResult: "not_run", headSha: start, errorType: "worker_failure" };
+        return {
+          ...base,
+          status: "failure",
+          filesChanged: [],
+          testsRun: [],
+          checkResult: "not_run",
+          headSha: start,
+          errorType: "worker_failure",
+        };
+      case "malformed_output":
+        return {
+          ...base,
+          status: "failure",
+          filesChanged: [],
+          testsRun: [],
+          checkResult: "not_run",
+          headSha: start,
+          errorType: "malformed_output",
+        };
+      case "head_mismatch":
+        return {
+          ...base,
+          status: "failure",
+          filesChanged: [],
+          testsRun: [],
+          checkResult: "not_run",
+          headSha: sha(0xdead),
+          errorType: "result_mismatch",
+        };
       case "validation_failed":
         return {
           ...base,
@@ -159,7 +193,13 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
           errorType: "validation_incomplete",
         };
       case "scope_violation":
-        return { ...base, status: "failure", headSha: commit(), filesChanged: [...files, "server/unrelated.ts"], errorType: "scope_violation" };
+        return {
+          ...base,
+          status: "failure",
+          headSha: commit(),
+          filesChanged: [...files, "server/unrelated.ts"],
+          errorType: "scope_violation",
+        };
     }
   };
 
@@ -177,8 +217,18 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
     },
     workspace: {
       async prepare({ plan, lease }) {
-        if (!isPlannerApproved(plan)) return { ok: false, error: "policy_violation", reason: "plan not approved" };
-        if (!leases.holds(lease) || (lease as WorkspaceLease).taskId !== plan.taskId) return { ok: false, error: "lease_conflict", reason: "lease not held" };
+        if (!isPlannerApproved(plan))
+          return {
+            ok: false,
+            error: "policy_violation",
+            reason: "plan not approved",
+          };
+        if (!leases.holds(lease) || (lease as WorkspaceLease).taskId !== plan.taskId)
+          return {
+            ok: false,
+            error: "lease_conflict",
+            reason: "lease not held",
+          };
         const headSha = plan.decision === "reuse_branch" ? plan.headSha : plan.baseSha;
         heads.set(plan.taskId, { branch: plan.branch, headSha });
         const prepared: PreparedWorkspace = Object.freeze({
@@ -195,7 +245,10 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
         const p = prepared as PreparedWorkspace;
         if (!leases.holds(lease)) return { ok: false, reason: "lease not held" };
         if (contract.taskId !== p.taskId || contract.branch !== p.branch) return { ok: false, reason: "contract not bound to prepared branch" };
-        return { ok: true, contract: { ...contract, expectedHeadSha: p.headSha } };
+        return {
+          ok: true,
+          contract: { ...contract, expectedHeadSha: p.headSha },
+        };
       },
       async head(lease) {
         return heads.get(lease.taskId) ?? null;
@@ -212,6 +265,8 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
           branch: contract.branch,
           expectedHeadSha: contract.expectedHeadSha ?? null,
           repair: contract.objective.includes("Repair attempt"),
+          requiredValidations: [...contract.requiredValidations],
+          storedRiskLevel: contract.storedRiskLevel ?? null,
         });
         const script = opts.worker?.[contract.taskId] ?? ["success"];
         const outcome = script[Math.min(n - 1, script.length - 1)];
@@ -220,7 +275,12 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
           if (opts.holdWorkers) held.set(contract.taskId, finish);
           else finish();
         });
-        return { runId: contract.runId, promptHash: "f".repeat(64), result, cancel() {} };
+        return {
+          runId: contract.runId,
+          promptHash: "f".repeat(64),
+          result,
+          cancel() {},
+        };
       },
     },
     evidence: {
@@ -228,7 +288,13 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
         const outcomeOf = (needle: string) => result.testsRun.find((r) => r.command.includes(needle))?.outcome ?? "not_run";
         const validations = contract.requiredValidations.map((name) => {
           const o = outcomeOf(name === "tests" ? "test" : "check");
-          return { name, requested: true, executed: o !== "not_run", status: o === "passed" ? ("passed" as const) : o === "failed" ? ("failed" as const) : ("missing" as const), trusted: true };
+          return {
+            name,
+            requested: true,
+            executed: o !== "not_run",
+            status: o === "passed" ? ("passed" as const) : o === "failed" ? ("failed" as const) : ("missing" as const),
+            trusted: true,
+          };
         });
         const testsPassed = validations.find((v) => v.name === "tests")?.status === "passed";
         return {
@@ -282,7 +348,14 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
           );
         }
         return evaluateQa({
-          pr: { number: prNumber, state: "open", draft: Boolean(raw.draft), headSha, headRef: branch, baseRef: raw.base.ref },
+          pr: {
+            number: prNumber,
+            state: "open",
+            draft: Boolean(raw.draft),
+            headSha,
+            headRef: branch,
+            baseRef: raw.base.ref,
+          },
           required: DEFAULT_REQUIRED_CHECKS,
           checks,
         });
@@ -309,9 +382,18 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
       requiredValidations: task.requiredValidations,
       branch,
     };
-    const defaults = phase === "pre_execution"
-      ? { kind: "start" as ApprovalKind, requestedAction: APPROVAL_ACTIONS.pre_execution, bindingShaOrActionId: redStartBindingId(contract) }
-      : { kind: "merge" as ApprovalKind, requestedAction: APPROVAL_ACTIONS.post_qa, bindingShaOrActionId: snap.headSha as string };
+    const defaults =
+      phase === "pre_execution"
+        ? {
+            kind: "start" as ApprovalKind,
+            requestedAction: APPROVAL_ACTIONS.pre_execution,
+            bindingShaOrActionId: redStartBindingId(contract),
+          }
+        : {
+            kind: "merge" as ApprovalKind,
+            requestedAction: APPROVAL_ACTIONS.post_qa,
+            bindingShaOrActionId: snap.headSha as string,
+          };
     const approval = approvals.create({
       id: `approval-${taskId}-${phase}-${approvals.listByTask(taskId).length + 1}`,
       taskId,
@@ -321,7 +403,11 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
     });
     return status === "expired"
       ? approvals.expire(approval.id)
-      : approvals.decide(approval.id, { status, decidedBy: "human-1", channel: "test" });
+      : approvals.decide(approval.id, {
+          status,
+          decidedBy: "human-1",
+          channel: "test",
+        });
   };
   const approve: Simulation["approve"] = (taskId, phase, overrides) => decideApproval(taskId, phase, "approved", overrides);
 
@@ -363,6 +449,7 @@ export interface FakeIntakeInput {
   expectedPaths?: string[];
   workspaceId?: string;
   availability?: WorkerAvailability;
+  allowClaudeToCodexFallback?: boolean;
 }
 
 /** A classified, routed intake. Classification and routing use the real domain policy. */
@@ -370,8 +457,15 @@ export function fakeIntake(input: FakeIntakeInput, overrides: Partial<TaskIntake
   const category = input.category ?? "bug_fix";
   const actions = input.actions ?? [{ kind: "code_edit" }, { kind: "run_tests" }];
   const expectedPaths = input.expectedPaths ?? [`server/${input.taskId}/`];
-  const classification = classifyTask({ id: input.taskId, category, actions, changedPaths: expectedPaths });
-  const routing = routeTask(classification, input.availability ?? { claude: "available", codex: "available" });
+  const classification = classifyTask({
+    id: input.taskId,
+    category,
+    actions,
+    changedPaths: expectedPaths,
+  });
+  const routing = routeTask(classification, input.availability ?? { claude: "available", codex: "available" }, {
+    allowClaudeToCodexFallback: input.allowClaudeToCodexFallback,
+  });
   return {
     taskId: input.taskId,
     title: input.title ?? `Fix ${input.taskId}`,

@@ -10,26 +10,56 @@ const cls = (category: TaskCategory): ClassificationResult => ({
 const both: WorkerAvailability = { claude: "available", codex: "available" };
 
 describe("routing", () => {
-  it.each<TaskCategory>(["backend", "business_logic", "database", "auth", "security", "bug_fix", "architecture", "general_coding"])(
-    "%s → claude",
-    (c) => {
-      expect(primaryWorkerFor(c)).toBe("claude");
-      expect(routeTask(cls(c), both)).toMatchObject({ worker: "claude", isFallback: false });
-    },
-  );
+  it.each<TaskCategory>(["backend", "business_logic", "database", "auth", "security", "bug_fix", "architecture", "general_coding"])("%s → claude", (c) => {
+    expect(primaryWorkerFor(c)).toBe("claude");
+    expect(routeTask(cls(c), both)).toMatchObject({
+      worker: "claude",
+      isFallback: false,
+    });
+  });
 
   it.each<TaskCategory>(["ui", "css", "layout", "visual_polish", "frontend_styling"])("%s → codex", (c) => {
     expect(primaryWorkerFor(c)).toBe("codex");
-    expect(routeTask(cls(c), both)).toMatchObject({ worker: "codex", isFallback: false });
+    expect(routeTask(cls(c), both)).toMatchObject({
+      worker: "codex",
+      isFallback: false,
+    });
   });
 
-  it.each(["unavailable", "quota_limited"] as const)("claude %s → codex fallback for coding", (status) => {
-    const d = routeTask(cls("backend"), { claude: status, codex: "available" });
-    expect(d).toMatchObject({ worker: "codex", primary: "claude", isFallback: true });
+  it.each(["unavailable", "quota_exhausted", "misconfigured"] as const)("claude %s → codex fallback for coding", (status) => {
+    const d = routeTask(cls("backend"), {
+      claude: status,
+      codex: "available",
+    });
+    expect(d).toMatchObject({
+      worker: "codex",
+      primary: "claude",
+      isFallback: true,
+    });
   });
 
   it("no worker when claude and codex both unavailable", () => {
-    expect(routeTask(cls("database"), { claude: "quota_limited", codex: "unavailable" })).toMatchObject({ worker: null });
+    expect(
+      routeTask(cls("database"), {
+        claude: "quota_exhausted",
+        codex: "unavailable",
+      }),
+    ).toMatchObject({ worker: null, reasonCode: "worker_unavailable" });
+  });
+
+  it("does not fallback when policy forbids it", () => {
+    expect(routeTask(cls("backend"), { claude: "unavailable", codex: "available" }, { allowClaudeToCodexFallback: false })).toMatchObject({
+      worker: null,
+      reasonCode: "fallback_forbidden",
+    });
+  });
+
+  it("does not silently substitute when Codex is unavailable", () => {
+    expect(routeTask(cls("ui"), { claude: "available", codex: "misconfigured" })).toMatchObject({
+      worker: null,
+      primary: "codex",
+      reasonCode: "worker_unavailable",
+    });
   });
 
   it("codex-primary tasks do not fall back to claude", () => {
