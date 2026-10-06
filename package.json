@@ -20,6 +20,7 @@
     "check": "tsc --noEmit",
     "format": "prettier --write .",
     "test": "vitest run",
+    "orchestrator:e2e-smoke": "tsx scripts/orchestrator-e2e-smoke.ts",
     "db:push": "drizzle-kit migrate",
     "cleanup:expired-chat-pdfs": "node dist/jobs/cleanupExpiredChatPdfAttachments.js",
     "reconcile:storage": "node dist/jobs/reconcileStorageObjects.js",

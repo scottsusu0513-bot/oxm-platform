@@ -78,6 +78,20 @@ export function createFakeRemote(seed: FakeRemoteSeed): FakeRemote {
       refs.set(branch, localSha);
     },
     async createPullRequest(repo, input: NewPullRequestInput) {
+      const existing = Array.from(prs.values()).find(
+        (pr) =>
+          pr.state === "open" &&
+          pr.merged !== true &&
+          pr.head.ref === input.head &&
+          pr.base.ref === input.base,
+      );
+      if (existing) {
+        calls.push(`REUSE pr ${key(repo)}#${existing.number}`);
+        return out({
+          ...existing,
+          head: { ...existing.head, sha: refs.get(input.head) ?? existing.head.sha },
+        });
+      }
       calls.push(`CREATE pr ${key(repo)} ${input.head}->${input.base} draft=${input.draft}`);
       guard("createPullRequest");
       const raw: RawWritePullRequest = {

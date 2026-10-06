@@ -273,7 +273,17 @@ export function directWorkerReport(stdout: string): ParseResult<WorkerReport> {
 
 export function missingValidations(required: readonly RequiredValidation[], report: Pick<WorkerReport, "testsRun" | "checkResult">): RequiredValidation[] {
   return required.filter((v) =>
-    v === "typecheck" ? report.checkResult !== "passed" : report.testsRun.length === 0 || !report.testsRun.every((t) => t.outcome === "passed"),
+    v === "typecheck"
+      ? report.checkResult !== "passed"
+      : v === "smoke"
+        ? !report.testsRun.some(
+            (t) =>
+              t.command ===
+                "pnpm vitest run orchestrator/src/e2e/fixture.test.ts" &&
+              t.outcome === "passed",
+          )
+        : report.testsRun.length === 0 ||
+          !report.testsRun.every((t) => t.outcome === "passed"),
   );
 }
 

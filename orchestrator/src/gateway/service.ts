@@ -122,7 +122,9 @@ function submitRequest(value: unknown): SubmitTaskRequest {
     requiredValidations !== undefined &&
     (!Array.isArray(requiredValidations) ||
       requiredValidations.length > 2 ||
-      requiredValidations.some((v) => v !== "tests" && v !== "typecheck"))
+      requiredValidations.some(
+        (v) => v !== "tests" && v !== "typecheck" && v !== "smoke",
+      ))
   )
     invalid("requiredValidations is malformed");
   return {

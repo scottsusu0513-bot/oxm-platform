@@ -34,7 +34,7 @@ export interface Task {
   fallbackUsed: boolean;
   priority: "critical" | "high" | "normal" | "low" | null;
   acceptanceCriteria: { id: string; text: string }[];
-  requiredValidations: ("tests" | "typecheck")[];
+  requiredValidations: ("tests" | "typecheck" | "smoke")[];
   expectedScope: string[];
   expectedScopeState: "provided" | "derived" | "unresolved";
   classificationPath: "deterministic" | "llm_fallback" | null;

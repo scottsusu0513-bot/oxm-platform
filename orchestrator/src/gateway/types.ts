@@ -49,7 +49,7 @@ export interface SubmitTaskRequest {
   productAreaHint?: string;
   workerPreference?: WorkerKind;
   acceptanceCriteria?: readonly string[];
-  requiredValidations?: readonly ("tests" | "typecheck")[];
+  requiredValidations?: readonly ("tests" | "typecheck" | "smoke")[];
 }
 
 export interface TaskRequest {

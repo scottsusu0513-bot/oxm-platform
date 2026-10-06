@@ -29,6 +29,7 @@ export const FORBIDDEN_OPERATIONS = [
 export const VALIDATION_COMMANDS: Record<RequiredValidation, string> = {
   tests: "pnpm test",
   typecheck: "pnpm check",
+  smoke: "pnpm vitest run orchestrator/src/e2e/fixture.test.ts",
 };
 
 /** Claude Code tool permissions. Defense in depth — the adapter re-verifies branch/HEAD afterwards. */
