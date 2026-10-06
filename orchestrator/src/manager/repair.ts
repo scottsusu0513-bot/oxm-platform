@@ -1,7 +1,7 @@
 import type { WorkerTaskContract } from "../workers/types";
 import { workerEffortForAttempt } from "./budget";
 import type { ManagerEvidence, RepairCounters, RepairRequest } from "./types";
-import { validateEvidence } from "./validator";
+import { isInScope, validateEvidence } from "./validator";
 
 /**
  * Structured repair requests: the Manager says WHAT failed, never HOW to fix
@@ -60,6 +60,7 @@ export function buildRepairRequest(evidence: ManagerEvidence): Intent<{ request:
       unverifiedAcceptanceCriteria: names("acceptance:", ["acceptance_unverified"]),
       workerErrorType: workerFinding ? e.worker.errorType : null,
       allowedScope: [...e.scope.allowedScope],
+      allowedDirtyPaths: Array.from(new Set(e.scope.changedPaths)).sort(),
       rerunValidations: Array.from(new Set(e.validations.filter((x) => x.requested).map((x) => x.name))).sort(),
       failureSummaries: v.findings.filter((f) => f.summary).map((f) => ({ evidenceId: f.evidenceId, summary: f.summary as string })),
       instructions: REPAIR_INSTRUCTIONS,
@@ -111,8 +112,10 @@ export function repairWorkerContract(base: WorkerTaskContract, request: RepairRe
   if (base.taskId !== request.taskId) return { ok: false, reason: "repair request belongs to another task" };
   if (base.branch !== request.branch) return { ok: false, reason: "repair must stay on the assigned task branch" };
   if (!sameSet(base.allowedScope, request.allowedScope)) return { ok: false, reason: "repair cannot change the task scope" };
+  if (!request.allowedDirtyPaths.every((path) => isInScope(path, base.allowedScope)))
+    return { ok: false, reason: "repair dirty paths must remain within the task scope" };
   if (runId === base.runId) return { ok: false, reason: "repair needs a new runId" };
   const objective = `${base.objective}\n\n${renderRepairBlock(request)}`;
   if (objective.length > MAX_OBJECTIVE) return { ok: false, reason: "repair objective exceeds contract limit" };
-  return { ok: true, contract: { ...base, runId, expectedHeadSha: request.expectedHeadSha, objective } };
+  return { ok: true, contract: { ...base, runId, expectedHeadSha: request.expectedHeadSha, objective, allowedDirtyPaths: [...request.allowedDirtyPaths] } };
 }

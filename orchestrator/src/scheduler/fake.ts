@@ -36,7 +36,7 @@ export const FAKE_REPO = { owner: "oxm", repo: "oxm-platform" } as const;
 export const sha = (n: number) => n.toString(16).padStart(40, "0");
 export const MAIN_SHA = sha(0xa0000);
 
-export type WorkerScript = "success" | "failure" | "policy_error" | "head_mismatch" | "malformed_output" | "validation_failed" | "scope_violation" | "risk_red";
+export type WorkerScript = "success" | "failure" | "policy_error" | "head_mismatch" | "malformed_output" | "validation_failed" | "validation_failed_dirty" | "scope_violation" | "risk_red";
 export type CiScript = "pass" | "fail" | "pending";
 
 export interface SimulationOptions {
@@ -67,6 +67,7 @@ export interface WorkerCall {
   repair: boolean;
   requiredValidations: readonly string[];
   storedRiskLevel: string | null;
+  allowedDirtyPaths: readonly string[];
 }
 
 export interface Simulation {
@@ -219,6 +220,15 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
           checkResult: "failed",
           errorType: "validation_incomplete",
         };
+      case "validation_failed_dirty":
+        return {
+          ...base,
+          status: "failure",
+          headSha: start,
+          testsRun: [{ command: "pnpm vitest run orchestrator/src/e2e/fixture.test.ts", outcome: "failed" }],
+          checkResult: "not_run",
+          errorType: "validation_incomplete",
+        };
       case "scope_violation":
         return {
           ...base,
@@ -294,6 +304,7 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
           repair: contract.objective.includes("Repair attempt"),
           requiredValidations: [...contract.requiredValidations],
           storedRiskLevel: contract.storedRiskLevel ?? null,
+          allowedDirtyPaths: [...(contract.allowedDirtyPaths ?? [])],
         });
         const script = opts.worker?.[contract.taskId] ?? ["success"];
         const outcome = script[Math.min(n - 1, script.length - 1)];

@@ -71,7 +71,7 @@ const CI_OUTCOME_RANK: Record<CheckOutcome, number> = { success: 0, pending: 1, 
 
 const REPLAN_TRIGGERS: readonly EscalationTrigger[] = ["stale_base", "branch_conflict"];
 
-function isInScope(path: string, scope: readonly string[]): boolean {
+export function isInScope(path: string, scope: readonly string[]): boolean {
   return scope.some((entry) => (entry.endsWith("/") ? path.startsWith(entry) : path === entry));
 }
 

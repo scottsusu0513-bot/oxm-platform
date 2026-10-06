@@ -102,6 +102,8 @@ export function validateContract(c: WorkerTaskContract): string[] {
   }
   if (c.allowedDirtyPaths && !c.allowedDirtyPaths.every((p) => typeof p === "string" && isSafeRepoPath(p))) {
     errors.push("invalid allowedDirtyPaths");
+  } else if (c.allowedDirtyPaths && !c.allowedDirtyPaths.every((p) => isPathInScope(p, c.allowedScope))) {
+    errors.push("allowedDirtyPaths must be within allowedScope");
   }
   if (c.changedPaths && !c.changedPaths.every((p) => typeof p === "string")) errors.push("invalid changedPaths");
   if (c.expectedHeadSha !== undefined && !/^[0-9a-f]{40}$/.test(c.expectedHeadSha)) errors.push("invalid expectedHeadSha");
