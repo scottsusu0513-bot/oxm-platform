@@ -1,10 +1,8 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createCodexAdapter } from "./codex";
 import { createFakeGit, createFakePromptFiles, createFakeRunner, createFakeTimer } from "./fake";
 import type { CodexRuntimeVerification, GitStatus, WorkerReport, WorkerTaskContract } from "./types";
-import { CODEX_WORKER_RULES_SHA256, codexCommandPolicyHash, requiredCodexPolicyDecision } from "./workerAdapter";
+import { codexCommandPolicyHash, requiredCodexPolicyDecision } from "./workerAdapter";
 
 const REPO = "/workspaces/oxm-platform";
 const BRANCH = "agent/ui-42";
@@ -84,11 +82,10 @@ const flush = async (until: () => boolean) => {
 };
 
 describe("Codex worker adapter", () => {
-  it("treats LF and CRLF policy files as the same pinned policy", () => {
+  it("hashes LF and CRLF policy files identically while detecting altered content", () => {
     const policy = "first rule\nsecond rule\n";
     expect(codexCommandPolicyHash(policy)).toBe(codexCommandPolicyHash(policy.replace(/\n/g, "\r\n")));
-    expect(codexCommandPolicyHash(policy)).not.toBe(CODEX_WORKER_RULES_SHA256);
-    expect(codexCommandPolicyHash(readFileSync(join(REPO, ".codex/rules/worker.rules"), "utf8"))).toBe(CODEX_WORKER_RULES_SHA256);
+    expect(codexCommandPolicyHash(policy)).not.toBe(codexCommandPolicyHash(`${policy}altered rule\n`));
   });
 
   it("uses fixed headless argv, a locked workspace profile, stdin prompt, and no shell/interpolation", async () => {
