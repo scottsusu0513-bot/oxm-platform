@@ -52,7 +52,7 @@ import type {
   WorkerTaskContract,
 } from "../workers/types";
 import { createLocalCodexAdapter } from "../workers/workerAdapter";
-import { blockedSmokeReport, runSmokeHarness, smokeTaskDefinition } from "./harness";
+import { blockedSmokeReport, runSmokeHarness, smokeTaskDefinition, smokeTaskId } from "./harness";
 import type {
   LiveSafetyResult,
   LiveSmokeConfig,
@@ -493,7 +493,7 @@ export async function createLiveSmokeEnvironment(
     intakeRecords: createInMemoryIntakeRepository(),
     scheduler: createManagerLoopRuntimePort(loop),
     workerAvailability: () => ({ claude: "unavailable", codex: "available" }),
-    nextTaskId: () => "e2e-smoke",
+    nextTaskId: () => smokeTaskId(smokeRunId),
     nextAuditId,
     now,
   });

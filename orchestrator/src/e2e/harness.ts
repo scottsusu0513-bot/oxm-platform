@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { ManagerDecision } from "../manager/types";
 import type { TaskSnapshot } from "../scheduler/types";
 import type {
@@ -11,6 +12,24 @@ import {
   SMOKE_FIXTURE_PATH,
   SMOKE_VALIDATION_COMMAND,
 } from "./types";
+
+/**
+ * Bind remote task/branch ownership to one smoke run without putting an
+ * unbounded operator-provided value into a ref name. The readable prefix is
+ * diagnostic only; the digest keeps long or prefix-identical run ids distinct.
+ */
+export function smokeTaskId(smokeRunId: string): string {
+  const prefix =
+    smokeRunId
+      .toLowerCase()
+      .replace(/[^a-z0-9-]+/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "")
+      .slice(0, 24)
+      .replace(/-+$/g, "") || "run";
+  const digest = createHash("sha256").update(smokeRunId).digest("hex").slice(0, 12);
+  return `e2e-smoke-${prefix}-${digest}`;
+}
 
 export function smokeTaskDefinition(smokeRunId: string): SmokeTaskDefinition {
   const task: SmokeTaskDefinition = {

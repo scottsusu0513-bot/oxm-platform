@@ -213,6 +213,29 @@ describe("planBranch: reuse_branch", () => {
     expect(foreign.decision).toBe("reject");
   });
 
+  it("fails closed on a stale same-name branch owned by another task context", () => {
+    const plan = planBranch(
+      req({
+        existingBranch: {
+          name: "agent/task-t1-fix-search-filter",
+          headSha: HEAD,
+          baseSha: "9".repeat(40),
+          lineageId: "another-task",
+          prNumber: null,
+          prState: null,
+          changedPaths: ["client/src/pages/Search.tsx"],
+          workerRunning: false,
+        },
+        allowReuse: true,
+      }),
+      { active: [] },
+    );
+    expect(plan).toMatchObject({
+      decision: "reject",
+      reasons: [expect.stringMatching(/lineage mismatch/)],
+    });
+  });
+
   it.each(["merged", "closed"] as const)("rejects stale %s PR context", (prState) => {
     const plan = planBranch(req({ taskId: "t2", lineage, existingBranch: existing({ prState }), allowReuse: true }), { active: [] });
     expect(plan).toMatchObject({ decision: "reject", reasons: [expect.stringMatching(/stale/)] });
