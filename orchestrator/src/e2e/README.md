@@ -25,10 +25,17 @@ for `verify` and `full-test` on the exact head SHA. It has no merge, deploy,
 force-push, production database, branch deletion, PR close, or Codespace
 start/stop capability.
 
+Each distinct `OXM_E2E_SMOKE_RUN_ID` deterministically owns a distinct task
+branch. Always choose a new run id for a new live execution. A branch from an
+earlier run is never reset, force-pushed, or reused without the orchestrator's
+trusted lineage metadata, so repeated live runs do not require deleting older
+smoke branches first.
+
 Manual cleanup after inspection:
 
 1. Close the smoke PR without merging.
-2. Optionally delete its remote `agent/task-*` branch in GitHub.
+2. Optionally delete its remote `agent/task-*` branch in GitHub; deletion is
+   not required before another run with a new run id.
 3. Switch the local workspace back to the desired non-smoke branch (or `main`
    when it is safe to do so).
 4. Delete the local smoke branch only after confirming no work is needed.

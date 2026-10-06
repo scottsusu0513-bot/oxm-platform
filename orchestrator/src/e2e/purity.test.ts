@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import type { ProcessExit, ProcessRunner, ProcessSpec } from "../workers/types";
 import { createFakeSmokeEnvironment } from "./fakeEnvironment";
-import { runSmokeHarness, smokeTaskDefinition } from "./harness";
+import { runSmokeHarness, smokeTaskDefinition, smokeTaskId } from "./harness";
 import { checkLiveSafety } from "./liveAdapters";
 import { formatSmokeReport } from "./report";
 import type { LiveSmokeConfig } from "./types";
@@ -58,6 +58,40 @@ const config = (): LiveSmokeConfig => ({
 });
 
 describe("Phase 2C.12 smoke purity and safety", () => {
+  describe("smoke task identity", () => {
+    it("normalizes uppercase, spaces, slashes, unicode, and special characters", () => {
+      expect(smokeTaskId("  Release / RÜN ✨ -- Alpha_BETA!  ")).toBe(
+        "e2e-smoke-release-r-n-alpha-beta-a7c4c6c667ff",
+      );
+    });
+
+    it("bounds very long readable prefixes without changing the digest", () => {
+      expect(smokeTaskId("abcdefghijklmnopqrstuvwxyz0123456789")).toBe(
+        "e2e-smoke-abcdefghijklmnopqrstuvwx-011fc2994e39",
+      );
+    });
+
+    it("distinguishes raw run ids whose sanitized prefixes collide", () => {
+      const slash = smokeTaskId("same/prefix");
+      const spaces = smokeTaskId("same prefix");
+
+      expect(slash).toMatch(/^e2e-smoke-same-prefix-/);
+      expect(spaces).toMatch(/^e2e-smoke-same-prefix-/);
+      expect(slash).not.toBe(spaces);
+    });
+
+    it.each(["", "✨☃☂"])('falls back to "run" for an empty/all-invalid prefix (%j)', (runId) => {
+      expect(smokeTaskId(runId)).toMatch(/^e2e-smoke-run-[a-f0-9]{12}$/);
+    });
+
+    it("contains only conservative characters and remains bounded", () => {
+      const taskId = smokeTaskId("---THIS is/a very long ÜNTRUSTED operator value!!!");
+
+      expect(taskId).toMatch(/^[a-z0-9-]+$/);
+      expect(taskId.length).toBeLessThanOrEqual(47);
+    });
+  });
+
   it("keeps fake mode offline", async () => {
     const smokeRunId = "offline-test";
     const env = createFakeSmokeEnvironment({ smokeRunId });
@@ -120,7 +154,7 @@ describe("Phase 2C.12 smoke purity and safety", () => {
     const smokeRunId = "boundary-test";
     const env = createFakeSmokeEnvironment({ smokeRunId });
     const report = await runSmokeHarness(env, { smokeRunId, maxQaPolls: 2, waitForQa: false });
-    const snapshot = env.simulation.loop.task("e2e-smoke")!;
+    const snapshot = env.simulation.loop.task(smokeTaskId(smokeRunId))!;
     expect(snapshot.budget.activatedCapabilities).toEqual(
       expect.arrayContaining(["branch_planner", "worker", "github_write", "github_qa"]),
     );

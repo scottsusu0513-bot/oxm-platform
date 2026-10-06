@@ -22,7 +22,7 @@ import { createAgentRuntimeService } from "../intake/service";
 import { createSimulation, MAIN_SHA, type CiScript, type WorkerScript } from "../scheduler/fake";
 import { createMemoryStore } from "../store/memory";
 import type { SmokeHarnessEnvironment } from "./types";
-import { smokeTaskDefinition } from "./harness";
+import { smokeTaskDefinition, smokeTaskId } from "./harness";
 
 const NOW = "2026-10-05T12:00:00.000Z";
 const TOKEN = "internal-smoke-principal";
@@ -35,6 +35,8 @@ export interface FakeSmokeOptions {
   staleQa?: boolean;
   existingPrNumber?: number;
   maxRepairAttempts?: number;
+  /** Pre-existing legacy branch used to prove reruns never move or reuse it. */
+  legacyBranchHead?: string;
 }
 
 export function createFakeSmokeEnvironment(
@@ -43,7 +45,7 @@ export function createFakeSmokeEnvironment(
   simulation: ReturnType<typeof createSimulation>;
   networkCalls: string[];
 } {
-  const taskId = "e2e-smoke";
+  const taskId = smokeTaskId(options.smokeRunId);
   const lifecycleDecisions: LifecycleDecision[] = [];
   const fakeCodespace = createFakeCodespaceClient(
     options.lifecycleAvailable === false ? "stopped" : "available",
@@ -75,6 +77,13 @@ export function createFakeSmokeEnvironment(
         ? undefined
         : { maxRepairAttempts: options.maxRepairAttempts },
   });
+
+  if (options.legacyBranchHead) {
+    simulation.remote.refs.set(
+      taskBranchName("e2e-smoke", "chore: agent e2e smoke", "ui"),
+      options.legacyBranchHead,
+    );
+  }
 
   if (options.existingPrNumber) {
     const branch = taskBranchName(

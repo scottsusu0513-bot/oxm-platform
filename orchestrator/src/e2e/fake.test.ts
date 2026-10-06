@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { taskBranchName } from "../branches/naming";
+import { MAIN_SHA, sha } from "../scheduler/fake";
 import { createFakeSmokeEnvironment } from "./fakeEnvironment";
-import { runSmokeHarness } from "./harness";
+import { runSmokeHarness, smokeTaskId } from "./harness";
 import { SMOKE_FIXTURE_PATH } from "./types";
 
 async function run(
@@ -34,7 +36,8 @@ describe("Phase 2C.12 fake end-to-end smoke", () => {
       repairCount: 0,
       finalStatus: "accepted",
     });
-    expect(report.branch).toMatch(/^agent\/task-e2e-smoke-/);
+    expect(report.taskId).toBe(smokeTaskId("phase-2c-12-test"));
+    expect(report.branch).toMatch(/^agent\/task-e2e-smoke-phase-2c-12-test-/);
     expect(report.baseSha).toMatch(/^[0-9a-f]{40}$/);
     expect(report.headSha).toMatch(/^[0-9a-f]{40}$/);
     expect(report.validations).toEqual([
@@ -45,7 +48,7 @@ describe("Phase 2C.12 fake end-to-end smoke", () => {
       ["full-test", "success"],
     ]);
     expect(report.codespaceLifecycleDecisions.some((decision) => decision.action === "no_op")).toBe(true);
-    expect(env.simulation.loop.task("e2e-smoke")?.budget.activatedCapabilities).toEqual(
+    expect(env.simulation.loop.task(smokeTaskId("phase-2c-12-test"))?.budget.activatedCapabilities).toEqual(
       expect.arrayContaining([
         "scheduler",
         "branch_planner",
@@ -61,6 +64,22 @@ describe("Phase 2C.12 fake end-to-end smoke", () => {
     expect(pr.body).toContain("Test-only");
     expect(pr.body).toContain("No production behavior change");
     expect(pr.body).toContain("Do not merge automatically");
+  });
+
+  it("reruns on a new deterministic smoke branch when the legacy branch exists on an older base", async () => {
+    const oldHead = sha(0x4343);
+    const legacyBranch = taskBranchName("e2e-smoke", "chore: agent e2e smoke", "ui");
+    const { env, report } = await run({
+      smokeRunId: "phase-2c-12-rerun",
+      legacyBranchHead: oldHead,
+    });
+
+    expect(report.finalStatus).toBe("accepted");
+    expect(report.workerInvocationCount).toBe(1);
+    expect(report.branch).not.toBe(legacyBranch);
+    expect(env.simulation.remote.refs.get(legacyBranch)).toBe(oldHead);
+    expect(env.simulation.remote.refs.get("main")).toBe(MAIN_SHA);
+    expect(env.simulation.remote.calls.some((call) => /force|DELETE/i.test(call))).toBe(false);
   });
 
   it("fails closed after a worker failure when repair is disabled", async () => {
