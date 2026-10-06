@@ -537,7 +537,7 @@ export async function createLiveSmokeEnvironment(
       });
       return { taskId: result.taskId, duplicate: result.duplicate };
     },
-    settle: () => loop.settle(),
+    settle: () => loop.settle({ waitForWorkers: true }),
     snapshot: (taskId) => loop.task(taskId),
     async pollQa(taskId) {
       loop.post({ type: "qa_updated", taskId });

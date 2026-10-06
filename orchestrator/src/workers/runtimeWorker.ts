@@ -130,7 +130,7 @@ async function execute(
     } catch {
       return failure(c, "runtime_unavailable", "worker runtime verification failed unexpectedly", risk);
     }
-    if (!readiness.ok) return failure(c, readiness.errorType, readiness.reason, risk);
+    if (!readiness.ok) return failure(c, readiness.errorType, readiness.reason, risk, { headSha: before.headSha });
   }
 
   let exit: ProcessExit | null = null;

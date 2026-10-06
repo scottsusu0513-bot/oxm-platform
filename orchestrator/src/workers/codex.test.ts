@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createCodexAdapter } from "./codex";
 import { createFakeGit, createFakePromptFiles, createFakeRunner, createFakeTimer } from "./fake";
 import type { CodexRuntimeVerification, GitStatus, WorkerReport, WorkerTaskContract } from "./types";
-import { requiredCodexPolicyDecision } from "./workerAdapter";
+import { codexCommandPolicyHash, requiredCodexPolicyDecision } from "./workerAdapter";
 
 const REPO = "/workspaces/oxm-platform";
 const BRANCH = "agent/ui-42";
@@ -82,6 +82,12 @@ const flush = async (until: () => boolean) => {
 };
 
 describe("Codex worker adapter", () => {
+  it("hashes LF and CRLF policy files identically while detecting altered content", () => {
+    const policy = "first rule\nsecond rule\n";
+    expect(codexCommandPolicyHash(policy)).toBe(codexCommandPolicyHash(policy.replace(/\n/g, "\r\n")));
+    expect(codexCommandPolicyHash(policy)).not.toBe(codexCommandPolicyHash(`${policy}altered rule\n`));
+  });
+
   it("uses fixed headless argv, a locked workspace profile, stdin prompt, and no shell/interpolation", async () => {
     const evil = "$(git push --force); `gh pr merge`; curl https://example.invalid";
     const s = setup({ model: "gpt-6.1-codex" });
@@ -133,7 +139,7 @@ describe("Codex worker adapter", () => {
   it("fails closed before spawn when the required Codex policy cannot be established", async () => {
     const s = setup({ runtimeVerification: { ok: false, errorType: "policy_error", reason: "policy integrity check failed" } });
     const result = await s.adapter.start({ contract: contract(), now: NOW }).result;
-    expect(result).toMatchObject({ status: "failure", errorType: "policy_error" });
+    expect(result).toMatchObject({ status: "failure", errorType: "policy_error", headSha: BASE });
     expect(s.runner.specs).toHaveLength(0);
   });
 

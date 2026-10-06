@@ -36,6 +36,25 @@ describe("Manager Loop — end-to-end with fakes", () => {
     expect(sim.remote.calls.filter((c) => c.startsWith("PUSH"))).toEqual([`PUSH ${t.headSha}:refs/heads/${t.branch}`]);
   });
 
+  it("waitForWorkers remains pending for an outstanding run and drains successful completion events", async () => {
+    const sim = createSimulation({ holdWorkers: true });
+    await sim.create(fakeIntake({ taskId: "wait-worker" }));
+    expect(sim.loop.task("wait-worker")).toMatchObject({ status: "running", workerRunning: true });
+
+    let settled = false;
+    const waiting = sim.loop.settle({ waitForWorkers: true }).then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    expect(sim.releaseWorker("wait-worker")).toBe(true);
+    await waiting;
+    expect(sim.loop.task("wait-worker")).toMatchObject({ status: "qa_pending", workerRunning: false });
+    expect(sim.loop.task("wait-worker")?.headSha).toMatch(/^[0-9a-f]{40}$/);
+    expect(sim.remote.calls.filter((call) => call.startsWith("CREATE pr"))).toHaveLength(1);
+  });
+
   it("2. worker failure then successful repair on the same branch and worker", async () => {
     const sim = createSimulation({ worker: { t2: ["failure", "success"] } });
     await sim.create(fakeIntake({ taskId: "t2" }));

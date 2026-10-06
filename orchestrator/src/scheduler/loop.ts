@@ -133,8 +133,8 @@ interface TaskRecord {
 export interface ManagerLoop {
   /** Enqueues an event; processing is serialized. */
   post(event: OrchestrationEvent): void;
-  /** Resolves once the loop is idle (no queued event; finished worker runs have posted). */
-  settle(): Promise<void>;
+  /** Resolves once queued events are drained; optionally awaits already-started worker runs and their resulting events. */
+  settle(options?: { waitForWorkers?: boolean }): Promise<void>;
   task(taskId: string): TaskSnapshot | null;
   tasks(): TaskSnapshot[];
   lastSchedule(): ScheduleDecision[];
@@ -178,6 +178,7 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
   const recs = new Map<string, TaskRecord>();
   const results = new Map<string, WorkerResult>();
   const cancels = new Map<string, (reason: string) => void>();
+  const workerCompletions = new Set<Promise<void>>();
   const rejected: { taskId: string; reason: string }[] = [];
   const queue: OrchestrationEvent[] = [];
   let draining: Promise<void> | null = null;
@@ -359,6 +360,7 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       expectedPaths: [...t.intake.expectedPaths],
       inFlight: view(t).inFlight,
       workerRunning: t.workerRunning,
+      workerErrorType: t.lastResult?.errorType ?? null,
       paused: t.paused,
       repair: t.repair,
       replans: t.replans,
@@ -842,7 +844,7 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     audit(t, "worker_started", { attempt });
     if (t.worker === "codex") audit(t, "codex_worker_started", { attempt });
     const taskId = t.intake.taskId;
-    void handle.result.then(
+    const completion = handle.result.then(
       (result) => {
         results.set(runId, result);
         post({
@@ -853,6 +855,8 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       },
       () => post({ type: "worker_failed", taskId, runId }),
     );
+    workerCompletions.add(completion);
+    void completion.finally(() => workerCompletions.delete(completion));
   }
 
   async function onRunDone(taskId: string, runId: string) {
@@ -1470,25 +1474,33 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     post({ type: "scheduler_tick" });
   }
 
+  async function settleEvents() {
+    for (let i = 0; i < 100_000; i++) {
+      if (running) {
+        await draining;
+        continue;
+      }
+      if (queue.length > 0) {
+        startDrain();
+        continue;
+      }
+      // Let worker runs that already finished post their completion events.
+      // Outstanding runs are awaited only by the explicit waitForWorkers mode.
+      for (let k = 0; k < 8 && queue.length === 0; k++) await Promise.resolve();
+      if (queue.length === 0 && !running) return;
+    }
+    throw new Error("[scheduler] loop did not settle");
+  }
+
   return {
     post,
     policy,
-    async settle() {
-      for (let i = 0; i < 100_000; i++) {
-        if (running) {
-          await draining;
-          continue;
-        }
-        if (queue.length > 0) {
-          startDrain();
-          continue;
-        }
-        // Let worker runs that already finished post their completion events.
-        // Outstanding runs are not awaited: they post their own events later.
-        for (let k = 0; k < 8 && queue.length === 0; k++) await Promise.resolve();
-        if (queue.length === 0 && !running) return;
-      }
-      throw new Error("[scheduler] loop did not settle");
+    async settle(options = {}) {
+      do {
+        await settleEvents();
+        if (!options.waitForWorkers || workerCompletions.size === 0) return;
+        await Promise.all(Array.from(workerCompletions));
+      } while (true);
     },
     task: (id) => {
       const t = recs.get(id);

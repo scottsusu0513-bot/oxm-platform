@@ -148,7 +148,7 @@ export function createFakeSmokeEnvironment(
       });
       return { taskId: result.taskId, duplicate: result.duplicate };
     },
-    settle: () => simulation.loop.settle(),
+    settle: () => simulation.loop.settle({ waitForWorkers: true }),
     snapshot: (id) => simulation.loop.task(id),
     async pollQa(id) {
       await simulation.send({ type: "qa_updated", taskId: id });
