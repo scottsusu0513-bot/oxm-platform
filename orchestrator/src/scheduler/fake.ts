@@ -3,7 +3,11 @@ import { classifyTask } from "../domain/risk";
 import { routeTask } from "../domain/routing";
 import type { TaskAction, TaskCategory, WorkerAvailability, WorkerKind } from "../domain/types";
 import { evaluateQa } from "../github/qa";
-import { DEFAULT_REQUIRED_CHECKS, type CheckObservation } from "../github/types";
+import {
+  DEFAULT_REQUIRED_CHECKS,
+  type CheckObservation,
+  type QaDecision,
+} from "../github/types";
 import { createGitHubWriteClient } from "../githubWrite/client";
 import { createFakeRemote, type FakeRemote } from "../githubWrite/fake";
 import { createWorkspaceLeaseRegistry, type WorkspaceLease } from "../githubWrite/lease";
@@ -48,6 +52,10 @@ export interface SimulationOptions {
   /** Keep worker runs outstanding until releaseWorker(taskId). */
   holdWorkers?: boolean;
   persistence?: OrchestrationPersistencePort;
+  /** Optional real-controller-shaped lifecycle port used by integration harnesses. */
+  lifecycle?: OrchestrationPorts["lifecycle"];
+  /** Makes all otherwise-successful check observations stale for this task. */
+  staleQaTaskIds?: readonly string[];
 }
 
 export interface WorkerCall {
@@ -68,6 +76,8 @@ export interface Simulation {
   audit: Omit<NewAuditEvent, "id">[];
   workerCalls: WorkerCall[];
   qaReads: number[];
+  qaDecisions: QaDecision[];
+  trustedRecords: TrustedRunRecord[];
   approvals: ReturnType<typeof createInMemoryApprovalRepository>;
   approve(taskId: string, phase: "pre_execution" | "post_qa", overrides?: Partial<Pick<Approval, "taskId" | "kind" | "requestedAction" | "bindingShaOrActionId" | "expiresAt">>): Approval;
   rejectApproval(taskId: string, phase: "pre_execution" | "post_qa"): Approval;
@@ -106,6 +116,8 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
   const audit: Omit<NewAuditEvent, "id">[] = [];
   const workerCalls: WorkerCall[] = [];
   const qaReads: number[] = [];
+  const qaDecisions: QaDecision[] = [];
+  const trustedRecords: TrustedRunRecord[] = [];
   const runsByTask = new Map<string, number>();
   const held = new Map<string, () => void>();
   let nextSha = 0xb0000;
@@ -129,6 +141,10 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
       filesChanged: files,
       testsRun: [
         { command: "pnpm test", outcome: "passed" },
+        {
+          command: "pnpm vitest run orchestrator/src/e2e/fixture.test.ts",
+          outcome: "passed",
+        },
         { command: "pnpm check", outcome: "passed" },
       ],
       checkResult: "passed",
@@ -287,7 +303,13 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
       async record({ contract, result, lease }): Promise<TrustedRunRecord> {
         const outcomeOf = (needle: string) => result.testsRun.find((r) => r.command.includes(needle))?.outcome ?? "not_run";
         const validations = contract.requiredValidations.map((name) => {
-          const o = outcomeOf(name === "tests" ? "test" : "check");
+          const o = outcomeOf(
+            name === "tests"
+              ? "pnpm test"
+              : name === "smoke"
+                ? "orchestrator/src/e2e/fixture.test.ts"
+                : "check",
+          );
           return {
             name,
             requested: true,
@@ -296,23 +318,29 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
             trusted: true,
           };
         });
-        const testsPassed = validations.find((v) => v.name === "tests")?.status === "passed";
-        return {
+        const validationsPassed =
+          validations.length > 0 &&
+          validations.every((v) => v.status === "passed");
+        const acceptanceReference = contract.requiredValidations[0] ?? null;
+        const record: TrustedRunRecord = {
           changedPaths: result.filesChanged,
           validations,
           acceptance: contract.acceptanceCriteria.map((_, i) => ({
             criterionId: `AC-${i + 1}`,
-            status: testsPassed ? ("satisfied" as const) : ("failed" as const),
+            status: validationsPassed ? ("satisfied" as const) : ("failed" as const),
             evidenceType: "validation" as const,
-            reference: "tests",
+            reference: acceptanceReference,
           })),
           verifiedHeadSha: heads.get(lease.taskId)?.headSha ?? null,
           observedRisk: result.riskObserved.level,
         };
+        trustedRecords.push(structuredClone(record));
+        return record;
       },
     },
     approvals: createApprovalPort(approvals, now),
     persistence: opts.persistence,
+    lifecycle: opts.lifecycle,
     now,
     qa: {
       async read(prNumber) {
@@ -324,10 +352,14 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
         const idx = (pushed.get(branch) ?? []).indexOf(headSha);
         const script = Object.entries(opts.ci ?? {}).find(([id]) => branch.startsWith(`agent/task-${id}-`))?.[1] ?? ["pass"];
         const outcome = script[Math.min(Math.max(idx, 0), script.length - 1)];
+        const stale = opts.staleQaTaskIds?.some((id) =>
+          branch.startsWith(`agent/task-${id}-`),
+        );
+        const checkHead = stale ? sha(0x515151) : headSha;
         const checks: CheckObservation[] = DEFAULT_REQUIRED_CHECKS.map((r) => ({
           source: "check_run",
           name: r.name,
-          headSha,
+          headSha: checkHead,
           appSlug: "github-actions",
           status: outcome === "pending" ? "in_progress" : "completed",
           conclusion: outcome === "pending" ? null : outcome === "fail" && r.name === "full-test" ? "failure" : "success",
@@ -347,7 +379,7 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
             })),
           );
         }
-        return evaluateQa({
+        const decision = evaluateQa({
           pr: {
             number: prNumber,
             state: "open",
@@ -359,6 +391,8 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
           required: DEFAULT_REQUIRED_CHECKS,
           checks,
         });
+        qaDecisions.push(structuredClone(decision));
+        return decision;
       },
     },
   };
@@ -418,6 +452,8 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
     audit,
     workerCalls,
     qaReads,
+    qaDecisions,
+    trustedRecords,
     approvals,
     approve,
     rejectApproval: (taskId, phase) => decideApproval(taskId, phase, "rejected"),

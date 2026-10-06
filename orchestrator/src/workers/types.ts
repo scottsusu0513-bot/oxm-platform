@@ -15,7 +15,7 @@ import type { Approval, IsoTimestamp } from "../store/types";
 // Task contract (input)
 
 /** Validations the worker must run; each maps to a fixed command in the prompt. */
-export const REQUIRED_VALIDATIONS = ["tests", "typecheck"] as const;
+export const REQUIRED_VALIDATIONS = ["tests", "typecheck", "smoke"] as const;
 export type RequiredValidation = (typeof REQUIRED_VALIDATIONS)[number];
 
 /**

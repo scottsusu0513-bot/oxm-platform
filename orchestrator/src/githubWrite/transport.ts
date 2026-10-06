@@ -109,6 +109,17 @@ export function createGhCliWriteTransport(runner: ProcessRunner, repoRoot: strin
       if (input.base !== PR_BASE_BRANCH) throw new Error("PR base must be main");
       const head = branchArg(input.head);
       if (head === PR_BASE_BRANCH) throw new Error("PR head cannot be main");
+      const existing = must(
+        await gh([
+          `${ghRepoPath(repo)}/pulls?state=open&head=${repo.owner}:${head}&base=${PR_BASE_BRANCH}&per_page=2`,
+        ]),
+        "find existing PR",
+      );
+      if (!Array.isArray(existing))
+        throw new Error("gh api returned malformed PR list");
+      if (existing.length > 1)
+        throw new Error("multiple open pull requests exist for the task branch");
+      if (existing.length === 1) return pickPr(existing[0]);
       const json = must(
         await gh([
           "--method",
