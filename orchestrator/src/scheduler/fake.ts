@@ -36,7 +36,7 @@ export const FAKE_REPO = { owner: "oxm", repo: "oxm-platform" } as const;
 export const sha = (n: number) => n.toString(16).padStart(40, "0");
 export const MAIN_SHA = sha(0xa0000);
 
-export type WorkerScript = "success" | "failure" | "head_mismatch" | "malformed_output" | "validation_failed" | "scope_violation" | "risk_red";
+export type WorkerScript = "success" | "failure" | "policy_error" | "head_mismatch" | "malformed_output" | "validation_failed" | "scope_violation" | "risk_red";
 export type CiScript = "pass" | "fail" | "pending";
 
 export interface SimulationOptions {
@@ -175,6 +175,17 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
           checkResult: "not_run",
           headSha: start,
           errorType: "worker_failure",
+        };
+      case "policy_error":
+        return {
+          ...base,
+          status: "failure",
+          summary: "Codex worker command policy is missing or altered",
+          filesChanged: [],
+          testsRun: [],
+          checkResult: "not_run",
+          headSha: start,
+          errorType: "policy_error",
         };
       case "malformed_output":
         return {

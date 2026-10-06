@@ -73,6 +73,23 @@ describe("Phase 2C.12 fake end-to-end smoke", () => {
     });
   });
 
+  it("surfaces a runtime policy failure after waiting for the worker result", async () => {
+    const { report } = await run({ worker: ["policy_error"] });
+    expect(report).toMatchObject({
+      finalStatus: "blocked",
+      failureCode: "policy_error",
+      managerDecision: "blocked",
+      workerInvocationCount: 1,
+      headSha: null,
+      filesChanged: [],
+      prNumber: null,
+    });
+    expect(report.failureReason).toContain("worker_policy_error");
+    expect(report.validations).toEqual([
+      expect.objectContaining({ name: "smoke", executed: false, status: "missing", trusted: true }),
+    ]);
+  });
+
   it("surfaces QA failure and never accepts it", async () => {
     const { report } = await run({ ci: ["fail"], maxRepairAttempts: 0 });
     expect(report.finalStatus).toBe("qa_failed");

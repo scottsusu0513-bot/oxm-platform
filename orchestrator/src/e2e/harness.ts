@@ -113,7 +113,7 @@ export async function runSmokeHarness(
     ? "blocked"
     : finalStatus(snapshot, ciStatus);
   if (!failureCode && status === "blocked") {
-    failureCode = "orchestration_blocked";
+    failureCode = snapshot?.workerErrorType ?? "orchestration_blocked";
     failureReason = snapshot?.blockingReason ?? snapshot?.queueReason ?? "smoke did not reach acceptance";
   }
 

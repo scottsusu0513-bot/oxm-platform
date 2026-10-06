@@ -12,10 +12,14 @@ import type { ClaudeCodeConfig, CodexConfig, CodexPolicyRuntime, ProcessExit, Pr
 export const CODEX_WORKER_RULES_PATH = ".codex/rules/worker.rules";
 export const CODEX_WORKER_RULES_SHA256 = "cbc91875a4f97ed767ef59736c3f4121d3f3ca36ca86b0a5938bbe603b973c67";
 
+export function codexCommandPolicyHash(rules: string): string {
+  return createHash("sha256").update(rules.replace(/\r\n/g, "\n"), "utf8").digest("hex");
+}
+
 /** Refuse to start if the native Codex command policy is absent or altered. */
 export function assertCodexCommandPolicy(repoRoot: string): void {
   const rules = readFileSync(join(repoRoot, CODEX_WORKER_RULES_PATH), "utf8");
-  if (createHash("sha256").update(rules, "utf8").digest("hex") !== CODEX_WORKER_RULES_SHA256) {
+  if (codexCommandPolicyHash(rules) !== CODEX_WORKER_RULES_SHA256) {
     throw new Error("Codex worker command policy is missing or altered");
   }
 }

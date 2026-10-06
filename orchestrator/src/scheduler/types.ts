@@ -24,7 +24,7 @@ import type { PreconditionResult, PrepareResult } from "../githubWrite/workspace
 import type { AcceptanceEvidence, ApprovalEvidenceState, ManagerProfile, RepairCounters, ValidationEvidence } from "../manager/types";
 import type { NewAuditEvent } from "../store/types";
 import type { Approval, ApprovalKind, IsoTimestamp } from "../store/types";
-import type { RequiredValidation, WorkerHandle, WorkerResult, WorkerTaskContract } from "../workers/types";
+import type { RequiredValidation, WorkerErrorType, WorkerHandle, WorkerResult, WorkerTaskContract } from "../workers/types";
 import type { LifecycleOutcome, LifecycleWorkload } from "../codespace/types";
 
 // ---------------------------------------------------------------------------
@@ -412,6 +412,8 @@ export interface TaskSnapshot {
   expectedPaths: string[];
   inFlight: boolean;
   workerRunning: boolean;
+  /** Sanitized adapter/worker failure classification from the latest completed run. */
+  workerErrorType: WorkerErrorType | null;
   paused: boolean;
   repair: RepairCounters;
   replans: number;
