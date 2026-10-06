@@ -472,7 +472,20 @@ describe("allowedScope enforcement", () => {
         now: NOW,
       }).result;
     expect((await mk(["server/db.ts", "server/x.ts"], ["server/"])).status).toBe("success");
-    expect((await mk(["server/db.ts", "server/x.ts"], ["server/x.ts"])).errorType).toBe("scope_violation");
+    expect((await mk(["server/db.ts", "server/x.ts"], ["server/x.ts"])).errorType).toBe("invalid_contract");
+  });
+
+  it("a repair allowance never adopts a foreign dirty path", async () => {
+    const statuses = [{ ...clean, dirtyPaths: ["server/db.ts", "notes/user-wip.txt"] }, after];
+    const r = await setup({ statuses }).adapter.start({
+      contract: contract({ allowedScope: ["server/"], allowedDirtyPaths: ["server/db.ts"] }),
+      now: NOW,
+    }).result;
+    expect(r).toMatchObject({ status: "failure", errorType: "dirty_worktree" });
+  });
+
+  it("rejects an allowed dirty path outside allowedScope", () => {
+    expect(validateContract(contract({ allowedScope: ["server/db.ts"], allowedDirtyPaths: ["notes/user-wip.txt"] }))).toContain("allowedDirtyPaths must be within allowedScope");
   });
 
   it.each(["", "/", ".", "./", "/etc/passwd", "../x", "a/../b", "a//b", "a\\b", "server/*.ts", "server/**", "a?b", "[ab]", " server/db.ts", "server/db.ts ", "a/./b", "C:/x"])(
@@ -526,7 +539,7 @@ describe("red approval binding", () => {
     ["actions", { actions: [...base.actions, { kind: "prod_deploy" }] }],
     ["changedPaths", { changedPaths: ["server/db.ts"] }],
     ["branch", { branch: "agent/task-43" }],
-    ["allowedScope", { allowedScope: ["server/"] }],
+    ["allowedScope", { allowedScope: ["server/", "drizzle/"] }],
     ["objective", { objective: "Drop the factories table" }],
     ["acceptanceCriteria", { acceptanceCriteria: ["a"] }],
     ["requiredValidations", { requiredValidations: ["tests"] }],

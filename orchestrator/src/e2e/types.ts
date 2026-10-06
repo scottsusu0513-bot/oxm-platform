@@ -11,6 +11,16 @@ export const SMOKE_VALIDATION_COMMAND =
 export const LIVE_CONFIRMATION =
   "create-one-smoke-branch-and-pr-without-merge" as const;
 
+/** The fixture is exactly one marker line with a final newline. */
+export function smokeFixtureContent(smokeRunId: string): string {
+  return `OXM_AGENT_E2E_SMOKE=${smokeRunId}\n`;
+}
+
+export function isSmokeFixtureContent(value: string): boolean {
+  const line = value.endsWith("\r\n") ? value.slice(0, -2) : value.endsWith("\n") ? value.slice(0, -1) : null;
+  return line !== null && /^OXM_AGENT_E2E_SMOKE=[a-z0-9][a-z0-9-]*$/.test(line);
+}
+
 export type SmokeMode = "fake" | "live";
 export type SmokeFinalStatus =
   | "waiting_for_ci"

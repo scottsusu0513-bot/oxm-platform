@@ -67,7 +67,7 @@ describe("repair requests", () => {
     if (!r.ok) throw new Error(r.reason);
     expect(Object.keys(r.request).sort()).toEqual(
       [
-        "allowedScope", "attempt", "baseSha", "branch", "ciFailures", "expectedHeadSha", "failedAcceptanceCriteria", "failedEvidenceIds",
+        "allowedDirtyPaths", "allowedScope", "attempt", "baseSha", "branch", "ciFailures", "expectedHeadSha", "failedAcceptanceCriteria", "failedEvidenceIds",
         "failedValidations", "failureSummaries", "instructions", "kind", "lineageId", "maxRepairAttempts", "rerunValidations",
         "taskId", "unverifiedAcceptanceCriteria", "worker", "workerEffort", "workerErrorType",
       ].sort(),
@@ -133,7 +133,7 @@ describe("repair loop policy", () => {
   });
 
   it("repair contract stays on the same task, branch, and scope", () => {
-    const r = buildRepairRequest(failingTests());
+    const r = buildRepairRequest(failingTests({ scope: { allowedScope: contract.allowedScope, changedPaths: ["client/src/pages/Search.tsx"] } }));
     if (!r.ok) throw new Error(r.reason);
     const c = repairWorkerContract(contract, r.request, "run-1");
     expect(c.ok).toBe(true);
@@ -141,6 +141,7 @@ describe("repair loop policy", () => {
     expect(c.contract.branch).toBe(TASK_BRANCH);
     expect(c.contract.taskId).toBe("t1");
     expect(c.contract.allowedScope).toEqual(contract.allowedScope);
+    expect(c.contract.allowedDirtyPaths).toEqual(["client/src/pages/Search.tsx"]);
     expect(c.contract.requiredValidations).toEqual(contract.requiredValidations);
     expect(c.contract.expectedHeadSha).toBe(SHA_HEAD);
     expect(c.contract.objective).toContain("Repair attempt 1 of 2");
@@ -150,5 +151,6 @@ describe("repair loop policy", () => {
     expect(repairWorkerContract({ ...contract, allowedScope: ["server/"] }, r.request, "run-1").ok).toBe(false);
     expect(repairWorkerContract(contract, r.request, "run-0").ok).toBe(false);
     expect(repairWorkerContract(contract, { ...r.request, branch: "agent/task-t1-other", expectedHeadSha: SHA_OTHER }, "run-1").ok).toBe(false);
+    expect(repairWorkerContract(contract, { ...r.request, allowedDirtyPaths: ["server/foreign.ts"] }, "run-1").ok).toBe(false);
   });
 });

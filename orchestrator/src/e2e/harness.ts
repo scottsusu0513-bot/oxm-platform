@@ -9,6 +9,7 @@ import type {
   SmokeTaskDefinition,
 } from "./types";
 import {
+  smokeFixtureContent,
   SMOKE_FIXTURE_PATH,
   SMOKE_VALIDATION_COMMAND,
 } from "./types";
@@ -38,7 +39,7 @@ export function smokeTaskDefinition(smokeRunId: string): SmokeTaskDefinition {
     instruction: [
       "Perform a UI polish test-fixture-only smoke task.",
       `Modify only ${SMOKE_FIXTURE_PATH}.`,
-      `Set its complete content to exactly: OXM_AGENT_E2E_SMOKE=${smokeRunId}`,
+      `Set its complete UTF-8 content to exactly ${JSON.stringify(smokeFixtureContent(smokeRunId))}; the final \\n is one LF byte (0x0a), not optional.`,
       `Run exactly: ${SMOKE_VALIDATION_COMMAND}`,
       "Commit the fixture change locally with message: chore: agent e2e smoke.",
       "This is test-only and must not change production behavior, access a database, deploy, push, merge, or alter authentication or secrets.",

@@ -262,6 +262,8 @@ export interface RepairRequest {
   unverifiedAcceptanceCriteria: string[];
   workerErrorType: WorkerErrorType | null;
   allowedScope: string[];
+  /** Git-observed paths from the prior run that a repair may inherit as dirty. */
+  allowedDirtyPaths: string[];
   rerunValidations: string[];
   /** Sanitized single-line summaries keyed by evidence id. */
   failureSummaries: { evidenceId: string; summary: string }[];

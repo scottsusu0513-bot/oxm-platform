@@ -76,6 +76,17 @@ describe("Manager Loop — end-to-end with fakes", () => {
     expect(sim.remote.calls.filter((c) => c.startsWith("CREATE ref"))).toHaveLength(1);
   });
 
+  it("repairs an uncommitted failed attempt using only its trusted task-owned paths", async () => {
+    const sim = createSimulation({ worker: { dirtyrepair: ["validation_failed_dirty", "success"] } });
+    await sim.create(fakeIntake({ taskId: "dirtyrepair" }));
+
+    const [first, repair] = sim.workerCalls;
+    expect(first.allowedDirtyPaths).toEqual([]);
+    expect(repair.expectedHeadSha).toBe(first.expectedHeadSha);
+    expect(repair.allowedDirtyPaths).toEqual(["server/dirtyrepair/index.ts"]);
+    expect(sim.loop.task("dirtyrepair")).toMatchObject({ status: "qa_pending", repair: { attempt: 1 } });
+  });
+
   it("3. CI failure then successful repair: same PR, new head, QA re-polled", async () => {
     const sim = createSimulation({ ci: { t3: ["fail", "pass"] } });
     await sim.create(fakeIntake({ taskId: "t3" }));

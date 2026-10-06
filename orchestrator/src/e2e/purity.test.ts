@@ -136,6 +136,8 @@ describe("Phase 2C.12 smoke purity and safety", () => {
     expect(task.expectedScope).toEqual([SMOKE_FIXTURE_PATH]);
     expect(Object.isFrozen(task.expectedScope)).toBe(true);
     expect(task.requiredValidations).toEqual(["smoke"]);
+    expect(task.instruction).toContain('"OXM_AGENT_E2E_SMOKE=scope-test\\n"');
+    expect(task.instruction).toContain("one LF byte (0x0a), not optional");
     expect(task.instruction).not.toMatch(/production (?:database|deploy).*\b(?:write|run|execute)\b/i);
   });
 
