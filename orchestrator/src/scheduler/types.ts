@@ -22,7 +22,7 @@ import type { BranchCreation, GitHubWriteClient, PushReceipt, TrustedPullRequest
 import type { WorkspaceLease, WorkspaceLeaseRegistry } from "../githubWrite/lease";
 import type { CommitApprovalEvidence } from "../workers/prompt";
 import type { CommitResult, CommitStateResult, PreconditionResult, PrepareResult } from "../githubWrite/workspace";
-import type { AcceptanceEvidence, ApprovalEvidenceState, ManagerProfile, RepairCounters, ValidationEvidence } from "../manager/types";
+import type { AcceptanceEvidence, ApprovalEvidenceState, HumanDecisionRequest, HumanEscalationReport, ManagerDiagnosis, ManagerProfile, RepairCounters, RepairCycleRecord, RepairRequest, ValidationEvidence } from "../manager/types";
 import type { NewAuditEvent } from "../store/types";
 import type { Approval, ApprovalKind, IsoTimestamp } from "../store/types";
 import type { RequiredValidation, WorkerErrorType, WorkerHandle, WorkerResult, WorkerTaskContract } from "../workers/types";
@@ -81,12 +81,27 @@ export const ORCHESTRATION_STATUSES = [
   "repair_requested",
   "qa_pending",
   "needs_human_approval",
+  /**
+   * Two Manager-guided repair cycles failed; automation paused with an
+   * escalation report. Resumable only by a bound human decision; cancellable.
+   * The workspace lease is kept so the uncommitted work stays intact.
+   */
+  "needs_human_decision",
   "accepted",
   "blocked",
 ] as const;
 export type OrchestrationStatus = (typeof ORCHESTRATION_STATUSES)[number];
 
 export const TERMINAL_ORCHESTRATION_STATUSES: readonly OrchestrationStatus[] = ["accepted", "blocked"];
+
+/** Outcome of one delivered human decision (accepted, rejected, or an idempotent duplicate). */
+export interface HumanDecisionLogEntry {
+  decisionId: string | null;
+  escalationId: string | null;
+  outcome: "accepted" | "rejected" | "duplicate";
+  reason: string;
+  at: IsoTimestamp;
+}
 
 export const BRANCH_PLAN_STATES = ["none", "queued", "assigned", "rejected"] as const;
 export type BranchPlanState = (typeof BRANCH_PLAN_STATES)[number];
@@ -156,7 +171,16 @@ export type Capability = (typeof CAPABILITIES)[number];
 export const OPTIONAL_CAPABILITIES = ["history_lookup", "deep_review", "second_reviewer", "architecture_analysis", "source_inspection", "extra_llm_call"] as const;
 export type OptionalCapability = (typeof OPTIONAL_CAPABILITIES)[number];
 
-export const ESCALATION_ACTIONS = ["return_to_worker", "replan_branch", "wait", "block", "request_human_approval", "future_deep_review_candidate"] as const;
+export const ESCALATION_ACTIONS = [
+  "return_to_worker",
+  "retry_infrastructure",
+  "replan_branch",
+  "wait",
+  "block",
+  "request_human_approval",
+  "request_human_decision",
+  "future_deep_review_candidate",
+] as const;
 export type EscalationAction = (typeof ESCALATION_ACTIONS)[number];
 
 export interface EscalationRecord {
@@ -166,8 +190,16 @@ export interface EscalationRecord {
 
 export interface OrchestrationPolicy {
   maxConcurrentTasks: number;
-  /** Capped by the Manager budget's maxRepairAttempts (the stricter one wins). */
+  /** Manager-guided repair cycles; capped by the Manager budget's maxRepairAttempts (the stricter one wins). */
   maxRepairAttempts: number;
+  /**
+   * Same-contract re-runs after a transient runtime/tool/quota/infrastructure
+   * failure (validator TRANSIENT_WORKER_ERRORS), per task. They never consume
+   * a Manager-guided repair cycle.
+   */
+  maxInfrastructureRetries: number;
+  /** Human-decision resumes per task; each grants one new round of maxRepairAttempts Manager-guided cycles. */
+  maxHumanResumes: number;
   /** Automatic pre-execution replans after a stale base. */
   maxReplans: number;
   executableWorkers: readonly WorkerKind[];
@@ -185,9 +217,13 @@ export interface OrchestrationBudget {
   managerProfile: ManagerProfile;
   maxRepairAttempts: number;
   maxConcurrentTasks: number;
-  /** 1 initial run + maxRepairAttempts repairs. Hard cap enforced by the loop. */
+  /** 1 initial run + maxRepairAttempts repairs + maxInfrastructureRetries. Hard cap enforced by the loop. */
   maxWorkerExecutions: number;
   workerExecutions: number;
+  maxInfrastructureRetries: number;
+  infrastructureRetries: number;
+  /** Runtime invariant: Workers never surface interactive Yes/No permission prompts. */
+  workerInteractivePromptsAllowed: false;
   /** Always 0: scheduler, planner, validator and loop are deterministic. */
   managerLlmCalls: 0;
   llmCallBudget: number | null;
@@ -248,6 +284,8 @@ export type OrchestrationEvent =
   /** A notification only; QA is read through the trusted read-only port. */
   | { type: "qa_updated"; taskId: string }
   | { type: "approval_granted"; taskId: string; phase: ApprovalPhase }
+  /** Untrusted human response to a needs_human_decision escalation; normalized and bound by the loop. Never an approval. */
+  | { type: "human_decision_submitted"; taskId: string; decision: unknown }
   | { type: "approval_rejected"; taskId: string; phase: ApprovalPhase };
 
 export type OrchestrationEventType = OrchestrationEvent["type"];
@@ -353,6 +391,18 @@ export interface PersistedTaskRecord {
   lastResult: WorkerResult | null;
   record: TrustedRunRecord | null;
   repair: RepairCounters;
+  /** Manager-guided repair cycles (diagnosis, repair run, revalidation). Optional for older checkpoints. */
+  repairCycles?: RepairCycleRecord[];
+  infrastructureRetries?: number;
+  humanEscalation?: HumanEscalationReport | null;
+  humanRound?: number;
+  humanDecisionRequest?: HumanDecisionRequest | null;
+  escalationPhase?: "pre_push" | "post_qa" | null;
+  humanDecisionLog?: HumanDecisionLogEntry[];
+  consumedHumanDecisionIds?: string[];
+  escalationHistory?: HumanEscalationReport[];
+  pendingRepair?: { request: RepairRequest; contract: WorkerTaskContract } | null;
+  pendingRetry?: { contract: WorkerTaskContract; errorType: string } | null;
   replans: number;
   receipt: PushReceipt | null;
   pr: TrustedPullRequest | null;
@@ -425,6 +475,20 @@ export interface TaskSnapshot {
   workerErrorType: WorkerErrorType | null;
   paused: boolean;
   repair: RepairCounters;
+  repairCycles: RepairCycleRecord[];
+  /** Set only in needs_human_decision. */
+  humanEscalation: HumanEscalationReport | null;
+  /** Open escalation a human decision must bind to (null when none is open). */
+  humanDecisionRequest: HumanDecisionRequest | null;
+  /** 1 initially; +1 per accepted human decision. */
+  humanRound: number;
+  /** Every escalation report ever issued for this task, oldest first. */
+  escalationHistory: HumanEscalationReport[];
+  humanDecisionLog: HumanDecisionLogEntry[];
+  /** Red-risk repair plan waiting for its own fresh pre-execution approval. */
+  pendingRepair: { round: number; attempt: number; diagnosis: ManagerDiagnosis; approvalBinding: string } | null;
+  /** Red-risk transient retry waiting for a fresh pre-execution approval of its changed contract. */
+  pendingRetry: { errorType: string; approvalBinding: string } | null;
   replans: number;
   prNumber: number | null;
   headSha: string | null;

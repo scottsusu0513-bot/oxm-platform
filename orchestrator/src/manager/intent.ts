@@ -16,7 +16,9 @@ export const MANAGER_AUDIT_EVENTS = [
   "manager_blocked",
   "manager_human_approval_required",
   "repair_attempt_started",
-  "repair_budget_exhausted",
+  "manager_diagnosis_issued",
+  "manager_human_decision_required",
+  "manager_human_decision_consumed",
   "escalation_triggered",
 ] as const;
 export type ManagerAuditEvent = (typeof MANAGER_AUDIT_EVENTS)[number];

@@ -144,18 +144,20 @@ describe("Manager Loop — end-to-end with fakes", () => {
     });
   });
 
-  it("4. repair budget exhausted → blocked; total worker runs capped at 1 + maxRepairAttempts", async () => {
+  it("4. two failed Manager-guided repair cycles → needs_human_decision; worker runs = 1 + 2 cycles", async () => {
     const sim = createSimulation({ worker: { t4: ["failure"] } });
     await sim.create(fakeIntake({ taskId: "t4" }));
     const t = sim.loop.task("t4")!;
-    expect(t.status).toBe("blocked");
-    expect(t.state).toBe("failed");
+    expect(t.status).toBe("needs_human_decision");
+    expect(t.state).toBe("running"); // not failed: a human decides
     expect(sim.workerCalls).toHaveLength(3);
     expect(t.budget.workerExecutions).toBe(3);
-    expect(t.budget.maxWorkerExecutions).toBe(3);
-    expect(t.blockingReason).toContain("repair_budget_exhausted");
+    expect(t.budget.maxWorkerExecutions).toBe(5); // 1 + 2 Manager-guided cycles + 2 infrastructure retries
+    expect(t.blockingReason).toContain("needs_human_decision");
+    expect(t.blockingReason).not.toContain("repair_budget_exhausted");
     expect(sim.remote.calls.filter((c) => c.startsWith("PUSH") || c.startsWith("CREATE pr"))).toEqual([]);
-    expect(sim.ports.leases.current("ws-t4")).toBeNull();
+    // Lease kept while awaiting the human: the uncommitted work stays intact for a resume.
+    expect(sim.ports.leases.current("ws-t4")).toMatchObject({ taskId: "t4" });
   });
 
   it("5. branch conflict queues the second task until the first finishes", async () => {
@@ -198,11 +200,14 @@ describe("Manager Loop — end-to-end with fakes", () => {
     expect(sim.loop.task("dep")!.status).toBe("running");
   });
 
-  it("6b. a blocked dependency blocks its dependents", async () => {
+  it("6b. a blocked dependency blocks its dependents (an escalated one keeps them waiting)", async () => {
     const sim = createSimulation({ worker: { base: ["failure"] } });
     await sim.create(fakeIntake({ taskId: "base" }));
     await sim.create(fakeIntake({ taskId: "dep" }, { dependsOn: ["base"] }));
-    expect(sim.loop.task("base")!.status).toBe("blocked");
+    expect(sim.loop.task("base")!.status).toBe("needs_human_decision");
+    expect(sim.loop.task("dep")!.status).toBe("waiting_dependency");
+    expect(sim.loop.cancel("base").ok).toBe(true);
+    await sim.loop.settle();
     const dep = sim.loop.task("dep")!;
     expect(dep.status).toBe("blocked");
     expect(dep.blockingReason).toContain("dependency blocked: base");
@@ -355,9 +360,10 @@ describe("Manager Loop — cost guardrails", () => {
     });
     await sim.create(fakeIntake({ taskId: "r2" }));
     const t = sim.loop.task("r2")!;
-    expect(t.status).toBe("blocked");
+    expect(t.status).toBe("needs_human_decision");
     expect(sim.workerCalls).toHaveLength(2);
-    expect(t.budget.maxWorkerExecutions).toBe(2);
+    expect(t.humanEscalation?.cyclesCompleted).toBe(1);
+    expect(t.budget.maxWorkerExecutions).toBe(4); // 1 + 1 cycle + 2 infrastructure retries
   });
 
   it("CI that fails forever cannot loop: worker runs stay bounded", async () => {
@@ -365,7 +371,7 @@ describe("Manager Loop — cost guardrails", () => {
     await sim.create(fakeIntake({ taskId: "r3" }));
     await driveQa(sim, "r3", 20);
     const t = sim.loop.task("r3")!;
-    expect(t.status).toBe("blocked");
+    expect(t.status).toBe("needs_human_decision");
     expect(sim.workerCalls).toHaveLength(3);
   });
 

@@ -82,14 +82,17 @@ describe("Phase 2C.12 fake end-to-end smoke", () => {
     expect(env.simulation.remote.calls.some((call) => /force|DELETE/i.test(call))).toBe(false);
   });
 
-  it("fails closed after a worker failure when repair is disabled", async () => {
+  it("escalates a repairable worker failure to a human when repair cycles are disabled", async () => {
     const { report } = await run({ worker: ["failure"], maxRepairAttempts: 0 });
     expect(report).toMatchObject({
-      finalStatus: "blocked",
-      managerDecision: "blocked",
+      finalStatus: "needs_human_decision",
+      managerDecision: "needs_human_decision",
       workerInvocationCount: 1,
+      repairCount: 0,
       prNumber: null,
     });
+    expect(report.humanEscalation).toMatchObject({ state: "needs_human_decision", cyclesCompleted: 0 });
+    expect(report.humanEscalation?.originalFailure?.failureCode).toBe("worker_worker_failure");
   });
 
   it("surfaces a runtime policy failure after waiting for the worker result", async () => {
@@ -125,8 +128,9 @@ describe("Phase 2C.12 fake end-to-end smoke", () => {
 
   it("surfaces QA failure and never accepts it", async () => {
     const { report } = await run({ ci: ["fail"], maxRepairAttempts: 0 });
-    expect(report.finalStatus).toBe("qa_failed");
-    expect(report.managerDecision).toBe("blocked");
+    expect(report.finalStatus).toBe("needs_human_decision");
+    expect(report.managerDecision).toBe("needs_human_decision");
+    expect(report.humanEscalation?.currentBlocker).toMatchObject({ failureCode: "ci_failed", failingCheck: "ci:full-test" });
     expect(report.ciChecks.find((check) => check.name === "full-test")?.outcome).toBe("failed");
   });
 

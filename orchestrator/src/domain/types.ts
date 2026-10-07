@@ -116,3 +116,21 @@ export interface RoutingDecision {
   reasonCode: "primary_available" | "fallback_selected" | "fallback_forbidden" | "worker_unavailable";
   reason: string;
 }
+
+// ---------------------------------------------------------------------------
+// Canonical trusted identifiers
+
+/**
+ * One rule for authenticated principal ids, shared by the Gateway (session
+ * identity) and the Manager (human decision decidedBy), so an identity the
+ * Gateway accepts is never rejected later by a different length rule.
+ */
+export const MAX_PRINCIPAL_ID_LENGTH = 128;
+const TRUSTED_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+
+export function isValidPrincipalId(value: unknown): value is string {
+  return typeof value === "string" && value.length >= 1 && value.length <= MAX_PRINCIPAL_ID_LENGTH && TRUSTED_ID_RE.test(value);
+}
+
+/** Escalation request ids (`<taskId>.hd.<round>`) follow the same canonical id rule. */
+export const isValidEscalationId = isValidPrincipalId;

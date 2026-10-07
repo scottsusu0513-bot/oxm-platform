@@ -3,6 +3,7 @@ import type { RiskLevel, TaskState, WorkerKind } from "../domain/types";
 import type { AgentTaskStatus } from "../intake/types";
 import type { Approval, ApprovalKind, IsoTimestamp } from "../store/types";
 import type { CommitApprovalEvidence } from "../workers/prompt";
+import type { HumanDecisionInput, HumanDecisionRequest } from "../manager/types";
 
 export const GATEWAY_CAPABILITIES = [
   "task:submit",
@@ -12,6 +13,10 @@ export const GATEWAY_CAPABILITIES = [
   "approval:read",
   "approval:grant",
   "approval:reject",
+  /** View an open needs_human_decision escalation and decision outcomes. */
+  "human_decision:read",
+  /** Submit guidance to an open escalation. Grants no approval of any kind. */
+  "human_decision:submit",
 ] as const;
 export type GatewayCapability = (typeof GATEWAY_CAPABILITIES)[number];
 
@@ -113,6 +118,102 @@ export interface ApprovalRequirementReader {
   current(taskId: string): Promise<PendingApprovalRequirement | null>;
 }
 
+// ---------------------------------------------------------------------------
+// Human decision (needs_human_decision resume)
+
+/**
+ * The only caller-controlled input of a human decision. Task, branch,
+ * expected HEAD, lineage and escalation metadata are resolved from trusted
+ * Manager state; decidedBy comes from the authenticated session.
+ */
+export interface SubmitHumanDecisionRequest {
+  escalationId: string;
+  idempotencyKey: string;
+  guidance: string;
+}
+
+/** Trusted Manager-side view of one open escalation (never caller-supplied). */
+export interface TrustedHumanDecisionRequirement {
+  request: HumanDecisionRequest;
+  /** Opaque requester id of the task; null when unknown (then only operators may decide). */
+  requesterId: string | null;
+  whyNeeded: string;
+  currentBlocker: { failureCode: string; failingCheck: string; expected: string; actual: string };
+  managerRecommendation: string;
+  inputRequested: string;
+  cyclesCompleted: number;
+  fingerprintTrend: "stagnated" | "changed";
+}
+
+export interface HumanDecisionOutcomeRecord {
+  decisionId: string | null;
+  escalationId: string | null;
+  outcome: "accepted" | "rejected" | "duplicate";
+  reason: string;
+  at: IsoTimestamp;
+}
+
+export interface HumanDecisionRequirementReader {
+  /** Must re-read the authoritative Manager state on every call. */
+  current(taskId: string): TrustedHumanDecisionRequirement | null;
+  outcomes(taskId: string): readonly HumanDecisionOutcomeRecord[];
+}
+
+/** Sanitized phone-UI view of an open escalation. */
+export interface PendingHumanDecisionView {
+  escalationId: string;
+  taskId: string;
+  round: number;
+  cyclesCompleted: number;
+  whyNeeded: string;
+  currentBlocker: { failureCode: string; failingCheck: string; expected: string; actual: string };
+  managerRecommendation: string;
+  inputRequested: string;
+  fingerprintTrend: "stagnated" | "changed";
+  /** A decision is guidance only: it never approves commit, publish, merge, deploy, or red risk. */
+  grantsApproval: false;
+}
+
+export interface HumanDecisionOutcomeView {
+  decisionId: string | null;
+  escalationId: string | null;
+  outcome: "accepted" | "stale" | "duplicate" | "rejected";
+  reason: string;
+  at: IsoTimestamp;
+}
+
+export interface HumanDecisionStatusResponse {
+  taskId: string;
+  pending: PendingHumanDecisionView | null;
+  lastOutcome: HumanDecisionOutcomeView | null;
+}
+
+export interface HumanDecisionSubmitResponse {
+  taskId: string;
+  escalationId: string;
+  decisionId: string;
+  /** Delivery result; the Manager's accept/stale/duplicate outcome is read via the status view. */
+  result: "submitted";
+  duplicate: boolean;
+}
+
+export interface PersistedHumanDecisionSubmission {
+  idempotencyKey: string;
+  fingerprint: string;
+  principalId: string;
+  taskId: string;
+  escalationId: string;
+  decisionId: string;
+  eventEmitted: boolean;
+  createdAt: IsoTimestamp;
+}
+
+export interface GatewayHumanDecisionRepository {
+  get(idempotencyKey: string): PersistedHumanDecisionSubmission | null;
+  create(record: PersistedHumanDecisionSubmission): PersistedHumanDecisionSubmission;
+  markEventEmitted(idempotencyKey: string): PersistedHumanDecisionSubmission;
+}
+
 export interface GatewayControlEventPort {
   taskSubmitted(taskId: string): void;
   taskPauseRequested(taskId: string): void;
@@ -123,6 +224,8 @@ export interface GatewayControlEventPort {
     phase: ApprovalPhase,
     decision: ApprovalDecisionValue,
   ): void;
+  /** Emits the typed human_decision_submitted event; the Manager re-binds and may still reject it. */
+  humanDecisionSubmitted(taskId: string, decision: HumanDecisionInput): void;
 }
 
 export type GatewayRateAction =
@@ -131,7 +234,9 @@ export type GatewayRateAction =
   | "task_pause"
   | "task_cancel"
   | "approval_read"
-  | "approval_mutate";
+  | "approval_mutate"
+  | "human_decision_read"
+  | "human_decision_mutate";
 
 export interface GatewayRateLimiter {
   consume(input: {
@@ -171,6 +276,9 @@ export interface GatewayAuditEvent {
     | "approval_granted"
     | "approval_rejected"
     | "approval_stale_rejected"
+    | "human_decision_viewed"
+    | "human_decision_submitted"
+    | "human_decision_rejected"
     | "gateway_rate_limited";
   principalId?: string;
   taskId?: string;
@@ -208,4 +316,6 @@ export interface AgentGatewayService {
   getPendingApproval(call: GatewayCall<unknown>): Promise<PendingApprovalResponse>;
   approveTask(call: GatewayCall<unknown>): Promise<ApprovalDecisionResponse>;
   rejectTask(call: GatewayCall<unknown>): Promise<ApprovalDecisionResponse>;
+  getHumanDecision(call: GatewayCall<unknown>): Promise<HumanDecisionStatusResponse>;
+  submitHumanDecision(call: GatewayCall<unknown>): Promise<HumanDecisionSubmitResponse>;
 }

@@ -165,7 +165,10 @@ describe("evidence validator", () => {
   it("maps worker failures: repairable vs blocked vs approval", () => {
     const w = (status: ManagerEvidence["worker"]["status"], errorType: ManagerEvidence["worker"]["errorType"]) => validateEvidence(fakeEvidence({ worker: { kind: "claude", status, errorType } })).decision;
     expect(w("failure", "worker_failure")).toBe("needs_repair");
-    expect(w("timeout", "timeout")).toBe("needs_repair");
+    // Transient runtime failures never enter the Manager repair loop (the loop retries them first).
+    expect(w("timeout", "timeout")).toBe("blocked");
+    expect(w("failure", "process_error")).toBe("blocked");
+    expect(validateEvidence(fakeEvidence({ worker: { kind: "claude", status: "timeout", errorType: "timeout" } })).triggers).toContain("infrastructure_failure");
     expect(w("failure", "scope_violation")).toBe("blocked");
     expect(w("failure", "dirty_worktree")).toBe("blocked");
     expect(w("failure", "runtime_unavailable")).toBe("blocked");

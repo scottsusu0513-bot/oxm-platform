@@ -3,6 +3,7 @@ import type { ManagerLoop } from "../scheduler/loop";
 import type {
   ApprovalRequirementReader,
   GatewayControlEventPort,
+  HumanDecisionRequirementReader,
 } from "./types";
 
 /**
@@ -22,6 +23,44 @@ export function createManagerLoopGatewayEvents(
         taskId,
         phase,
       });
+    },
+    humanDecisionSubmitted(taskId, decision) {
+      loop.post({ type: "human_decision_submitted", taskId, decision });
+    },
+  };
+}
+
+/**
+ * Trusted server-side resolution of an open needs_human_decision escalation
+ * from the Manager's current state. requesterOf reads the stored task owner.
+ */
+export function createManagerHumanDecisionReader(
+  loop: Pick<ManagerLoop, "task">,
+  requesterOf: (taskId: string) => string | null,
+): HumanDecisionRequirementReader {
+  return {
+    current(taskId) {
+      const snap = loop.task(taskId);
+      const report = snap?.humanEscalation;
+      if (!snap || snap.status !== "needs_human_decision" || !snap.humanDecisionRequest || !report) return null;
+      return {
+        request: structuredClone(snap.humanDecisionRequest),
+        requesterId: requesterOf(taskId),
+        whyNeeded: snap.blockingReason ?? "Manager-guided repair cycles did not resolve the failure",
+        currentBlocker: {
+          failureCode: report.currentBlocker.failureCode,
+          failingCheck: report.currentBlocker.failingCheck,
+          expected: report.currentBlocker.expected,
+          actual: report.currentBlocker.actual,
+        },
+        managerRecommendation: report.managerRecommendation,
+        inputRequested: report.humanDecisionRequired,
+        cyclesCompleted: report.cyclesCompleted,
+        fingerprintTrend: report.fingerprintTrend,
+      };
+    },
+    outcomes(taskId) {
+      return structuredClone(loop.task(taskId)?.humanDecisionLog ?? []);
     },
   };
 }

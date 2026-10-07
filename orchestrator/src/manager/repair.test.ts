@@ -68,7 +68,7 @@ describe("repair requests", () => {
     expect(Object.keys(r.request).sort()).toEqual(
       [
         "allowedDirtyPaths", "allowedScope", "attempt", "baseSha", "branch", "ciFailures", "expectedHeadSha", "failedAcceptanceCriteria", "failedEvidenceIds",
-        "failedValidations", "failureSummaries", "instructions", "kind", "lineageId", "maxRepairAttempts", "rerunValidations",
+        "diagnosis", "failedValidations", "failureSummaries", "instructions", "kind", "lineageId", "maxRepairAttempts", "rerunValidations",
         "taskId", "unverifiedAcceptanceCriteria", "worker", "workerEffort", "workerErrorType",
       ].sort(),
     );
@@ -87,28 +87,35 @@ describe("repair loop policy", () => {
   it("attempts are monotonic and the budget is bounded (no infinite retry)", () => {
     let e = failingTests();
     const attempts: number[] = [];
+    let previous: Parameters<typeof buildRepairRequest>[1] = null;
     for (let i = 0; i < 10; i++) {
       const v = validateEvidence(e);
       if (v.decision !== "needs_repair") break;
-      const r = buildRepairRequest(e);
+      const r = buildRepairRequest(e, previous);
       if (!r.ok) throw new Error(r.reason);
       attempts.push(r.request.attempt);
       expect(r.request.branch).toBe(TASK_BRANCH);
+      expect(r.request.diagnosis.cycle).toBe(r.request.attempt);
+      previous = { diagnosis: r.request.diagnosis, repairOutcome: "worker success; revalidation needs_repair" };
       e = { ...e, repair: advanceRepairCounters(e.repair, r.request) };
     }
     expect(attempts).toEqual([1, 2]);
     const final = validateEvidence(e);
-    expect(final.decision).toBe("blocked");
-    expect(final.reasonCodes).toContain("repair_budget_exhausted");
+    expect(final.decision).toBe("needs_human_decision");
+    expect(final.reasonCodes).toContain("manager_repair_cycles_exhausted");
+    expect(final.reasonCodes).not.toContain("repair_budget_exhausted");
     expect(final.triggers).toContain("repeated_repair_failure");
-    expect(final.intents).toContain("stop_task");
+    expect(final.intents).toEqual(["request_human_decision"]);
     expect(final.intents).not.toContain("future_deep_review_candidate"); // green: fast profile
-    expect(buildRepairRequest(e).ok).toBe(false);
+    expect(buildRepairRequest(e, previous).ok).toBe(false);
   });
 
   it("final repair requests increased effort (metadata only)", () => {
+    const first = buildRepairRequest(failingTests());
+    if (!first.ok) throw new Error(first.reason);
     const e = failingTests({ repair: { attempt: 1, prior: [{ attempt: 0, decision: "needs_repair", failedEvidenceIds: ["validation:tests"] }] } });
-    const r = buildRepairRequest(e);
+    expect(buildRepairRequest(e).ok).toBe(false); // cycle 2 requires the previous diagnosis
+    const r = buildRepairRequest(e, { diagnosis: first.request.diagnosis, repairOutcome: "worker success" });
     expect(r.ok && r.request.attempt).toBe(2);
     expect(r.ok && r.request.workerEffort).toBe("increased");
   });
@@ -118,7 +125,7 @@ describe("repair loop policy", () => {
       risk: { stored: "yellow", observed: "yellow", approval: "none" },
       repair: { attempt: 2, prior: [{ attempt: 0, decision: "needs_repair", failedEvidenceIds: ["validation:tests"] }, { attempt: 1, decision: "needs_repair", failedEvidenceIds: ["validation:tests"] }] },
     });
-    expect(validateEvidence(e).intents).toEqual(["stop_task", "future_deep_review_candidate"]);
+    expect(validateEvidence(e).intents).toEqual(["request_human_decision", "future_deep_review_candidate"]);
   });
 
   it("successful repair -> validation continues to accepted", () => {

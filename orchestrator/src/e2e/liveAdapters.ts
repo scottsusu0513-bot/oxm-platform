@@ -12,10 +12,12 @@ import {
   createFakeGatewayAudit,
   createFakeRateLimiter,
   createInMemoryGatewayDecisionRepository,
+  createInMemoryHumanDecisionRepository,
   fakePrincipal,
 } from "../gateway/fake";
 import {
   createManagerApprovalRequirementReader,
+  createManagerHumanDecisionReader,
   createManagerLoopGatewayEvents,
 } from "../gateway/integration";
 import { createAgentGatewayService } from "../gateway/service";
@@ -510,6 +512,8 @@ export async function createLiveSmokeEnvironment(
     approvalRequirements: createManagerApprovalRequirementReader(loop),
     decisions: createInMemoryGatewayDecisionRepository(),
     events: createManagerLoopGatewayEvents(loop),
+    humanDecisionRequirements: createManagerHumanDecisionReader(loop, (id) => store.tasks.get(id)?.requesterId ?? null),
+    humanDecisionSubmissions: createInMemoryHumanDecisionRepository(),
     rateLimiter: createFakeRateLimiter(),
     audit: createFakeGatewayAudit(),
     now,

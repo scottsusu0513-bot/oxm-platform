@@ -1,6 +1,7 @@
 import type { RiskLevel, WorkerKind } from "../domain/types";
 import { approvalAuthorizes } from "../store/repositories";
 import { createKillSwitch } from "./killSwitch";
+import { looksLikeInteractivePrompt, nonInteractiveViolation, WORKER_INTERACTIVE_PROMPTS_ALLOWED } from "./permissions";
 import { buildWorkerPrompt, checkTaskBranch, contractRisk, maxRisk, redStartBindingId, scopeViolations, sha256Hex, validateContract } from "./prompt";
 import { parseWorkerReport, sanitizeText, type ParseResult } from "./resultParser";
 import type {
@@ -24,6 +25,8 @@ export interface RuntimeWorkerConfig {
   command: string;
   repoRoot: string;
   timeoutMs: number;
+  /** Runtime invariant validated in preflight; Workers never surface interactive permission UI. */
+  interactivePromptsAllowed?: false;
   prepareRuntime?(): Promise<{ ok: true } | { ok: false; errorType: WorkerErrorType; reason: string }>;
   buildArgs(): string[];
   parseOutput(stdout: string): ParseResult<WorkerReport>;
@@ -159,6 +162,11 @@ async function execute(
     } catch {
       return failure(c, "invalid_contract", "invalid model identifier", risk);
     }
+    // Preflight invariant: an unattended run can never stop on a Yes/No prompt.
+    const interactive = config.interactivePromptsAllowed !== undefined && config.interactivePromptsAllowed !== WORKER_INTERACTIVE_PROMPTS_ALLOWED
+      ? "interactive worker prompts must be disabled"
+      : nonInteractiveViolation(config.kind, args);
+    if (interactive) return failure(c, "runtime_misconfigured", interactive, risk, { headSha: before.headSha });
     const proc = deps.runner.spawn({
       command: config.command,
       args,
@@ -188,6 +196,11 @@ async function execute(
   }
   if (afterMetadata !== beforeMetadata)
     return failure(c, "git_metadata_changed", "worker run changed or hid Git metadata; result refused", "red", { needsApproval: true });
+  // A run that stalled or failed on an interactive confirmation is a runtime
+  // configuration defect: not a transient timeout, never retried or repaired.
+  const finalOutcome = outcome as "exited" | "cancelled" | "timeout";
+  if (finalOutcome !== "cancelled" && exit && (finalOutcome === "timeout" || exit.exitCode !== 0) && looksLikeInteractivePrompt(`${exit.stdout}\n${exit.stderr}`))
+    return failure(c, "runtime_misconfigured", "worker runtime waited on an interactive confirmation prompt (non-interactive configuration defect)", risk, { headSha: before.headSha });
   if (outcome !== "exited") return terminal(c, outcome, risk, before.headSha);
   return interpret(config, c, deps, risk, before, exit as ProcessExit);
 }

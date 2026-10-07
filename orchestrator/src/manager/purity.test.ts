@@ -26,7 +26,7 @@ const ALLOWED_EXTERNAL = new Set([
 
 describe("manager boundaries", () => {
   it("covers the manager modules", () => {
-    expect(sources.sort()).toEqual(["budget.ts", "evidence.ts", "fake.ts", "intent.ts", "lifecycle.ts", "repair.ts", "sequencing.ts", "types.ts", "validator.ts"]);
+    expect(sources.sort()).toEqual(["budget.ts", "diagnosis.ts", "evidence.ts", "fake.ts", "humanDecision.ts", "intent.ts", "lifecycle.ts", "repair.ts", "sequencing.ts", "types.ts", "validator.ts"]);
   });
 
   it("imports only pure policy/type modules (allowlist)", () => {

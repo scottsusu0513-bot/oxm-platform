@@ -1,7 +1,7 @@
 import type { LifecycleDecision } from "../codespace/types";
 import type { RiskLevel, WorkerKind } from "../domain/types";
 import type { RequiredCheckResult } from "../github/types";
-import type { ManagerDecision, ValidationEvidence } from "../manager/types";
+import type { HumanEscalationReport, ManagerDecision, ValidationEvidence } from "../manager/types";
 import type { PriorityClass, TaskSnapshot } from "../scheduler/types";
 
 export const SMOKE_FIXTURE_PATH =
@@ -29,6 +29,7 @@ export type SmokeFinalStatus =
   | "accepted"
   | "needs_repair"
   | "needs_human_approval"
+  | "needs_human_decision"
   | "blocked";
 
 export interface SmokeTaskDefinition {
@@ -74,7 +75,10 @@ export interface SmokeReport {
   prState: "open" | "closed" | "merged" | null;
   ciChecks: RequiredCheckResult[];
   managerDecision: ManagerDecision | null;
+  /** Completed or started Manager-guided repair cycles. */
   repairCount: number;
+  /** Present only when two Manager-guided cycles failed (finalStatus needs_human_decision). */
+  humanEscalation: HumanEscalationReport | null;
   timestamps: {
     startedAt: string;
     finishedAt: string;

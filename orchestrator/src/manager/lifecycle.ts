@@ -3,14 +3,17 @@ import type { TaskState, WorkerKind } from "../domain/types";
 import type { NewAuditEvent, NewTaskRun, TaskPatch } from "../store/types";
 import { managerAudit, type ManagerAuditMetadataInput } from "./intent";
 import { buildRepairRequest, type Intent } from "./repair";
-import type { ManagerEvidence, ManagerValidation, RepairRequest } from "./types";
+import type { ManagerDiagnosis, ManagerEvidence, ManagerValidation, RepairRequest } from "./types";
 import { REPAIRABLE_STATES, validateEvidence } from "./validator";
 
 /**
  * Pure thin-Manager flow:
  *   task ready -> evidence collected -> validate ->
  *     accepted             -> next-step intent for the existing PR/QA/approval lifecycle
- *     needs_repair         -> RepairRequest; same worker, same task branch
+ *     needs_repair         -> Manager root-cause diagnosis + RepairRequest;
+ *                             same worker, same task branch
+ *     needs_human_decision -> two Manager-guided cycles failed: escalate to a
+ *                             human (no further repair, no commit/push/PR)
  *     blocked              -> stop / replan intent (no automatic retry)
  *     needs_human_approval -> approval intent
  *
@@ -28,6 +31,7 @@ export const MANAGER_NEXT_STEPS = [
   "request_post_qa_approval",
   "await_human_approval",
   "dispatch_repair",
+  "escalate_human_decision",
   "replan_branch",
   "stop",
 ] as const;
@@ -42,7 +46,14 @@ export interface ManagerStep {
   audit: Omit<NewAuditEvent, "id">[];
 }
 
-export function managerStep(input: { evidence: ManagerEvidence; approvalPhase?: ApprovalPhase }): Intent<ManagerStep> {
+export function managerStep(input: {
+  evidence: ManagerEvidence;
+  approvalPhase?: ApprovalPhase;
+  /** Previous cycle's diagnosis and the outcome of the repair that followed it (cycle >= 2). */
+  previousDiagnosis?: { diagnosis: ManagerDiagnosis; repairOutcome: string } | null;
+  /** Repair round (1 unless resumed by a human decision; that resume itself uses humanDecisionResumeStep). */
+  round?: number;
+}): Intent<ManagerStep> {
   const v = validateEvidence(input.evidence);
   const e = input.evidence;
   const from = e.taskState;
@@ -93,18 +104,30 @@ export function managerStep(input: { evidence: ManagerEvidence; approvalPhase?: 
       audit.push(managerAudit("manager_human_approval_required", from, transition, meta));
       break;
     case "needs_repair": {
-      const built = buildRepairRequest(e);
+      const built = buildRepairRequest(e, input.previousDiagnosis ?? null, { round: input.round ?? 1, human: null });
       if (!built.ok) return { ok: false, reason: built.reason };
       repairRequest = built.request;
       next = "dispatch_repair";
       taskPatch = { retries: built.request.attempt };
+      const d = built.request.diagnosis;
+      audit.push(
+        managerAudit("manager_diagnosis_issued", from, null, {
+          ...meta,
+          attempt: built.request.attempt,
+          failedEvidenceIds: [d.failingCheck],
+          reasonCodes: [d.failureCode, ...(d.previous ? [`trend_${d.previous.trend}`] : [])],
+        }),
+      );
       audit.push(managerAudit("manager_repair_requested", from, null, { ...meta, attempt: built.request.attempt }));
       break;
     }
+    case "needs_human_decision":
+      next = "escalate_human_decision";
+      audit.push(managerAudit("manager_human_decision_required", from, null, meta));
+      break;
     case "blocked":
       next = v.intents.includes("replan_branch") && !v.intents.includes("stop_task") ? "replan_branch" : "stop";
       audit.push(managerAudit("manager_blocked", from, null, meta));
-      if (v.reasonCodes.includes("repair_budget_exhausted")) audit.push(managerAudit("repair_budget_exhausted", from, null, meta));
       break;
     default:
       return { ok: false, reason: "unknown manager decision" };

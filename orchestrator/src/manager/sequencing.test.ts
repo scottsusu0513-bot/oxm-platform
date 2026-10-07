@@ -101,35 +101,40 @@ describe("lifecycle sequencing gate", () => {
     expect(g2.ok && [g2.transition, g2.manager.validation.decision, g2.manager.next]).toEqual([null, "accepted", "open_pr"]);
   });
 
-  it("second failed repair exhausts the budget and applies the terminal failed intent", () => {
+  it("two failed Manager-guided repairs escalate to needs_human_decision and withhold the failed intent", () => {
     let e = workerFailed("worker_failure");
     const transitions: (TaskState | null)[] = [];
     const attempts: number[] = [];
+    let previousDiagnosis: Parameters<typeof gateWorkerFinish>[0]["previousDiagnosis"] = null;
     for (let i = 0; i < 6; i++) {
-      const g = gateWorkerFinish({ finish: finish("running", "failure", "worker_failure"), evidence: e });
+      const g = gateWorkerFinish({ finish: finish("running", "failure", "worker_failure"), evidence: e, previousDiagnosis });
       if (!g.ok) throw new Error(g.reason);
       transitions.push(g.transition);
       if (!g.manager.repairRequest) {
-        expect(g.manager.validation.reasonCodes).toContain("repair_budget_exhausted");
-        expect(g.manager.audit.map((a) => a.event)).toContain("repair_budget_exhausted");
-        expect(g.workerAudit.toState).toBe("failed");
+        expect(g.manager.validation.decision).toBe("needs_human_decision");
+        expect(g.manager.next).toBe("escalate_human_decision");
+        expect(g.manager.validation.reasonCodes).toContain("manager_repair_cycles_exhausted");
+        expect(g.manager.audit.map((a) => a.event)).toContain("manager_human_decision_required");
+        expect(g.workerAudit.toState).toBeNull();
+        expect(g.withheldTransition).toBe("failed");
         break;
       }
       expect(g.manager.repairRequest.branch).toBe(TASK_BRANCH);
       attempts.push(g.manager.repairRequest.attempt);
+      previousDiagnosis = { diagnosis: g.manager.repairRequest.diagnosis, repairOutcome: "worker failure/worker_failure" };
       e = { ...e, repair: advanceRepairCounters(e.repair, g.manager.repairRequest) };
     }
     expect(attempts).toEqual([1, 2]);
-    expect(transitions).toEqual([null, null, "failed"]);
+    expect(transitions).toEqual([null, null, null]);
   });
 
-  it("QA budget exhaustion also ends in failed", () => {
+  it("QA failure after two Manager-guided cycles escalates to a human instead of failing", () => {
     const prior = [
       { attempt: 0, decision: "needs_repair" as const, failedEvidenceIds: ["ci:verify"] },
       { attempt: 1, decision: "needs_repair" as const, failedEvidenceIds: ["ci:verify"] },
     ];
     const g = gateQaResult({ qa: qaFailed(), taskId: "t1", currentState: "qa_running", evidence: ciFailedEvidence({ repair: { attempt: 2, prior } }) });
-    expect(g.ok && [g.transition, g.manager.next]).toEqual(["failed", "stop"]);
+    expect(g.ok && [g.transition, g.manager.next, g.withheldTransition]).toEqual([null, "escalate_human_decision", "failed"]);
   });
 
   it("non-repairable policy/scope violations are never converted into repairs", () => {

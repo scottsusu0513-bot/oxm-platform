@@ -18,7 +18,12 @@ import type { WorkerErrorType, WorkerResultStatus } from "../workers/types";
 // ---------------------------------------------------------------------------
 // Decisions
 
-export const MANAGER_DECISIONS = ["accepted", "needs_repair", "blocked", "needs_human_approval"] as const;
+/**
+ * needs_human_decision: two completed Manager-guided repair cycles still
+ * failed. Automation stops and a structured escalation report is handed to a
+ * human; it is never produced by a single finding.
+ */
+export const MANAGER_DECISIONS = ["accepted", "needs_repair", "blocked", "needs_human_approval", "needs_human_decision"] as const;
 export type ManagerDecision = (typeof MANAGER_DECISIONS)[number];
 
 /** Maximum length of any sanitized summary carried in evidence (single line). */
@@ -196,6 +201,8 @@ export const ESCALATION_TRIGGERS = [
   "missing_trusted_evidence",
   "repeated_repair_failure",
   "task_state_blocked",
+  /** Transient runtime/tool/quota/infrastructure failure; retried by the loop without a Manager-guided cycle. */
+  "infrastructure_failure",
 ] as const;
 export type EscalationTrigger = (typeof ESCALATION_TRIGGERS)[number];
 
@@ -204,6 +211,8 @@ export const ESCALATION_INTENTS = [
   "replan_branch",
   "request_human_approval",
   "stop_task",
+  /** Two Manager-guided repair cycles failed: a human must decide. */
+  "request_human_decision",
   /** Marker only: deep review is a future capability and is never executed. */
   "future_deep_review_candidate",
 ] as const;
@@ -239,7 +248,154 @@ export interface ManagerValidation {
 }
 
 // ---------------------------------------------------------------------------
-// Repair request (WHAT failed, never HOW to fix it)
+// Manager root-cause diagnosis (structured; derived only from trusted evidence)
+
+export const DIAGNOSIS_PHASES = ["local_validation", "post_pr_ci"] as const;
+export type DiagnosisPhase = (typeof DIAGNOSIS_PHASES)[number];
+
+/** How the failure changed relative to the previous diagnosis. */
+export const FAILURE_TRENDS = ["stagnated", "partially_resolved", "shifted"] as const;
+export type FailureTrend = (typeof FAILURE_TRENDS)[number];
+
+export interface DiagnosisFinding {
+  evidenceId: string;
+  failureCode: string;
+  expected: string;
+  actual: string;
+}
+
+/** Comparison of a fresh failure with the previous diagnosis and its repair. */
+export interface PreviousRepairComparison {
+  /** Cycle whose repair produced the current evidence. */
+  cycle: number;
+  previousFailureCode: string;
+  previousFingerprint: string;
+  currentFingerprint: string;
+  fingerprintChanged: boolean;
+  /** True when the set of failing checks/codes is different from the previous one. */
+  failureModeChanged: boolean;
+  resolvedEvidenceIds: string[];
+  persistingEvidenceIds: string[];
+  newEvidenceIds: string[];
+  trend: FailureTrend;
+  /** Worker outcome of the previous repair run. */
+  previousRepairOutcome: string;
+}
+
+/**
+ * One Manager-guided root-cause diagnosis. Every field is derived from
+ * normalized trusted evidence (ids, codes, statuses, SHAs, sanitized
+ * single-line summaries) — never from source code, diffs, raw logs or prompts.
+ */
+export interface ManagerDiagnosis {
+  kind: "manager_diagnosis";
+  taskId: string;
+  /** Repair round: 1 initially, +1 per accepted human decision. */
+  round: number;
+  /** 1-based Manager-guided repair cycle (within its round) this diagnosis starts. */
+  cycle: number;
+  phase: DiagnosisPhase;
+  /** Head the failing evidence was observed on. */
+  headSha: string | null;
+  failureCode: string;
+  failingCheck: string;
+  expected: string;
+  actual: string;
+  rootCause: string;
+  requiredFix: string;
+  protectedAreas: string[];
+  acceptanceCriteria: string[];
+  evidenceUsed: string[];
+  /** Stable "evidenceId=code|..." fingerprint of the repairable failures. */
+  fingerprint: string;
+  findings: DiagnosisFinding[];
+  previous: PreviousRepairComparison | null;
+  /** Human decision consumed as new evidence (first cycle of a resumed round only). */
+  humanDecision: HumanDecisionEvidence | null;
+}
+
+/** One completed (or in-flight) Manager-guided repair cycle. */
+export interface RepairCycleRecord {
+  round: number;
+  cycle: number;
+  diagnosis: ManagerDiagnosis;
+  repairRunId: string | null;
+  /** Worker outcome of the repair run (null while it runs). */
+  workerResult: { status: WorkerResultStatus; errorType: WorkerErrorType | null } | null;
+  /** Manager re-validation of the repaired result (null until revalidated). */
+  revalidation: { decision: ManagerDecision; failureCode: string | null; fingerprint: string | null } | null;
+}
+
+export interface HumanEscalationReport {
+  kind: "human_escalation_report";
+  state: "needs_human_decision";
+  taskId: string;
+  round: number;
+  /** Identity + binding a human decision must echo to resume this escalation. */
+  decisionRequest: HumanDecisionRequest;
+  cyclesCompleted: number;
+  originalFailure: { failureCode: string; failingCheck: string; actual: string; fingerprint: string } | null;
+  diagnoses: ManagerDiagnosis[];
+  repairOutcomes: { cycle: number; repairRunId: string | null; workerResult: string; revalidation: string }[];
+  currentBlocker: { failureCode: string; failingCheck: string; expected: string; actual: string; fingerprint: string };
+  /** stagnated: every cycle ended on the same fingerprint; changed: the failure mode moved. */
+  fingerprintTrend: "stagnated" | "changed";
+  currentComparison: PreviousRepairComparison | null;
+  managerRecommendation: string;
+  humanDecisionRequired: string;
+}
+
+// ---------------------------------------------------------------------------
+// Human decision (resume of a needs_human_decision escalation)
+
+/**
+ * The only decision a human can hand back to the Manager: new information /
+ * clarification that the Manager turns into a fresh repair plan. It carries
+ * no approval of any kind (commit, publish, merge, deploy, red risk); those
+ * remain separate trusted approvals. Cancellation uses the cancel path.
+ */
+export const HUMAN_DECISION_KINDS = ["continue_with_guidance"] as const;
+export type HumanDecisionKind = (typeof HUMAN_DECISION_KINDS)[number];
+export const MAX_HUMAN_GUIDANCE_LENGTH = 600;
+
+/** Exact binding of one open escalation. A decision must match every field. */
+export interface HumanDecisionRequest {
+  kind: "human_decision_request";
+  escalationId: string;
+  taskId: string;
+  lineageId: string;
+  branch: string;
+  /** Verified workspace HEAD at escalation; the resume re-checks the live workspace against it. */
+  expectedHeadSha: string;
+  round: number;
+  cyclesCompleted: number;
+  fingerprint: string;
+}
+
+/** Untrusted human input, accepted only after strict normalization and binding. */
+export interface HumanDecisionInput {
+  decisionId: string;
+  escalationId: string;
+  taskId: string;
+  branch: string;
+  expectedHeadSha: string;
+  kind: HumanDecisionKind;
+  guidance: string;
+  decidedBy: string;
+}
+
+/** Normalized human decision as Manager evidence. */
+export interface HumanDecisionEvidence {
+  decisionId: string;
+  escalationId: string;
+  round: number;
+  kind: HumanDecisionKind;
+  guidance: string;
+  decidedBy: string;
+}
+
+// ---------------------------------------------------------------------------
+// Repair request (Manager diagnosis + outcome-level required fix; the Worker decides the code)
 
 export interface RepairRequest {
   kind: "repair_request";
@@ -269,4 +425,6 @@ export interface RepairRequest {
   failureSummaries: { evidenceId: string; summary: string }[];
   /** Fixed process instructions (constant text, no implementation advice). */
   instructions: readonly string[];
+  /** The Manager root-cause diagnosis this repair cycle executes. */
+  diagnosis: ManagerDiagnosis;
 }

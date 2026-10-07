@@ -11,11 +11,14 @@ import type { WorkspaceLease } from "../githubWrite/lease";
 import type { PushReceipt, TrustedPullRequest } from "../githubWrite/types";
 import { DEFAULT_MAX_REPAIR_ATTEMPTS, managerBudget } from "../manager/budget";
 import { managerStep, type ManagerStep } from "../manager/lifecycle";
+import { buildHumanEscalationReport, failureFingerprint, primaryFailureCode, repairOutcomeSummary } from "../manager/diagnosis";
+import { checkHumanDecisionBinding, humanDecisionResumeStep, normalizeHumanDecision } from "../manager/humanDecision";
 import { advanceRepairCounters, repairWorkerContract } from "../manager/repair";
 import { gateTransition } from "../manager/sequencing";
-import type { ApprovalEvidenceState, ManagerValidation, RepairCounters } from "../manager/types";
-import { REPAIRABLE_STATES } from "../manager/validator";
+import type { ApprovalEvidenceState, HumanDecisionRequest, HumanEscalationReport, ManagerValidation, RepairCounters, RepairCycleRecord, RepairRequest } from "../manager/types";
+import { REPAIRABLE_STATES, TRANSIENT_WORKER_ERRORS, validateEvidence } from "../manager/validator";
 import type { WorkerResult, WorkerTaskContract } from "../workers/types";
+import { WORKER_INTERACTIVE_PROMPTS_ALLOWED } from "../workers/permissions";
 import { COMMIT_PUBLISH_ACTION, commitApprovalBinding, normalizeCommitApprovalEvidence, redStartBindingId, type CommitApprovalEvidence } from "../workers/prompt";
 import type { Approval, IsoTimestamp } from "../store/types";
 import { findDependencyCycle } from "./dependencies";
@@ -31,6 +34,7 @@ import {
   type Capability,
   type EscalationAction,
   type EscalationRecord,
+  type HumanDecisionLogEntry,
   type OrchestrationEvent,
   type OrchestrationPolicy,
   type OrchestrationPorts,
@@ -58,7 +62,14 @@ import {
  *   intake (classification/routing already done) -> scheduler decision ->
  *   branch plan -> lease -> create branch -> prepare workspace -> worker ->
  *   trusted run record -> evidence -> Manager validation ->
- *     needs_repair: same task / branch / worker, bounded attempts
+ *     transient runtime failure: bounded same-contract retry (no repair cycle)
+ *     needs_repair: Manager root-cause diagnosis -> repair instruction ->
+ *       same task / branch / worker repairs -> revalidation (max 2 cycles,
+ *       cycle 2 diagnoses fresh evidence against diagnosis #1)
+ *     needs_human_decision: both cycles failed -> escalation report, paused
+ *       (lease kept) -> bound human decision -> Manager consumes it as
+ *       evidence -> fresh diagnosis (next round) -> same task/branch/worker
+ *       repairs -> revalidation; or cancel
  *     accepted (no PR): commit/publish approval -> trusted commit -> safe push -> open PR -> QA
  *     QA final: validation -> qa_passed -> complete | human approval
  *     blocked: stop (failed) or replan marker
@@ -72,6 +83,8 @@ import {
 export const DEFAULT_ORCHESTRATION_POLICY: OrchestrationPolicy = Object.freeze({
   maxConcurrentTasks: 2,
   maxRepairAttempts: DEFAULT_MAX_REPAIR_ATTEMPTS,
+  maxInfrastructureRetries: 2,
+  maxHumanResumes: 3,
   maxReplans: 1,
   executableWorkers: Object.freeze(["claude", "codex"]) as readonly WorkerKind[],
   prDraft: false,
@@ -112,6 +125,20 @@ interface TaskRecord {
   lastResult: WorkerResult | null;
   record: TrustedRunRecord | null;
   repair: RepairCounters;
+  repairCycles: RepairCycleRecord[];
+  infraRetries: number;
+  humanEscalation: HumanEscalationReport | null;
+  humanRound: number;
+  humanDecisionRequest: HumanDecisionRequest | null;
+  /** Evidence phase the escalation was judged in; a resume re-judges the same phase. */
+  escalationPhase: "pre_push" | "post_qa" | null;
+  humanDecisionLog: HumanDecisionLogEntry[];
+  consumedHumanDecisionIds: string[];
+  escalationHistory: HumanEscalationReport[];
+  /** A red-risk repair waiting for its own fresh pre-execution approval. */
+  pendingRepair: { request: RepairRequest; contract: WorkerTaskContract } | null;
+  /** A red-risk transient retry whose changed contract waits for a fresh pre-execution approval. */
+  pendingRetry: { contract: WorkerTaskContract; errorType: string } | null;
   replans: number;
   receipt: PushReceipt | null;
   pr: TrustedPullRequest | null;
@@ -222,6 +249,17 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       lastResult,
       record,
       repair: structuredClone(t.repair),
+      repairCycles: structuredClone(t.repairCycles),
+      infrastructureRetries: t.infraRetries,
+      humanEscalation: t.humanEscalation ? structuredClone(t.humanEscalation) : null,
+      humanRound: t.humanRound,
+      humanDecisionRequest: t.humanDecisionRequest ? structuredClone(t.humanDecisionRequest) : null,
+      escalationPhase: t.escalationPhase,
+      humanDecisionLog: structuredClone(t.humanDecisionLog),
+      consumedHumanDecisionIds: [...t.consumedHumanDecisionIds],
+      escalationHistory: structuredClone(t.escalationHistory),
+      pendingRepair: t.pendingRepair ? structuredClone(t.pendingRepair) : null,
+      pendingRetry: t.pendingRetry ? structuredClone(t.pendingRetry) : null,
       replans: t.replans,
       receipt: t.receipt ? structuredClone(t.receipt) : null,
       pr: t.pr ? structuredClone(t.pr) : null,
@@ -257,7 +295,9 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
   // ---------------------------------------------------------------- helpers
 
   const isTerminalStatus = (s: OrchestrationStatus) => TERMINAL_ORCHESTRATION_STATUSES.includes(s);
-  const maxWorkerExecutions = (t: TaskRecord) => 1 + t.maxRepairAttempts;
+  const maxInfraRetries = Math.max(0, Math.floor(policy.maxInfrastructureRetries));
+  // Each accepted human decision opens one more round of maxRepairAttempts cycles.
+  const maxWorkerExecutions = (t: TaskRecord) => 1 + t.maxRepairAttempts * t.humanRound + maxInfraRetries;
   const capabilityList = (t: TaskRecord) => CAPABILITIES.filter((c) => t.capabilities.has(c));
 
   function audit(
@@ -366,6 +406,21 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       workerErrorType: t.lastResult?.errorType ?? null,
       paused: t.paused,
       repair: t.repair,
+      repairCycles: t.repairCycles,
+      humanEscalation: t.humanEscalation,
+      humanDecisionRequest: t.humanDecisionRequest,
+      humanRound: t.humanRound,
+      escalationHistory: t.escalationHistory,
+      humanDecisionLog: t.humanDecisionLog,
+      pendingRepair: t.pendingRepair
+        ? {
+            round: t.pendingRepair.request.diagnosis.round,
+            attempt: t.pendingRepair.request.attempt,
+            diagnosis: t.pendingRepair.request.diagnosis,
+            approvalBinding: redStartBindingId(t.pendingRepair.contract),
+          }
+        : null,
+      pendingRetry: t.pendingRetry ? { errorType: t.pendingRetry.errorType, approvalBinding: redStartBindingId(t.pendingRetry.contract) } : null,
       replans: t.replans,
       prNumber: t.pr?.number ?? null,
       headSha: t.receipt?.headSha ?? null,
@@ -381,6 +436,9 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
         maxConcurrentTasks: policy.maxConcurrentTasks,
         maxWorkerExecutions: maxWorkerExecutions(t),
         workerExecutions: t.workerExecutions,
+        maxInfrastructureRetries: maxInfraRetries,
+        infrastructureRetries: t.infraRetries,
+        workerInteractivePromptsAllowed: WORKER_INTERACTIVE_PROMPTS_ALLOWED,
         managerLlmCalls: 0 as const,
         llmCallBudget: policy.llmCallBudget,
         deepReviewEnabled: false as const,
@@ -509,6 +567,17 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       lastResult: null,
       record: null,
       repair: { attempt: 0, prior: [] },
+      repairCycles: [],
+      infraRetries: 0,
+      humanEscalation: null,
+      humanRound: 1,
+      humanDecisionRequest: null,
+      escalationPhase: null,
+      humanDecisionLog: [],
+      consumedHumanDecisionIds: [],
+      escalationHistory: [],
+      pendingRepair: null,
+      pendingRetry: null,
       replans: 0,
       receipt: null,
       pr: null,
@@ -881,6 +950,13 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
         trigger: "missing_trusted_evidence",
       });
     t.lastResult = result;
+    // The latest run of the current Manager-guided cycle (an infrastructure retry re-runs the same cycle).
+    const cycle = currentCycle(t);
+    if (cycle) {
+      cycle.repairRunId = runId;
+      cycle.workerResult = { status: result.status, errorType: result.errorType };
+      cycle.revalidation = null;
+    }
     audit(t, t.repair.attempt > 0 ? "repair_completed" : "worker_completed");
     if (t.worker === "codex") audit(t, result.status === "success" ? "codex_worker_completed" : "codex_worker_failed");
 
@@ -905,11 +981,69 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       });
     }
     t.record = record;
+    const phase = t.pr ? "pre_push" : "post_qa";
+
+    // A transient runtime/tool/quota/infrastructure failure is re-run on the
+    // same contract without a Manager diagnosis, so it never consumes a
+    // Manager-guided repair cycle. Only when nothing else about the run is
+    // unsafe; once the bounded retries are used, the validator blocks it as
+    // an unrecoverable infrastructure condition.
+    if (result.errorType !== null && TRANSIENT_WORKER_ERRORS.includes(result.errorType) && t.infraRetries < maxInfraRetries) {
+      const probe = validateEvidence(evidenceFor(t, phase));
+      const unsafe = probe.findings.some((f) => f.severity === "blocked" && f.evidenceId !== "worker:result");
+      if (!unsafe) return retryInfrastructure(t, result.errorType);
+    }
 
     // With an open PR, validate the repaired local result as a pre-push
     // artifact. CI is deliberately absent here because this exact head is not
     // on GitHub yet; post-QA validation below still requires exact-head CI.
-    return evaluate(t, undefined, t.pr ? "pre_push" : "post_qa");
+    return evaluate(t, undefined, phase);
+  }
+
+  async function retryInfrastructure(t: TaskRecord, errorType: string) {
+    if (!t.lease || !t.plan || !t.contract || !t.record)
+      return block(t, "infrastructure retry state incomplete", { terminal: true, trigger: "missing_trusted_evidence" });
+    const head = await ports.workspace.head(t.lease);
+    const expected = t.contract.expectedHeadSha ?? null;
+    if (!head || head.branch !== t.plan.branch || expected === null || head.headSha !== expected || t.record.verifiedHeadSha !== expected) {
+      return block(t, "workspace is not at the retry head", { terminal: true, trigger: "unsafe_branch_state" });
+    }
+    const contract: WorkerTaskContract = {
+      ...t.contract,
+      runId: `${t.intake.taskId}-run-${t.runCount + 1}`,
+      // Partial task-owned edits of the interrupted run (validated in scope) may remain dirty.
+      allowedDirtyPaths: Array.from(new Set([...(t.contract.allowedDirtyPaths ?? []), ...t.record.changedPaths])).sort(),
+    };
+    if (t.risk === "red") {
+      // Recompute the binding of the retry contract. Unchanged -> the existing
+      // approval still authorizes it. Changed (e.g. new task-owned dirty paths)
+      // -> the held approval is dropped and a fresh one is requested; it is
+      // never reused, and this wait is not a Manager-guided repair cycle.
+      const resolved = await ports.approvals.resolve(redRepairCheck(t, contract));
+      t.approval.pre_execution = resolved.state;
+      if (resolved.state === "rejected") return block(t, "pre_execution approval rejected", { terminal: true, trigger: "approval_rejected" });
+      if (resolved.state !== "approved" || !resolved.approval) {
+        t.trustedApproval = null;
+        t.pendingRetry = { contract: structuredClone(contract), errorType };
+        t.approval.pre_execution = "pending";
+        return awaitApproval(t, "pre_execution", "approval_required");
+      }
+      t.trustedApproval = resolved.approval;
+    }
+    return launchRetry(t, contract, errorType);
+  }
+
+  async function launchRetry(t: TaskRecord, contract: WorkerTaskContract, errorType: string) {
+    if (!t.lease || !t.plan) return block(t, "infrastructure retry state incomplete", { terminal: true, trigger: "missing_trusted_evidence" });
+    const head = await ports.workspace.head(t.lease);
+    if (!head || head.branch !== t.plan.branch || head.headSha !== contract.expectedHeadSha)
+      return block(t, "workspace is not at the retry head", { terminal: true, trigger: "unsafe_branch_state" });
+    t.pendingRetry = null;
+    t.infraRetries++;
+    escalate(t, `infrastructure_failure:${errorType}`, "retry_infrastructure");
+    audit(t, "infrastructure_retry_requested", { reason: `transient ${errorType}; retry ${t.infraRetries} of ${maxInfraRetries}` });
+    t.status = t.repair.attempt > 0 ? "repair_requested" : "running";
+    startRun(t, contract, t.repair.attempt);
   }
 
   // -------------------------------------------------------- Manager step
@@ -935,6 +1069,18 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     });
   }
 
+  /** The cycle of the current round whose repair produced the current evidence. */
+  function currentCycle(t: TaskRecord): RepairCycleRecord | null {
+    const last = t.repairCycles.at(-1);
+    return last && last.round === t.humanRound && last.cycle === t.repair.attempt ? last : null;
+  }
+
+  /** Previous cycle's diagnosis plus the outcome of the repair that followed it. */
+  function previousDiagnosis(t: TaskRecord) {
+    const last = currentCycle(t);
+    return last ? { diagnosis: last.diagnosis, repairOutcome: repairOutcomeSummary(last) } : null;
+  }
+
   function recordEscalations(t: TaskRecord, v: ManagerValidation) {
     const trigger = v.triggers.join(",") || v.decision;
     for (const intent of v.intents) {
@@ -956,7 +1102,15 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     }
     t.capabilities.add("validator");
     const evidence = evidenceFor(t, phase);
-    const step = managerStep({ evidence, approvalPhase });
+    // Every revalidation of a repaired result is recorded on its cycle (latest
+    // wins), before the Manager compares the new failure with that cycle.
+    const current = currentCycle(t);
+    if (current && current.workerResult) {
+      const v = validateEvidence(evidence);
+      current.revalidation = { decision: v.decision, failureCode: primaryFailureCode(v), fingerprint: failureFingerprint(v) || null };
+    }
+    const previous = previousDiagnosis(t);
+    const step = managerStep({ evidence, approvalPhase, previousDiagnosis: previous, round: t.humanRound });
     if (!step.ok)
       return block(t, `manager: ${step.reason}`, {
         terminal: true,
@@ -965,10 +1119,10 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     for (const a of step.audit) ports.audit(a);
     if (RANK[step.validation.riskLevel] > RANK[t.risk]) t.risk = step.validation.riskLevel; // risk only escalates
     recordEscalations(t, step.validation);
-    return applyStep(t, step, evidence, approvalPhase);
+    return applyStep(t, step, evidence, approvalPhase, phase);
   }
 
-  async function applyStep(t: TaskRecord, step: ManagerStep, evidence: ReturnType<typeof evidenceFor>, approvalPhase?: ApprovalPhase) {
+  async function applyStep(t: TaskRecord, step: ManagerStep, evidence: ReturnType<typeof evidenceFor>, approvalPhase: ApprovalPhase | undefined, phase: "pre_push" | "post_qa") {
     const from = t.state;
     const reasons = step.validation.reasonCodes.join(",");
     switch (step.next) {
@@ -994,7 +1148,11 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
         return awaitApproval(t, phase, step.validation.triggers.join(",") || "approval_required");
       }
       case "dispatch_repair":
-        return startRepair(t, step);
+        // A stricter orchestration policy may allow fewer cycles than the Manager budget.
+        if (step.repairRequest && step.repairRequest.attempt > t.maxRepairAttempts) return escalateHumanDecision(t, step, evidence, phase);
+        return startRepair(t, step.repairRequest);
+      case "escalate_human_decision":
+        return escalateHumanDecision(t, step, evidence, phase);
       case "replan_branch":
         // Work already exists on the branch: no automatic replan after execution.
         return block(t, `replan required: ${reasons}`, {
@@ -1020,15 +1178,14 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     }
   }
 
-  async function startRepair(t: TaskRecord, step: ManagerStep) {
-    const req = step.repairRequest;
+  async function startRepair(t: TaskRecord, req: RepairRequest | null) {
     if (!req || !t.lease || !t.baseContract || !t.plan)
       return block(t, "repair request incomplete", {
         terminal: true,
         trigger: "missing_trusted_evidence",
       });
     if (req.attempt > t.maxRepairAttempts) {
-      return block(t, "orchestration repair budget exhausted", {
+      return block(t, "repair cycle outside the orchestration policy", {
         terminal: true,
         trigger: "repeated_repair_failure",
       });
@@ -1060,12 +1217,122 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
         terminal: true,
         trigger: "unsafe_branch_state",
       });
-    if (!(await authorizeWorkerContract(t, contract.contract))) return;
+    if (t.risk === "red") {
+      // Every repair plan is a materially new contract (objective = diagnosis /
+      // human guidance, dirty paths): it needs its own fresh pre-execution
+      // approval. Wait for it instead of blocking; never reuse an older one.
+      const resolved = await ports.approvals.resolve(redRepairCheck(t, contract.contract));
+      t.approval.pre_execution = resolved.state;
+      if (resolved.state === "rejected")
+        return block(t, "pre_execution approval rejected", { terminal: true, trigger: "approval_rejected" });
+      if (resolved.state !== "approved" || !resolved.approval) {
+        t.pendingRepair = { request: structuredClone(req), contract: structuredClone(contract.contract) };
+        t.approval.pre_execution = "pending";
+        return awaitApproval(t, "pre_execution", "approval_required");
+      }
+      t.trustedApproval = resolved.approval;
+    }
+    return launchRepair(t, req, contract.contract);
+  }
+
+  function redRepairCheck(t: TaskRecord, contract: WorkerTaskContract) {
+    return {
+      taskId: t.intake.taskId,
+      phase: "pre_execution" as const,
+      kind: "start" as const,
+      requestedAction: APPROVAL_ACTIONS.pre_execution,
+      bindingShaOrActionId: redStartBindingId(contract),
+    };
+  }
+
+  /** Starts an authorized repair run. Repair history is advanced only when the Worker actually starts. */
+  async function launchRepair(t: TaskRecord, req: RepairRequest, contract: WorkerTaskContract) {
+    if (!t.lease) return block(t, "repair request incomplete", { terminal: true, trigger: "missing_trusted_evidence" });
+    const head = await ports.workspace.head(t.lease);
+    if (!head || head.branch !== req.branch || head.headSha !== req.expectedHeadSha)
+      return block(t, "workspace is not at the repair head", { terminal: true, trigger: "unsafe_branch_state" });
+    t.pendingRepair = null;
     t.capabilities.add("repair_loop");
     t.repair = advanceRepairCounters(t.repair, req);
+    t.repairCycles.push({ round: t.humanRound, cycle: req.attempt, diagnosis: structuredClone(req.diagnosis), repairRunId: contract.runId, workerResult: null, revalidation: null });
     t.status = "repair_requested";
     audit(t, "repair_requested", { attempt: req.attempt });
-    startRun(t, contract.contract, req.attempt);
+    startRun(t, contract, req.attempt);
+  }
+
+  /**
+   * Two Manager-guided repair cycles completed and the failure persists.
+   * Automation stops without failing the task: no further worker run,
+   * commit, push or PR happens, and the escalation report names the
+   * decision a human must make.
+   */
+  function escalateHumanDecision(t: TaskRecord, step: ManagerStep, evidence: ReturnType<typeof evidenceFor>, phase: "pre_push" | "post_qa") {
+    if (isTerminalStatus(t.status)) return;
+    const report = buildHumanEscalationReport({ evidence, validation: step.validation, cycles: t.repairCycles, prNumber: t.pr?.number ?? null, round: t.humanRound });
+    t.humanEscalation = report;
+    t.humanDecisionRequest = report.decisionRequest;
+    t.escalationPhase = phase;
+    t.escalationHistory.push(structuredClone(report));
+    t.status = "needs_human_decision";
+    t.queueReason = null;
+    t.blockingReason = `needs_human_decision: ${report.currentBlocker.failureCode} on ${report.currentBlocker.failingCheck} after ${report.cyclesCompleted} Manager-guided repair cycles (${report.fingerprintTrend})`.slice(0, 200);
+    escalate(t, "repeated_repair_failure", "request_human_decision");
+    // The lease is kept: the uncommitted work must stay intact for a resume.
+    audit(t, "human_decision_requested", { reason: `${report.decisionRequest.escalationId}: ${t.blockingReason}` });
+  }
+
+  function logHumanDecision(t: TaskRecord, outcome: HumanDecisionLogEntry["outcome"], reason: string, ids: { decisionId: string; escalationId: string } | null) {
+    t.humanDecisionLog.push({ decisionId: ids?.decisionId ?? null, escalationId: ids?.escalationId ?? null, outcome, reason: reason.slice(0, 200), at: ports.now() });
+    if (t.humanDecisionLog.length > 50) t.humanDecisionLog.shift();
+    audit(t, outcome === "accepted" ? "human_decision_accepted" : "human_decision_rejected", { reason: `${outcome}: ${reason}` });
+  }
+
+  /**
+   * Resume of a needs_human_decision task. The decision is untrusted input:
+   * it is normalized, de-duplicated by decisionId (idempotent), bound to the
+   * open escalation (task, branch, escalation id, expected HEAD) and to the
+   * live workspace, then consumed by the Manager as evidence for a fresh
+   * repair plan on the SAME task, branch and worker. It grants no approval:
+   * commit/publish, red-risk, merge and deploy gates are untouched.
+   */
+  async function onHumanDecision(taskId: string, raw: unknown) {
+    const t = recs.get(taskId);
+    if (!t) return;
+    const normalized = normalizeHumanDecision(raw);
+    if (!normalized.ok) return logHumanDecision(t, "rejected", normalized.reason, null);
+    const d = normalized.decision;
+    if (t.consumedHumanDecisionIds.includes(d.decisionId)) return logHumanDecision(t, "duplicate", "decision already consumed; ignored", d);
+    if (d.taskId !== taskId) return logHumanDecision(t, "rejected", "human decision belongs to another task", d);
+    const request = t.humanDecisionRequest;
+    if (t.status !== "needs_human_decision" || !request) return logHumanDecision(t, "rejected", `task is ${t.status}, not awaiting a human decision`, d);
+    const bound = checkHumanDecisionBinding(request, d);
+    if (!bound.ok) return logHumanDecision(t, "rejected", bound.reason, d);
+    if (t.humanRound - 1 >= policy.maxHumanResumes) return logHumanDecision(t, "rejected", "human resume budget exhausted; cancel the task", d);
+    if (t.maxRepairAttempts === 0) return logHumanDecision(t, "rejected", "repair cycles are disabled by policy", d);
+    if (!t.lease || !t.plan || !t.lastResult || !t.record || !t.worker || !t.escalationPhase)
+      return logHumanDecision(t, "rejected", "escalated task state is incomplete", d);
+    const head = await ports.workspace.head(t.lease);
+    if (!head || head.branch !== t.plan.branch || head.headSha !== request.expectedHeadSha)
+      return logHumanDecision(t, "rejected", "workspace no longer matches the escalated branch/HEAD", d);
+    const last = t.repairCycles.filter((c) => c.round === t.humanRound).at(-1);
+    if (!last) return logHumanDecision(t, "rejected", "no Manager diagnosis to resume from", d);
+
+    // Same trusted evidence the escalation was judged on, with counters reset for the new round.
+    const evidence = { ...evidenceFor(t, t.escalationPhase), repair: { attempt: 0, prior: [] } };
+    const step = humanDecisionResumeStep({ evidence, request, decision: d, previous: { diagnosis: last.diagnosis, repairOutcome: repairOutcomeSummary(last) } });
+    if (!step.ok) return logHumanDecision(t, "rejected", step.reason, d);
+
+    t.consumedHumanDecisionIds.push(d.decisionId);
+    for (const a of step.audit) ports.audit(a);
+    logHumanDecision(t, "accepted", `resumed as round ${step.human.round}`, d);
+    t.humanRound = step.human.round;
+    t.repair = { attempt: 0, prior: [] };
+    t.humanDecisionRequest = null;
+    t.humanEscalation = null;
+    t.escalationPhase = null;
+    t.blockingReason = null;
+    escalate(t, `human_decision:${d.decisionId}`, "return_to_worker");
+    return startRepair(t, step.repairRequest);
   }
 
   // ---------------------------------------------------------- GitHub path
@@ -1295,6 +1562,9 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
         bindingShaOrActionId: head,
       };
     }
+    // A parked red-risk repair is bound to its own exact new contract.
+    if (t.pendingRepair) return { ...redRepairCheck(t, t.pendingRepair.contract) };
+    if (t.pendingRetry) return { ...redRepairCheck(t, t.pendingRetry.contract) };
     let branch = t.plan?.branch;
     if (!branch) {
       // The pre-execution binding covers the deterministic task contract and
@@ -1368,6 +1638,18 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     t.trustedApproval = resolved.approval;
     t.approvalPhase = null;
     t.approvalRequestedAt = null;
+    if (phase === "pre_execution" && t.pendingRepair) {
+      // Fresh approval of exactly this repair plan: resume the same repair.
+      t.approval.pre_execution = "approved";
+      const { request, contract } = t.pendingRepair;
+      return launchRepair(t, request, contract);
+    }
+    if (phase === "pre_execution" && t.pendingRetry) {
+      // Fresh approval of exactly the changed retry contract: resume the same retry.
+      t.approval.pre_execution = "approved";
+      const { contract, errorType } = t.pendingRetry;
+      return launchRetry(t, contract, errorType);
+    }
     if (t.state === "awaiting_approval" && phase === "pre_execution") {
       move(t, "queued", { approved: true, approvalPhase: "pre_execution" });
       t.status = "queued";
@@ -1408,6 +1690,8 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
         return onApproval(e.taskId, e.phase);
       case "approval_rejected":
         return onApproval(e.taskId, e.phase);
+      case "human_decision_submitted":
+        return onHumanDecision(e.taskId, e.decision);
     }
   }
 
@@ -1527,6 +1811,17 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       lastResult: saved.lastResult ? structuredClone(saved.lastResult) : null,
       record: saved.record ? structuredClone(saved.record) : null,
       repair: structuredClone(saved.repair),
+      repairCycles: structuredClone(saved.repairCycles ?? []),
+      infraRetries: saved.infrastructureRetries ?? 0,
+      humanEscalation: saved.humanEscalation ? structuredClone(saved.humanEscalation) : null,
+      humanRound: saved.humanRound ?? 1,
+      humanDecisionRequest: saved.humanDecisionRequest ? structuredClone(saved.humanDecisionRequest) : null,
+      escalationPhase: saved.escalationPhase ?? null,
+      humanDecisionLog: structuredClone(saved.humanDecisionLog ?? []),
+      consumedHumanDecisionIds: [...(saved.consumedHumanDecisionIds ?? [])],
+      escalationHistory: structuredClone(saved.escalationHistory ?? []),
+      pendingRepair: saved.pendingRepair ? structuredClone(saved.pendingRepair) : null,
+      pendingRetry: saved.pendingRetry ? structuredClone(saved.pendingRetry) : null,
       replans: saved.replans,
       receipt: saved.receipt ? structuredClone(saved.receipt) : null,
       pr: saved.pr ? structuredClone(saved.pr) : null,
@@ -1563,7 +1858,7 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
         recs.set(t.intake.taskId, t);
       }
       for (const t of Array.from(recs.values()).sort((a, b) => a.seq - b.seq)) {
-        if (isTerminalStatus(t.status) || t.status === "needs_human_approval" || t.status === "qa_pending") continue;
+        if (isTerminalStatus(t.status) || t.status === "needs_human_approval" || t.status === "needs_human_decision" || t.status === "qa_pending") continue;
         if (t.workerRunning || t.pendingSideEffect !== null) {
           block(t, `restart found indeterminate ${t.pendingSideEffect ?? "worker"} side effect; refusing to repeat it`, {
             terminal: true,

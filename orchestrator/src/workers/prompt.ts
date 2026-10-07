@@ -77,8 +77,34 @@ export const VALIDATION_COMMANDS: Record<RequiredValidation, string> = {
   smoke: "pnpm vitest run orchestrator/src/e2e/fixture.test.ts",
 };
 
-/** Claude Code tool permissions. Defense in depth — the adapter re-verifies branch/HEAD afterwards. */
-export const CLAUDE_ALLOWED_TOOLS = ["Read", "Edit", "Write", "Glob", "Grep", "Bash(pnpm test:*)", "Bash(pnpm check)", "Bash(pnpm vitest run:*)", "Bash(git status:*)", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git rev-parse:*)"] as const;
+/**
+ * Claude Code tool permissions (see workers/permissions.ts). With
+ * --permission-mode dontAsk these run without confirmation; everything not
+ * allowed is denied immediately instead of prompting. Scope is enforced again
+ * from real Git paths after the run, which returns a structured scope_violation.
+ */
+export const CLAUDE_TOOLS = ["Read", "Edit", "Write", "Glob", "Grep", "Bash"] as const;
+
+export const CLAUDE_ALLOWED_TOOLS = [
+  "Read",
+  "Edit",
+  "Write",
+  "Glob",
+  "Grep",
+  "Bash(pnpm test:*)",
+  "Bash(pnpm check)",
+  "Bash(pnpm build)",
+  "Bash(pnpm vitest run:*)",
+  "Bash(git status:*)",
+  "Bash(git diff:*)",
+  "Bash(git log:*)",
+  "Bash(git rev-parse:*)",
+  "Bash(git ls-files:*)",
+  "Bash(git show:*)",
+  "Bash(ls:*)",
+  "Bash(pwd)",
+  "Bash(wc:*)",
+] as const;
 
 export const CLAUDE_DISALLOWED_TOOLS = [
   "Bash(git push:*)",
@@ -91,20 +117,74 @@ export const CLAUDE_DISALLOWED_TOOLS = [
   "Bash(git config:*)",
   "Bash(git add:*)",
   "Bash(git commit:*)",
+  "Bash(git remote:*)",
+  "Bash(git tag:*)",
+  "Bash(git stash:*)",
+  "Bash(git restore:*)",
+  "Bash(git clean:*)",
+  "Bash(git cherry-pick:*)",
+  "Bash(git update-ref:*)",
+  "Bash(git worktree:*)",
+  "Bash(git fetch:*)",
+  "Bash(git pull:*)",
   "Bash(gh:*)",
   "Bash(pnpm db:push:*)",
+  "Bash(pnpm deploy:*)",
   "Bash(curl:*)",
   "Bash(wget:*)",
+  "Bash(sudo:*)",
+  "Bash(claude:*)",
+  "Bash(codex:*)",
+  "Edit(.git/**)",
+  "Write(.git/**)",
+  "Edit(.claude/**)",
+  "Write(.claude/**)",
+  "Edit(.codex/**)",
+  "Write(.codex/**)",
+  "Read(.env)",
+  "Read(.env.*)",
   "WebFetch",
   "WebSearch",
 ] as const;
+
+/**
+ * Inline settings: dontAsk by default and bypass mode disabled, so nothing in
+ * the run can switch the Worker into a more permissive or interactive mode.
+ */
+export const CLAUDE_WORKER_SETTINGS = JSON.stringify({
+  permissions: { defaultMode: "dontAsk", disableBypassPermissionsMode: "disable" },
+});
 
 const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:\[\]-]{0,99}$/;
 
 /** Fixed argument array for `claude -p`. The prompt goes via stdin, never argv. */
 export function buildClaudeArgs(model: string): string[] {
   if (!MODEL_RE.test(model)) throw new Error("invalid model identifier");
-  return ["-p", "--output-format", "json", "--model", model, "--permission-mode", "acceptEdits", "--allowedTools", ...CLAUDE_ALLOWED_TOOLS, "--disallowedTools", ...CLAUDE_DISALLOWED_TOOLS];
+  // Fully non-interactive: dontAsk + permission prompts answered by nobody (=
+  // denied). No user/project/local settings or MCP servers can widen the
+  // allowlist, and the inline settings disable bypass mode.
+  return [
+    "-p",
+    "--output-format",
+    "json",
+    "--model",
+    model,
+    "--permission-mode",
+    "dontAsk",
+    "--permission-prompts",
+    "none",
+    "--setting-sources",
+    "",
+    "--strict-mcp-config",
+    "--settings",
+    CLAUDE_WORKER_SETTINGS,
+    "--tools",
+    CLAUDE_TOOLS.join(","),
+    "--allowedTools",
+    ...CLAUDE_ALLOWED_TOOLS,
+    "--disallowedTools",
+    ...CLAUDE_DISALLOWED_TOOLS,
+  ];
 }
 
 /** Fixed, non-interactive Codex argv. The task prompt is read from stdin via `-`. */
@@ -126,6 +206,9 @@ export function buildCodexArgs(model: string | undefined, repoRoot: string): str
     "permissions.worker.network.enabled=false",
     "-c",
     'default_permissions="worker"',
+    // Never ask: sandbox/exec-policy denials are returned to the model as failures.
+    "-c",
+    'approval_policy="never"',
     "--color",
     "never",
     ...(model ? ["--model", model] : []),
