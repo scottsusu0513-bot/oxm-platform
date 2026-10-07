@@ -147,12 +147,22 @@ describe("Agent runtime planning composition", () => {
   });
 
   it("refuses a planner working directory inside the repository", async () => {
-    const cli = fakeCli();
-    const built = await createPlanningBackend({}, deps(cli, { workspace: fixedPlanningWorkspace(join(REPO, "orchestrator")) }));
-    expect(built).toMatchObject({ ok: false, code: "claude_cli_workspace_unavailable" });
-    expect(cli.specs).toEqual([]);
-    expect(createTempPlanningWorkspace({ repoRoot: REPO, base: join(REPO, "orchestrator") }).acquire).toThrow(expect.objectContaining({ kind: "workspace_unavailable" }));
-    expect(existsSync(join(REPO, "orchestrator"))).toBe(true);
+    // A dedicated fixture repository: the in-repo base really exists, so the refusal comes from the containment check.
+    const repo = mkdtempSync(join(tmpdir(), "oxm-repo-fixture-"));
+    try {
+      const inRepo = join(repo, "orchestrator");
+      mkdirSync(inRepo);
+      writeFileSync(join(inRepo, "sentinel.txt"), "keep");
+      const cli = fakeCli();
+      const built = await createPlanningBackend({}, deps(cli, { workspace: fixedPlanningWorkspace(inRepo), repoRoot: repo }));
+      expect(built).toMatchObject({ ok: false, code: "claude_cli_workspace_unavailable" });
+      expect(cli.specs).toEqual([]);
+      expect(createTempPlanningWorkspace({ repoRoot: repo, base: inRepo }).acquire).toThrow(expect.objectContaining({ kind: "workspace_unavailable" }));
+      expect(readdirSync(repo)).toEqual(["orchestrator"]);
+      expect(readdirSync(inRepo)).toEqual(["sentinel.txt"]);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
   });
 
   it("invalid provider fails closed before anything is spawned", async () => {
