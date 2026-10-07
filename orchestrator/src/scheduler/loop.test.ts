@@ -562,6 +562,29 @@ describe("Manager Loop — trusted approval notifications", () => {
     expect(sim.loop.task("meta")?.approvalPhase).toBeNull();
     expect(sim.commits).toEqual([]);
     expect(sim.remote.calls.filter((call) => call.startsWith("PUSH") || call.startsWith("CREATE pr"))).toEqual([]);
+    // No earlier Worker failure: the evidence error itself is the primary failure and stays surfaced.
+    expect(sim.loop.task("meta")?.workerErrorType).toBeNull();
+    expect(sim.loop.task("meta")?.blockingReason).toBe("orchestration error (Error)");
+  });
+
+  it("a secondary evidence error never masks a primary Worker failure with headSha=null", async () => {
+    const sim = createSimulation({ worker: { meta6: ["git_metadata_changed"] } });
+    await sim.create(fakeIntake({ taskId: "meta6" }));
+    await sim.loop.settle();
+    const t = sim.loop.task("meta6");
+    expect(t?.status).toBe("blocked");
+    expect(t?.state).toBe("failed");
+    expect(t?.workerErrorType).toBe("git_metadata_changed");
+    expect(t?.blockingReason).toBe("worker failure: git_metadata_changed");
+    expect(t?.blockingReason).not.toContain("orchestration error");
+    expect(t?.headSha).toBeNull();
+    expect(t?.escalations).toEqual([
+      { trigger: "secondary:evidence_record_failed(Error)", action: "block" },
+      { trigger: "worker_git_metadata_changed", action: "block" },
+    ]);
+    expect(t?.budget.workerExecutions).toBe(1);
+    expect(sim.commits).toEqual([]);
+    expect(sim.remote.calls.filter((call) => call.startsWith("PUSH") || call.startsWith("CREATE pr"))).toEqual([]);
   });
 });
 

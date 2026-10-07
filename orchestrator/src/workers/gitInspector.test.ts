@@ -1,10 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createGitInspector } from "./gitInspector";
-import { gitBlobId, gitMetadataDigest, readContentIdentities } from "./gitIntegrity";
+import { gitBlobId, gitMetadataDigest, normalizeRepoConfig, readContentIdentities } from "./gitIntegrity";
 import { createNodeProcessRunner } from "./processRunner";
 
 describe("git inspector against a real repository", () => {
@@ -105,6 +105,64 @@ describe("trusted content identities and Git metadata digest (real filesystem)",
       }
     } finally {
       rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  // Live smoke #6: VS Code's Git extension cached branch.<task>.vscode-merge-base
+  // ~1.4s after the trusted `git switch -c`, mid-run, and the digest refused the result.
+  it("ignores VS Code's vscode-merge-base cache but still detects every other repo config change", async () => {
+    const root = repo();
+    const home = mkdtempSync(join(tmpdir(), "oxm-home-"));
+    try {
+      const env = { HOME: home, GIT_CONFIG_SYSTEM: join(home, "system-gitconfig") };
+      const git = (...args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8" });
+      const config = join(root, ".git", "config");
+      const digest = () => gitMetadataDigest(root, env);
+      git("config", "--local", "branch.main.remote", "origin");
+      const baseline = await digest();
+
+      git("config", "--local", "branch.agent/task-x.vscode-merge-base", "origin/main");
+      git("config", "--local", "branch.main.vscode-merge-base", "origin/main");
+      expect(await digest()).toBe(baseline);
+      git("config", "--local", "branch.agent/task-x.vscode-merge-base", "origin/other");
+      expect(await digest()).toBe(baseline);
+      const benign = readFileSync(config, "utf8");
+
+      const tampered = [
+        `${benign}[branch "agent/task-x"]\n\tremote = evil\n`,
+        benign.replace('[branch "agent/task-x"]\n', '[branch "agent/task-x"]\n\tdescription = x\n'),
+        benign.replace("\tvscode-merge-base = origin/other\n", "\tvscode-merge-base = origin/other\n\tpushRemote = evil\n"),
+        `${benign}[core]\n\thooksPath = /tmp/hooks\n`,
+        `${benign}[core]\n\tvscode-merge-base = origin/main\n`,
+        `${benign}[include]\n\tpath = ${join(home, "inc")}\n`,
+        benign.replace("\tremote = origin\n", "\tremote = origin\\\n\tvscode-merge-base = origin/main\n"),
+        benign.replace("\tvscode-merge-base = origin/other\n", "\tvscode-merge-base = origin/other ; x\n"),
+        benign.replace("\tvscode-merge-base = origin/other\n", "\tvscode-merge-base = origin/other\r\n"),
+      ];
+      for (const text of tampered) {
+        writeFileSync(config, text);
+        expect(await digest()).not.toBe(baseline);
+      }
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("normalizeRepoConfig", () => {
+  const norm = (s: string) => normalizeRepoConfig(Buffer.from(s, "latin1")).toString("latin1");
+  it("drops only the git-config-written vscode-merge-base shape", () => {
+    expect(norm('[core]\n\tbare = false\n[branch "a/b"]\n\tvscode-merge-base = origin/main\n')).toBe("[core]\n\tbare = false\n");
+    expect(norm('[branch "a"]\n\tremote = origin\n\tvscode-merge-base = origin/main\n')).toBe('[branch "a"]\n\tremote = origin\n');
+    expect(norm('[branch "a"]\n\tvscode-merge-base = origin/main\n\tmerge = refs/heads/a\n')).toBe('[branch "a"]\n\tmerge = refs/heads/a\n');
+    for (const kept of [
+      '[core]\n\tvscode-merge-base = origin/main\n',
+      '[branch "a"] vscode-merge-base = origin/main\n',
+      '[branch "a"]\n\tvscode-merge-base = "origin/main"\n',
+      '[branch "a"]\n\tx = y\\\n\tvscode-merge-base = origin/main\n',
+      '[branch "a b"]\n\tvscode-merge-base = origin/main\n',
+    ]) {
+      expect(norm(kept)).toBe(kept);
     }
   });
 });

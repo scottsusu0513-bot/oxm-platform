@@ -145,11 +145,65 @@ function referencedPaths(config: string): { key: string; value: string }[] {
   return out;
 }
 
-async function addConfig(entries: Entries, label: string, path: string, ctx: { repoRoot: string; home: string; seen: Set<string> }, depth = 0): Promise<void> {
+const VSCODE_BRANCH_HEADER_RE = /^\[branch "[A-Za-z0-9._/-]+"\]$/;
+const VSCODE_MERGE_BASE_RE = /^\tvscode-merge-base = [A-Za-z0-9._/-]+$/;
+
+/**
+ * VS Code's Git extension asynchronously caches `branch.<name>.vscode-merge-base`
+ * in the repository config (via `git config --local`) shortly after it sees a
+ * new branch. Git never reads that key, so exactly the `git config`-written
+ * shape is dropped before hashing: the key line inside a strict `[branch "…"]`
+ * section, plus that header when the section holds nothing else. Any other
+ * spelling (CRLF, quotes, comments, line continuation, other sections or keys)
+ * is still hashed byte-for-byte and fails closed.
+ */
+export function normalizeRepoConfig(bytes: Buffer): Buffer {
+  const lines = bytes.toString("latin1").split("\n");
+  const continued = (i: number) => i > 0 && lines[i - 1].endsWith("\\");
+  const drop = new Set<number>();
+  let header = -1;
+  let branchSection = false;
+  let sectionKeys: number[] = [];
+  let sectionOnlyMergeBase = false;
+  const closeSection = () => {
+    if (branchSection && header >= 0 && sectionOnlyMergeBase && sectionKeys.length > 0) drop.add(header);
+  };
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (i === lines.length - 1 && line === "") break;
+    if (!continued(i) && /^\s*\[/.test(line)) {
+      closeSection();
+      header = i;
+      branchSection = VSCODE_BRANCH_HEADER_RE.test(line);
+      sectionKeys = [];
+      sectionOnlyMergeBase = true;
+      continue;
+    }
+    if (branchSection && !continued(i) && VSCODE_MERGE_BASE_RE.test(line)) {
+      drop.add(i);
+      sectionKeys.push(i);
+    } else sectionOnlyMergeBase = false;
+  }
+  closeSection();
+  if (drop.size === 0) return bytes;
+  return Buffer.from(lines.filter((_, i) => !drop.has(i)).join("\n"), "latin1");
+}
+
+async function addConfig(
+  entries: Entries,
+  label: string,
+  path: string,
+  ctx: { repoRoot: string; home: string; seen: Set<string> },
+  depth = 0,
+  normalize?: (bytes: Buffer) => Buffer,
+): Promise<void> {
   const abs = resolve(path);
   if (ctx.seen.has(abs)) return;
   ctx.seen.add(abs);
-  const bytes = await addFile(entries, label, abs);
+  const d = await describeFile(abs);
+  const bytes = d.bytes;
+  // d.value is "file:<x|->:<sha256>"; a normalized config swaps in the hash of its normalized bytes.
+  add(entries, label, bytes && normalize ? d.value.slice(0, -64) + createHash("sha256").update(normalize(bytes)).digest("hex") : d.value);
   if (!bytes || depth >= MAX_INCLUDE_DEPTH) return;
   for (const ref of referencedPaths(bytes.toString("utf8"))) {
     if (ref.key === "fsmonitor" && !/[\\/]/.test(ref.value)) continue; // boolean value; the config bytes already cover it
@@ -195,7 +249,7 @@ export async function gitMetadataDigest(repoRoot: string, env: GitMetadataEnv = 
   const dirs = gitDir === commonDir ? [["git", gitDir]] : [["git", gitDir], ["common", commonDir]];
 
   for (const [tag, dir] of dirs) {
-    await addConfig(entries, `${tag}:config`, join(dir, "config"), ctx);
+    await addConfig(entries, `${tag}:config`, join(dir, "config"), ctx, 0, normalizeRepoConfig);
     await addConfig(entries, `${tag}:config.worktree`, join(dir, "config.worktree"), ctx);
     for (const name of ["HEAD", "commondir", "shallow", "objects/info/alternates", "objects/info/http-alternates"]) {
       await addFile(entries, `${tag}:${name}`, join(dir, ...name.split("/")));

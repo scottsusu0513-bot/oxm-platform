@@ -39,7 +39,7 @@ export const sha = (n: number) => n.toString(16).padStart(40, "0");
 export const MAIN_SHA = sha(0xa0000);
 export const FAKE_METADATA_DIGEST = "c".repeat(64);
 
-export type WorkerScript = "success" | "failure" | "policy_error" | "head_mismatch" | "malformed_output" | "validation_failed" | "validation_failed_dirty" | "scope_violation" | "risk_red";
+export type WorkerScript = "success" | "failure" | "policy_error" | "head_mismatch" | "malformed_output" | "validation_failed" | "validation_failed_dirty" | "scope_violation" | "risk_red" | "git_metadata_changed";
 export type CiScript = "pass" | "fail" | "pending";
 
 export interface SimulationOptions {
@@ -201,6 +201,21 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
           checkResult: "not_run",
           headSha: start,
           errorType: "worker_failure",
+        };
+      case "git_metadata_changed":
+        // Mirrors runtimeWorker: metadata drifted during the run, so the result is refused with no headSha.
+        gitMetadata.set(c.taskId, "d".repeat(64));
+        return {
+          ...base,
+          status: "failure",
+          summary: "worker run changed or hid Git metadata; result refused",
+          filesChanged: [],
+          testsRun: [],
+          checkResult: "not_run",
+          headSha: null,
+          riskObserved: { level: "red", notes: [] },
+          needsApproval: true,
+          errorType: "git_metadata_changed",
         };
       case "policy_error":
         return {
