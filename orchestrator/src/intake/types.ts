@@ -155,7 +155,7 @@ export type IntakeResult =
 export interface ApprovalNeededStatus {
   required: boolean;
   kind: ApprovalKind | null;
-  phase: "pre_execution" | "post_qa" | null;
+  phase: "pre_execution" | "commit_publish" | "post_qa" | null;
   bindingTarget: string | null;
   action: string | null;
 }

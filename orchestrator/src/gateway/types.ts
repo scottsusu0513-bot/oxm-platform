@@ -2,6 +2,7 @@ import type { ApprovalPhase } from "../domain/taskState";
 import type { RiskLevel, TaskState, WorkerKind } from "../domain/types";
 import type { AgentTaskStatus } from "../intake/types";
 import type { Approval, ApprovalKind, IsoTimestamp } from "../store/types";
+import type { CommitApprovalEvidence } from "../workers/prompt";
 
 export const GATEWAY_CAPABILITIES = [
   "task:submit",
@@ -99,6 +100,8 @@ export interface PendingApprovalRequirement {
   expiresAt: IsoTimestamp;
   status: "pending";
   reasonSummary: string;
+  /** Sanitized Manager-reviewed evidence; present for commit/publish only. */
+  commitEvidence?: CommitApprovalEvidence;
 }
 
 export type PendingApprovalResponse =

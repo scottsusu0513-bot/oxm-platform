@@ -12,6 +12,8 @@ import { createGitHubWriteClient } from "../githubWrite/client";
 import { createFakeRemote, type FakeRemote } from "../githubWrite/fake";
 import { createWorkspaceLeaseRegistry, type WorkspaceLease } from "../githubWrite/lease";
 import type { PreparedWorkspace } from "../githubWrite/workspace";
+import { COMMIT_PUBLISH_ACTION, commitApprovalBinding, normalizeCommitApprovalEvidence } from "../workers/prompt";
+import { gitBlobId, sameContentIdentities, type PathContentIdentity } from "../workers/gitIntegrity";
 import type { NewAuditEvent } from "../store/types";
 import type { WorkerHandle, WorkerResult, WorkerTaskContract } from "../workers/types";
 import { redStartBindingId } from "../workers/prompt";
@@ -35,6 +37,7 @@ import type { OrchestrationPersistencePort } from "./types";
 export const FAKE_REPO = { owner: "oxm", repo: "oxm-platform" } as const;
 export const sha = (n: number) => n.toString(16).padStart(40, "0");
 export const MAIN_SHA = sha(0xa0000);
+export const FAKE_METADATA_DIGEST = "c".repeat(64);
 
 export type WorkerScript = "success" | "failure" | "policy_error" | "head_mismatch" | "malformed_output" | "validation_failed" | "validation_failed_dirty" | "scope_violation" | "risk_red";
 export type CiScript = "pass" | "fail" | "pending";
@@ -56,6 +59,8 @@ export interface SimulationOptions {
   lifecycle?: OrchestrationPorts["lifecycle"];
   /** Makes all otherwise-successful check observations stale for this task. */
   staleQaTaskIds?: readonly string[];
+  /** Test convenience; disable to assert the mandatory human gate itself. */
+  autoApproveCommits?: boolean;
 }
 
 export interface WorkerCall {
@@ -79,11 +84,18 @@ export interface Simulation {
   qaReads: number[];
   qaDecisions: QaDecision[];
   trustedRecords: TrustedRunRecord[];
+  /** Every trusted commit the workspace port actually created. */
+  commits: { taskId: string; approvalId: string }[];
   approvals: ReturnType<typeof createInMemoryApprovalRepository>;
-  approve(taskId: string, phase: "pre_execution" | "post_qa", overrides?: Partial<Pick<Approval, "taskId" | "kind" | "requestedAction" | "bindingShaOrActionId" | "expiresAt">>): Approval;
-  rejectApproval(taskId: string, phase: "pre_execution" | "post_qa"): Approval;
-  expireApproval(taskId: string, phase: "pre_execution" | "post_qa"): Approval;
+  approve(taskId: string, phase: "pre_execution" | "commit_publish" | "post_qa", overrides?: Partial<Pick<Approval, "taskId" | "kind" | "requestedAction" | "bindingShaOrActionId" | "expiresAt">>): Approval;
+  rejectApproval(taskId: string, phase: "pre_execution" | "commit_publish" | "post_qa"): Approval;
+  expireApproval(taskId: string, phase: "pre_execution" | "commit_publish" | "post_qa"): Approval;
   releaseWorker(taskId: string): boolean;
+  /**
+   * Out-of-band workspace change (e.g. after Manager review): writes/removes files
+   * (null = delete) and/or replaces the Git metadata digest.
+   */
+  mutateWorkspace(taskId: string, change: { files?: Record<string, string | null>; gitMetadataDigest?: string }): void;
   /** Posts task_created and settles. */
   create(task: TaskIntake): Promise<void>;
   /** Posts an event and settles. */
@@ -114,12 +126,24 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
 
   const leases = createWorkspaceLeaseRegistry();
   const heads = new Map<string, { branch: string; headSha: string }>(); // taskId -> workspace HEAD
+  const dirtyPaths = new Map<string, string[]>();
+  const contents = new Map<string, Map<string, string | null>>(); // taskId -> path -> bytes (null = deleted)
+  const gitMetadata = new Map<string, string>(); // taskId -> current Git metadata digest of its workspace
+  const metadataOf = (taskId: string) => gitMetadata.get(taskId) ?? FAKE_METADATA_DIGEST;
+  const identitiesOf = (taskId: string, paths: readonly string[]): PathContentIdentity[] =>
+    Array.from(new Set(paths)).sort().map((path): PathContentIdentity => {
+      const bytes = contents.get(taskId)?.get(path);
+      return typeof bytes === "string" ? { path, mode: "100644", blob: gitBlobId(Buffer.from(bytes)) } : { path, mode: "absent", blob: null };
+    });
   const audit: Omit<NewAuditEvent, "id">[] = [];
   const workerCalls: WorkerCall[] = [];
   const qaReads: number[] = [];
   const qaDecisions: QaDecision[] = [];
   const trustedRecords: TrustedRunRecord[] = [];
+  const commits: { taskId: string; approvalId: string }[] = [];
+  const recordsByTask = new Map<string, TrustedRunRecord>();
   const runsByTask = new Map<string, number>();
+  const contractsByTask = new Map<string, WorkerTaskContract>();
   const held = new Map<string, () => void>();
   let nextSha = 0xb0000;
   let mainReads = 0;
@@ -129,11 +153,12 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
 
   const resultFor = (c: WorkerTaskContract, script: WorkerScript): WorkerResult => {
     const start = c.expectedHeadSha ?? null;
-    const commit = () => {
-      const s = sha(++nextSha);
-      if (start) parents.set(s, start);
-      heads.set(c.taskId, { branch: c.branch, headSha: s });
-      return s;
+    const edit = (changed = files) => {
+      dirtyPaths.set(c.taskId, [...changed]);
+      const store = contents.get(c.taskId) ?? new Map<string, string | null>();
+      for (const path of changed) store.set(path, `content:${path}:${c.runId}`);
+      contents.set(c.taskId, store);
+      return start;
     };
     const files = c.allowedScope.map((p) => (p.endsWith("/") ? `${p}index.ts` : p));
     const base: WorkerResult = {
@@ -160,11 +185,11 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
     };
     switch (script) {
       case "success":
-        return { ...base, headSha: commit() };
+        return { ...base, headSha: edit() };
       case "risk_red":
         return {
           ...base,
-          headSha: commit(),
+          headSha: edit(),
           riskObserved: { level: "red", notes: ["observed red"] },
         };
       case "failure":
@@ -212,7 +237,7 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
         return {
           ...base,
           status: "failure",
-          headSha: commit(),
+          headSha: edit(),
           testsRun: [
             { command: "pnpm test", outcome: "failed" },
             { command: "pnpm check", outcome: "passed" },
@@ -221,6 +246,7 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
           errorType: "validation_incomplete",
         };
       case "validation_failed_dirty":
+        edit();
         return {
           ...base,
           status: "failure",
@@ -230,10 +256,11 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
           errorType: "validation_incomplete",
         };
       case "scope_violation":
+        edit([...files, "server/unrelated.ts"]);
         return {
           ...base,
           status: "failure",
-          headSha: commit(),
+          headSha: start,
           filesChanged: [...files, "server/unrelated.ts"],
           errorType: "scope_violation",
         };
@@ -275,6 +302,7 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
           branch: plan.branch,
           headSha,
           allowedDirtyPaths: [],
+          gitMetadataDigest: metadataOf(plan.taskId),
         });
         return { ok: true, prepared };
       },
@@ -282,17 +310,50 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
         const p = prepared as PreparedWorkspace;
         if (!leases.holds(lease)) return { ok: false, reason: "lease not held" };
         if (contract.taskId !== p.taskId || contract.branch !== p.branch) return { ok: false, reason: "contract not bound to prepared branch" };
+        if (metadataOf(p.taskId) !== p.gitMetadataDigest) return { ok: false, reason: "Git metadata changed since preparation" };
         return {
           ok: true,
-          contract: { ...contract, expectedHeadSha: p.headSha },
+          contract: { ...contract, expectedHeadSha: p.headSha, gitMetadataDigest: p.gitMetadataDigest },
         };
       },
       async head(lease) {
         return heads.get(lease.taskId) ?? null;
       },
+      async observeCommitState(lease) {
+        if (!leases.holds(lease)) return { ok: false as const, error: "lease_conflict" as const, reason: "lease not held" };
+        const head = heads.get(lease.taskId);
+        if (!head) return { ok: false as const, error: "verification_failed" as const, reason: "head unavailable" };
+        const dirty = [...(dirtyPaths.get(lease.taskId) ?? [])].sort();
+        return { ok: true as const, ...head, dirtyPaths: dirty, contentIdentities: identitiesOf(lease.taskId, dirty), gitMetadataDigest: metadataOf(lease.taskId) };
+      },
+      async commitValidated({ plan, lease, evidence, approval }) {
+        if (!isPlannerApproved(plan) || !leases.holds(lease)) return { ok: false, error: "policy_violation", reason: "untrusted commit input" };
+        const head = heads.get(lease.taskId);
+        const dirty = dirtyPaths.get(lease.taskId) ?? [];
+        const expectedPaths = Array.from(new Set(evidence.changedPaths)).sort();
+        if (approval.kind !== "commit_publish" || approval.taskId !== plan.taskId || approval.requestedAction !== COMMIT_PUBLISH_ACTION || approval.bindingShaOrActionId !== commitApprovalBinding(evidence)) {
+          return { ok: false, error: "policy_violation", reason: "approval mismatch" };
+        }
+        if (!head || head.branch !== plan.branch || head.headSha !== evidence.expectedHeadSha || JSON.stringify([...dirty].sort()) !== JSON.stringify(expectedPaths)) {
+          return { ok: false, error: "dirty_worktree", reason: "trusted commit preconditions failed" };
+        }
+        if (expectedPaths.length === 0 || expectedPaths.some((path) => !evidence.allowedScope.some((scope) => scope.endsWith("/") ? path.startsWith(scope) : path === scope))) {
+          return { ok: false, error: "policy_violation", reason: "commit path outside scope" };
+        }
+        if (metadataOf(lease.taskId) !== evidence.gitMetadataDigest || !sameContentIdentities(identitiesOf(lease.taskId, expectedPaths), evidence.contentIdentities)) {
+          return { ok: false, error: "verification_failed", reason: "approved content or Git metadata drifted" };
+        }
+        commits.push({ taskId: lease.taskId, approvalId: approval.id });
+        const committed = sha(++nextSha);
+        parents.set(committed, evidence.expectedHeadSha);
+        heads.set(lease.taskId, { branch: plan.branch, headSha: committed });
+        dirtyPaths.delete(lease.taskId);
+        return { ok: true, headSha: committed };
+      },
     },
     worker: {
       start(kind, contract): WorkerHandle {
+        contractsByTask.set(contract.taskId, structuredClone(contract));
         const n = (runsByTask.get(contract.taskId) ?? 0) + 1;
         runsByTask.set(contract.taskId, n);
         workerCalls.push({
@@ -323,6 +384,9 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
     },
     evidence: {
       async record({ contract, result, lease }): Promise<TrustedRunRecord> {
+        if (!contract.gitMetadataDigest || metadataOf(lease.taskId) !== contract.gitMetadataDigest) {
+          throw new Error("[fake] Git metadata changed since workspace preparation");
+        }
         const outcomeOf = (needle: string) => result.testsRun.find((r) => r.command.includes(needle))?.outcome ?? "not_run";
         const validations = contract.requiredValidations.map((name) => {
           const o = outcomeOf(
@@ -357,6 +421,7 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
           observedRisk: result.riskObserved.level,
         };
         trustedRecords.push(structuredClone(record));
+        recordsByTask.set(contract.taskId, structuredClone(record));
         return record;
       },
     },
@@ -420,24 +485,42 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
   };
 
   const loop = createManagerLoop(ports, opts.policy);
-  const decideApproval = (taskId: string, phase: "pre_execution" | "post_qa", status: "approved" | "rejected" | "expired", overrides = {}) => {
+  const decideApproval = (taskId: string, phase: "pre_execution" | "commit_publish" | "post_qa", status: "approved" | "rejected" | "expired", overrides = {}) => {
     const task = intakes.get(taskId);
+    const latestContract = contractsByTask.get(taskId);
     const snap = loop.task(taskId);
-    if (!task || !snap) throw new Error(`unknown task ${taskId}`);
-    const branch = snap.branch ?? taskBranchName(task.lineage?.rootTaskId ?? task.taskId, task.lineage?.title ?? task.title, task.category);
-    const contract: WorkerTaskContract = {
-      taskId: task.taskId,
-      runId: `${task.taskId}-approval-binding`,
-      category: task.category,
-      actions: task.actions,
-      changedPaths: task.expectedPaths,
-      storedRiskLevel: task.classification.risk.level,
-      objective: task.objective,
-      allowedScope: task.allowedScope ?? task.expectedPaths,
-      acceptanceCriteria: task.acceptanceCriteria.map((c) => c.text),
-      requiredValidations: task.requiredValidations,
+    if ((!task && !latestContract) || !snap) throw new Error(`unknown task ${taskId}`);
+    const branch = snap.branch ?? taskBranchName(task!.lineage?.rootTaskId ?? task!.taskId, task!.lineage?.title ?? task!.title, task!.category);
+    const contract: WorkerTaskContract = latestContract ?? {
+      taskId: task!.taskId,
+      runId: `${task!.taskId}-approval-binding`,
+      category: task!.category,
+      actions: task!.actions,
+      changedPaths: task!.expectedPaths,
+      storedRiskLevel: task!.classification.risk.level,
+      objective: task!.objective,
+      allowedScope: task!.allowedScope ?? task!.expectedPaths,
+      acceptanceCriteria: task!.acceptanceCriteria.map((c) => c.text),
+      requiredValidations: task!.requiredValidations,
       branch,
     };
+    const record = recordsByTask.get(taskId);
+    const head = heads.get(taskId);
+    const commitEvidence = record && head ? normalizeCommitApprovalEvidence({
+      taskId,
+      branch,
+      expectedHeadSha: head.headSha,
+      changedPaths: dirtyPaths.get(taskId) ?? [],
+      contentIdentities: identitiesOf(taskId, dirtyPaths.get(taskId) ?? []),
+      gitMetadataDigest: metadataOf(taskId),
+      allowedScope: contract.allowedScope,
+      validations: record.validations,
+      acceptance: record.acceptance,
+      observedRisk: record.observedRisk,
+      managerDecision: "accepted",
+      action: COMMIT_PUBLISH_ACTION,
+      authorization: { commit: true, normalPush: true, openOrReusePr: true, merge: false, deploy: false },
+    }) : null;
     const defaults =
       phase === "pre_execution"
         ? {
@@ -445,6 +528,12 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
             requestedAction: APPROVAL_ACTIONS.pre_execution,
             bindingShaOrActionId: redStartBindingId(contract),
           }
+        : phase === "commit_publish"
+          ? {
+              kind: "commit_publish" as ApprovalKind,
+              requestedAction: APPROVAL_ACTIONS.commit_publish,
+              bindingShaOrActionId: commitEvidence ? commitApprovalBinding(commitEvidence) : "missing",
+            }
         : {
             kind: "merge" as ApprovalKind,
             requestedAction: APPROVAL_ACTIONS.post_qa,
@@ -467,6 +556,13 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
   };
   const approve: Simulation["approve"] = (taskId, phase, overrides) => decideApproval(taskId, phase, "approved", overrides);
 
+  async function maybeAutoApproveCommit(taskId: string) {
+    if (opts.autoApproveCommits === false || loop.task(taskId)?.approvalPhase !== "commit_publish") return;
+    approve(taskId, "commit_publish");
+    loop.post({ type: "approval_granted", taskId, phase: "commit_publish" });
+    await loop.settle();
+  }
+
   return {
     loop,
     ports,
@@ -476,10 +572,22 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
     qaReads,
     qaDecisions,
     trustedRecords,
+    commits,
     approvals,
     approve,
     rejectApproval: (taskId, phase) => decideApproval(taskId, phase, "rejected"),
     expireApproval: (taskId, phase) => decideApproval(taskId, phase, "expired"),
+    mutateWorkspace(taskId, change) {
+      if (change.gitMetadataDigest !== undefined) gitMetadata.set(taskId, change.gitMetadataDigest);
+      const files = contents.get(taskId) ?? new Map<string, string | null>();
+      const dirty = new Set(dirtyPaths.get(taskId) ?? []);
+      for (const [path, bytes] of Object.entries(change.files ?? {})) {
+        files.set(path, bytes);
+        dirty.add(path);
+      }
+      contents.set(taskId, files);
+      dirtyPaths.set(taskId, Array.from(dirty).sort());
+    },
     releaseWorker(taskId) {
       const f = held.get(taskId);
       if (!f) return false;
@@ -491,10 +599,13 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
       intakes.set(task.taskId, structuredClone(task));
       loop.post({ type: "task_created", task });
       await loop.settle();
+      await maybeAutoApproveCommit(task.taskId);
     },
     async send(event) {
       loop.post(event);
       await loop.settle();
+      const eventTaskId = "taskId" in event ? event.taskId : event.type === "task_created" ? event.task.taskId : null;
+      if (eventTaskId) await maybeAutoApproveCommit(eventTaskId);
     },
   };
 }
@@ -544,7 +655,14 @@ export function fakeIntake(input: FakeIntakeInput, overrides: Partial<TaskIntake
 /** Polls QA once per call (as an external timer would) until the task leaves qa_pending; bounded. */
 export async function driveQa(sim: Simulation, taskId: string, maxPolls = 10): Promise<number> {
   let polls = 0;
-  while (sim.loop.task(taskId)?.status === "qa_pending" && polls < maxPolls) {
+  while (polls < maxPolls) {
+    const task = sim.loop.task(taskId);
+    if (task?.approvalPhase === "commit_publish") {
+      sim.approve(taskId, "commit_publish");
+      await sim.send({ type: "approval_granted", taskId, phase: "commit_publish" });
+      continue;
+    }
+    if (task?.status !== "qa_pending") break;
     await sim.send({ type: "qa_updated", taskId });
     polls++;
   }

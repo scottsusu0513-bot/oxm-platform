@@ -41,7 +41,7 @@ export function smokeTaskDefinition(smokeRunId: string): SmokeTaskDefinition {
       `Modify only ${SMOKE_FIXTURE_PATH}.`,
       `Set its complete UTF-8 content to exactly ${JSON.stringify(smokeFixtureContent(smokeRunId))}; the final \\n is one LF byte (0x0a), not optional.`,
       `Run exactly: ${SMOKE_VALIDATION_COMMAND}`,
-      "Commit the fixture change locally with message: chore: agent e2e smoke.",
+      "Leave the validated fixture change uncommitted; trusted orchestration owns commit creation.",
       "This is test-only and must not change production behavior, access a database, deploy, push, merge, or alter authentication or secrets.",
     ].join(" "),
     expectedScope: Object.freeze([SMOKE_FIXTURE_PATH]),

@@ -10,7 +10,7 @@ import { createTempPromptFileStore } from "./promptFile";
 import type { ClaudeCodeConfig, CodexConfig, CodexPolicyRuntime, ProcessExit, ProcessRunner, WorkerAdapter } from "./types";
 
 export const CODEX_WORKER_RULES_PATH = ".codex/rules/worker.rules";
-export const CODEX_WORKER_RULES_SHA256 = "cbc91875a4f97ed767ef59736c3f4121d3f3ca36ca86b0a5938bbe603b973c67";
+export const CODEX_WORKER_RULES_SHA256 = "aed5adf51e4ae9a9b689d0cf11a3cc02a00c4e0959de64ff1381d2975c6bd500";
 
 export function codexCommandPolicyHash(rules: string): string {
   return createHash("sha256").update(rules.replace(/\r\n/g, "\n"), "utf8").digest("hex");
@@ -28,7 +28,7 @@ const REQUIRED_CODEX_EXEC_OPTIONS = ["--strict-config", "--ignore-user-config", 
 const REQUIRED_CODEX_SANDBOX_OPTIONS = ["--permission-profile", "--sandbox-state-disable-network"] as const;
 
 export const CODEX_POLICY_PROBES = [
-  ..."switch checkout merge rebase reset push".split(" ").map((operation) => ({ command: ["git", operation, "probe"], decision: "forbidden" as const })),
+  ..."add commit switch checkout merge rebase reset push".split(" ").map((operation) => ({ command: ["git", operation, "probe"], decision: "forbidden" as const })),
   ...[
     ["git", "status", "--short"],
     ["git", "diff", "--stat"],
@@ -43,7 +43,7 @@ export const CODEX_POLICY_PROBES = [
 export function requiredCodexPolicyDecision(command: readonly string[]): "allowed" | "forbidden" {
   const executable = command[0]?.split("/").at(-1);
   const operation = command[1];
-  if (executable === "git" && "switch checkout branch merge rebase reset push config remote".split(" ").includes(operation ?? "")) return "forbidden";
+  if (executable === "git" && "add commit switch checkout branch merge rebase reset push config remote".split(" ").includes(operation ?? "")) return "forbidden";
   if (executable === "gh") return "forbidden";
   if (["pnpm", "npm", "yarn", "bun"].includes(executable ?? "") && ["deploy", "db:push", "migrate"].includes(operation ?? "")) return "forbidden";
   if (["vercel", "netlify", "flyctl", "railway", "kubectl", "helm", "terraform"].includes(executable ?? "")) return "forbidden";

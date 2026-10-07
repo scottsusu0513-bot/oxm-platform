@@ -3,6 +3,8 @@ import { assessRisk, isProtectedBranch, normalizeBranch } from "../domain/risk";
 import { TASK_CATEGORIES, type RiskLevel } from "../domain/types";
 import { isSafeRepoPath, isValidBranchName } from "./resultParser";
 import { REQUIRED_VALIDATIONS, type RequiredValidation, type WorkerTaskContract } from "./types";
+import type { AcceptanceEvidence, ValidationEvidence } from "../manager/types";
+import { normalizeContentIdentities, type PathContentIdentity } from "./gitIntegrity";
 
 /**
  * Deterministic prompt contract and policy derivation for worker runs.
@@ -15,7 +17,50 @@ import { REQUIRED_VALIDATIONS, type RequiredValidation, type WorkerTaskContract 
 const ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
 const RANK: Record<RiskLevel, number> = { green: 0, yellow: 1, red: 2 };
 
+export const COMMIT_PUBLISH_ACTION = "commit_and_publish_task_branch_for_pr_review" as const;
+
+/** Sanitized evidence shown to a human and bound into commit authorization. */
+export interface CommitApprovalEvidence {
+  taskId: string;
+  branch: string;
+  expectedHeadSha: string;
+  changedPaths: readonly string[];
+  /** Git blob identity of every changed path's approved working-tree bytes (path + mode + blob id). */
+  contentIdentities: readonly PathContentIdentity[];
+  /** Git metadata digest the run was prepared and validated under. */
+  gitMetadataDigest: string;
+  allowedScope: readonly string[];
+  validations: readonly Pick<ValidationEvidence, "name" | "requested" | "executed" | "status" | "trusted">[];
+  acceptance: readonly Pick<AcceptanceEvidence, "criterionId" | "status" | "evidenceType" | "reference">[];
+  observedRisk: RiskLevel;
+  managerDecision: "accepted";
+  action: typeof COMMIT_PUBLISH_ACTION;
+  authorization: { commit: true; normalPush: true; openOrReusePr: true; merge: false; deploy: false };
+}
+
+function canonicalApproval(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalApproval).join(",")}]`;
+  if (value && typeof value === "object") return `{${Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${canonicalApproval(item)}`).join(",")}}`;
+  return JSON.stringify(value);
+}
+
+export function normalizeCommitApprovalEvidence(evidence: CommitApprovalEvidence): CommitApprovalEvidence {
+  return {
+    ...evidence,
+    changedPaths: Array.from(new Set(evidence.changedPaths)).sort(),
+    contentIdentities: normalizeContentIdentities(evidence.contentIdentities),
+    allowedScope: Array.from(new Set(evidence.allowedScope)).sort(),
+    validations: evidence.validations.map(({ name, requested, executed, status, trusted }) => ({ name, requested, executed, status, trusted })).sort((a, b) => a.name.localeCompare(b.name)),
+    acceptance: evidence.acceptance.map(({ criterionId, status, evidenceType, reference }) => ({ criterionId, status, evidenceType, reference })).sort((a, b) => a.criterionId.localeCompare(b.criterionId)),
+  };
+}
+
+export function commitApprovalBinding(evidence: CommitApprovalEvidence): string {
+  return `commit-publish:${sha256Hex(canonicalApproval(normalizeCommitApprovalEvidence(evidence)))}`;
+}
+
 export const FORBIDDEN_OPERATIONS = [
+  "writing Git metadata, including git add or git commit; the trusted orchestration layer owns commit creation",
   "git push of any kind (including force push), and any GitHub write (gh, API calls, PR merge)",
   "merging, rebasing onto, checking out, switching to, or committing on main/master",
   "switching or creating branches, resetting or rewriting history",
@@ -33,7 +78,7 @@ export const VALIDATION_COMMANDS: Record<RequiredValidation, string> = {
 };
 
 /** Claude Code tool permissions. Defense in depth — the adapter re-verifies branch/HEAD afterwards. */
-export const CLAUDE_ALLOWED_TOOLS = ["Read", "Edit", "Write", "Glob", "Grep", "Bash(pnpm test:*)", "Bash(pnpm check)", "Bash(pnpm vitest run:*)", "Bash(git status:*)", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git rev-parse:*)", "Bash(git add:*)", "Bash(git commit:*)"] as const;
+export const CLAUDE_ALLOWED_TOOLS = ["Read", "Edit", "Write", "Glob", "Grep", "Bash(pnpm test:*)", "Bash(pnpm check)", "Bash(pnpm vitest run:*)", "Bash(git status:*)", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git rev-parse:*)"] as const;
 
 export const CLAUDE_DISALLOWED_TOOLS = [
   "Bash(git push:*)",
@@ -44,6 +89,8 @@ export const CLAUDE_DISALLOWED_TOOLS = [
   "Bash(git switch:*)",
   "Bash(git branch:*)",
   "Bash(git config:*)",
+  "Bash(git add:*)",
+  "Bash(git commit:*)",
   "Bash(gh:*)",
   "Bash(pnpm db:push:*)",
   "Bash(curl:*)",
@@ -107,6 +154,7 @@ export function validateContract(c: WorkerTaskContract): string[] {
   }
   if (c.changedPaths && !c.changedPaths.every((p) => typeof p === "string")) errors.push("invalid changedPaths");
   if (c.expectedHeadSha !== undefined && !/^[0-9a-f]{40}$/.test(c.expectedHeadSha)) errors.push("invalid expectedHeadSha");
+  if (c.gitMetadataDigest !== undefined && !/^[0-9a-f]{64}$/.test(c.gitMetadataDigest)) errors.push("invalid gitMetadataDigest");
   return errors;
 }
 
@@ -233,7 +281,7 @@ Category: ${c.category}
 Risk level: ${riskLevel}
 Current branch: ${c.branch}
 Expected starting HEAD: ${c.expectedHeadSha ?? "not supplied"}
-You must stay on branch "${c.branch}". You may commit to it locally. Do not push.
+You must stay on branch "${c.branch}". Edit the working tree but do not stage or commit; the trusted orchestration layer will commit validated changes. Do not push.
 
 Forbidden operations:
 ${FORBIDDEN_OPERATIONS.map((o) => `- ${o}`).join("\n")}

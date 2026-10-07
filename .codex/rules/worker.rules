@@ -1,10 +1,12 @@
 # Codex worker command policy. The adapter verifies this file before starting.
 prefix_rule(
-    pattern = [["git", "/usr/bin/git", "/bin/git"], ["switch", "checkout", "branch", "merge", "rebase", "reset", "push", "config", "remote"]],
+    pattern = [["git", "/usr/bin/git", "/bin/git"], ["add", "commit", "switch", "checkout", "branch", "merge", "rebase", "reset", "push", "config", "remote"]],
     decision = "forbidden",
     justification = "The orchestrator owns branches, history, remotes, and publication; use read-only Git inspection commands instead.",
     match = [
         "git switch other",
+        "git add source.ts",
+        "git commit -m local",
         "git checkout other",
         "git branch new-branch",
         "git merge other",
@@ -20,8 +22,6 @@ prefix_rule(
         "git diff --stat",
         "git log -1",
         "git rev-parse HEAD",
-        "git add source.ts",
-        "git commit -m local",
     ],
 )
 

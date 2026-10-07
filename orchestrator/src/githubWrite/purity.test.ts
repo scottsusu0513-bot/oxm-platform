@@ -40,10 +40,11 @@ describe("github write layer boundaries", () => {
     for (const f of sources) {
       if (f !== "transport.ts" && f !== "workspace.ts") expect(code(f), f).not.toMatch(/\.spawn\s*\(/);
     }
-    // workspace.ts: git only, and only fetch / rev-parse / switch — never reset/merge/rebase/clean/checkout/push/force.
+    // workspace.ts: git only, with a narrow preparation path plus trusted add/diff/commit packaging.
     const w = code("workspace.ts");
-    expect(w.match(/command:\s*"[^"]+"/g)).toEqual(['command: "git"']);
+    expect(w.match(/command:\s*"[^"]+"/g)).toEqual(['command: "git"', 'command: "git"']);
     expect(w).toMatch(/WORKSPACE_GIT_SUBCOMMANDS = \["fetch", "rev-parse", "switch"\] as const/);
+    expect(w).toMatch(/COMMIT_GIT_SUBCOMMANDS = \["add", "diff", "ls-files", "hash-object", "commit"\] as const/);
     expect(w).not.toMatch(/"(reset|merge|rebase|clean|checkout|push|pull|stash|restore|update-ref|branch)"|--hard|--force|--discard-changes|"-[fCB]"/);
     const t = code("transport.ts");
     expect(t.match(/command:\s*"[^"]+"/g)?.sort()).toEqual(['command: "gh"', 'command: "git"']);

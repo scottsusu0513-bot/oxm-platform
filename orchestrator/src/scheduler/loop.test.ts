@@ -1,10 +1,11 @@
+import { createManagerApprovalRequirementReader } from "../gateway/integration";
 import { describe, expect, it } from "vitest";
 import { OPTIONAL_CAPABILITIES } from "./types";
 import { createSimulation, driveQa, fakeIntake, MAIN_SHA, sha } from "./fake";
 
 const events = (sim: ReturnType<typeof createSimulation>, taskId: string) => sim.audit.filter((e) => e.taskId === taskId).map((e) => e.event);
 
-const GREEN_CAPS = ["scheduler", "branch_planner", "workspace_lease", "worker", "validator", "github_write", "github_qa"];
+const GREEN_CAPS = ["scheduler", "branch_planner", "workspace_lease", "worker", "validator", "github_write", "github_qa", "human_approval"];
 
 describe("Manager Loop — end-to-end with fakes", () => {
   it("1. happy-path green task: dispatch → branch → worker → evidence → push → PR → QA → accepted", async () => {
@@ -16,6 +17,8 @@ describe("Manager Loop — end-to-end with fakes", () => {
     expect(t.branch).toBe("agent/task-t1-fix-t1");
     expect(t.prNumber).toBe(100); // from the trusted write client, never the worker
     expect(sim.remote.refs.get(t.branch!)).toBe(t.headSha);
+    expect(t.headSha).not.toBe(MAIN_SHA);
+    expect(sim.trustedRecords[0].verifiedHeadSha).toBe(MAIN_SHA); // Worker only edited; trusted layer committed next.
 
     await driveQa(sim, "t1");
     t = sim.loop.task("t1")!;
@@ -50,8 +53,12 @@ describe("Manager Loop — end-to-end with fakes", () => {
 
     expect(sim.releaseWorker("wait-worker")).toBe(true);
     await waiting;
+    expect(sim.loop.task("wait-worker")).toMatchObject({ status: "needs_human_approval", state: "awaiting_approval", approvalPhase: "commit_publish", workerRunning: false });
+    expect(sim.loop.task("wait-worker")?.headSha).toBeNull();
+    expect(sim.remote.calls.filter((call) => call.startsWith("PUSH") || call.startsWith("CREATE pr"))).toHaveLength(0);
+    sim.approve("wait-worker", "commit_publish");
+    await sim.send({ type: "approval_granted", taskId: "wait-worker", phase: "commit_publish" });
     expect(sim.loop.task("wait-worker")).toMatchObject({ status: "qa_pending", workerRunning: false });
-    expect(sim.loop.task("wait-worker")?.headSha).toMatch(/^[0-9a-f]{40}$/);
     expect(sim.remote.calls.filter((call) => call.startsWith("CREATE pr"))).toHaveLength(1);
   });
 
@@ -70,7 +77,7 @@ describe("Manager Loop — end-to-end with fakes", () => {
     expect(t.repair.attempt).toBe(1);
     expect(t.budget.workerExecutions).toBe(2);
     expect(t.budget.activatedCapabilities).toContain("repair_loop");
-    expect(t.escalations.map((e) => e.action)).toEqual(["return_to_worker"]);
+    expect(t.escalations.map((e) => e.action)).toEqual(["return_to_worker", "request_human_approval"]);
     expect(events(sim, "t2")).toEqual(expect.arrayContaining(["repair_requested", "repair_completed"]));
     // Only one task branch was ever created.
     expect(sim.remote.calls.filter((c) => c.startsWith("CREATE ref"))).toHaveLength(1);
@@ -125,6 +132,9 @@ describe("Manager Loop — end-to-end with fakes", () => {
     expect(sim.workerCalls).toHaveLength(3);
     expect(sim.workerCalls.every((c) => c.branch === branch)).toBe(true);
     expect(sim.remote.calls.filter((c) => c.startsWith("CREATE pr"))).toHaveLength(1);
+    const repairPushes = sim.remote.calls.filter((c) => c.startsWith("PUSH"));
+    expect(repairPushes).toHaveLength(3);
+    expect(new Set(repairPushes).size).toBe(3); // one trusted commit/push per bounded successful run
 
     await driveQa(sim, "t3b");
     expect(sim.loop.task("t3b")!).toMatchObject({
@@ -281,7 +291,10 @@ describe("Manager Loop — end-to-end with fakes", () => {
     await sim.create(fakeIntake({ taskId: "s1" }));
     const t = sim.loop.task("s1")!;
     expect(t.replans).toBe(1);
-    expect(t.escalations).toEqual([{ trigger: "stale_base", action: "replan_branch" }]);
+    expect(t.escalations).toEqual([
+      { trigger: "stale_base", action: "replan_branch" },
+      { trigger: "approval_required", action: "request_human_approval" },
+    ]);
     expect(t.budget.activatedCapabilities).toContain("replan");
     expect(sim.workerCalls).toHaveLength(1);
     expect(sim.workerCalls[0].expectedHeadSha).toBe(fresh);
@@ -314,13 +327,13 @@ describe("Manager Loop — end-to-end with fakes", () => {
       managerProfile: "fast",
       workerExecutions: 1,
       managerLlmCalls: 0,
-      escalationCount: 0,
+      escalationCount: 1,
       deepReviewEnabled: false,
       llmCallBudget: null,
     });
-    expect(t.escalations).toEqual([]);
+    expect(t.escalations).toEqual([{ trigger: "approval_required", action: "request_human_approval" }]);
     expect(t.budget.activatedCapabilities).not.toContain("repair_loop");
-    expect(t.budget.activatedCapabilities).not.toContain("human_approval");
+    expect(t.budget.activatedCapabilities).toContain("human_approval");
   });
 });
 
@@ -448,6 +461,107 @@ describe("Manager Loop — trusted approval notifications", () => {
       phase: "pre_execution",
     });
     expect(sim.workerCalls.map((c) => c.taskId)).toEqual(["bound"]);
+  });
+
+  it("requires an exact commit/publish approval and consumes it for one commit only", async () => {
+    const sim = createSimulation({ autoApproveCommits: false });
+    let commits = 0;
+    const commit = sim.ports.workspace.commitValidated;
+    sim.ports.workspace.commitValidated = async (input) => {
+      commits++;
+      return commit(input);
+    };
+    await sim.create(fakeIntake({ taskId: "commit-once" }));
+    expect(sim.loop.task("commit-once")).toMatchObject({
+      state: "awaiting_approval",
+      status: "needs_human_approval",
+      approvalPhase: "commit_publish",
+    });
+    expect(commits).toBe(0);
+    expect(sim.remote.calls.filter((call) => call.startsWith("PUSH") || call.startsWith("CREATE pr"))).toEqual([]);
+
+    sim.approve("commit-once", "commit_publish");
+    await sim.send({ type: "approval_granted", taskId: "commit-once", phase: "commit_publish" });
+    await sim.send({ type: "approval_granted", taskId: "commit-once", phase: "commit_publish" });
+    expect(commits).toBe(1);
+    expect(sim.remote.calls.filter((call) => call.startsWith("PUSH"))).toHaveLength(1);
+    expect(sim.remote.calls.filter((call) => call.startsWith("CREATE pr"))).toHaveLength(1);
+    expect(sim.remote.calls.some((call) => /merge|deploy|force/i.test(call))).toBe(false);
+  });
+
+  it("rejects forged, wrong-task, wrong-branch, stale-HEAD, and changed-path commit approvals", async () => {
+    for (const scenario of ["forged", "task", "branch", "head", "paths"] as const) {
+      const id = `commit-${scenario}`;
+      const sim = createSimulation({ autoApproveCommits: false });
+      await sim.create(fakeIntake({ taskId: id }));
+      if (scenario === "task") sim.approve(id, "commit_publish", { taskId: "another-task" });
+      else if (scenario === "branch") sim.approve(id, "commit_publish", { bindingShaOrActionId: "commit-publish:wrong-branch" });
+      else if (scenario !== "forged") sim.approve(id, "commit_publish");
+      if (scenario === "head" || scenario === "paths") {
+        const observe = sim.ports.workspace.observeCommitState;
+        sim.ports.workspace.observeCommitState = async (lease) => {
+          const state = await observe(lease);
+          if (!state.ok) return state;
+          return scenario === "head"
+            ? { ...state, headSha: sha(0xdecaf) }
+            : { ...state, dirtyPaths: [...state.dirtyPaths, "server/foreign.ts"] };
+        };
+      }
+      await sim.send({ type: "approval_granted", taskId: id, phase: "commit_publish" });
+      const task = sim.loop.task(id)!;
+      if (scenario === "head" || scenario === "paths") expect(task.status).toBe("blocked");
+      else expect(task.status).toBe("needs_human_approval");
+      expect(sim.remote.calls.filter((call) => call.startsWith("PUSH") || call.startsWith("CREATE pr"))).toEqual([]);
+    }
+  });
+
+  it("binds approved file contents and Git metadata: post-approval drift is stale and never committed", async () => {
+    const PATH = "server/drift/index.ts";
+    const scenarios: Record<string, Parameters<ReturnType<typeof createSimulation>["mutateWorkspace"]>[1]> = {
+      "changed contents": { files: { [PATH]: "export const replaced = true;\n" } },
+      "one byte": { files: { [PATH]: "content:server/drift/index.ts:drift-run-2" } },
+      deletion: { files: { [PATH]: null } },
+      rename: { files: { [PATH]: null, "server/drift/renamed.ts": "content:server/drift/index.ts:drift-run-1" } },
+      "git metadata": { gitMetadataDigest: "e".repeat(64) },
+    };
+    for (const [name, change] of Object.entries(scenarios)) {
+      const sim = createSimulation({ autoApproveCommits: false });
+      await sim.create(fakeIntake({ taskId: "drift", expectedPaths: ["server/drift/"] }));
+      const presented = (await createManagerApprovalRequirementReader(sim.loop).current("drift"))!;
+      expect(presented.commitEvidence?.contentIdentities).toEqual([{ path: PATH, mode: "100644", blob: expect.stringMatching(/^[0-9a-f]{40}$/) }]);
+      expect(JSON.stringify(presented)).not.toContain("content:server/drift");
+      // The human approves exactly what was presented; afterwards the workspace drifts.
+      sim.approve("drift", "commit_publish");
+      sim.mutateWorkspace("drift", change);
+      await sim.send({ type: "approval_granted", taskId: "drift", phase: "commit_publish" });
+      expect(sim.loop.task("drift")?.status, name).toBe("blocked");
+      expect(sim.commits, name).toEqual([]);
+      expect(sim.remote.calls.filter((call) => call.startsWith("PUSH") || call.startsWith("CREATE pr")), name).toEqual([]);
+      // A repeated notification cannot revive the stale approval.
+      await sim.send({ type: "approval_granted", taskId: "drift", phase: "commit_publish" });
+      expect(sim.commits, name).toEqual([]);
+    }
+  });
+
+  it("unchanged approved bytes commit exactly once, even with duplicate approval notifications", async () => {
+    const sim = createSimulation({ autoApproveCommits: false });
+    await sim.create(fakeIntake({ taskId: "stable" }));
+    sim.approve("stable", "commit_publish");
+    for (let i = 0; i < 3; i++) await sim.send({ type: "approval_granted", taskId: "stable", phase: "commit_publish" });
+    expect(sim.commits).toEqual([{ taskId: "stable", approvalId: expect.any(String) }]);
+    expect(sim.remote.calls.filter((call) => call.startsWith("PUSH"))).toHaveLength(1);
+  });
+
+  it("refuses Worker results when Git metadata changed before Manager review", async () => {
+    const sim = createSimulation({ autoApproveCommits: false, holdWorkers: true });
+    await sim.create(fakeIntake({ taskId: "meta" }));
+    sim.mutateWorkspace("meta", { gitMetadataDigest: "e".repeat(64) });
+    sim.releaseWorker("meta");
+    await sim.loop.settle();
+    expect(sim.loop.task("meta")?.status).toBe("blocked");
+    expect(sim.loop.task("meta")?.approvalPhase).toBeNull();
+    expect(sim.commits).toEqual([]);
+    expect(sim.remote.calls.filter((call) => call.startsWith("PUSH") || call.startsWith("CREATE pr"))).toEqual([]);
   });
 });
 

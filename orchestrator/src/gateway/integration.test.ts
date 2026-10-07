@@ -55,4 +55,33 @@ describe("gateway / Manager approval integration", () => {
     expect(after?.approvalRequestId).not.toBe(before?.approvalRequestId);
     expect(after?.bindingTarget).toBe("b".repeat(40));
   });
+
+  it("presents sanitized structured commit evidence and explicit publication limits", async () => {
+    const sim = createSimulation({ autoApproveCommits: false });
+    await sim.create(fakeIntake({ taskId: "gateway-commit" }));
+    const requirement = await createManagerApprovalRequirementReader(sim.loop).current("gateway-commit");
+    expect(requirement).toMatchObject({
+      taskId: "gateway-commit",
+      phase: "commit_publish",
+      kind: "commit_publish",
+      action: "commit_and_publish_task_branch_for_pr_review",
+      commitEvidence: {
+        taskId: "gateway-commit",
+        branch: "agent/task-gateway-commit-fix-gateway-commit",
+        changedPaths: ["server/gateway-commit/index.ts"],
+        allowedScope: ["server/gateway-commit/"],
+        authorization: {
+          commit: true,
+          normalPush: true,
+          openOrReusePr: true,
+          merge: false,
+          deploy: false,
+        },
+      },
+    });
+    expect(requirement?.commitEvidence?.expectedHeadSha).toMatch(/^[0-9a-f]{40}$/);
+    expect(requirement?.commitEvidence?.validations.every((v) => v.trusted && v.status === "passed")).toBe(true);
+    expect(requirement).not.toHaveProperty("prompt");
+    expect(requirement).not.toHaveProperty("stdout");
+  });
 });

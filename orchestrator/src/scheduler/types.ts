@@ -20,7 +20,8 @@ import type { PullRequestState, QaDecision } from "../github/types";
 import type { PollPolicy } from "../github/qa";
 import type { BranchCreation, GitHubWriteClient, PushReceipt, TrustedPullRequest } from "../githubWrite/types";
 import type { WorkspaceLease, WorkspaceLeaseRegistry } from "../githubWrite/lease";
-import type { PreconditionResult, PrepareResult } from "../githubWrite/workspace";
+import type { CommitApprovalEvidence } from "../workers/prompt";
+import type { CommitResult, CommitStateResult, PreconditionResult, PrepareResult } from "../githubWrite/workspace";
 import type { AcceptanceEvidence, ApprovalEvidenceState, ManagerProfile, RepairCounters, ValidationEvidence } from "../manager/types";
 import type { NewAuditEvent } from "../store/types";
 import type { Approval, ApprovalKind, IsoTimestamp } from "../store/types";
@@ -276,6 +277,10 @@ export interface WorkspacePort {
   checkPreconditions(input: { prepared: unknown; plan: unknown; contract: WorkerTaskContract; lease: unknown }): Promise<PreconditionResult>;
   /** Branch/HEAD of the leased workspace from git (repair start check). */
   head(lease: WorkspaceLease): Promise<{ branch: string; headSha: string } | null>;
+  /** Re-reads branch, HEAD, and dirty paths from trusted Git. */
+  observeCommitState(lease: WorkspaceLease): Promise<CommitStateResult>;
+  /** Creates one trusted local commit from already validated, Git-observed paths. */
+  commitValidated(input: { plan: unknown; lease: unknown; evidence: CommitApprovalEvidence; approval: Approval; at: IsoTimestamp }): Promise<CommitResult>;
 }
 
 export interface EvidencePort {
@@ -298,6 +303,8 @@ export interface ApprovalCheck {
   kind: ApprovalKind;
   requestedAction: string;
   bindingShaOrActionId: string;
+  /** Structured, sanitized evidence for the commit/publish approval UI. */
+  evidence?: CommitApprovalEvidence;
 }
 
 export interface TrustedApprovalResult {
@@ -312,7 +319,7 @@ export interface ApprovalPort {
   resolve(check: ApprovalCheck): Promise<TrustedApprovalResult>;
 }
 
-export type PendingSideEffect = "worker" | "push" | "pr" | null;
+export type PendingSideEffect = "worker" | "commit" | "push" | "pr" | null;
 
 /**
  * Versioned, sanitized Manager Loop checkpoint. This contains structured
@@ -357,6 +364,8 @@ export interface PersistedTaskRecord {
   approvalPhase: ApprovalPhase | null;
   /** Time the current exact approval binding was presented to a human. */
   approvalRequestedAt?: IsoTimestamp | null;
+  /** Exact sanitized state shown for commit/publish approval. */
+  commitApprovalEvidence?: CommitApprovalEvidence | null;
   queueReason: string | null;
   blockingReason: string | null;
   escalations: EscalationRecord[];
@@ -419,6 +428,7 @@ export interface TaskSnapshot {
   replans: number;
   prNumber: number | null;
   headSha: string | null;
+  approvalPhase: ApprovalPhase | null;
   qaStatus: QaDecision["status"] | null;
   /** Suggested delay before the next qa_updated, for an external timer. */
   nextQaPollDelayMs: number | null;

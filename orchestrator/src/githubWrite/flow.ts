@@ -10,8 +10,9 @@ import type { WorkerResult, WorkerTaskContract } from "../workers/types";
  *   classify/risk → planBranch → createTaskBranch (new_branch) →
  *   acquire workspace lease → prepareAssignedWorkspace (workspace.ts) →
  *   assignWorkerBranch → checkWorkerPreconditions (binds expectedHeadSha) →
- *   workerStartIntent → worker runs on the assigned branch (it never creates
- *   or switches branches) → workerFinishIntent → pushInputFromWorkerResult →
+ *   workerStartIntent → worker edits without writing Git metadata → trusted
+ *   evidence validation → Manager acceptance → commit/publish approval →
+ *   trusted workspace commit → pushInputFromWorkerResult →
  *   pushTaskBranch → openPullRequest → prOpenedIntent → Phase 2C.3 QA polling.
  *
  * A successful worker run without a PR stays valid (task remains `running`)
@@ -39,7 +40,7 @@ export function expectedRemoteHead(plan: AssignedBranchPlan): string {
 }
 
 /**
- * Derives push input from a verified worker result. Only the git-verified
+ * Derives push input after trusted commit packaging. Only the git-verified
  * branch/headSha are used; the worker's prNumber is never read.
  */
 export function pushInputFromWorkerResult(

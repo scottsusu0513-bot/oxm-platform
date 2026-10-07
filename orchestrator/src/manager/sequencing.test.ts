@@ -180,20 +180,22 @@ describe("lifecycle sequencing gate", () => {
   });
 });
 
-describe("taskState invariants are unchanged", () => {
-  it("no backwards edge into running from PR/QA states", () => {
-    for (const s of ["pr_opened", "qa_running", "qa_passed", "awaiting_approval"] as const) {
+describe("taskState invariants", () => {
+  it("no unapproved backwards edge into running from PR/QA states", () => {
+    for (const s of ["pr_opened", "qa_running", "qa_passed"] as const) {
       expect(TASK_TRANSITIONS[s]).not.toContain("running");
       expect(validateTransition(s, "running", { riskLevel: "green" }).ok).toBe(false);
     }
+    expect(validateTransition("awaiting_approval", "running", { riskLevel: "green" }).ok).toBe(false);
+    expect(validateTransition("awaiting_approval", "running", { riskLevel: "green", approvalPhase: "commit_publish", approved: true }).ok).toBe(true);
   });
 
   it("transition table snapshot", () => {
     expect(Object.keys(TASK_TRANSITIONS).sort()).toEqual([...TASK_STATES].sort());
     expect(TASK_TRANSITIONS).toMatchObject({
-      running: ["pr_opened", "failed", "cancelled"],
+      running: ["awaiting_approval", "pr_opened", "failed", "cancelled"],
       pr_opened: ["qa_running", "failed", "cancelled"],
-      qa_running: ["qa_passed", "failed", "cancelled"],
+      qa_running: ["awaiting_approval", "qa_passed", "failed", "cancelled"],
       qa_passed: ["awaiting_approval", "complete", "failed", "cancelled"],
       complete: [],
       failed: [],

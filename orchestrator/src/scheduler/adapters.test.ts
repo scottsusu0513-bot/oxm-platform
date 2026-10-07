@@ -17,6 +17,7 @@ const contract: WorkerTaskContract = {
   requiredValidations: ["tests"],
   branch: "agent/task-adapter1-fix-adapter-behavior",
   expectedHeadSha: sha(1),
+  gitMetadataDigest: "c".repeat(64),
 };
 
 const result: WorkerResult = {
@@ -26,7 +27,7 @@ const result: WorkerResult = {
   testsRun: [{ command: "pnpm test", outcome: "passed" }],
   checkResult: "passed",
   branch: contract.branch,
-  headSha: sha(2),
+  headSha: sha(1),
   prNumber: null,
   riskObserved: { level: "green", notes: [] },
   needsApproval: false,
@@ -122,14 +123,17 @@ describe("scheduler production adapters", () => {
   });
 
   it("bridges trusted git evidence and main-head reads without adding policy", async () => {
+    let metadata = "c".repeat(64);
     const evidence = createEvidencePort({
       git: {
         status: async () => ({
           branch: contract.branch,
-          headSha: sha(2),
-          dirtyPaths: [],
+          headSha: sha(1),
+          dirtyPaths: ["server/adapter1.ts"],
         }),
         changedPathsSince: async () => ["server/adapter1.ts"],
+        contentIdentities: async () => [],
+        metadataDigest: async () => metadata,
       },
       validations: () => [
         {
@@ -158,9 +162,22 @@ describe("scheduler production adapters", () => {
         lease: {} as never,
       }),
     ).resolves.toMatchObject({
-      verifiedHeadSha: sha(2),
+      verifiedHeadSha: sha(1),
       changedPaths: ["server/adapter1.ts"],
     });
+    // Evidence is never produced for the Manager if Git metadata drifted from the prepared baseline.
+    metadata = "e".repeat(64);
+    await expect(
+      evidence.record({ taskId: "adapter1", runId: contract.runId, contract, result, lease: {} as never }),
+    ).rejects.toThrow(/Git metadata changed/);
+    metadata = "c".repeat(64);
+    await expect(
+      evidence.record({ taskId: "adapter1", runId: contract.runId, contract: { ...contract, gitMetadataDigest: undefined }, result, lease: {} as never }),
+    ).rejects.toThrow(/Git metadata changed/);
+    // A worker-moved HEAD is not trusted evidence either.
+    await expect(
+      evidence.record({ taskId: "adapter1", runId: contract.runId, contract: { ...contract, expectedHeadSha: sha(3) }, result, lease: {} as never }),
+    ).rejects.toThrow(/does not match trusted git state/);
 
     const repo = createRepoStatePort(
       {

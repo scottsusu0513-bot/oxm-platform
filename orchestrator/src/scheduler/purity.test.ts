@@ -123,8 +123,10 @@ describe("scheduler / manager-loop boundaries", () => {
   it("first push happens only after a Manager validation step (open_pr)", () => {
     const loop = code("loop.ts");
     const pushCalls = [...loop.matchAll(/return push\(t\)/g)].length;
-    expect(pushCalls).toBe(1); // applyStep(open_pr), including explicit pre-push repair validation
-    expect(loop).toMatch(/case "open_pr":\s*return push\(t\);/);
+    expect(pushCalls).toBe(1); // commitAndPush, reached only after Manager open_pr validation
+    expect(loop).toMatch(/case "open_pr":\s*return requestCommitApproval\(t\);/);
+    expect(loop).toMatch(/async function requestCommitApproval[\s\S]*awaitApproval\(t, "commit_publish"/);
+    expect(loop).toMatch(/async function commitAndPush[\s\S]*ports\.workspace\.commitValidated[\s\S]*return push\(t\);/);
     expect(loop).toMatch(/return evaluate\(t, undefined, t\.pr \? "pre_push" : "post_qa"\);/);
     expect(loop).toMatch(/taskState: phase === "pre_push" \? "running" : t\.state/);
   });

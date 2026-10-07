@@ -111,7 +111,7 @@ export type NewTaskRun = Pick<TaskRun, "id" | "taskId" | "worker" | "model" | "p
 
 export type TaskRunPatch = Partial<Pick<TaskRun, "endedAt" | "exitStatus" | "headSha" | "summary">>;
 
-export const APPROVAL_KINDS = ["start", "merge", "execute_red_action"] as const;
+export const APPROVAL_KINDS = ["start", "commit_publish", "merge", "execute_red_action"] as const;
 export type ApprovalKind = (typeof APPROVAL_KINDS)[number];
 
 export const APPROVAL_STATUSES = ["pending", "approved", "rejected", "expired"] as const;
@@ -128,7 +128,7 @@ export interface Approval {
   /** Channel the decision arrived through (e.g. "phone", "chat"). */
   channel: string | null;
   expiresAt: IsoTimestamp;
-  /** Commit SHA (merge) or action id (start / execute_red_action) this approval is bound to. Immutable. */
+  /** Exact protected-state identity (commit/publish), commit SHA (merge), or action id. Immutable. */
   bindingShaOrActionId: string;
   createdAt: IsoTimestamp;
 }

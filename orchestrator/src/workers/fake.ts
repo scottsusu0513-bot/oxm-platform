@@ -1,3 +1,4 @@
+import { gitBlobId, type PathContentIdentity } from "./gitIntegrity";
 import type {
   GitInspector,
   GitStatus,
@@ -47,9 +48,16 @@ export function createFakeRunner(behavior: (spec: ProcessSpec) => FakeProcessBeh
   return runner;
 }
 
-export function createFakeGit(statuses: GitStatus[], changed: string[] = []): GitInspector & { statusCalls: number } {
+export const FAKE_GIT_METADATA_DIGEST = "d".repeat(64);
+
+export function createFakeGit(
+  statuses: GitStatus[],
+  changed: string[] = [],
+  metadata: readonly string[] = [FAKE_GIT_METADATA_DIGEST],
+): GitInspector & { statusCalls: number; metadataCalls: number } {
   const git = {
     statusCalls: 0,
+    metadataCalls: 0,
     async status() {
       const s = statuses[Math.min(git.statusCalls, statuses.length - 1)];
       git.statusCalls++;
@@ -57,6 +65,14 @@ export function createFakeGit(statuses: GitStatus[], changed: string[] = []): Gi
     },
     async changedPathsSince() {
       return [...changed];
+    },
+    async contentIdentities(paths: readonly string[]): Promise<PathContentIdentity[]> {
+      return Array.from(new Set(paths)).sort().map((path) => ({ path, mode: "100644" as const, blob: gitBlobId(Buffer.from(`fake:${path}`)) }));
+    },
+    async metadataDigest() {
+      const d = metadata[Math.min(git.metadataCalls, metadata.length - 1)];
+      git.metadataCalls++;
+      return d;
     },
   };
   return git;

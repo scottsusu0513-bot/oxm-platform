@@ -56,6 +56,7 @@ const WORKER_ERROR_POLICY: Record<WorkerErrorType, { severity: Finding["severity
   protected_branch: { severity: "blocked", trigger: "unsafe_branch_state" },
   branch_mismatch: { severity: "blocked", trigger: "unsafe_branch_state" },
   branch_changed: { severity: "blocked", trigger: "unsafe_branch_state" },
+  git_metadata_changed: { severity: "blocked", trigger: "unsafe_branch_state" },
   dirty_worktree: { severity: "blocked", trigger: "unsafe_branch_state" },
   invalid_contract: { severity: "blocked", trigger: "task_state_blocked" },
   cancelled: { severity: "blocked", trigger: "task_state_blocked" },

@@ -16,11 +16,11 @@ const code = (f: string) =>
     .replace(/`(?:\\.|[^`\\])*`/g, "``")
     .replace(/"(?:\\.|[^"\\])*"/g, '""');
 
-const INFRA = new Set(["processRunner.ts", "promptFile.ts", "gitInspector.ts", "workerAdapter.ts"]);
+const INFRA = new Set(["processRunner.ts", "promptFile.ts", "gitInspector.ts", "gitIntegrity.ts", "workerAdapter.ts"]);
 
 describe("worker layer boundaries", () => {
   it("covers the worker modules", () => {
-    expect(sources.sort()).toEqual(["claudeCode.ts", "codex.ts", "fake.ts", "gitInspector.ts", "killSwitch.ts", "lifecycle.ts", "processRunner.ts", "prompt.ts", "promptFile.ts", "resultParser.ts", "runtimeWorker.ts", "types.ts", "workerAdapter.ts"]);
+    expect(sources.sort()).toEqual(["claudeCode.ts", "codex.ts", "fake.ts", "gitInspector.ts", "gitIntegrity.ts", "killSwitch.ts", "lifecycle.ts", "processRunner.ts", "prompt.ts", "promptFile.ts", "resultParser.ts", "runtimeWorker.ts", "types.ts", "workerAdapter.ts"]);
   });
 
   it("only processRunner.ts touches child_process, and never with a shell", () => {
@@ -54,7 +54,10 @@ describe("worker layer boundaries", () => {
       expect(src, f).not.toMatch(/\b(drizzle|mysql|octokit|railway|codespaces?|DATABASE_URL)\b/i);
     }
     // git is only ever invoked with read-only subcommands; the worker command is fixed.
-    expect(read("gitInspector.ts")).toMatch(/READ_ONLY_GIT_SUBCOMMANDS = \["rev-parse", "status", "diff"\] as const/);
+    expect(read("gitInspector.ts")).toMatch(/READ_ONLY_GIT_SUBCOMMANDS = \["rev-parse", "status", "diff", "ls-files"\] as const/);
+    // Integrity checks only read: no fs write/remove/rename/chmod/link primitives at all.
+    expect(read("gitIntegrity.ts")).toMatch(/import \{ lstat, readdir, readFile, readlink \} from "node:fs\/promises";/);
+    expect(code("gitIntegrity.ts")).not.toMatch(/\b(writeFile|appendFile|rm|rmdir|unlink|mkdir|rename|chmod|chown|symlink|link|copyFile|cp|truncate|open|utimes)\s*\(/);
     expect(read("claudeCode.ts")).toMatch(/DEFAULT_CLAUDE_COMMAND = "claude"/);
     expect(read("claudeCode.ts")).not.toMatch(/--dangerously-skip-permissions/);
     expect(read("codex.ts")).toMatch(/DEFAULT_CODEX_COMMAND = "codex"/);
