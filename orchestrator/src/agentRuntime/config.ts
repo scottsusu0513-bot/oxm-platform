@@ -1,3 +1,4 @@
+import { isSafeWorkspaceRoot } from "../codespace/policy";
 import type { LiveSmokeConfig } from "../e2e/types";
 
 /** Explicit opt-in for the long-lived Agent runtime (distinct from the smoke confirmation). */
@@ -20,11 +21,16 @@ const int = (value: string | undefined, fallback: number, min: number, max: numb
   return Number.isInteger(n) && n >= min && n <= max ? n : null;
 };
 
-/** Reads OXM_AGENT_* configuration. Failure reasons name variables, never values. */
+/**
+ * Reads OXM_AGENT_* configuration. Failure reasons name variables, never values.
+ * `repoRoot` is the trusted repository root injected by the entrypoint (e.g. the
+ * resolved working directory); no host-specific path is assumed.
+ */
 export function readAgentRuntimeConfig(
   env: Readonly<Record<string, string | undefined>>,
-  cwd: string,
+  repoRoot: string,
 ): { ok: true; config: AgentRuntimeConfig } | { ok: false; reason: string } {
+  if (!isSafeWorkspaceRoot(repoRoot)) return { ok: false, reason: "repository root must be an absolute, normalized path" };
   const [owner, repo, extra] = (env.OXM_AGENT_EXPECTED_REPO ?? "").split("/");
   if (!owner || !repo || extra) return { ok: false, reason: "OXM_AGENT_EXPECTED_REPO must be an exact owner/repository binding" };
   const codespaceName = env.CODESPACE_NAME ?? "";
@@ -47,11 +53,11 @@ export function readAgentRuntimeConfig(
       base: {
         live: true,
         confirmation: env.OXM_AGENT_CONFIRM ?? "",
-        repoRoot: cwd,
+        repoRoot,
         expectedRepository: { owner, repo },
         codespaceName,
         expectedCodespaceName,
-        workspacePath: env.OXM_AGENT_WORKSPACE_PATH ?? cwd,
+        workspacePath: env.OXM_AGENT_WORKSPACE_PATH ?? repoRoot,
         codexCommand: workers.codex?.command,
         codexModel: workers.codex?.model,
         workerTimeoutMs,

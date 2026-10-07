@@ -173,3 +173,19 @@ export function decideLifecycle(input: {
   }
   return out("blocked", "failed", "unrecognized_lifecycle_state");
 }
+/**
+ * Portable, string-level check for a workspace / repository root. It does not
+ * assume any host layout (Codespaces /workspaces, GitHub Actions
+ * /home/runner/work, a temporary directory): the root must be absolute,
+ * already normalized (no empty, "." or ".." segments, no trailing slash) and
+ * never the filesystem root. Existence and symlink resolution are checked by
+ * the runtime that actually touches the filesystem.
+ */
+export function isSafeWorkspaceRoot(path: string): boolean {
+  if (typeof path !== "string" || path.length < 2 || path.length > 4096) return false;
+  if (!path.startsWith("/") || path.endsWith("/") || /[\0\r\n]/.test(path)) return false;
+  return path
+    .slice(1)
+    .split("/")
+    .every((segment) => segment !== "" && segment !== "." && segment !== "..");
+}

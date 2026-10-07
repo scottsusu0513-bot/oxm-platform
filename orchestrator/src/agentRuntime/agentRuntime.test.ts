@@ -1,7 +1,7 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { isValidBranchTaskId } from "../branches/naming";
 import { createHumanOwnerSession } from "../humanInteraction/auth";
 import { createAuditHumanInteractionLedger } from "../humanInteraction/ledger";
@@ -39,8 +39,11 @@ const ENV = {
   OXM_AGENT_CODESPACE_NAME: "oxm-space",
   OXM_AGENT_CONFIRM: AGENT_RUNTIME_CONFIRMATION,
 };
+// A real, host-independent repository root (CI runs under /home/runner/work/..., not a Codespace path).
+const REPO_ROOT = realpathSync(mkdtempSync(join(tmpdir(), "oxm-agent-runtime-")));
+afterAll(() => rmSync(REPO_ROOT, { recursive: true, force: true }));
 const config = (): AgentRuntimeConfig => {
-  const r = readAgentRuntimeConfig(ENV, "/workspaces/oxm-platform");
+  const r = readAgentRuntimeConfig(ENV, REPO_ROOT);
   if (!r.ok) throw new Error(r.reason);
   return r.config;
 };
@@ -86,7 +89,7 @@ describe("agent runtime composition", () => {
 
   it("requires the Agent runtime confirmation (not the smoke one)", async () => {
     const audit = createInMemoryAuditRepository(() => "t");
-    const bad = readAgentRuntimeConfig({ ...ENV, OXM_AGENT_CONFIRM: "create-one-smoke-branch-and-pr-without-merge" }, "/workspaces/oxm-platform");
+    const bad = readAgentRuntimeConfig({ ...ENV, OXM_AGENT_CONFIRM: "create-one-smoke-branch-and-pr-without-merge" }, REPO_ROOT);
     const r = await createAgentRuntime((bad as { config: AgentRuntimeConfig }).config, { audit, owner: owner(), runner: safetyRunner() });
     expect(r).toMatchObject({ ok: false, code: "safety_explicit_confirmation" });
   });

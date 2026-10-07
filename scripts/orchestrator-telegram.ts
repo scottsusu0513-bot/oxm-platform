@@ -15,9 +15,9 @@
 import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
-import Anthropic from "@anthropic-ai/sdk";
 import { createAgentRuntime } from "../orchestrator/src/agentRuntime/compose";
 import { createAnthropicGoalReviewer, createAnthropicIntentPlanner, DEFAULT_PLANNER_MODEL } from "../orchestrator/src/planning/anthropic";
+import { createAnthropicHttpTransportFromEnv } from "../orchestrator/src/planning/anthropicHttp";
 import type { GoalReviewer, IntentPlanner } from "../orchestrator/src/planning/types";
 import { readAgentRuntimeConfig } from "../orchestrator/src/agentRuntime/config";
 import { smokeTaskDefinition } from "../orchestrator/src/e2e/harness";
@@ -81,19 +81,16 @@ try {
 }
 const owner = createHumanOwnerSession({ principalId: "telegram-owner", source: "telegram", now });
 
-// Trusted planning layer (intent routing + semantic goal review). Credentials are resolved by the SDK
-// (ANTHROPIC_API_KEY or an `ant auth login` profile) and never printed.
+// Trusted planning layer (intent routing + semantic goal review), over native HTTP (no SDK dependency).
+// The key is read only from ANTHROPIC_API_KEY and never printed; without it the planner stays disabled.
 let planner: IntentPlanner | null = null;
 let reviewer: GoalReviewer | null = null;
 if (process.env.OXM_AGENT_PLANNER !== "off") {
-  try {
-    const client = new Anthropic({ timeout: 180_000, maxRetries: 2 });
+  const client = createAnthropicHttpTransportFromEnv(process.env, { timeoutMs: 180_000, maxRetries: 2 });
+  if (client) {
     const model = process.env.OXM_AGENT_PLANNER_MODEL || DEFAULT_PLANNER_MODEL;
     planner = createAnthropicIntentPlanner({ client, model });
     reviewer = createAnthropicGoalReviewer({ client, model });
-  } catch {
-    planner = null;
-    reviewer = null;
   }
 }
 say(planner ? "Agent planner configured (natural-language intake + semantic goal review)" : "Agent planner unavailable: natural-language intake disabled; goal criteria cannot be accepted automatically");

@@ -5,6 +5,7 @@ import { createInMemoryAuditRepository } from "../store/memory";
 import { fakeEvidence } from "../manager/fake";
 import { validateEvidence } from "../manager/validator";
 import { createAnthropicGoalReviewer, createAnthropicIntentPlanner } from "./anthropic";
+import { createAnthropicHttpTransport } from "./anthropicHttp";
 import { citedPaths, semanticAcceptance } from "./goalAcceptance";
 import { normalizeGoalReview, normalizeIntentDecision } from "./normalize";
 import type { GoalReviewer, GoalReviewInput, IntentPlanner } from "./types";
@@ -204,26 +205,21 @@ describe("planning output validation", () => {
 describe("Claude-backed planning adapters", () => {
   function fakeClient(reply: { stop_reason: string; text: string }) {
     const requests: Record<string, unknown>[] = [];
-    return {
-      requests,
-      client: {
-        beta: {
-          messages: {
-            async create(body: Record<string, unknown>) {
-              requests.push(body);
-              return { stop_reason: reply.stop_reason, content: [{ type: "text", text: reply.text }] };
-            },
-          },
-        },
-      } as never,
-    };
+    const headers: Record<string, string>[] = [];
+    const fetch = (async (_url: string, init: RequestInit) => {
+      requests.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+      headers.push(init.headers as Record<string, string>);
+      return new Response(JSON.stringify({ stop_reason: reply.stop_reason, content: [{ type: "text", text: reply.text }] }), { status: 200 });
+    }) as unknown as typeof globalThis.fetch;
+    return { requests, headers, client: createAnthropicHttpTransport({ apiKey: "test-key", fetch, maxRetries: 0 }) };
   }
 
   it("uses structured JSON output with server-side fallbacks and returns parsed data", async () => {
     const f = fakeClient({ stop_reason: "end_turn", text: JSON.stringify({ intent: "status_query" }) });
     const out = await createAnthropicIntentPlanner({ client: f.client }).interpret({ message: "x", contextTaskId: null, tasks: [], requireTask: false });
     expect(out).toEqual({ intent: "status_query" });
-    expect(f.requests[0]).toMatchObject({ model: "claude-opus-5-5", fallbacks: "default", betas: ["server-side-fallback-2026-07-01"], output_config: { effort: "high", format: { type: "json_schema" } } });
+    expect(f.requests[0]).toMatchObject({ model: "claude-opus-5-5", fallbacks: "default", output_config: { effort: "high", format: { type: "json_schema" } } });
+    expect(f.headers[0]).toMatchObject({ "anthropic-beta": "server-side-fallback-2026-07-01" });
   });
 
   it("a refusal or non-JSON reply throws (callers fail closed)", async () => {

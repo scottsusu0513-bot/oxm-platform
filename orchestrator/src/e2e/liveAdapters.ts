@@ -2,6 +2,7 @@ import { createCodespaceLifecycleController } from "../codespace/controller";
 import { createFixedCodespaceClient } from "../codespace/client";
 import { createLifecycleLeaseRegistry } from "../codespace/lease";
 import { createMemoryLifecycleStateRepository } from "../codespace/state";
+import { isSafeWorkspaceRoot } from "../codespace/policy";
 import type {
   CodespaceObservation,
   LifecycleDecision,
@@ -137,8 +138,7 @@ export async function checkLiveSafety(
   add(
     "workspace_binding",
     config.repoRoot === config.workspacePath &&
-      config.repoRoot.startsWith("/workspaces/") &&
-      !config.repoRoot.includes(".."),
+      isSafeWorkspaceRoot(config.repoRoot),
     "workspace path does not match the configured repository root",
   );
 

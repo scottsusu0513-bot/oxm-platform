@@ -2,12 +2,15 @@ import { readFileSync, realpathSync, statSync } from "node:fs";
 import { join, relative, isAbsolute } from "node:path";
 import { isSafeRepoPath } from "../workers/resultParser";
 import type { ProcessRunner } from "../workers/types";
+import { resolveRepoRoot } from "./repoRoot";
 
 const MAX_FILE = 64_000;
 
 /** Trusted repository read for the goal reviewer: inside the repo, regular file, bounded, no secrets paths. */
 export function createRepoFileReader(repoRoot: string): (path: string) => string | null {
-  const root = realpathSync(repoRoot);
+  const resolved = resolveRepoRoot(repoRoot);
+  if (!resolved.ok) throw new Error(`repository file reader: ${resolved.reason}`);
+  const root = resolved.root;
   return (path) => {
     if (!isSafeRepoPath(path) || /(^|\/)\.env|(^|\/)\.git\//.test(path)) return null;
     try {

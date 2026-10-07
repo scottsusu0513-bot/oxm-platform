@@ -1,5 +1,5 @@
-import Anthropic from "@anthropic-ai/sdk";
 import { RISK_SIGNAL_KINDS } from "../intake/riskSignals";
+import type { AnthropicMessagesTransport } from "./anthropicHttp";
 import type { GoalReviewer, GoalReviewInput, IntentPlanner, IntentPlannerInput } from "./types";
 
 /**
@@ -7,25 +7,27 @@ import type { GoalReviewer, GoalReviewInput, IntentPlanner, IntentPlannerInput }
  * constrained with structured outputs and still validated deterministically
  * by ./normalize; a refusal, a non-JSON answer or an API error throws, which
  * every caller treats as "unavailable" (fail closed — no task is created and
- * no criterion is accepted).
+ * no criterion is accepted). Requests go through the native-HTTP transport in
+ * ./anthropicHttp (no SDK dependency).
  */
 export const DEFAULT_PLANNER_MODEL = "claude-opus-5-5";
 
-type Client = Pick<Anthropic, "beta">;
+type Client = AnthropicMessagesTransport;
 
 async function structuredCall(client: Client, model: string, system: string, user: string, schema: Record<string, unknown>, maxTokens: number): Promise<unknown> {
-  const response = await client.beta.messages.create({
-    model,
-    max_tokens: maxTokens,
+  const response = await client.createMessage({
     betas: ["server-side-fallback-2026-07-01"],
-    fallbacks: "default",
-    output_config: { effort: "high", format: { type: "json_schema", schema } },
-    system,
-    messages: [{ role: "user", content: user }],
+    body: {
+      model,
+      max_tokens: maxTokens,
+      fallbacks: "default",
+      output_config: { effort: "high", format: { type: "json_schema", schema } },
+      system,
+      messages: [{ role: "user", content: user }],
+    },
   });
-  if (response.stop_reason === "refusal" || response.stop_reason === "max_tokens") throw new Error(`planning call stopped: ${response.stop_reason}`);
-  const text = response.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("");
-  return JSON.parse(text) as unknown;
+  if (response.stopReason === "refusal" || response.stopReason === "max_tokens") throw new Error(`planning call stopped: ${response.stopReason}`);
+  return JSON.parse(response.text) as unknown;
 }
 
 const INTENT_SCHEMA = {

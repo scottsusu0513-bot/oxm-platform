@@ -31,6 +31,7 @@ import { createLocalClaudeCodeAdapter, createLocalCodexAdapter } from "../worker
 import { createReadOnlySnapshotAdapter, routeByMode } from "./readOnlySnapshot";
 import { AGENT_RUNTIME_CONFIRMATION, type AgentRuntimeConfig } from "./config";
 import { describeIssues, reconcileRuntimeState } from "./reconcile";
+import { resolveRepoRoot } from "./repoRoot";
 import { createRepoFileReader, createWorkingTreeDiff } from "./reviewEvidence";
 import type { GoalReviewer, IntentPlanner } from "../planning/types";
 import { createInMemoryInterpretationRepository } from "../gateway/fake";
@@ -85,6 +86,10 @@ export async function createAgentRuntime(config: AgentRuntimeConfig, options: Ag
   let auditSequence = 0;
   const nextAuditId = () => `agent-${bootId}-${++auditSequence}`;
   const fail = (code: string, reason: string, diagnostics: string[] = []): AgentRuntimeResult => ({ ok: false, code, reason, diagnostics });
+
+  // The repository root is injected by the entrypoint; it must exist before any process or file read uses it.
+  const resolvedRoot = resolveRepoRoot(config.base.repoRoot);
+  if (!resolvedRoot.ok) return fail("repo_root_unavailable", resolvedRoot.reason);
 
   const checkpoints = createAuditCheckpointRepository({ audit: options.audit, nextId: nextAuditId });
   let checkpoint: ReturnType<typeof checkpoints.load>;
