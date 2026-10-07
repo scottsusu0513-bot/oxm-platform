@@ -127,7 +127,7 @@ describe("scheduler / manager-loop boundaries", () => {
     const loop = code("loop.ts");
     const pushCalls = [...loop.matchAll(/return push\(t\)/g)].length;
     expect(pushCalls).toBe(1); // commitAndPush, reached only after Manager open_pr validation
-    expect(loop).toMatch(/case "open_pr":\s*return requestCommitApproval\(t\);/);
+    expect(loop).toMatch(/case "open_pr":\s*if \(modeOf\(t\) === "read_only"\) return completeReadOnly\(t\);\s*return requestCommitApproval\(t\);/);
     expect(loop).toMatch(/async function requestCommitApproval[\s\S]*awaitApproval\(t, "commit_publish"/);
     expect(loop).toMatch(/async function commitAndPush[\s\S]*ports\.workspace\.commitValidated[\s\S]*return push\(t\);/);
     expect(loop).toMatch(/const phase = t\.pr \? "pre_push" : "post_qa";[\s\S]*return evaluate\(t, undefined, phase\);/);

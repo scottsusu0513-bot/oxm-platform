@@ -10,7 +10,8 @@ export const TASK_TRANSITIONS: Readonly<Record<TaskState, readonly TaskState[]>>
   // red-risk tasks go routed -> awaiting_approval -> queued before execution
   routed: ["queued", "awaiting_approval", "failed", "cancelled"],
   queued: ["running", "failed", "cancelled"],
-  running: ["awaiting_approval", "pr_opened", "failed", "cancelled"],
+  // running -> complete exists only for read_only tasks (no commit/push/PR); see validateTransition.
+  running: ["awaiting_approval", "pr_opened", "complete", "failed", "cancelled"],
   pr_opened: ["qa_running", "failed", "cancelled"],
   qa_running: ["awaiting_approval", "qa_passed", "failed", "cancelled"],
   qa_passed: ["awaiting_approval", "complete", "failed", "cancelled"],
@@ -31,6 +32,10 @@ export interface TransitionContext {
   approved?: boolean;
   /** Which approval gate the task is in; required when leaving awaiting_approval. */
   approvalPhase?: ApprovalPhase;
+  /** True only for a read_only task whose trusted Git state shows no change. */
+  readOnly?: boolean;
+  /** A red read-only task may complete only after its pre-execution approval was granted. */
+  preExecutionApproved?: boolean;
 }
 
 export type TransitionResult = { ok: true } | { ok: false; reason: string };
@@ -50,6 +55,12 @@ export function validateTransition(
   }
 
   const red = ctx.riskLevel === "red";
+
+  // Only a read-only task may complete straight from running (there is nothing to commit or publish);
+  // a red read-only task additionally needs its granted pre-execution approval.
+  if (from === "running" && to === "complete" && (ctx.readOnly !== true || (red && ctx.preExecutionApproved !== true))) {
+    return { ok: false, reason: "only a read-only task (red: after pre-execution approval) may complete without commit/publish" };
+  }
 
   // Red-risk gates exist before execution and after QA. Every risk level uses
   // the additional running -> awaiting_approval commit/publish gate.

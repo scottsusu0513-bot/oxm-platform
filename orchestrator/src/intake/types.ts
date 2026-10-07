@@ -2,6 +2,9 @@ import type {
   RiskLevel,
   TaskCategory,
   TaskAction,
+  TaskCreatingIntent,
+  TaskGoal,
+  TaskMode,
   TaskState,
   WorkerAvailability,
   WorkerKind,
@@ -56,6 +59,22 @@ export interface TaskIntakeRequest {
   submittedAt: IsoTimestamp;
   /** Structured signals supplied by a trusted transport, not inferred by an LLM. */
   prioritySignals?: readonly PrioritySignal[];
+  /**
+   * Goal interpreted by the trusted planning layer. Only the Gateway builds
+   * this (from a stored interpretation); no external caller can supply it.
+   */
+  goal?: IntakeGoal;
+}
+
+/** Interpreted goal: intent (which fixes the mode) and semantic goal criteria. */
+export interface IntakeGoal {
+  intent: TaskCreatingIntent;
+  originalRequest: string;
+  interpretedObjective: string;
+  /** Semantic goal criteria derived by the planner (observable outcomes). */
+  criteria: readonly string[];
+  /** Planner risk observations (typed signal kinds). They can only raise risk, never lower it. */
+  riskObservations?: readonly string[];
 }
 
 export type ClassificationPath = "deterministic" | "llm_fallback";
@@ -180,6 +199,9 @@ export interface AgentTaskStatus {
   qaState: string | null;
   repairAttempt: number;
   waitReason: string | null;
+  mode: TaskMode;
+  /** Manager-accepted answer of a read_only task. */
+  answer: string | null;
   approval: ApprovalNeededStatus;
   lastMeaningfulAuditEvent: Pick<
     AuditEvent,
@@ -223,10 +245,14 @@ export interface PreparedIntake {
   workerPreference?: WorkerKind;
   requestedPriority?: PriorityClass;
   prioritySignals: PrioritySignal[];
-  acceptanceCriteria: { id: string; text: string }[];
+  acceptanceCriteria: { id: string; text: string; kind?: "goal" | "technical" }[];
   requiredValidations: RequiredValidation[];
   expectedScopeHint: string[];
   productAreaHint?: string;
+  mode: TaskMode;
+  goal?: TaskGoal;
+  /** Validated planner risk observations (typed signal kinds; can only raise risk). */
+  riskObservations?: string[];
 }
 
 export type ValidationResult =

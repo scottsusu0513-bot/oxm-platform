@@ -10,6 +10,58 @@ export const TASK_STATES = ["received", "classified", "routed", "queued", "runni
 export type TaskState = (typeof TASK_STATES)[number];
 
 export const RISK_LEVELS = ["green", "yellow", "red"] as const;
+
+/**
+ * Execution mode of a task. read_only tasks (investigations, questions,
+ * reviews) may read the repository and run checks but must not change any
+ * file; they complete without commit, push or PR.
+ */
+export const TASK_MODES = ["change", "read_only"] as const;
+export type TaskMode = (typeof TASK_MODES)[number];
+
+/** Internal intents the trusted planning layer may assign to an owner message. */
+export const AGENT_INTENTS = [
+  "investigate_or_answer",
+  "change_code",
+  "audit_or_review",
+  "audit_and_fix",
+  "task_follow_up",
+  "human_decision",
+  "status_query",
+  "cancel_or_pause",
+] as const;
+export type AgentIntent = (typeof AGENT_INTENTS)[number];
+export const TASK_CREATING_INTENTS = ["investigate_or_answer", "change_code", "audit_or_review", "audit_and_fix"] as const;
+export type TaskCreatingIntent = (typeof TASK_CREATING_INTENTS)[number];
+
+/**
+ * MUTABILITY (may the Worker change code?) and RISK (how dangerous is the
+ * request?) are separate dimensions. Mutability is a deterministic function
+ * of the trusted interpreted intent ONLY. Risk may add approvals, gates or
+ * blocks, but nothing that computes, raises or approves risk may ever turn a
+ * read_only task into a mutating one, widen its scope, or grant tools / Git
+ * write; an approval authorizes executing the exact (still read-only)
+ * contract, nothing more.
+ */
+export function modeForIntent(intent: TaskCreatingIntent): TaskMode {
+  return intent === "investigate_or_answer" || intent === "audit_or_review" ? "read_only" : "change";
+}
+
+/** Fail-closed consistency check between a task's mutability and anything that would act on it. */
+export function checkMutability(input: { taskMode: TaskMode; contractMode: TaskMode | undefined; intent?: TaskCreatingIntent | null }): { ok: true } | { ok: false; reason: string } {
+  const contractMode = input.contractMode ?? "change";
+  if (input.intent && modeForIntent(input.intent) !== input.taskMode) return { ok: false, reason: `task mode ${input.taskMode} contradicts intent ${input.intent}` };
+  if (contractMode !== input.taskMode) return { ok: false, reason: `worker contract mutability (${contractMode}) contradicts task mode (${input.taskMode})` };
+  return { ok: true };
+}
+
+/** The owner's goal as interpreted by the trusted planning layer (immutable for the task's life). */
+export interface TaskGoal {
+  intent: TaskCreatingIntent;
+  /** The owner's original words (sanitized). */
+  originalRequest: string;
+  interpretedObjective: string;
+}
 export type RiskLevel = (typeof RISK_LEVELS)[number];
 
 export const WORKER_KINDS = ["claude", "codex"] as const;

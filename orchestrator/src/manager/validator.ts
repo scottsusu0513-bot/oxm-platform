@@ -207,7 +207,9 @@ function collectFindings(e: ManagerEvidence, approvalRequired: boolean): { findi
       (a.evidenceType === "validation" && a.reference !== null && passedValidations.has(a.reference)) ||
       (a.evidenceType === "ci_check" && a.reference !== null && passedChecks.has(a.reference)) ||
       (a.evidenceType === "scope" && a.reference === "scope" && e.scope.allowedScope.length > 0 && violations.length === 0) ||
-      (a.evidenceType === "human" && a.reference !== null);
+      (a.evidenceType === "human" && a.reference !== null) ||
+      // Semantic goal acceptance: only the Manager's trusted reviewer can back a goal criterion.
+      (a.evidenceType === "manager_review" && a.reference !== null && a.reference.startsWith("review:"));
     if (!backed) add(aid, "needs_repair", "acceptance_unverified", "acceptance_failure", a.summary);
   }
 

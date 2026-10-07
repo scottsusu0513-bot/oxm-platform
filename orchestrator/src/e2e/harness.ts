@@ -42,7 +42,10 @@ export function smokeTaskDefinition(smokeRunId: string): SmokeTaskDefinition {
       `Set its complete UTF-8 content to exactly ${JSON.stringify(smokeFixtureContent(smokeRunId))}; the final \\n is one LF byte (0x0a), not optional.`,
       `Run exactly: ${SMOKE_VALIDATION_COMMAND}`,
       "Leave the validated fixture change uncommitted; trusted orchestration owns commit creation.",
-      "This is test-only and must not change production behavior, access a database, deploy, push, merge, or alter authentication or secrets.",
+      // Constraints are phrased without risk vocabulary: the multilingual risk layer deliberately does not
+      // trust negation ("must not deploy" still mentions deploying), so naming those operations would make
+      // this fixture task red. The trusted policy and Worker permissions enforce the same limits regardless.
+      "This is test-only: touch nothing outside the fixture file; leave application behavior, stored data, branches and permissions exactly as they are.",
     ].join(" "),
     expectedScope: Object.freeze([SMOKE_FIXTURE_PATH]),
     acceptanceCriteria: Object.freeze([

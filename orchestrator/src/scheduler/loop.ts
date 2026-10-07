@@ -3,7 +3,7 @@ import { BASE_BRANCH, type ActiveWork, type AssignedBranchPlan } from "../branch
 import { isValidBranchTaskId } from "../branches/naming";
 import { normalizePathSet } from "../branches/overlap";
 import { assertTransition, isTerminalState, type ApprovalPhase, type TransitionContext } from "../domain/taskState";
-import { TASK_CATEGORIES, type RiskLevel, type TaskState, type WorkerKind } from "../domain/types";
+import { TASK_CATEGORIES, checkMutability, type RiskLevel, type TaskMode, type TaskState, type WorkerKind } from "../domain/types";
 import { DEFAULT_POLL_POLICY, nextPollStep } from "../github/qa";
 import type { QaDecision } from "../github/types";
 import { assignWorkerBranch, pushInputFromWorkerResult } from "../githubWrite/flow";
@@ -43,6 +43,7 @@ import {
   type PersistedTaskRecord,
   type ScheduleDecision,
   type SchedulerTaskView,
+  type StartApprovalEvidence,
   type TaskIntake,
   type TaskSnapshot,
   type TrustedRunRecord,
@@ -85,6 +86,7 @@ export const DEFAULT_ORCHESTRATION_POLICY: OrchestrationPolicy = Object.freeze({
   maxRepairAttempts: DEFAULT_MAX_REPAIR_ATTEMPTS,
   maxInfrastructureRetries: 2,
   maxHumanResumes: 3,
+  maxReviewRetries: 5,
   maxReplans: 1,
   executableWorkers: Object.freeze(["claude", "codex"]) as readonly WorkerKind[],
   prDraft: false,
@@ -157,6 +159,9 @@ interface TaskRecord {
   approvalRequestedAt: IsoTimestamp | null;
   commitApprovalEvidence: CommitApprovalEvidence | null;
   paused: boolean;
+  /** Finished run waiting for the Manager's goal reviewer (infrastructure); no repair cycle consumed. */
+  pendingReview: boolean;
+  reviewRetries: number;
 }
 
 export interface ManagerLoop {
@@ -195,6 +200,10 @@ function validateIntake(t: TaskIntake, known: ReadonlyMap<string, unknown>): str
   if (!Array.isArray(t.requiredValidations) || t.requiredValidations.length === 0) return "required validations are required";
   if ((t.dependsOn ?? []).includes(t.taskId)) return "task depends on itself";
   return null;
+}
+
+function modeOf(t: { intake: TaskIntake }): TaskMode {
+  return t.intake.mode === "read_only" ? "read_only" : "change";
 }
 
 export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<OrchestrationPolicy> = {}): ManagerLoop {
@@ -278,6 +287,8 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       pendingSideEffect: t.pendingSideEffect,
       pendingSideEffectId: t.pendingSideEffectId,
       paused: t.paused,
+      pendingReview: t.pendingReview,
+      reviewRetries: t.reviewRetries,
     };
   }
 
@@ -391,6 +402,8 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       seq: t.seq,
       title: t.intake.title,
       category: t.intake.category,
+      mode: modeOf(t),
+      answer: modeOf(t) === "read_only" && t.status === "accepted" ? (t.lastResult?.summary ?? null) : null,
       risk: t.risk,
       priority: t.priority,
       state: t.state,
@@ -405,6 +418,8 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       workerRunning: t.workerRunning,
       workerErrorType: t.lastResult?.errorType ?? null,
       paused: t.paused,
+      pendingReview: t.pendingReview,
+      reviewRetries: t.reviewRetries,
       repair: t.repair,
       repairCycles: t.repairCycles,
       humanEscalation: t.humanEscalation,
@@ -596,6 +611,8 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       approvalRequestedAt: null,
       commitApprovalEvidence: null,
       paused: false,
+      pendingReview: false,
+      reviewRetries: 0,
     };
     if ((task.dependsOn ?? []).length > 0) t.capabilities.add("dependency_resolver");
     recs.set(task.taskId, t);
@@ -851,6 +868,7 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
   function baseContract(t: TaskRecord): Omit<WorkerTaskContract, "branch"> {
     const task = t.intake;
     return {
+      ...(modeOf(t) === "read_only" ? { mode: "read_only" as const } : {}),
       taskId: task.taskId,
       runId: `${task.taskId}-run-${t.runCount + 1}`,
       category: task.category,
@@ -888,6 +906,10 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
   }
 
   function startRun(t: TaskRecord, contract: WorkerTaskContract, attempt: number) {
+    // Typed invariant: no Worker run (first run, repair, retry, or after any approval) may carry a
+    // mutability different from the task's intent-derived mode.
+    const mutability = checkMutability({ taskMode: modeOf(t), contractMode: contract.mode, intent: t.intake.goal?.intent ?? null });
+    if (!mutability.ok) return block(t, `mutability invariant violated: ${mutability.reason}`, { terminal: true, trigger: "scope_violation" });
     // Hard cap independent of the validator: no path can exceed 1 + maxRepairAttempts runs.
     if (t.workerExecutions >= maxWorkerExecutions(t)) {
       return block(t, "worker execution budget exhausted", {
@@ -968,6 +990,14 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
         contract: t.contract,
         result,
         lease: t.lease,
+        // The original goal and its criteria come from the immutable intake, never from the Worker.
+        goal: {
+          mode: modeOf(t),
+          title: t.intake.title,
+          objective: t.intake.objective,
+          goal: t.intake.goal ? structuredClone(t.intake.goal) : null,
+          criteria: structuredClone(t.intake.acceptanceCriteria),
+        },
       });
     } catch (err) {
       // No prior failure: the evidence error is the primary failure (generic fail-closed path).
@@ -982,6 +1012,9 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     }
     t.record = record;
     const phase = t.pr ? "pre_push" : "post_qa";
+    // A read-only task that changed anything is a policy violation, never a repairable result.
+    if (modeOf(t) === "read_only" && record.changedPaths.length > 0)
+      return block(t, "read-only task modified the workspace", { terminal: true, trigger: "scope_violation" });
 
     // A transient runtime/tool/quota/infrastructure failure is re-run on the
     // same contract without a Manager diagnosis, so it never consumes a
@@ -994,10 +1027,62 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       if (!unsafe) return retryInfrastructure(t, result.errorType);
     }
 
+    // The Manager could not JUDGE the run (goal reviewer outage): wait, never a repair verdict.
+    if (record.goalReviewUnavailable && result.status === "success") return awaitReview(t);
+
     // With an open PR, validate the repaired local result as a pre-push
     // artifact. CI is deliberately absent here because this exact head is not
     // on GitHub yet; post-QA validation below still requires exact-head CI.
     return evaluate(t, undefined, phase);
+  }
+
+  /**
+   * Typed infrastructure wait. The run's result and trusted evidence exist,
+   * but the goal reviewer is unavailable, so the Manager cannot complete a
+   * diagnosis: no verdict is recorded, no repair cycle is consumed, the lease
+   * and work stay intact, and review_retry re-judges the SAME run.
+   */
+  function awaitReview(t: TaskRecord) {
+    t.pendingReview = true;
+    t.status = "waiting_infrastructure";
+    const exhausted = t.reviewRetries >= policy.maxReviewRetries;
+    t.queueReason = exhausted
+      ? `goal reviewer unavailable after ${t.reviewRetries} retries (infrastructure); waiting for the operator: restart the runtime to retry, or cancel. No Manager repair cycle was consumed.`
+      : `goal reviewer unavailable (infrastructure); review retry ${t.reviewRetries}/${policy.maxReviewRetries}. No Manager repair cycle consumed.`;
+    escalate(t, "goal_review_unavailable", "wait");
+    audit(t, "goal_review_unavailable", { reason: t.queueReason });
+  }
+
+  async function onReviewRetry(taskId: string) {
+    const t = recs.get(taskId);
+    if (!t || !t.pendingReview || t.status !== "waiting_infrastructure" || isTerminalStatus(t.status)) return;
+    if (t.reviewRetries >= policy.maxReviewRetries) return; // exhausted: only a restart re-arms retries
+    if (!t.lease || !t.contract || !t.lastResult || !t.runId)
+      return block(t, "review retry state incomplete", { terminal: true, trigger: "missing_trusted_evidence" });
+    t.reviewRetries++;
+    const record = await ports.evidence.record({
+      taskId,
+      runId: t.runId,
+      contract: t.contract,
+      result: t.lastResult,
+      lease: t.lease,
+      goal: {
+        mode: modeOf(t),
+        title: t.intake.title,
+        objective: t.intake.objective,
+        goal: t.intake.goal ? structuredClone(t.intake.goal) : null,
+        criteria: structuredClone(t.intake.acceptanceCriteria),
+      },
+    });
+    if (record.goalReviewUnavailable) return awaitReview(t);
+    t.pendingReview = false;
+    t.reviewRetries = 0;
+    t.record = record;
+    if (modeOf(t) === "read_only" && record.changedPaths.length > 0)
+      return block(t, "read-only task modified the workspace", { terminal: true, trigger: "scope_violation" });
+    t.status = t.repair.attempt > 0 ? "repair_requested" : "running";
+    t.queueReason = null;
+    return evaluate(t, undefined, t.pr ? "pre_push" : "post_qa");
   }
 
   async function retryInfrastructure(t: TaskRecord, errorType: string) {
@@ -1127,6 +1212,7 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     const reasons = step.validation.reasonCodes.join(",");
     switch (step.next) {
       case "open_pr":
+        if (modeOf(t) === "read_only") return completeReadOnly(t);
         return requestCommitApproval(t);
       case "advance_qa":
         // Accepted with final, passing CI on the exact head: QA is done.
@@ -1377,7 +1463,21 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     });
   }
 
+  /** A read-only task accepted by the Manager completes with no commit, push or PR. */
+  async function completeReadOnly(t: TaskRecord) {
+    if (!t.lease || !t.record || t.record.changedPaths.length > 0)
+      return block(t, "read-only completion state could not be verified", { terminal: true, trigger: "missing_trusted_evidence" });
+    const observed = await ports.workspace.observeCommitState(t.lease);
+    if (!observed.ok || observed.dirtyPaths.length > 0)
+      return block(t, "read-only task modified the workspace", { terminal: true, trigger: "scope_violation" });
+    const from = t.state;
+    move(t, "complete", { readOnly: true, preExecutionApproved: t.approval.pre_execution === "approved" });
+    return accept(t, from);
+  }
+
   async function requestCommitApproval(t: TaskRecord) {
+    // Defense in depth: a read-only task can never reach commit/publish.
+    if (modeOf(t) === "read_only") return block(t, "read-only task cannot request commit/publish", { terminal: true, trigger: "scope_violation" });
     const evidence = await currentCommitApprovalEvidence(t);
     if (!evidence) {
       return block(t, "commit approval state could not be verified", { terminal: true, trigger: "unsafe_branch_state" });
@@ -1563,8 +1663,8 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       };
     }
     // A parked red-risk repair is bound to its own exact new contract.
-    if (t.pendingRepair) return { ...redRepairCheck(t, t.pendingRepair.contract) };
-    if (t.pendingRetry) return { ...redRepairCheck(t, t.pendingRetry.contract) };
+    if (t.pendingRepair) return { ...redRepairCheck(t, t.pendingRepair.contract), startEvidence: startEvidence(t, t.pendingRepair.contract, true) };
+    if (t.pendingRetry) return { ...redRepairCheck(t, t.pendingRetry.contract), startEvidence: startEvidence(t, t.pendingRetry.contract, true) };
     let branch = t.plan?.branch;
     if (!branch) {
       // The pre-execution binding covers the deterministic task contract and
@@ -1593,6 +1693,20 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       kind: "start" as const,
       requestedAction: APPROVAL_ACTIONS.pre_execution,
       bindingShaOrActionId: redStartBindingId(contract),
+      startEvidence: startEvidence(t, contract, false),
+    };
+  }
+
+  /** Structured description of exactly what a pre-execution approval would authorize. */
+  function startEvidence(t: TaskRecord, contract: WorkerTaskContract, repair: boolean): StartApprovalEvidence {
+    return {
+      objectiveSummary: (t.intake.goal?.interpretedObjective ?? t.intake.summary ?? t.intake.title).slice(0, 400),
+      category: contract.category,
+      actions: Array.from(new Set(contract.actions.map((a) => a.kind))).sort(),
+      allowedScope: [...contract.allowedScope].sort(),
+      riskReasons: [...t.intake.classification.risk.reasons].slice(0, 12),
+      repair,
+      mode: modeOf(t),
     };
   }
 
@@ -1692,6 +1806,8 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
         return onApproval(e.taskId, e.phase);
       case "human_decision_submitted":
         return onHumanDecision(e.taskId, e.decision);
+      case "review_retry":
+        return onReviewRetry(e.taskId);
     }
   }
 
@@ -1838,8 +1954,14 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       pendingSideEffectId: saved.pendingSideEffectId,
       trustedApproval: null,
       approvalRequestedAt: saved.approvalRequestedAt ?? null,
-      commitApprovalEvidence: saved.commitApprovalEvidence ? structuredClone(saved.commitApprovalEvidence) : null,
+      // The checkpoint sanitizer redacts any "authorization" key; that field is a fixed literal
+      // (commit/push/PR yes, merge/deploy no), so it is restored as exactly that, never widened.
+      commitApprovalEvidence: saved.commitApprovalEvidence
+        ? { ...structuredClone(saved.commitApprovalEvidence), authorization: { commit: true, normalPush: true, openOrReusePr: true, merge: false, deploy: false } }
+        : null,
       paused: saved.paused === true,
+      pendingReview: saved.pendingReview === true,
+      reviewRetries: saved.reviewRetries ?? 0,
     };
   }
 
@@ -1859,6 +1981,12 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       }
       for (const t of Array.from(recs.values()).sort((a, b) => a.seq - b.seq)) {
         if (isTerminalStatus(t.status) || t.status === "needs_human_approval" || t.status === "needs_human_decision" || t.status === "qa_pending") continue;
+        if (t.pendingReview) {
+          // Re-arm bounded review retries for the same finished run; never re-run the Worker or re-judge stale evidence.
+          t.reviewRetries = 0;
+          post({ type: "review_retry", taskId: t.intake.taskId });
+          continue;
+        }
         if (t.workerRunning || t.pendingSideEffect !== null) {
           block(t, `restart found indeterminate ${t.pendingSideEffect ?? "worker"} side effect; refusing to repeat it`, {
             terminal: true,

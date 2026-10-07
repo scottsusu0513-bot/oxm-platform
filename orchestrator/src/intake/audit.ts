@@ -12,7 +12,8 @@ export type IntakeAuditEvent =
   | "task_enqueued"
   | "task_paused"
   | "task_cancel_requested"
-  | "task_status_read";
+  | "task_status_read"
+  | "risk_signals_detected";
 
 export function createIntakeAuditor(input: {
   audit: AuditRepository;

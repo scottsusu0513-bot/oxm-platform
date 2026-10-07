@@ -1,9 +1,11 @@
 import type { ApprovalPhase } from "../domain/taskState";
-import type { RiskLevel, TaskState, WorkerKind } from "../domain/types";
+import type { RiskLevel, TaskMode, TaskState, WorkerKind } from "../domain/types";
 import type { AgentTaskStatus } from "../intake/types";
 import type { Approval, ApprovalKind, IsoTimestamp } from "../store/types";
 import type { CommitApprovalEvidence } from "../workers/prompt";
 import type { HumanDecisionInput, HumanDecisionRequest } from "../manager/types";
+import type { IntentDecision } from "../planning/types";
+import type { StartApprovalEvidence } from "../scheduler/types";
 
 export const GATEWAY_CAPABILITIES = [
   "task:submit",
@@ -11,8 +13,16 @@ export const GATEWAY_CAPABILITIES = [
   "task:pause",
   "task:cancel",
   "approval:read",
+  /** Generic: may decide any approval kind (operator consoles). */
   "approval:grant",
   "approval:reject",
+  /** Least-privilege, kind-scoped approval capabilities (e.g. a mobile transport). */
+  "approval:grant:start",
+  "approval:grant:commit_publish",
+  "approval:reject:start",
+  "approval:reject:commit_publish",
+  /** Ask the trusted planning layer to interpret an owner message (no side effects besides storing the interpretation). */
+  "task:interpret",
   /** View an open needs_human_decision escalation and decision outcomes. */
   "human_decision:read",
   /** Submit guidance to an open escalation. Grants no approval of any kind. */
@@ -88,6 +98,9 @@ export interface GatewayTaskStatus {
   qaState: string | null;
   repairAttempt: number;
   waitReason: string | null;
+  mode: TaskMode;
+  /** Manager-accepted answer of a completed read_only task (sanitized). */
+  answer: string | null;
   approvalRequired: boolean;
   createdAt: IsoTimestamp;
   updatedAt: IsoTimestamp;
@@ -107,6 +120,49 @@ export interface PendingApprovalRequirement {
   reasonSummary: string;
   /** Sanitized Manager-reviewed evidence; present for commit/publish only. */
   commitEvidence?: CommitApprovalEvidence;
+  /** Sanitized description of a red-risk pre-execution approval. */
+  startEvidence?: StartApprovalEvidence;
+}
+
+// ---------------------------------------------------------------------------
+// Natural-language interpretation (trusted planning layer)
+
+export interface InterpretOwnerMessageRequest {
+  idempotencyKey: string;
+  text: string;
+  /** Task the message replied to, resolved by the caller from its trusted correlation ledger. */
+  contextTaskId: string | null;
+  /** Explicit /goal: only task-creating intents are acceptable. */
+  requireTask: boolean;
+  priority?: "critical" | "high" | "normal" | "low";
+}
+
+export interface InterpretationView {
+  interpretationId: string;
+  decision: IntentDecision;
+  duplicate: boolean;
+}
+
+export interface PersistedInterpretation {
+  interpretationId: string;
+  fingerprint: string;
+  principalId: string;
+  originalRequest: string;
+  priority: "critical" | "high" | "normal" | "low" | null;
+  decision: IntentDecision;
+  createdAt: IsoTimestamp;
+}
+
+export interface GatewayInterpretationRepository {
+  get(interpretationId: string): PersistedInterpretation | null;
+  create(record: PersistedInterpretation): PersistedInterpretation;
+}
+
+export interface TaskDirectoryEntry {
+  taskId: string;
+  title: string;
+  status: string;
+  mode: TaskMode;
 }
 
 export type PendingApprovalResponse =
@@ -143,6 +199,10 @@ export interface TrustedHumanDecisionRequirement {
   inputRequested: string;
   cyclesCompleted: number;
   fingerprintTrend: "stagnated" | "changed";
+  /** Latest Manager root-cause diagnosis (structured Manager text, sanitized again on read). */
+  rootCause?: string;
+  /** What each Manager-guided repair cycle of this round attempted and how it ended. */
+  repairAttempts?: readonly { cycle: number; attempted: string; outcome: string }[];
 }
 
 export interface HumanDecisionOutcomeRecord {
@@ -170,6 +230,8 @@ export interface PendingHumanDecisionView {
   managerRecommendation: string;
   inputRequested: string;
   fingerprintTrend: "stagnated" | "changed";
+  rootCause: string;
+  repairAttempts: { cycle: number; attempted: string; outcome: string }[];
   /** A decision is guidance only: it never approves commit, publish, merge, deploy, or red risk. */
   grantsApproval: false;
 }
@@ -236,7 +298,8 @@ export type GatewayRateAction =
   | "approval_read"
   | "approval_mutate"
   | "human_decision_read"
-  | "human_decision_mutate";
+  | "human_decision_mutate"
+  | "task_interpret";
 
 export interface GatewayRateLimiter {
   consume(input: {
@@ -318,4 +381,8 @@ export interface AgentGatewayService {
   rejectTask(call: GatewayCall<unknown>): Promise<ApprovalDecisionResponse>;
   getHumanDecision(call: GatewayCall<unknown>): Promise<HumanDecisionStatusResponse>;
   submitHumanDecision(call: GatewayCall<unknown>): Promise<HumanDecisionSubmitResponse>;
+  /** Natural-language owner message -> validated internal intent (stored, idempotent). */
+  interpretOwnerMessage(call: GatewayCall<unknown>): Promise<InterpretationView>;
+  /** Creates the task described by a stored task interpretation through normal intake. */
+  submitInterpretedTask(call: GatewayCall<unknown>): Promise<{ taskId: string; status: GatewayTaskStatus; duplicate: boolean }>;
 }

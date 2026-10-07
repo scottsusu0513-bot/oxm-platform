@@ -7,6 +7,8 @@ import { classifyIntake } from "./classify";
 import { validateAndNormalizeRequest } from "./normalize";
 import { seedPriority } from "./priority";
 import { seedRisk } from "./risk";
+import { describeSignal, detectRiskSignals, plannerSignals, signalActions } from "./riskSignals";
+import { checkMutability } from "../domain/types";
 import { seedRouting } from "./routing";
 import { buildTaskStatus } from "./status";
 import type {
@@ -163,7 +165,22 @@ export function createAgentRuntimeService(
         requestId: input.requestId,
       };
     }
-    const classification = await classifyIntake(input, deps.llmClassifier);
+    const classified = await classifyIntake(input, deps.llmClassifier);
+    // Multilingual semantic risk: typed signals from the deterministic lexicon plus planner
+    // observations. They only ADD typed actions; domain/risk takes the maximum.
+    const riskText = `${input.title}\n${input.instruction}`;
+    // Mutability comes ONLY from the trusted interpreted intent (normalize: modeForIntent). Risk signals
+    // below may raise risk and add approvals, but never change the mode.
+    const mode = input.mode;
+    const consistent = checkMutability({ taskMode: mode, contractMode: mode, intent: input.goal?.intent ?? null });
+    if (!consistent.ok) return { outcome: "rejected", reasonCode: "mutability_inconsistent", reason: consistent.reason, requestId: input.requestId };
+    const signals = [...detectRiskSignals(riskText, mode), ...plannerSignals(input.riskObservations)];
+    const extraActions = signals.flatMap(signalActions);
+    // A read-only task only reads and checks: no edit, commit or PR action exists to classify or route.
+    const classification = {
+      ...classified,
+      actions: [...(mode === "read_only" ? [{ kind: "repo_read" as const }, { kind: "run_check" as const }] : classified.actions), ...extraActions],
+    };
     if (classification.clarificationRequired || !classification.executable) {
       audit("clarification_required", {
         taskId: input.requestId,
@@ -219,7 +236,19 @@ export function createAgentRuntimeService(
     }
     const taskId = deps.nextTaskId();
     const scope = resolveScope(input, classification.category);
-    const risk = seedRisk(taskId, classification, scope.paths);
+    const seeded = seedRisk(taskId, classification, scope.paths);
+    const risk = {
+      ...seeded,
+      reasons: Array.from(new Set([...seeded.reasons.filter((r) => r !== "no escalating signals" || signals.length === 0), ...signals.filter((s) => s.level === seeded.level).map((s) => `semantic: ${describeSignal(s)}`)])),
+    };
+    if (signals.length)
+      audit("risk_signals_detected", {
+        taskId,
+        requestId: input.requestId,
+        risk: risk.level,
+        reasonCodes: signals.map((s) => `${s.kind}:${s.source}:${s.rule}`),
+        sourceType: input.source.type,
+      });
     const priority = seedPriority(input, classification);
     const routing = seedRouting(
       taskId,
@@ -329,6 +358,9 @@ export function createAgentRuntimeService(
       summary: input.title,
       acceptanceCriteria: input.acceptanceCriteria,
       requiredValidations: input.requiredValidations,
+      ...(mode === "read_only" ? { mode: "read_only" as const } : {}),
+      ...(input.goal ? { goal: input.goal } : {}),
+      ...(signals.length ? { riskSignals: signals.map((s) => ({ ...s, evidence: [...s.evidence] })) } : {}),
       workspaceId: "default",
       prioritySignals: classification.prioritySignals,
       requestedPriority: input.requestedPriority,

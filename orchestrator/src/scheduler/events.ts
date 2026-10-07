@@ -27,6 +27,7 @@ export const ORCHESTRATION_AUDIT_EVENTS = [
   "repair_requested",
   "repair_completed",
   "infrastructure_retry_requested",
+  "goal_review_unavailable",
   "human_decision_requested",
   "human_decision_accepted",
   "human_decision_rejected",

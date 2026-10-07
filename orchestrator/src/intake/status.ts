@@ -63,6 +63,8 @@ export function buildTaskStatus(input: {
     qaState: snap?.qaStatus ?? null,
     repairAttempt: snap?.repair.attempt ?? task.retries,
     waitReason: snap?.blockingReason ?? snap?.queueReason ?? null,
+    mode: snap?.mode ?? "change",
+    answer: snap?.answer ?? null,
     approval: {
       required: approvalState || pending !== null,
       kind:

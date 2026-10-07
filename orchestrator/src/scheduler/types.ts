@@ -15,7 +15,7 @@
  */
 import type { AssignedBranchPlan, BranchLineage } from "../branches/types";
 import type { ApprovalPhase } from "../domain/taskState";
-import type { ClassificationResult, RiskLevel, RoutingDecision, TaskAction, TaskCategory, TaskState, WorkerKind } from "../domain/types";
+import type { ClassificationResult, RiskLevel, RoutingDecision, TaskAction, TaskCategory, TaskGoal, TaskMode, TaskState, WorkerKind } from "../domain/types";
 import type { PullRequestState, QaDecision } from "../github/types";
 import type { PollPolicy } from "../github/qa";
 import type { BranchCreation, GitHubWriteClient, PushReceipt, TrustedPullRequest } from "../githubWrite/types";
@@ -87,6 +87,12 @@ export const ORCHESTRATION_STATUSES = [
    * The workspace lease is kept so the uncommitted work stays intact.
    */
   "needs_human_decision",
+  /**
+   * A trusted infrastructure dependency the Manager needs to JUDGE a finished
+   * run (the semantic goal reviewer) is unavailable. Typed transient state:
+   * no Manager-guided repair cycle is consumed; bounded review retries.
+   */
+  "waiting_infrastructure",
   "accepted",
   "blocked",
 ] as const;
@@ -200,6 +206,8 @@ export interface OrchestrationPolicy {
   maxInfrastructureRetries: number;
   /** Human-decision resumes per task; each grants one new round of maxRepairAttempts Manager-guided cycles. */
   maxHumanResumes: number;
+  /** Bounded goal-review retries after a reviewer outage (per waiting episode). */
+  maxReviewRetries: number;
   /** Automatic pre-execution replans after a stale base. */
   maxReplans: number;
   executableWorkers: readonly WorkerKind[];
@@ -239,6 +247,32 @@ export interface AcceptanceCriterionSpec {
   /** Stable criterion id, e.g. "AC-1". */
   id: string;
   text: string;
+  /**
+   * goal: semantic goal criterion judged by the Manager's trusted reviewer.
+   * technical (default): backed by trusted validations.
+   */
+  kind?: "goal" | "technical";
+}
+
+/** Goal context handed to the trusted evidence layer for semantic acceptance. */
+export interface GoalAcceptanceContext {
+  mode: TaskMode;
+  title: string;
+  objective: string;
+  goal: TaskGoal | null;
+  criteria: readonly AcceptanceCriterionSpec[];
+}
+
+/** Sanitized, structured view of a red-risk pre-execution approval (no prompts, no diffs). */
+export interface StartApprovalEvidence {
+  objectiveSummary: string;
+  category: TaskCategory;
+  actions: string[];
+  allowedScope: string[];
+  riskReasons: string[];
+  /** True when the approval is for a Manager-guided repair or retry contract, not the first run. */
+  repair: boolean;
+  mode: TaskMode;
 }
 
 /** A classified and routed task handed to the loop. Classification/routing happen upstream. */
@@ -263,6 +297,12 @@ export interface TaskIntake {
   prioritySignals?: readonly PrioritySignal[];
   requestedPriority?: PriorityClass;
   lineage?: BranchLineage;
+  /** Defaults to "change". read_only tasks never commit, push or open a PR. */
+  mode?: TaskMode;
+  /** Interpreted owner goal (natural-language intake); immutable for the task's life. */
+  goal?: TaskGoal;
+  /** Typed, auditable risk signals that raised this task's risk at intake (never lowered). */
+  riskSignals?: readonly { kind: string; level: "red" | "yellow"; rule: string; evidence: readonly string[]; source: string }[];
 }
 
 // ---------------------------------------------------------------------------
@@ -286,7 +326,9 @@ export type OrchestrationEvent =
   | { type: "approval_granted"; taskId: string; phase: ApprovalPhase }
   /** Untrusted human response to a needs_human_decision escalation; normalized and bound by the loop. Never an approval. */
   | { type: "human_decision_submitted"; taskId: string; decision: unknown }
-  | { type: "approval_rejected"; taskId: string; phase: ApprovalPhase };
+  | { type: "approval_rejected"; taskId: string; phase: ApprovalPhase }
+  /** External timer: retry the Manager's goal review of the already finished run (never re-runs the Worker). */
+  | { type: "review_retry"; taskId: string };
 
 export type OrchestrationEventType = OrchestrationEvent["type"];
 
@@ -300,6 +342,8 @@ export interface TrustedRunRecord {
   acceptance: readonly AcceptanceEvidence[];
   /** Workspace HEAD verified from git after the run. */
   verifiedHeadSha: string | null;
+  /** The Manager's goal reviewer was unavailable (infrastructure). Never a goal verdict; never consumes a repair cycle. */
+  goalReviewUnavailable?: boolean;
   observedRisk: RiskLevel;
 }
 
@@ -322,7 +366,7 @@ export interface WorkspacePort {
 }
 
 export interface EvidencePort {
-  record(input: { taskId: string; runId: string; contract: WorkerTaskContract; result: WorkerResult; lease: WorkspaceLease }): Promise<TrustedRunRecord>;
+  record(input: { taskId: string; runId: string; contract: WorkerTaskContract; result: WorkerResult; lease: WorkspaceLease; goal?: GoalAcceptanceContext }): Promise<TrustedRunRecord>;
 }
 
 export interface QaPort {
@@ -343,6 +387,8 @@ export interface ApprovalCheck {
   bindingShaOrActionId: string;
   /** Structured, sanitized evidence for the commit/publish approval UI. */
   evidence?: CommitApprovalEvidence;
+  /** Structured, sanitized evidence for a red-risk pre-execution approval UI. */
+  startEvidence?: StartApprovalEvidence;
 }
 
 export interface TrustedApprovalResult {
@@ -424,6 +470,9 @@ export interface PersistedTaskRecord {
   pendingSideEffectId: string | null;
   /** Runtime intake control; does not alter the TaskState model. */
   paused?: boolean;
+  /** Finished run waiting for the Manager's goal review (infrastructure outage). */
+  pendingReview?: boolean;
+  reviewRetries?: number;
 }
 
 export interface OrchestrationPersistencePort {
@@ -459,6 +508,12 @@ export interface TaskSnapshot {
   seq: number;
   title: string;
   category: TaskCategory;
+  mode: TaskMode;
+  /** Accepted answer of a read_only task (Worker report judged by the Manager's reviewer); null otherwise. */
+  answer: string | null;
+  /** A finished run is waiting for the goal reviewer (infrastructure), with this many retries used. */
+  pendingReview: boolean;
+  reviewRetries: number;
   risk: RiskLevel;
   priority: PriorityAssessment;
   state: TaskState;

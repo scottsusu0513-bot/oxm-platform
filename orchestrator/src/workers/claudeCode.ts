@@ -26,7 +26,7 @@ export function createClaudeCodeAdapter(config: ClaudeCodeConfig, deps: ClaudeCo
       command: config.command ?? DEFAULT_CLAUDE_COMMAND,
       repoRoot: config.repoRoot,
       timeoutMs: config.timeoutMs,
-      buildArgs: () => buildClaudeArgs(config.model),
+      buildArgs: (contract) => buildClaudeArgs(config.model, contract.mode ?? "change"),
       parseOutput: parseClaudeOutput,
     },
     deps,

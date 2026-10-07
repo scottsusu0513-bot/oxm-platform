@@ -125,4 +125,21 @@ describe("Manager Loop persistence and resume", () => {
       blockingReason: "orchestration persistence failed",
     });
   });
+
+  it("restores a pending commit/publish approval with the identical binding (sanitizer-redacted authorization literal is restored, never widened)", async () => {
+    const store = createMemoryStore(() => "2026-10-04T12:00:00.000Z");
+    let id = 0;
+    const persistence = createAuditCheckpointRepository({ audit: store.audit, nextId: () => `cp-${++id}` });
+    const sim = createSimulation({ persistence, autoApproveCommits: false });
+    await sim.create(fakeIntake({ taskId: "resume-commit" }));
+    const before = await sim.loop.pendingApproval("resume-commit");
+    expect(persistence.load()!.tasks[0].commitApprovalEvidence!.authorization).toBe("[REDACTED]");
+    sim.ports.leases.release(sim.ports.leases.current("ws-resume-commit"));
+    const resumed = createManagerLoop(sim.ports);
+    await resumed.resume();
+    await resumed.settle();
+    const after = await resumed.pendingApproval("resume-commit");
+    expect(after).toEqual(before);
+    expect(after!.evidence!.authorization).toEqual({ commit: true, normalPush: true, openOrReusePr: true, merge: false, deploy: false });
+  });
 });

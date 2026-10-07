@@ -12,6 +12,8 @@ import type {
   PersistedGatewayDecision,
   GatewayHumanDecisionRepository,
   PersistedHumanDecisionSubmission,
+  GatewayInterpretationRepository,
+  PersistedInterpretation,
 } from "./types";
 import type { HumanDecisionInput } from "../manager/types";
 
@@ -127,6 +129,18 @@ export function createFakeRateLimiter(
       return denied.includes(input.action)
         ? { allowed: false, retryAfterSeconds: 60 }
         : { allowed: true };
+    },
+  };
+}
+
+export function createInMemoryInterpretationRepository(): GatewayInterpretationRepository {
+  const rows = new Map<string, PersistedInterpretation>();
+  return {
+    get: (id) => (rows.has(id) ? structuredClone(rows.get(id)!) : null),
+    create(record) {
+      if (rows.has(record.interpretationId)) throw new Error("interpretation already exists");
+      rows.set(record.interpretationId, structuredClone(record));
+      return structuredClone(record);
     },
   };
 }

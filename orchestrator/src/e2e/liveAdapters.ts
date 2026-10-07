@@ -89,9 +89,24 @@ function repoName(input: unknown): string | null {
 }
 
 /** Read-only, fail-closed checks. No branch, PR, worker, Codespace or data mutation occurs here. */
+export interface LiveSafetyOptions {
+  /**
+   * Branches whose kept, uncommitted work a durable checkpoint expects (an
+   * active, not-yet-pushed task). A dirty worktree is accepted only on one of
+   * these exact branches; the Manager re-verifies HEAD and content identities
+   * before any resume or commit. Absent: the worktree must be clean.
+   */
+  dirtyBranches?: readonly string[];
+  /** Confirmation value required for this runtime (defaults to the smoke confirmation). */
+  expectedConfirmation?: string;
+  /** Worker CLIs that must answer --version (defaults to the configured Codex command). */
+  workerCommands?: readonly { kind: string; command: string }[];
+}
+
 export async function checkLiveSafety(
   config: LiveSmokeConfig,
   runner: ProcessRunner = createNodeProcessRunner(),
+  options: LiveSafetyOptions = {},
 ): Promise<LiveSafetyResult> {
   const checks: SafetyCheck[] = [];
   const add = (name: string, ok: boolean, reason: string) =>
@@ -99,7 +114,7 @@ export async function checkLiveSafety(
   add("explicit_live_opt_in", config.live === true, "live flag is required");
   add(
     "explicit_confirmation",
-    config.confirmation === LIVE_CONFIRMATION,
+    config.confirmation === (options.expectedConfirmation ?? LIVE_CONFIRMATION),
     "confirmation value does not match",
   );
   add("not_ci", config.ci === false, "live smoke is disabled in CI");
@@ -147,11 +162,14 @@ export async function checkLiveSafety(
     "--porcelain=v1",
     "--untracked-files=all",
   ]);
-  add(
-    "clean_worktree",
-    successful(status) && status.stdout.trim() === "",
-    "working tree must be clean before live side effects",
-  );
+  const clean = successful(status) && status.stdout.trim() === "";
+  if (options.dirtyBranches && options.dirtyBranches.length > 0 && !clean)
+    add(
+      "resume_branch_binding",
+      successful(status) && successful(branchResult) && options.dirtyBranches.includes(branch),
+      "uncommitted work is not on the branch of a checkpointed active task",
+    );
+  else add("clean_worktree", clean, "working tree must be clean before live side effects");
 
   const expected = `${config.expectedRepository.owner}/${config.expectedRepository.repo}`;
   const repo = await exec(configRunner(runner), config.repoRoot, "gh", [
@@ -188,13 +206,10 @@ export async function checkLiveSafety(
     "expected Codespace is unavailable or bound to another repository",
   );
 
-  const worker = await exec(
-    configRunner(runner),
-    config.repoRoot,
-    config.codexCommand ?? "codex",
-    ["--version"],
-  );
-  add("worker_runtime", successful(worker), "Codex runtime is unavailable");
+  for (const w of options.workerCommands ?? [{ kind: "codex", command: config.codexCommand ?? "codex" }]) {
+    const worker = await exec(configRunner(runner), config.repoRoot, w.command, ["--version"]);
+    add(w.kind === "codex" ? "worker_runtime" : `worker_runtime_${w.kind}`, successful(worker), `${w.kind === "codex" ? "Codex" : "Claude"} runtime is unavailable`);
+  }
 
   const failed = checks.find((check) => !check.ok);
   return failed
@@ -215,7 +230,7 @@ function mapCodespaceStatus(value: unknown): TrustedCodespaceStatus {
   return "unknown";
 }
 
-async function readCodespaceObservation(
+export async function readCodespaceObservation(
   runner: ProcessRunner,
   config: LiveSmokeConfig,
 ): Promise<CodespaceObservation | null> {
@@ -250,7 +265,7 @@ async function readCodespaceObservation(
   }
 }
 
-function createGhReadTransport(
+export function createGhReadTransport(
   runner: ProcessRunner,
   repoRoot: string,
 ): GitHubReadTransport {
