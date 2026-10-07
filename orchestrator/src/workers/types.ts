@@ -176,6 +176,10 @@ export interface ProcessSpec {
   cwd: string;
   /** File whose contents are streamed to the child's stdin (keeps prompts out of argv). */
   stdinFile?: string;
+  /** In-memory stdin (alternative to stdinFile); stdin is closed after it is written. */
+  stdinText?: string;
+  /** Complete child environment. Omitted: the parent's environment is inherited (Worker behaviour). */
+  env?: Readonly<Record<string, string>>;
 }
 
 export interface ProcessExit {
@@ -185,6 +189,8 @@ export interface ProcessExit {
   stderr: string;
   /** True if output exceeded the runner's buffer cap (output is then unusable). */
   truncated: boolean;
+  /** Set when the process could not be started (e.g. "ENOENT"); exitCode and signal are then null. */
+  spawnError?: string;
 }
 
 export interface RunningProcess {

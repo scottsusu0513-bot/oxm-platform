@@ -21,10 +21,11 @@ export function createNodeProcessRunner(opts: { maxOutputBytes?: number; killGra
     spawn(spec: ProcessSpec): RunningProcess {
       const child = spawn(spec.command, [...spec.args], {
         cwd: spec.cwd,
+        ...(spec.env ? { env: { ...spec.env } } : {}),
         shell: false,
         detached: true,
         windowsHide: true,
-        stdio: [spec.stdinFile ? "pipe" : "ignore", "pipe", "pipe"],
+        stdio: [spec.stdinFile || spec.stdinText !== undefined ? "pipe" : "ignore", "pipe", "pipe"],
       });
 
       let killed = false;
@@ -72,10 +73,13 @@ export function createNodeProcessRunner(opts: { maxOutputBytes?: number; killGra
           input.on("error", () => kill());
           child.stdin.on("error", () => {}); // EPIPE if the child exits early
           input.pipe(child.stdin);
+        } else if (spec.stdinText !== undefined && child.stdin) {
+          child.stdin.on("error", () => {}); // EPIPE if the child exits early
+          child.stdin.end(spec.stdinText, "utf8");
         }
 
         let settled = false;
-        const finish = (exitCode: number | null, signal: string | null) => {
+        const finish = (exitCode: number | null, signal: string | null, spawnError?: string) => {
           if (settled) return;
           settled = true;
           if (graceTimer) clearTimeout(graceTimer);
@@ -85,9 +89,10 @@ export function createNodeProcessRunner(opts: { maxOutputBytes?: number; killGra
             stdout: Buffer.concat(out).toString("utf8"),
             stderr: Buffer.concat(err).toString("utf8"),
             truncated,
+            ...(spawnError ? { spawnError } : {}),
           });
         };
-        child.on("error", () => finish(null, null));
+        child.on("error", (error: NodeJS.ErrnoException) => finish(null, null, typeof error.code === "string" && /^E[A-Z0-9]{1,20}$/.test(error.code) ? error.code : "ESPAWN"));
         child.on("close", (code, signal) => finish(code, signal));
       });
 

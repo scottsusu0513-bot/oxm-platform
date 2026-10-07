@@ -16,9 +16,7 @@ import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { createAgentRuntime } from "../orchestrator/src/agentRuntime/compose";
-import { createAnthropicGoalReviewer, createAnthropicIntentPlanner, DEFAULT_PLANNER_MODEL } from "../orchestrator/src/planning/anthropic";
-import { createAnthropicHttpTransportFromEnv } from "../orchestrator/src/planning/anthropicHttp";
-import type { GoalReviewer, IntentPlanner } from "../orchestrator/src/planning/types";
+import { createPlanningBackend } from "../orchestrator/src/agentRuntime/planningBackend";
 import { readAgentRuntimeConfig } from "../orchestrator/src/agentRuntime/config";
 import { smokeTaskDefinition } from "../orchestrator/src/e2e/harness";
 import { createHumanOwnerSession } from "../orchestrator/src/humanInteraction/auth";
@@ -81,19 +79,16 @@ try {
 }
 const owner = createHumanOwnerSession({ principalId: "telegram-owner", source: "telegram", now });
 
-// Trusted planning layer (intent routing + semantic goal review), over native HTTP (no SDK dependency).
-// The key is read only from ANTHROPIC_API_KEY and never printed; without it the planner stays disabled.
-let planner: IntentPlanner | null = null;
-let reviewer: GoalReviewer | null = null;
-if (process.env.OXM_AGENT_PLANNER !== "off") {
-  const client = createAnthropicHttpTransportFromEnv(process.env, { timeoutMs: 180_000, maxRetries: 2 });
-  if (client) {
-    const model = process.env.OXM_AGENT_PLANNER_MODEL || DEFAULT_PLANNER_MODEL;
-    planner = createAnthropicIntentPlanner({ client, model });
-    reviewer = createAnthropicGoalReviewer({ client, model });
-  }
-}
-say(planner ? "Agent planner configured (natural-language intake + semantic goal review)" : "Agent planner unavailable: natural-language intake disabled; goal criteria cannot be accepted automatically");
+// Trusted planning layer (intent routing + semantic goal review). Default provider: the owner's
+// authenticated Claude Code CLI session (no ANTHROPIC_API_KEY, no API billing). The Anthropic HTTP API
+// is used only with OXM_AGENT_PLANNER_PROVIDER=anthropic_api. An unavailable configured provider fails
+// closed; OXM_AGENT_PLANNER=off disables the planner explicitly. Secrets are never printed.
+const planning = await createPlanningBackend(process.env, { repoRoot: process.cwd() });
+if (!planning.ok) fail(`planner ${planning.code}: ${planning.reason}`);
+const planned = planning as Extract<typeof planning, { ok: true }>;
+for (const line of planned.diagnostics) say(line);
+const planner = planned.planner;
+const reviewer = planned.reviewer;
 
 const runtimeConfig = readAgentRuntimeConfig(process.env, process.cwd());
 if (!runtimeConfig.ok) fail(runtimeConfig.reason);
