@@ -109,6 +109,20 @@ describe("Phase 2C.12 fake end-to-end smoke", () => {
     ]);
   });
 
+  it("keeps git_metadata_changed as the reported failure when evidence recording then throws (live smoke #6)", async () => {
+    const { report } = await run({ worker: ["git_metadata_changed"] });
+    expect(report).toMatchObject({
+      finalStatus: "blocked",
+      failureCode: "git_metadata_changed",
+      failureReason: "worker failure: git_metadata_changed",
+      managerDecision: "blocked",
+      workerInvocationCount: 1,
+      headSha: null,
+      prNumber: null,
+    });
+    expect(report.failureReason).not.toContain("orchestration error");
+  });
+
   it("surfaces QA failure and never accepts it", async () => {
     const { report } = await run({ ci: ["fail"], maxRepairAttempts: 0 });
     expect(report.finalStatus).toBe("qa_failed");

@@ -884,13 +884,26 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     audit(t, t.repair.attempt > 0 ? "repair_completed" : "worker_completed");
     if (t.worker === "codex") audit(t, result.status === "success" ? "codex_worker_completed" : "codex_worker_failed");
 
-    const record = await ports.evidence.record({
-      taskId,
-      runId,
-      contract: t.contract,
-      result,
-      lease: t.lease,
-    });
+    let record: TrustedRunRecord;
+    try {
+      record = await ports.evidence.record({
+        taskId,
+        runId,
+        contract: t.contract,
+        result,
+        lease: t.lease,
+      });
+    } catch (err) {
+      // No prior failure: the evidence error is the primary failure (generic fail-closed path).
+      if (result.status === "success" || result.errorType === null) throw err;
+      // A Worker failure (e.g. git_metadata_changed with headSha=null) is primary; the
+      // evidence error is secondary and must never mask it. Still terminal, no repair.
+      escalate(t, `secondary:evidence_record_failed(${err instanceof Error ? err.name : "unknown"})`, "block");
+      return block(t, `worker failure: ${result.errorType}`, {
+        terminal: true,
+        trigger: `worker_${result.errorType}`,
+      });
+    }
     t.record = record;
 
     // With an open PR, validate the repaired local result as a pre-push
