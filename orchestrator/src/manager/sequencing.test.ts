@@ -198,7 +198,8 @@ describe("taskState invariants", () => {
   it("transition table snapshot", () => {
     expect(Object.keys(TASK_TRANSITIONS).sort()).toEqual([...TASK_STATES].sort());
     expect(TASK_TRANSITIONS).toMatchObject({
-      running: ["awaiting_approval", "pr_opened", "failed", "cancelled"],
+      // running -> complete is guarded: read-only, non-red tasks only (see the test below).
+      running: ["awaiting_approval", "pr_opened", "complete", "failed", "cancelled"],
       pr_opened: ["qa_running", "failed", "cancelled"],
       qa_running: ["awaiting_approval", "qa_passed", "failed", "cancelled"],
       qa_passed: ["awaiting_approval", "complete", "failed", "cancelled"],
@@ -206,5 +207,15 @@ describe("taskState invariants", () => {
       failed: [],
       cancelled: [],
     });
+  });
+
+  it("running -> complete is only for a read-only task (red: only after pre-execution approval)", () => {
+    expect(validateTransition("running", "complete", { riskLevel: "green" }).ok).toBe(false);
+    expect(validateTransition("running", "complete", { riskLevel: "yellow", readOnly: false }).ok).toBe(false);
+    expect(validateTransition("running", "complete", { riskLevel: "red", readOnly: true }).ok).toBe(false);
+    expect(validateTransition("running", "complete", { riskLevel: "red", readOnly: false, preExecutionApproved: true }).ok).toBe(false);
+    expect(validateTransition("running", "complete", { riskLevel: "red", readOnly: true, preExecutionApproved: true }).ok).toBe(true);
+    expect(validateTransition("running", "complete", { riskLevel: "green", readOnly: true }).ok).toBe(true);
+    expect(validateTransition("running", "complete", { riskLevel: "yellow", readOnly: true }).ok).toBe(true);
   });
 });

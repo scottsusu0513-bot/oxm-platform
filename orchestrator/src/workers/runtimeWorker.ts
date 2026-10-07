@@ -28,7 +28,8 @@ export interface RuntimeWorkerConfig {
   /** Runtime invariant validated in preflight; Workers never surface interactive permission UI. */
   interactivePromptsAllowed?: false;
   prepareRuntime?(): Promise<{ ok: true } | { ok: false; errorType: WorkerErrorType; reason: string }>;
-  buildArgs(): string[];
+  /** Receives the contract so read-only runs can drop mutating tools. */
+  buildArgs(contract: WorkerTaskContract): string[];
   parseOutput(stdout: string): ParseResult<WorkerReport>;
 }
 
@@ -158,7 +159,7 @@ async function execute(
     if (killSwitch.triggered) return cancelled();
     let args: string[];
     try {
-      args = config.buildArgs();
+      args = config.buildArgs(c);
     } catch {
       return failure(c, "invalid_contract", "invalid model identifier", risk);
     }

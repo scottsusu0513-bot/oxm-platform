@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { assessRisk, isProtectedBranch, normalizeBranch } from "../domain/risk";
-import { TASK_CATEGORIES, type RiskLevel } from "../domain/types";
+import { TASK_CATEGORIES, type RiskLevel, type TaskMode } from "../domain/types";
 import { isSafeRepoPath, isValidBranchName } from "./resultParser";
 import { REQUIRED_VALIDATIONS, type RequiredValidation, type WorkerTaskContract } from "./types";
 import type { AcceptanceEvidence, ValidationEvidence } from "../manager/types";
@@ -157,8 +157,13 @@ export const CLAUDE_WORKER_SETTINGS = JSON.stringify({
 
 const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:\[\]-]{0,99}$/;
 
+/** Read-only runs get no file-mutating tools at all (Edit/Write are neither available nor allowed). */
+export const CLAUDE_READ_ONLY_TOOLS = CLAUDE_TOOLS.filter((t) => t !== "Edit" && t !== "Write");
+export const CLAUDE_READ_ONLY_ALLOWED_TOOLS = CLAUDE_ALLOWED_TOOLS.filter((t) => t !== "Edit" && t !== "Write");
+
 /** Fixed argument array for `claude -p`. The prompt goes via stdin, never argv. */
-export function buildClaudeArgs(model: string): string[] {
+export function buildClaudeArgs(model: string, mode: TaskMode = "change"): string[] {
+  const readOnly = mode === "read_only";
   if (!MODEL_RE.test(model)) throw new Error("invalid model identifier");
   // Fully non-interactive: dontAsk + permission prompts answered by nobody (=
   // denied). No user/project/local settings or MCP servers can widen the
@@ -179,9 +184,9 @@ export function buildClaudeArgs(model: string): string[] {
     "--settings",
     CLAUDE_WORKER_SETTINGS,
     "--tools",
-    CLAUDE_TOOLS.join(","),
+    (readOnly ? CLAUDE_READ_ONLY_TOOLS : CLAUDE_TOOLS).join(","),
     "--allowedTools",
-    ...CLAUDE_ALLOWED_TOOLS,
+    ...(readOnly ? CLAUDE_READ_ONLY_ALLOWED_TOOLS : CLAUDE_ALLOWED_TOOLS),
     "--disallowedTools",
     ...CLAUDE_DISALLOWED_TOOLS,
   ];
@@ -238,6 +243,7 @@ export function validateContract(c: WorkerTaskContract): string[] {
   if (c.changedPaths && !c.changedPaths.every((p) => typeof p === "string")) errors.push("invalid changedPaths");
   if (c.expectedHeadSha !== undefined && !/^[0-9a-f]{40}$/.test(c.expectedHeadSha)) errors.push("invalid expectedHeadSha");
   if (c.gitMetadataDigest !== undefined && !/^[0-9a-f]{64}$/.test(c.gitMetadataDigest)) errors.push("invalid gitMetadataDigest");
+  if (c.mode !== undefined && c.mode !== "change" && c.mode !== "read_only") errors.push("invalid mode");
   return errors;
 }
 
@@ -339,6 +345,8 @@ export function redStartBindingId(c: WorkerTaskContract): string {
     acceptanceCriteria: canonicalSet(c.acceptanceCriteria),
     requiredValidations: canonicalSet(c.requiredValidations),
     allowedDirtyPaths: canonicalSet(c.allowedDirtyPaths ?? []),
+    // Only present for read_only contracts, so existing change-task bindings are unchanged.
+    ...(c.mode === "read_only" ? { mode: "read_only" } : {}),
   });
   return `start:${sha256Hex(canonical)}`;
 }
@@ -364,7 +372,11 @@ Category: ${c.category}
 Risk level: ${riskLevel}
 Current branch: ${c.branch}
 Expected starting HEAD: ${c.expectedHeadSha ?? "not supplied"}
-You must stay on branch "${c.branch}". Edit the working tree but do not stage or commit; the trusted orchestration layer will commit validated changes. Do not push.
+You must stay on branch "${c.branch}". ${
+    c.mode === "read_only"
+      ? `READ-ONLY TASK: do not create, edit, delete, format or regenerate ANY file. Investigate by reading the repository and running the allowed read-only commands only. Put your complete answer in "summary": answer the question directly, cite the repository files (paths) that support it, and state any uncertainty or unverified assumption. Any file change fails the task.`
+      : "Edit the working tree but do not stage or commit; the trusted orchestration layer will commit validated changes."
+  } Do not push.
 
 Forbidden operations:
 ${FORBIDDEN_OPERATIONS.map((o) => `- ${o}`).join("\n")}

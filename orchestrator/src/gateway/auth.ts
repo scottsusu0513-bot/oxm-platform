@@ -11,7 +11,8 @@ import type {
 export async function authenticateAndAuthorize(input: {
   authenticator: GatewayAuthenticator;
   authentication: GatewayAuthenticationInput;
-  capability: GatewayCapability;
+  /** One capability, or any one of several (kind-scoped alternatives). */
+  capability: GatewayCapability | readonly GatewayCapability[];
   audit: GatewayAuditSink;
   action: string;
 }): Promise<AuthContext> {
@@ -43,7 +44,8 @@ export async function authenticateAndAuthorize(input: {
     });
     throw new GatewayError("unauthenticated", "authentication failed", 401);
   }
-  if (!principal.capabilities.includes(input.capability)) {
+  const required = typeof input.capability === "string" ? [input.capability] : input.capability;
+  if (!required.some((c) => principal.capabilities.includes(c))) {
     input.audit.record({
       event: "gateway_forbidden",
       principalId: principal.principalId,

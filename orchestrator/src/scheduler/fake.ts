@@ -1,3 +1,5 @@
+import { semanticAcceptance } from "../planning/goalAcceptance";
+import type { GoalReviewer } from "../planning/types";
 import { isPlannerApproved } from "../branches/planner";
 import { classifyTask } from "../domain/risk";
 import { routeTask } from "../domain/routing";
@@ -54,7 +56,9 @@ export type WorkerScript =
   | "timeout"
   /** Timed out after editing task files: the retry must inherit new dirty paths. */
   | "timeout_dirty"
-  | "process_error";
+  | "process_error"
+  /** Edits files even though the contract is read_only (policy violation probe). */
+  | "mutate_readonly";
 export type CiScript = "pass" | "fail" | "pending";
 
 export interface SimulationOptions {
@@ -76,6 +80,14 @@ export interface SimulationOptions {
   staleQaTaskIds?: readonly string[];
   /** Test convenience; disable to assert the mandatory human gate itself. */
   autoApproveCommits?: boolean;
+  /**
+   * Manager goal reviewer. When set, tasks with a goal context get the same
+   * semantic acceptance as production (planning/goalAcceptance); without it
+   * the simulation keeps its validation-only acceptance.
+   */
+  goalReviewer?: GoalReviewer;
+  /** Answer text a read_only Worker returns, per task (default cites the task's own file). */
+  answers?: Record<string, string>;
 }
 
 export interface WorkerCall {
@@ -200,7 +212,10 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
       errorType: null,
       workerErrorCode: null,
     };
+    if (c.mode === "read_only" && script === "success")
+      return { ...base, filesChanged: [], summary: opts.answers?.[c.taskId] ?? `Answer for ${c.taskId}: see ${files[0] ?? "the repository"}.`, headSha: start };
     switch (script) {
+      case "mutate_readonly":
       case "success":
         return { ...base, headSha: edit() };
       case "risk_red":
@@ -451,7 +466,7 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
       },
     },
     evidence: {
-      async record({ contract, result, lease }): Promise<TrustedRunRecord> {
+      async record({ contract, result, lease, goal, runId }): Promise<TrustedRunRecord> {
         if (!contract.gitMetadataDigest || metadataOf(lease.taskId) !== contract.gitMetadataDigest) {
           throw new Error("[fake] Git metadata changed since workspace preparation");
         }
@@ -476,15 +491,32 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
           validations.length > 0 &&
           validations.every((v) => v.status === "passed");
         const acceptanceReference = contract.requiredValidations[0] ?? null;
+        const files = contents.get(contract.taskId) ?? new Map<string, string | null>();
+        const judged =
+          goal && opts.goalReviewer
+            ? await semanticAcceptance({
+                  goal,
+                  validations,
+                  reviewer: opts.goalReviewer,
+                  reviewId: runId,
+                  diff: { text: result.filesChanged.map((p) => `+++ b/${p}\n+${files.get(p) ?? ""}`).join("\n"), truncated: false },
+                  answer: result.summary,
+                  fileContent: (p) => files.get(p) ?? `// repository file ${p}`,
+                  timeoutMs: 5_000,
+                })
+            : null;
         const record: TrustedRunRecord = {
           changedPaths: result.filesChanged,
           validations,
-          acceptance: contract.acceptanceCriteria.map((_, i) => ({
-            criterionId: `AC-${i + 1}`,
-            status: validationsPassed ? ("satisfied" as const) : ("failed" as const),
-            evidenceType: "validation" as const,
-            reference: acceptanceReference,
-          })),
+          ...(judged?.reviewUnavailable ? { goalReviewUnavailable: true } : {}),
+          acceptance: judged
+            ? judged.acceptance
+            : contract.acceptanceCriteria.map((_, i) => ({
+                criterionId: `AC-${i + 1}`,
+                status: validationsPassed ? ("satisfied" as const) : ("failed" as const),
+                evidenceType: "validation" as const,
+                reference: acceptanceReference,
+              })),
           verifiedHeadSha: heads.get(lease.taskId)?.headSha ?? null,
           observedRisk: result.riskObserved.level,
         };

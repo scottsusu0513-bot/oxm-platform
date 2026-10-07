@@ -1,8 +1,9 @@
 import { normalizePathSet } from "../branches/overlap";
-import { TASK_CATEGORIES, RISK_LEVELS, WORKER_KINDS } from "../domain/types";
+import { TASK_CATEGORIES, TASK_CREATING_INTENTS, RISK_LEVELS, WORKER_KINDS, modeForIntent, type TaskGoal, type TaskMode } from "../domain/types";
 import { PRIORITY_CLASSES, PRIORITY_SIGNALS } from "../scheduler/types";
 import { isDangerousValue } from "../store/sanitize";
 import { REQUIRED_VALIDATIONS } from "../workers/types";
+import { validatePlannerGoal } from "../planning/structured";
 import {
   INTAKE_LIMITS,
   type PreparedIntake,
@@ -28,6 +29,7 @@ const REQUEST_KEYS = new Set([
   "requiredValidations",
   "source",
   "submittedAt",
+  "goal",
   "prioritySignals",
 ]);
 
@@ -70,6 +72,44 @@ function inferredTitle(instruction: string): string {
       ? `${first.slice(0, INTAKE_LIMITS.title - 1)}…`
       : first) || "Engineering task"
   );
+}
+
+/** Criteria every interpreted goal of this intent carries regardless of the planner. */
+const FIXED_GOAL_CRITERIA: Readonly<Record<TaskGoal["intent"], readonly string[]>> = {
+  investigate_or_answer: [
+    "The owner's question is answered directly",
+    "The answer is supported by cited repository evidence (file paths)",
+    "Uncertainty and unverified assumptions are stated explicitly",
+  ],
+  audit_or_review: [
+    "Every requested area was actually inspected",
+    "Each finding is supported by cited repository evidence (file paths)",
+    "Uncertainty and unverified assumptions are stated explicitly",
+  ],
+  change_code: ["Existing behaviour outside the requested change is preserved"],
+  audit_and_fix: [
+    "Every requested audit area was inspected and each finding is reported with cited repository evidence",
+    "Every code change corresponds to a reported, evidence-backed finding; no unrelated code is changed",
+    "Each supported finding within the requested scope is fixed",
+  ],
+};
+
+function checkGoal(value: unknown): { ok: true; goal: TaskGoal; criteria: string[]; riskObservations: string[] } | { ok: false; reason: string } {
+  const g = value as Record<string, unknown> | null;
+  if (!g || typeof g !== "object" || Array.isArray(g)) return { ok: false, reason: "goal must be an object" };
+  if (Object.keys(g).some((k) => !["intent", "originalRequest", "interpretedObjective", "criteria", "riskObservations"].includes(k))) return { ok: false, reason: "goal contains an unsupported field" };
+  if (!(TASK_CREATING_INTENTS as readonly string[]).includes(String(g.intent))) return { ok: false, reason: "goal intent does not create a task" };
+  // The owner's own words keep the raw-input checks; planner-derived fields use the structured planner validator.
+  const originalRequest = typeof g.originalRequest === "string" ? normalizeObjective(g.originalRequest) : "";
+  if (!originalRequest || originalRequest.length > 2_000 || isDangerousValue(originalRequest)) return { ok: false, reason: "goal original request is missing, too long, or credential-like" };
+  const planned = validatePlannerGoal({ interpretedObjective: g.interpretedObjective, criteria: g.criteria, riskObservations: g.riskObservations ?? [] });
+  if (!planned.ok) return { ok: false, reason: `goal ${planned.reason}` };
+  return {
+    ok: true,
+    goal: { intent: g.intent as TaskGoal["intent"], originalRequest, interpretedObjective: planned.interpretedObjective },
+    criteria: planned.criteria,
+    riskObservations: planned.riskObservations,
+  };
 }
 
 export function validateAndNormalizeRequest(
@@ -239,13 +279,34 @@ export function validateAndNormalizeRequest(
   const paths = normalizePathSet(request.expectedScopeHint ?? []);
   if (!paths.ok) return reject("unsafe_scope", paths.reason);
   const title = normalizeObjective(request.title ?? inferredTitle(instruction));
-  const acceptanceCriteria = (
-    criteria.length
-      ? criteria
-      : [`The requested outcome is observable: ${title}`]
-  ).map((text, i) => ({ id: `AC-${i + 1}`, text }));
+  let mode: TaskMode = "change";
+  let goal: TaskGoal | undefined;
+  let riskObservations: string[] = [];
+  let acceptanceCriteria: PreparedIntake["acceptanceCriteria"];
+  if (request.goal !== undefined) {
+    const g = checkGoal(request.goal);
+    if (!g.ok) return reject("invalid_goal", g.reason);
+    if (criteria.length) return reject("invalid_goal", "an interpreted goal carries its own criteria");
+    mode = modeForIntent(g.goal.intent);
+    goal = { intent: g.goal.intent, originalRequest: g.goal.originalRequest, interpretedObjective: g.goal.interpretedObjective };
+    riskObservations = g.riskObservations;
+    // Planner criteria first, then fixed criteria the planner can never drop or weaken.
+    acceptanceCriteria = [
+      ...g.criteria.map((text) => ({ text, kind: "goal" as const })),
+      ...FIXED_GOAL_CRITERIA[g.goal.intent].map((text) => ({ text, kind: "goal" as const })),
+      { text: "All required validations pass on the final working tree", kind: "technical" as const },
+    ].map((c, i) => ({ id: `AC-${i + 1}`, ...c }));
+  } else {
+    acceptanceCriteria = (
+      criteria.length
+        ? criteria
+        : [`The requested outcome is observable: ${title}`]
+    ).map((text, i) => ({ id: `AC-${i + 1}`, text }));
+  }
+  if (mode === "read_only" && request.requiredValidations !== undefined)
+    return reject("invalid_validation", "read-only tasks use the fixed read-only validation set");
   const requiredValidations = Array.from(
-    new Set(request.requiredValidations ?? REQUIRED_VALIDATIONS)
+    new Set(mode === "read_only" ? (["typecheck"] as const) : (request.requiredValidations ?? REQUIRED_VALIDATIONS))
   );
   const prioritySignals = Array.from(new Set(request.prioritySignals ?? []));
   const value: PreparedIntake = {
@@ -265,8 +326,14 @@ export function validateAndNormalizeRequest(
     requiredValidations,
     expectedScopeHint: paths.paths,
     productAreaHint: request.productAreaHint,
+    mode,
+    ...(goal ? { goal } : {}),
+    ...(riskObservations.length ? { riskObservations } : {}),
   };
   value.fingerprint = fingerprintRequest({
+    mode: value.mode,
+    goal: value.goal ?? null,
+    riskObservations: value.riskObservations ?? [],
     instruction: value.instruction,
     title: value.title,
     source: value.source,

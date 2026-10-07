@@ -57,6 +57,15 @@ export function createManagerHumanDecisionReader(
         inputRequested: report.humanDecisionRequired,
         cyclesCompleted: report.cyclesCompleted,
         fingerprintTrend: report.fingerprintTrend,
+        rootCause: report.diagnoses.at(-1)?.rootCause ?? "",
+        repairAttempts: report.repairOutcomes.map((o) => {
+          const diagnosis = report.diagnoses.find((d) => d.cycle === o.cycle);
+          return {
+            cycle: o.cycle,
+            attempted: diagnosis?.requiredFix ?? "Manager-guided repair",
+            outcome: `worker ${o.workerResult}; revalidation ${o.revalidation}`,
+          };
+        }),
       };
     },
     outcomes(taskId) {
@@ -97,6 +106,7 @@ export function createManagerApprovalRequirementReader(
         status: "pending",
         reasonSummary: `${check.phase} approval required for ${check.requestedAction}`,
         ...(check.evidence ? { commitEvidence: structuredClone(check.evidence) } : {}),
+        ...(check.startEvidence ? { startEvidence: structuredClone(check.startEvidence) } : {}),
       };
     },
   };

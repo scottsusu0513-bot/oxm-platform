@@ -1,3 +1,4 @@
+import { isSafeWorkspaceRoot } from "./policy";
 import type {
   CodespaceClient,
   CodespaceIdentity,
@@ -33,11 +34,7 @@ export function validateCodespaceIdentity(
     };
   if (identity.expectedBranch !== "main")
     return { ok: false, reason: "expected source branch must be main" };
-  if (
-    identity.workspacePath &&
-    (!identity.workspacePath.startsWith("/workspaces/") ||
-      identity.workspacePath.includes(".."))
-  )
+  if (identity.workspacePath && !isSafeWorkspaceRoot(identity.workspacePath))
     return { ok: false, reason: "unsafe workspace path" };
   return { ok: true };
 }

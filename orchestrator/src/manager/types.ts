@@ -73,10 +73,15 @@ export type AcceptanceStatus = (typeof ACCEPTANCE_STATUSES)[number];
  * What backs an acceptance status. "worker_report" is self-reported prose and
  * is never sufficient on its own to satisfy a criterion.
  */
-export const ACCEPTANCE_EVIDENCE_TYPES = ["validation", "ci_check", "scope", "human", "worker_report"] as const;
+export const ACCEPTANCE_EVIDENCE_TYPES = ["validation", "ci_check", "scope", "human", "worker_report", "manager_review"] as const;
 export type AcceptanceEvidenceType = (typeof ACCEPTANCE_EVIDENCE_TYPES)[number];
 
 /** 4. One acceptance criterion's outcome. */
+/**
+ * "manager_review": the Manager's trusted goal reviewer judged the criterion
+ * against the original goal and trusted evidence (diff / answer); never the
+ * Worker's own report.
+ */
 export interface AcceptanceEvidence {
   criterionId: string;
   status: AcceptanceStatus;

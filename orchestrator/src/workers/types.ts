@@ -8,7 +8,7 @@
  *
  * Privacy: nothing here holds a full prompt, raw stdout/stderr, or secrets.
  */
-import type { ActionKind, RiskLevel, TaskAction, TaskCategory, WorkerKind } from "../domain/types";
+import type { ActionKind, RiskLevel, TaskAction, TaskCategory, TaskMode, WorkerKind } from "../domain/types";
 import type { PathContentIdentity } from "./gitIntegrity";
 import type { Approval, IsoTimestamp } from "../store/types";
 
@@ -41,6 +41,8 @@ export interface WorkerTaskContract {
   requiredValidations: readonly RequiredValidation[];
   /** Task branch the worker must stay on. Never main/master. */
   branch: string;
+  /** read_only: the Worker must not change any file (enforced again from trusted Git after the run). */
+  mode?: TaskMode;
   /** Pre-existing dirty paths that are explicitly part of this task. */
   allowedDirtyPaths?: readonly string[];
   /**

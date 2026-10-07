@@ -6,6 +6,9 @@ import { fingerprintRequest } from "../intake/normalize";
 import { MAX_HUMAN_GUIDANCE_LENGTH, type HumanDecisionInput } from "../manager/types";
 import { isValidEscalationId } from "../domain/types";
 import type { IsoTimestamp } from "../store/types";
+import { normalizeIntentDecision } from "../planning/normalize";
+import type { IntentPlanner } from "../planning/types";
+import type { StartApprovalEvidence } from "../scheduler/types";
 import { COMMIT_PUBLISH_ACTION, normalizeCommitApprovalEvidence, type CommitApprovalEvidence } from "../workers/prompt";
 import { authenticateAndAuthorize } from "./auth";
 import {
@@ -27,6 +30,9 @@ import type {
   GatewayAuditSink,
   GatewayAuthenticator,
   GatewayCapability,
+  GatewayInterpretationRepository,
+  InterpretOwnerMessageRequest,
+  TaskDirectoryEntry,
   GatewayControlEventPort,
   GatewayDecisionRepository,
   GatewayExpiryPolicy,
@@ -68,6 +74,13 @@ export interface GatewayDependencies {
   /** Trusted escalation state; without it the human-decision actions are unavailable (fail closed). */
   humanDecisionRequirements?: HumanDecisionRequirementReader;
   humanDecisionSubmissions?: GatewayHumanDecisionRepository;
+  /** Trusted planning layer; without it natural-language interpretation is unavailable (fail closed). */
+  intentPlanner?: IntentPlanner;
+  interpretations?: GatewayInterpretationRepository;
+  /** Trusted list of known tasks (newest first) given to the planner as context. */
+  taskDirectory?: () => readonly TaskDirectoryEntry[];
+  /** Bound for one planner call (default 120s). */
+  plannerTimeoutMs?: number;
 }
 
 const ESCALATION_ID = /^([A-Za-z0-9][A-Za-z0-9._:-]{0,63})\.hd\.([1-9][0-9]{0,3})$/;
@@ -105,6 +118,12 @@ function pendingView(r: TrustedHumanDecisionRequirement): PendingHumanDecisionVi
     managerRecommendation: shortText(r.managerRecommendation),
     inputRequested: shortText(r.inputRequested),
     fingerprintTrend: r.fingerprintTrend,
+    rootCause: shortText(r.rootCause ?? ""),
+    repairAttempts: (r.repairAttempts ?? []).slice(0, 8).map((a) => ({
+      cycle: Number.isInteger(a.cycle) ? a.cycle : 0,
+      attempted: shortText(a.attempted, 240),
+      outcome: shortText(a.outcome, 160),
+    })),
     grantsApproval: false,
   };
 }
@@ -229,10 +248,20 @@ function externalStatus(status: NonNullable<ReturnType<AgentRuntimeService["getT
     qaState: status.qaState,
     repairAttempt: status.repairAttempt,
     waitReason: sanitizeSummary(status.waitReason),
+    mode: status.mode === "read_only" ? "read_only" : "change",
+    answer: sanitizeAnswer(status.answer),
     approvalRequired: status.approval.required,
     createdAt: status.createdAt,
     updatedAt: status.updatedAt,
   };
+}
+
+/** The accepted answer keeps its line breaks but never control characters or credential-like content. */
+function sanitizeAnswer(value: string | null | undefined): string | null {
+  if (typeof value !== "string") return null;
+  const text = value.replace(/\r\n?/g, "\n").replace(/[\u0000-\u0009\u000b-\u001f\u007f]+/g, " ").trim().slice(0, 2_000);
+  if (!text) return null;
+  return text.split(/\s+/).some((w) => isDangerousValue(w)) || isDangerousValue(text) ? REDACTED : text;
 }
 
 function sanitizeSummary(value: string | null): string | null {
@@ -258,7 +287,7 @@ function sanitizeCommitEvidence(value: CommitApprovalEvidence | undefined): Comm
     !Array.isArray(value.validations) || value.validations.length > 50 ||
     value.validations.some((v) => !v || typeof v.name !== "string" || v.name.length > 100 || /[\u0000-\u001f\u007f]/.test(v.name) || isDangerousValue(v.name) || typeof v.requested !== "boolean" || typeof v.executed !== "boolean" || typeof v.trusted !== "boolean" || !["passed", "failed", "skipped", "missing"].includes(v.status)) ||
     !Array.isArray(value.acceptance) || value.acceptance.length > 50 ||
-    value.acceptance.some((a) => !a || !SAFE_KEY.test(a.criterionId) || !["satisfied", "failed", "unknown"].includes(a.status) || !["validation", "ci_check", "scope", "human", "worker_report"].includes(a.evidenceType) || (a.reference !== null && (typeof a.reference !== "string" || a.reference.length > 100 || /[\u0000-\u001f\u007f]/.test(a.reference) || isDangerousValue(a.reference)))) ||
+    value.acceptance.some((a) => !a || !SAFE_KEY.test(a.criterionId) || !["satisfied", "failed", "unknown"].includes(a.status) || !["validation", "ci_check", "scope", "human", "worker_report", "manager_review"].includes(a.evidenceType) || (a.reference !== null && (typeof a.reference !== "string" || a.reference.length > 100 || /[\u0000-\u001f\u007f]/.test(a.reference) || isDangerousValue(a.reference)))) ||
     !["green", "yellow", "red"].includes(value.observedRisk) ||
     value.managerDecision !== "accepted" ||
     value.action !== COMMIT_PUBLISH_ACTION ||
@@ -309,6 +338,21 @@ function sanitizeRequirement(
     // structured explanation and must not become a raw-log/prompt channel.
     reasonSummary: `${value.phase} approval required for ${value.action}`,
     ...(value.commitEvidence ? { commitEvidence: sanitizeCommitEvidence(value.commitEvidence) } : {}),
+    ...(value.startEvidence && value.phase === "pre_execution" ? { startEvidence: sanitizeStartEvidence(value.startEvidence) } : {}),
+  };
+}
+
+function sanitizeStartEvidence(value: StartApprovalEvidence): StartApprovalEvidence {
+  const list = (items: unknown, max: number, len: number) =>
+    Array.isArray(items) ? items.filter((i): i is string => typeof i === "string").slice(0, max).map((i) => sanitizeSummary(i)?.slice(0, len) ?? REDACTED) : [];
+  return {
+    objectiveSummary: sanitizeSummary(typeof value.objectiveSummary === "string" ? value.objectiveSummary : "") ?? "",
+    category: value.category,
+    actions: list(value.actions, 30, 60),
+    allowedScope: list(value.allowedScope, 50, 200),
+    riskReasons: list(value.riskReasons, 12, 200),
+    repair: value.repair === true,
+    mode: value.mode === "read_only" ? "read_only" : "change",
   };
 }
 
@@ -331,7 +375,7 @@ export function createAgentGatewayService(deps: GatewayDependencies): AgentGatew
 
   async function principal(
     call: { authentication: Parameters<GatewayAuthenticator["verify"]>[0] },
-    capability: GatewayCapability,
+    capability: GatewayCapability | readonly GatewayCapability[],
     rateAction: GatewayRateAction,
     action: string,
   ): Promise<AuthContext> {
@@ -387,9 +431,16 @@ export function createAgentGatewayService(deps: GatewayDependencies): AgentGatew
     call: Parameters<AgentGatewayService["approveTask"]>[0],
     decision: ApprovalDecisionValue,
   ): Promise<ApprovalDecisionResponse> {
-    const capability = decision === "approved" ? "approval:grant" : "approval:reject";
-    const auth = await principal(call, capability, "approval_mutate", `approval_${decision}`);
+    const verb = decision === "approved" ? "grant" : "reject";
+    const generic: GatewayCapability = decision === "approved" ? "approval:grant" : "approval:reject";
+    const scoped = (kind: string) => `approval:${verb}:${kind}` as GatewayCapability;
+    const auth = await principal(call, [generic, scoped("start"), scoped("commit_publish")], "approval_mutate", `approval_${decision}`);
     const request = validateApprovalDecisionRequest(call.request);
+    // Least privilege: a kind-scoped principal may decide only its own approval kinds.
+    if (!auth.capabilities.includes(generic) && !auth.capabilities.includes(scoped(request.kind))) {
+      deps.audit.record({ event: "gateway_forbidden", principalId: auth.principalId, taskId: request.taskId, requestId: auth.requestId, action: `approval_${decision}`, outcome: "rejected", reasonCode: "approval_kind_not_permitted", approvalKind: request.kind });
+      throw new GatewayError("forbidden", "principal may not decide this approval kind", 403);
+    }
     const fingerprint = approvalDecisionFingerprint(request, decision);
     const existingDecision = deps.decisions.get(request.idempotencyKey);
     if (existingDecision) {
@@ -766,7 +817,97 @@ export function createAgentGatewayService(deps: GatewayDependencies): AgentGatew
       });
       return { taskId, escalationId: request.escalationId, decisionId, result: "submitted", duplicate: false };
     },
+
+    async interpretOwnerMessage(call) {
+      const auth = await principal(call, "task:interpret", "task_interpret", "interpret_owner_message");
+      const planner = deps.intentPlanner;
+      const repo = deps.interpretations;
+      if (!planner || !repo) throw new GatewayError("unavailable", "the Agent planner is unavailable", 503);
+      const request = interpretRequest(call.request);
+      const fingerprint = fingerprintRequest({ principalId: auth.principalId, text: request.text, contextTaskId: request.contextTaskId, requireTask: request.requireTask, priority: request.priority ?? null });
+      const existing = repo.get(request.idempotencyKey);
+      if (existing) {
+        if (existing.fingerprint !== fingerprint || existing.principalId !== auth.principalId)
+          throw new GatewayError("idempotency_conflict", "idempotency key is bound to a different message", 409);
+        // Redelivery returns the stored interpretation: a model is never asked twice for one message.
+        return { interpretationId: existing.interpretationId, decision: structuredClone(existing.decision), duplicate: true };
+      }
+      const directory = (deps.taskDirectory?.() ?? []).slice(0, 30).map((t) => ({ ...t, title: sanitizeSummary(t.title)?.slice(0, 120) ?? "" }));
+      if (request.contextTaskId !== null && !directory.some((t) => t.taskId === request.contextTaskId)) invalid("contextTaskId is unknown");
+      let raw: unknown;
+      try {
+        raw = await withTimeout(planner.interpret({ message: request.text, contextTaskId: request.contextTaskId, tasks: directory, requireTask: request.requireTask }), deps.plannerTimeoutMs ?? 120_000);
+      } catch {
+        throw new GatewayError("unavailable", "the Agent planner could not interpret the message", 503);
+      }
+      const decision = normalizeIntentDecision(raw, { knownTaskIds: directory.map((t) => t.taskId), requireTask: request.requireTask });
+      try {
+        repo.create({ interpretationId: request.idempotencyKey, fingerprint, principalId: auth.principalId, originalRequest: request.text, priority: request.priority ?? null, decision, createdAt: deps.now() });
+      } catch {
+        const concurrent = repo.get(request.idempotencyKey);
+        if (!concurrent || concurrent.fingerprint !== fingerprint) throw new GatewayError("idempotency_conflict", "idempotency key is bound to a different message", 409);
+        return { interpretationId: concurrent.interpretationId, decision: structuredClone(concurrent.decision), duplicate: true };
+      }
+      deps.audit.record({ event: "task_submit_requested", principalId: auth.principalId, requestId: auth.requestId, action: "interpret_owner_message", outcome: decision.kind });
+      return { interpretationId: request.idempotencyKey, decision, duplicate: false };
+    },
+
+    async submitInterpretedTask(call) {
+      const auth = await principal(call, "task:submit", "task_submit", "submit_interpreted_task");
+      const input = strictObject(call.request, ["interpretationId"]);
+      if (!SAFE_KEY.test(String(input.interpretationId ?? ""))) invalid("interpretationId is malformed");
+      const stored = deps.interpretations?.get(String(input.interpretationId));
+      if (!stored || stored.principalId !== auth.principalId) throw new GatewayError("not_found", "interpretation not found", 404);
+      const d = stored.decision;
+      if (d.kind !== "task") throw new GatewayError("conflict", "interpretation does not describe a new task", 409);
+      // Every task field comes from the stored, validated interpretation; nothing from the caller.
+      const intake: TaskIntakeRequest = {
+        requestId: auth.requestId,
+        idempotencyKey: stored.interpretationId,
+        userInstruction: `${d.intent === "audit_and_fix" ? `${AUDIT_AND_FIX_POLICY}\n\n` : ""}${d.interpretedObjective}\n\nOwner request (verbatim): ${stored.originalRequest}`.slice(0, 8_000),
+        title: d.title,
+        ...(stored.priority ? { priority: stored.priority } : {}),
+        goal: { intent: d.intent, originalRequest: stored.originalRequest, interpretedObjective: d.interpretedObjective, criteria: d.criteria, riskObservations: d.riskObservations ?? [] },
+        source: { type: "gateway", requesterId: auth.principalId, reference: auth.source },
+        submittedAt: deps.now(),
+      };
+      deps.audit.record({ event: "task_submit_requested", principalId: auth.principalId, requestId: auth.requestId, action: "submit_interpreted_task", outcome: "requested" });
+      const result = await deps.runtime.submitTask(intake);
+      if (result.outcome === "needs_clarification") throw new GatewayError("invalid_request", "task needs clarification", 400);
+      if (result.outcome === "rejected")
+        throw new GatewayError(result.reasonCode === "idempotency_conflict" ? "idempotency_conflict" : "invalid_request", result.reason, result.reasonCode === "idempotency_conflict" ? 409 : 400);
+      return { taskId: result.taskId, status: externalStatus(result.status), duplicate: result.outcome === "duplicate" };
+    },
   };
+}
+
+/** Server-side (trusted) working order for audit_and_fix; not owner- or planner-supplied. */
+const AUDIT_AND_FIX_POLICY =
+  "Audit first, then fix. Inspect every requested area and put the audit report in your summary: each finding with cited repository file paths. Then change code ONLY to fix those reported, evidence-backed findings within the requested scope. Do not make any unrelated change; an audit is not permission to refactor or improve other code.";
+
+function interpretRequest(value: unknown): InterpretOwnerMessageRequest {
+  const input = strictObject(value, ["idempotencyKey", "text", "contextTaskId", "requireTask", "priority"]);
+  if (!SAFE_KEY.test(String(input.idempotencyKey ?? ""))) invalid("idempotencyKey is malformed");
+  if (typeof input.text !== "string") invalid("text is malformed");
+  const text = (input.text as string).replace(/\r\n?/g, "\n").replace(/[\u0000-\u0009\u000b-\u001f\u007f]+/g, " ").trim();
+  if (!text || text.length > 4_000) invalid("text must be 1-4000 characters");
+  if (isDangerousValue(text) || text.split(/\s+/).some((w) => isDangerousValue(w))) invalid("message looks like a credential or secret; remove it and resend");
+  const contextTaskId = input.contextTaskId === null || input.contextTaskId === undefined ? null : String(input.contextTaskId);
+  if (contextTaskId !== null && !SAFE_KEY.test(contextTaskId)) invalid("contextTaskId is malformed");
+  if (typeof input.requireTask !== "boolean") invalid("requireTask is malformed");
+  const priority = input.priority;
+  if (priority !== undefined && priority !== "critical" && priority !== "high" && priority !== "normal" && priority !== "low") invalid("priority is unsupported");
+  return { idempotencyKey: String(input.idempotencyKey), text, contextTaskId, requireTask: input.requireTask as boolean, ...(priority ? { priority: priority as InterpretOwnerMessageRequest["priority"] } : {}) };
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    promise.finally(() => clearTimeout(timer)),
+    new Promise<T>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("planner timeout")), ms);
+    }),
+  ]);
 }
 
 export type { PendingApprovalRequirement, ApprovalDecisionRequest };
