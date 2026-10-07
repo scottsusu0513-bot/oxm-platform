@@ -10,7 +10,7 @@ import { createTempPromptFileStore } from "./promptFile";
 import type { ClaudeCodeConfig, CodexConfig, CodexPolicyRuntime, ProcessExit, ProcessRunner, WorkerAdapter } from "./types";
 
 export const CODEX_WORKER_RULES_PATH = ".codex/rules/worker.rules";
-export const CODEX_WORKER_RULES_SHA256 = "aed5adf51e4ae9a9b689d0cf11a3cc02a00c4e0959de64ff1381d2975c6bd500";
+export const CODEX_WORKER_RULES_SHA256 = "849f70bf6b79c45a96c2158c0246a60004fcd55d354410ef09bc6d28cd8f57f4";
 
 export function codexCommandPolicyHash(rules: string): string {
   return createHash("sha256").update(rules.replace(/\r\n/g, "\n"), "utf8").digest("hex");
