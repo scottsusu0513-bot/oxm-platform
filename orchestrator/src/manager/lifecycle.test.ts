@@ -43,23 +43,29 @@ describe("manager lifecycle", () => {
     expect(s.transition).toBeNull();
     expect(s.taskPatch).toEqual({ retries: 1 });
     expect(s.repairRequest?.branch).toBe(TASK_BRANCH);
-    expect(s.audit.map((a) => a.event)).toEqual(["manager_validation_started", "escalation_triggered", "manager_repair_requested"]);
+    expect(s.audit.map((a) => a.event)).toEqual(["manager_validation_started", "escalation_triggered", "manager_diagnosis_issued", "manager_repair_requested"]);
+    expect(s.repairRequest?.diagnosis).toMatchObject({ kind: "manager_diagnosis", cycle: 1, previous: null });
   });
 
-  it("full loop: fail -> repair -> fail -> repair -> fail -> blocked (budget exhausted)", () => {
+  it("full loop: fail -> diagnose/repair -> fail -> diagnose/repair -> fail -> needs_human_decision", () => {
     let e = failing;
     const nexts: string[] = [];
+    let previousDiagnosis: Parameters<typeof managerStep>[0]["previousDiagnosis"] = null;
     for (let i = 0; i < 5; i++) {
-      const s = managerStep({ evidence: e });
+      const s = managerStep({ evidence: e, previousDiagnosis });
       if (!s.ok) throw new Error(s.reason);
       nexts.push(s.next);
       if (!s.repairRequest) {
-        expect(s.audit.map((a) => a.event)).toContain("repair_budget_exhausted");
+        expect(s.validation.decision).toBe("needs_human_decision");
+        expect(s.transition).toBeNull();
+        expect(s.audit.map((a) => a.event)).toContain("manager_human_decision_required");
+        expect(s.audit.map((a) => a.event)).not.toContain("manager_blocked");
         break;
       }
+      previousDiagnosis = { diagnosis: s.repairRequest.diagnosis, repairOutcome: "worker success; revalidation needs_repair" };
       e = { ...e, repair: advanceRepairCounters(e.repair, s.repairRequest) };
     }
-    expect(nexts).toEqual(["dispatch_repair", "dispatch_repair", "stop"]);
+    expect(nexts).toEqual(["dispatch_repair", "dispatch_repair", "escalate_human_decision"]);
   });
 
   it("blocked stale base -> replan_branch", () => {
@@ -85,7 +91,18 @@ describe("manager lifecycle", () => {
 describe("manager audit", () => {
   it("covers every required event", () => {
     expect([...MANAGER_AUDIT_EVENTS].sort()).toEqual(
-      ["escalation_triggered", "manager_accepted", "manager_blocked", "manager_human_approval_required", "manager_repair_requested", "manager_validation_started", "repair_attempt_started", "repair_budget_exhausted"],
+      [
+        "escalation_triggered",
+        "manager_accepted",
+        "manager_blocked",
+        "manager_diagnosis_issued",
+        "manager_human_approval_required",
+        "manager_human_decision_consumed",
+        "manager_human_decision_required",
+        "manager_repair_requested",
+        "manager_validation_started",
+        "repair_attempt_started",
+      ],
     );
   });
 

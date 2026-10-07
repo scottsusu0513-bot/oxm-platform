@@ -195,7 +195,7 @@ describe("process invocation", () => {
     const spec = runner.specs[0];
     expect(spec.command).toBe("claude");
     expect(spec.cwd).toBe(REPO);
-    expect(spec.args.slice(0, 7)).toEqual(["-p", "--output-format", "json", "--model", "claude-opus-5-5", "--permission-mode", "acceptEdits"]);
+    expect(spec.args.slice(0, 13)).toEqual(["-p", "--output-format", "json", "--model", "claude-opus-5-5", "--permission-mode", "dontAsk", "--permission-prompts", "none", "--setting-sources", "", "--strict-mcp-config", "--settings"]);
     expect(spec.args).not.toContain("--dangerously-skip-permissions");
     for (const t of ["Bash(git push:*)", "Bash(git merge:*)", "Bash(gh:*)", "Bash(git checkout:*)"]) {
       expect(spec.args.slice(spec.args.indexOf("--disallowedTools"))).toContain(t);

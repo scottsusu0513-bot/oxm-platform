@@ -10,7 +10,10 @@ import type {
   GatewayRateAction,
   GatewayRateLimiter,
   PersistedGatewayDecision,
+  GatewayHumanDecisionRepository,
+  PersistedHumanDecisionSubmission,
 } from "./types";
+import type { HumanDecisionInput } from "../manager/types";
 
 export function createFakeAuthenticator(
   principals: Readonly<Record<string, Omit<AuthContext, "requestId">>>,
@@ -81,10 +84,29 @@ export function createFakeGatewayAudit(): GatewayAuditSink & {
   };
 }
 
+export function createInMemoryHumanDecisionRepository(): GatewayHumanDecisionRepository {
+  const rows = new Map<string, PersistedHumanDecisionSubmission>();
+  return {
+    get: (key) => (rows.has(key) ? structuredClone(rows.get(key)!) : null),
+    create(record) {
+      if (rows.has(record.idempotencyKey)) throw new Error("human decision idempotency key already exists");
+      rows.set(record.idempotencyKey, structuredClone(record));
+      return structuredClone(record);
+    },
+    markEventEmitted(key) {
+      const row = rows.get(key);
+      if (!row) throw new Error("human decision submission not found");
+      const next = { ...row, eventEmitted: true };
+      rows.set(key, next);
+      return structuredClone(next);
+    },
+  };
+}
+
 export function createFakeGatewayEvents(): GatewayControlEventPort & {
-  events: { type: string; taskId: string; phase?: string; decision?: string }[];
+  events: { type: string; taskId: string; phase?: string; decision?: string; humanDecision?: HumanDecisionInput }[];
 } {
-  const events: { type: string; taskId: string; phase?: string; decision?: string }[] = [];
+  const events: { type: string; taskId: string; phase?: string; decision?: string; humanDecision?: HumanDecisionInput }[] = [];
   return {
     events,
     taskSubmitted: (taskId) => events.push({ type: "task_submitted", taskId }),
@@ -92,6 +114,8 @@ export function createFakeGatewayEvents(): GatewayControlEventPort & {
     taskCancelRequested: (taskId) => events.push({ type: "task_cancel_requested", taskId }),
     reEvaluateApproval: (taskId, phase, decision) =>
       events.push({ type: "task_re_evaluate_requested", taskId, phase, decision }),
+    humanDecisionSubmitted: (taskId, humanDecision) =>
+      events.push({ type: "human_decision_submitted", taskId, humanDecision: structuredClone(humanDecision) }),
   };
 }
 

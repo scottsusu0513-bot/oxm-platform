@@ -17,6 +17,8 @@ import type {
 export interface FakeProcessBehavior {
   /** Resolve immediately with this exit; omit to hang until kill(). */
   exit?: Partial<ProcessExit>;
+  /** Output a hung process had produced when it is killed (e.g. a stalled confirmation prompt). */
+  killOutput?: Partial<ProcessExit>;
 }
 
 export interface FakeRunner extends ProcessRunner {
@@ -40,7 +42,7 @@ export function createFakeRunner(behavior: (spec: ProcessSpec) => FakeProcessBeh
         exit,
         kill() {
           runner.kills++;
-          done({ exitCode: null, signal: "SIGTERM" });
+          done({ exitCode: null, signal: "SIGTERM", ...b.killOutput });
         },
       };
     },

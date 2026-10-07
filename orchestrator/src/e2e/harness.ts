@@ -62,6 +62,7 @@ function managerDecision(snapshot: TaskSnapshot | null): ManagerDecision | null 
   if (snapshot.status === "needs_human_approval")
     return "needs_human_approval";
   if (snapshot.status === "repair_requested") return "needs_repair";
+  if (snapshot.status === "needs_human_decision") return "needs_human_decision";
   if (snapshot.status === "blocked") return "blocked";
   return null;
 }
@@ -75,6 +76,7 @@ function finalStatus(
   if (snapshot.status === "needs_human_approval")
     return "needs_human_approval";
   if (snapshot.status === "repair_requested") return "needs_repair";
+  if (snapshot.status === "needs_human_decision") return "needs_human_decision";
   if (snapshot.status === "qa_pending") return "waiting_for_ci";
   if (snapshot.status === "blocked" && ciStatus === "failed")
     return "qa_failed";
@@ -159,6 +161,7 @@ export async function runSmokeHarness(
     ciChecks: observed.ciChecks,
     managerDecision: managerDecision(snapshot),
     repairCount: snapshot?.repair.attempt ?? 0,
+    humanEscalation: snapshot?.humanEscalation ?? null,
     timestamps: { startedAt, finishedAt: env.now() },
     finalStatus: status,
     failureCode,
@@ -195,6 +198,7 @@ export function blockedSmokeReport(input: {
     ciChecks: [],
     managerDecision: null,
     repairCount: 0,
+    humanEscalation: null,
     timestamps: { startedAt: input.at, finishedAt: input.at },
     finalStatus: "blocked",
     failureCode: input.failureCode,

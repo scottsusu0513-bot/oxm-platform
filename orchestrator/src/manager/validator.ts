@@ -22,14 +22,16 @@ import type {
  * only cross-checks structured evidence records and returns a decision.
  *
  * Precedence (most restrictive wins):
- *   blocked > needs_human_approval > needs_repair > accepted
+ *   blocked > needs_human_approval > needs_human_decision > needs_repair > accepted
+ * needs_human_decision is never forced by a single finding: it replaces
+ * needs_repair only once the Manager-guided repair cycles are exhausted.
  * Rationale: an unsafe or untrusted state must stop work; and once approval
  * is required, no further worker execution (including repairs) happens
  * without it.
  */
 
 const RANK: Record<RiskLevel, number> = { green: 0, yellow: 1, red: 2 };
-const SEVERITY: Record<ManagerDecision, number> = { accepted: 0, needs_repair: 1, needs_human_approval: 2, blocked: 3 };
+const SEVERITY: Record<ManagerDecision, number> = { accepted: 0, needs_repair: 1, needs_human_decision: 2, needs_human_approval: 3, blocked: 4 };
 
 /** States in which a worker run has happened and evidence can be judged. */
 export const VALIDATABLE_STATES: readonly TaskState[] = ["running", "pr_opened", "qa_running", "qa_passed", "awaiting_approval"];
@@ -43,6 +45,15 @@ export const CI_REQUIRED_STATES: readonly TaskState[] = ["pr_opened", "qa_runnin
  */
 export const REPAIRABLE_STATES: readonly TaskState[] = ["running", "pr_opened", "qa_running"];
 
+/**
+ * Transient runtime/tool/quota/infrastructure failures. The Manager Loop may
+ * re-run the same contract a bounded number of times WITHOUT a Manager
+ * diagnosis, so they never consume a Manager-guided repair cycle. When the
+ * Manager itself sees one (retries exhausted), it is an unrecoverable
+ * infrastructure condition and blocks — it is never sent to repair.
+ */
+export const TRANSIENT_WORKER_ERRORS: readonly WorkerErrorType[] = ["timeout", "process_error", "runtime_unavailable"];
+
 /** Worker failures the same worker may repair; everything else is not repairable by retrying. */
 const WORKER_ERROR_POLICY: Record<WorkerErrorType, { severity: Finding["severity"]; trigger: EscalationTrigger }> = {
   worker_failure: { severity: "needs_repair", trigger: "worker_failure" },
@@ -50,7 +61,7 @@ const WORKER_ERROR_POLICY: Record<WorkerErrorType, { severity: Finding["severity
   validation_incomplete: { severity: "needs_repair", trigger: "validation_failure" },
   result_mismatch: { severity: "needs_repair", trigger: "worker_failure" },
   malformed_output: { severity: "needs_repair", trigger: "worker_failure" },
-  timeout: { severity: "needs_repair", trigger: "worker_failure" },
+  timeout: { severity: "blocked", trigger: "infrastructure_failure" },
   red_approval_missing: { severity: "needs_human_approval", trigger: "approval_required" },
   scope_violation: { severity: "blocked", trigger: "scope_violation" },
   protected_branch: { severity: "blocked", trigger: "unsafe_branch_state" },
@@ -62,10 +73,10 @@ const WORKER_ERROR_POLICY: Record<WorkerErrorType, { severity: Finding["severity
   cancelled: { severity: "blocked", trigger: "task_state_blocked" },
   git_error: { severity: "blocked", trigger: "missing_trusted_evidence" },
   temp_file_error: { severity: "blocked", trigger: "missing_trusted_evidence" },
-  runtime_unavailable: { severity: "blocked", trigger: "missing_trusted_evidence" },
+  runtime_unavailable: { severity: "blocked", trigger: "infrastructure_failure" },
   runtime_misconfigured: { severity: "blocked", trigger: "missing_trusted_evidence" },
   policy_error: { severity: "blocked", trigger: "missing_trusted_evidence" },
-  process_error: { severity: "blocked", trigger: "missing_trusted_evidence" },
+  process_error: { severity: "blocked", trigger: "infrastructure_failure" },
 };
 
 const CI_OUTCOME_RANK: Record<CheckOutcome, number> = { success: 0, pending: 1, unknown: 2, missing: 3, failed: 4, blocked: 5 };
@@ -219,6 +230,7 @@ function intentsFor(decision: ManagerDecision, triggers: readonly EscalationTrig
   const out = new Set<EscalationIntent>();
   if (decision === "needs_repair") out.add("return_to_worker");
   if (decision === "needs_human_approval") out.add("request_human_approval");
+  if (decision === "needs_human_decision") out.add("request_human_decision");
   if (decision === "blocked") {
     if (blockingTriggers.some((t) => REPLAN_TRIGGERS.includes(t))) out.add("replan_branch");
     if (blockingTriggers.some((t) => !REPLAN_TRIGGERS.includes(t))) out.add("stop_task");
@@ -268,8 +280,10 @@ export function validateEvidence(input: ManagerEvidence): ManagerValidation {
     triggers.push("repeated_repair_failure");
   }
   if (decision === "needs_repair" && attempt >= budget.maxRepairAttempts) {
-    decision = "blocked";
-    findings.push({ evidenceId: "repair:budget", severity: "blocked", code: "repair_budget_exhausted", trigger: "repeated_repair_failure" });
+    // Every Manager-guided cycle was used and the failure persists: escalate
+    // to a human with the diagnoses instead of failing the task silently.
+    decision = "needs_human_decision";
+    findings.push({ evidenceId: "repair:cycles", severity: "needs_human_decision", code: "manager_repair_cycles_exhausted", trigger: "repeated_repair_failure" });
   } else if (decision === "needs_repair" && !REPAIRABLE_STATES.includes(e.taskState)) {
     decision = "blocked";
     findings.push({ evidenceId: "task:state", severity: "blocked", code: "repair_state_unavailable", trigger: "task_state_blocked" });

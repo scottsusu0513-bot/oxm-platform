@@ -72,6 +72,7 @@ export function createNativeCodexPolicyRuntime(runner: ProcessRunner): CodexPoli
         'permissions.worker.filesystem={":minimal"="read",":workspace_roots"={"."="write",".git"="read",".codex/rules"="read"},":tmpdir"="write",":slash_tmp"="write"}',
         "permissions.worker.network.enabled=false",
         'default_permissions="worker"',
+        'approval_policy="never"',
       ];
       if (!requiredArgs.every((value) => args.includes(value))) {
         return { ok: false, errorType: "runtime_misconfigured", reason: "Codex worker permission configuration is incomplete" };

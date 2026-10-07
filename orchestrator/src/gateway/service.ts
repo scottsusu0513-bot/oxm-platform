@@ -2,6 +2,9 @@ import { isTerminalState } from "../domain/taskState";
 import type { AgentRuntimeService, TaskIntakeRequest } from "../intake/types";
 import type { ApprovalRepository } from "../store/repositories";
 import { isDangerousValue, REDACTED } from "../store/sanitize";
+import { fingerprintRequest } from "../intake/normalize";
+import { MAX_HUMAN_GUIDANCE_LENGTH, type HumanDecisionInput } from "../manager/types";
+import { isValidEscalationId } from "../domain/types";
 import type { IsoTimestamp } from "../store/types";
 import { COMMIT_PUBLISH_ACTION, normalizeCommitApprovalEvidence, type CommitApprovalEvidence } from "../workers/prompt";
 import { authenticateAndAuthorize } from "./auth";
@@ -27,6 +30,14 @@ import type {
   GatewayControlEventPort,
   GatewayDecisionRepository,
   GatewayExpiryPolicy,
+  GatewayHumanDecisionRepository,
+  HumanDecisionOutcomeView,
+  HumanDecisionRequirementReader,
+  HumanDecisionStatusResponse,
+  HumanDecisionSubmitResponse,
+  PendingHumanDecisionView,
+  SubmitHumanDecisionRequest,
+  TrustedHumanDecisionRequirement,
   GatewayRateAction,
   GatewayRateLimiter,
   GatewayTaskStatus,
@@ -54,6 +65,59 @@ export interface GatewayDependencies {
   audit: GatewayAuditSink;
   now: () => IsoTimestamp;
   expiryPolicy?: Partial<GatewayExpiryPolicy>;
+  /** Trusted escalation state; without it the human-decision actions are unavailable (fail closed). */
+  humanDecisionRequirements?: HumanDecisionRequirementReader;
+  humanDecisionSubmissions?: GatewayHumanDecisionRepository;
+}
+
+const ESCALATION_ID = /^([A-Za-z0-9][A-Za-z0-9._:-]{0,63})\.hd\.([1-9][0-9]{0,3})$/;
+
+/** Only escalationId, idempotencyKey and guidance are caller-controlled. */
+function humanDecisionRequest(value: unknown): SubmitHumanDecisionRequest {
+  const input = strictObject(value, ["escalationId", "idempotencyKey", "guidance"]);
+  if (typeof input.escalationId !== "string" || !ESCALATION_ID.test(input.escalationId) || !isValidEscalationId(input.escalationId))
+    invalid("escalationId is malformed");
+  if (!SAFE_KEY.test(String(input.idempotencyKey ?? ""))) invalid("idempotencyKey is malformed");
+  if (typeof input.guidance !== "string") invalid("guidance is malformed");
+  const guidance = input.guidance.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
+  if (guidance.length < 1 || guidance.length > MAX_HUMAN_GUIDANCE_LENGTH) invalid("guidance is malformed");
+  if (isDangerousValue(guidance)) invalid("guidance looks like a credential or secret; remove it and resubmit");
+  return { escalationId: input.escalationId, idempotencyKey: String(input.idempotencyKey), guidance };
+}
+
+function shortText(value: string, max = 320): string {
+  return sanitizeSummary(value)?.slice(0, max) ?? "";
+}
+
+function pendingView(r: TrustedHumanDecisionRequirement): PendingHumanDecisionView {
+  return {
+    escalationId: r.request.escalationId,
+    taskId: r.request.taskId,
+    round: r.request.round,
+    cyclesCompleted: r.cyclesCompleted,
+    whyNeeded: shortText(r.whyNeeded),
+    currentBlocker: {
+      failureCode: shortText(r.currentBlocker.failureCode, 80),
+      failingCheck: shortText(r.currentBlocker.failingCheck, 80),
+      expected: shortText(r.currentBlocker.expected),
+      actual: shortText(r.currentBlocker.actual),
+    },
+    managerRecommendation: shortText(r.managerRecommendation),
+    inputRequested: shortText(r.inputRequested),
+    fingerprintTrend: r.fingerprintTrend,
+    grantsApproval: false,
+  };
+}
+
+function outcomeView(o: { decisionId: string | null; escalationId: string | null; outcome: string; reason: string; at: IsoTimestamp }): HumanDecisionOutcomeView {
+  const stale = o.outcome === "rejected" && /stale|not awaiting|HEAD|another task|branch does not match|no longer matches/.test(o.reason);
+  return {
+    decisionId: o.decisionId,
+    escalationId: o.escalationId,
+    outcome: o.outcome === "accepted" ? "accepted" : o.outcome === "duplicate" ? "duplicate" : stale ? "stale" : "rejected",
+    reason: shortText(o.reason, 200),
+    at: o.at,
+  };
 }
 
 function taskRequest(value: unknown): TaskRequest {
@@ -245,6 +309,20 @@ function sanitizeRequirement(
     // structured explanation and must not become a raw-log/prompt channel.
     reasonSummary: `${value.phase} approval required for ${value.action}`,
     ...(value.commitEvidence ? { commitEvidence: sanitizeCommitEvidence(value.commitEvidence) } : {}),
+  };
+}
+
+/** Every bound field comes from trusted Manager state; only guidance and the session identity come from the caller. */
+function trustedDecision(current: TrustedHumanDecisionRequirement, decisionId: string, guidance: string, principalId: string): HumanDecisionInput {
+  return {
+    decisionId,
+    escalationId: current.request.escalationId,
+    taskId: current.request.taskId,
+    branch: current.request.branch,
+    expectedHeadSha: current.request.expectedHeadSha,
+    kind: "continue_with_guidance",
+    guidance,
+    decidedBy: principalId,
   };
 }
 
@@ -602,6 +680,92 @@ export function createAgentGatewayService(deps: GatewayDependencies): AgentGatew
 
     approveTask: (call) => decide(call, "approved"),
     rejectTask: (call) => decide(call, "rejected"),
+
+    async getHumanDecision(call): Promise<HumanDecisionStatusResponse> {
+      const auth = await principal(call, "human_decision:read", "human_decision_read", "get_human_decision");
+      const request = taskRequest(call.request);
+      const reader = deps.humanDecisionRequirements;
+      if (!reader) throw new GatewayError("unavailable", "human decisions are unavailable", 503);
+      if (!deps.runtime.getTaskStatus(request.taskId)) throw new GatewayError("not_found", "task not found", 404);
+      const current = reader.current(request.taskId);
+      if (current && current.request.taskId !== request.taskId) throw new GatewayError("unavailable", "human decision requirement is malformed", 503);
+      const last = reader.outcomes(request.taskId).at(-1) ?? null;
+      deps.audit.record({
+        event: "human_decision_viewed",
+        principalId: auth.principalId,
+        taskId: request.taskId,
+        requestId: auth.requestId,
+        action: "get_human_decision",
+        outcome: current ? "pending" : "none",
+      });
+      return { taskId: request.taskId, pending: current ? pendingView(current) : null, lastOutcome: last ? outcomeView(last) : null };
+    },
+
+    async submitHumanDecision(call): Promise<HumanDecisionSubmitResponse> {
+      const auth = await principal(call, "human_decision:submit", "human_decision_mutate", "submit_human_decision");
+      const reject = (code: GatewayError["code"], message: string, status: number, reasonCode: string, taskId?: string): never => {
+        deps.audit.record({ event: "human_decision_rejected", principalId: auth.principalId, taskId, requestId: auth.requestId, action: "submit_human_decision", outcome: "rejected", reasonCode });
+        throw new GatewayError(code, message, status);
+      };
+      // A decision must come from a person, never from a service credential.
+      if (auth.principalType === "service") reject("forbidden", "human decisions require a human principal", 403, "service_principal");
+      const reader = deps.humanDecisionRequirements;
+      const submissions = deps.humanDecisionSubmissions;
+      if (!reader || !submissions) throw new GatewayError("unavailable", "human decisions are unavailable", 503);
+      const request = humanDecisionRequest(call.request);
+      const taskId = (ESCALATION_ID.exec(request.escalationId) as RegExpExecArray)[1];
+      const fingerprint = fingerprintRequest({ principalId: auth.principalId, escalationId: request.escalationId, guidance: request.guidance });
+      const decisionId = `hd-${fingerprintRequest({ principalId: auth.principalId, idempotencyKey: request.idempotencyKey })}`;
+
+      const existing = submissions.get(request.idempotencyKey);
+      if (existing) {
+        if (existing.fingerprint !== fingerprint || existing.principalId !== auth.principalId)
+          reject("idempotency_conflict", "idempotency key is bound to a different human decision", 409, "idempotency_conflict", existing.taskId);
+        // Duplicate delivery: never a second event once one was emitted.
+        if (!existing.eventEmitted) {
+          const current = reader.current(existing.taskId);
+          if (current && current.request.escalationId === existing.escalationId) {
+            deps.events.humanDecisionSubmitted(existing.taskId, trustedDecision(current, existing.decisionId, request.guidance, auth.principalId));
+          }
+          submissions.markEventEmitted(request.idempotencyKey);
+        }
+        return { taskId: existing.taskId, escalationId: existing.escalationId, decisionId: existing.decisionId, result: "submitted", duplicate: true };
+      }
+
+      const status = deps.runtime.getTaskStatus(taskId);
+      if (!status) reject("not_found", "escalation not found", 404, "unknown_escalation");
+      const current = reader.current(taskId);
+      if (!current || isTerminalState((status as NonNullable<typeof status>).taskState))
+        reject("conflict", "escalation is closed or no human decision is pending", 409, "escalation_closed", taskId);
+      const open = current as TrustedHumanDecisionRequirement;
+      if (open.request.taskId !== taskId) throw new GatewayError("unavailable", "human decision requirement is malformed", 503);
+      if (open.request.escalationId !== request.escalationId)
+        reject("stale_binding", "escalation is stale; a newer human decision request is open", 409, "stale_escalation", taskId);
+      // Only the task's requester or an operator may decide.
+      if (auth.principalType !== "operator" && (open.requesterId === null || open.requesterId !== auth.principalId))
+        reject("forbidden", "principal may not decide this escalation", 403, "wrong_user", taskId);
+
+      try {
+        submissions.create({ idempotencyKey: request.idempotencyKey, fingerprint, principalId: auth.principalId, taskId, escalationId: request.escalationId, decisionId, eventEmitted: false, createdAt: deps.now() });
+      } catch {
+        const concurrent = submissions.get(request.idempotencyKey);
+        if (!concurrent || concurrent.fingerprint !== fingerprint)
+          reject("idempotency_conflict", "idempotency key is bound to a different human decision", 409, "idempotency_conflict", taskId);
+        return { taskId, escalationId: request.escalationId, decisionId, result: "submitted", duplicate: true };
+      }
+      deps.events.humanDecisionSubmitted(taskId, trustedDecision(open, decisionId, request.guidance, auth.principalId));
+      submissions.markEventEmitted(request.idempotencyKey);
+      deps.audit.record({
+        event: "human_decision_submitted",
+        principalId: auth.principalId,
+        taskId,
+        requestId: auth.requestId,
+        action: "submit_human_decision",
+        outcome: "submitted",
+        bindingReference: bindingReference(request.escalationId),
+      });
+      return { taskId, escalationId: request.escalationId, decisionId, result: "submitted", duplicate: false };
+    },
   };
 }
 

@@ -1,20 +1,24 @@
 import type { WorkerTaskContract } from "../workers/types";
 import { workerEffortForAttempt } from "./budget";
-import type { ManagerEvidence, RepairCounters, RepairRequest } from "./types";
+import { diagnoseFailure } from "./diagnosis";
+import type { HumanDecisionEvidence, ManagerDiagnosis, ManagerEvidence, RepairCounters, RepairRequest } from "./types";
 import { isInScope, validateEvidence } from "./validator";
 
 /**
- * Structured repair requests: the Manager says WHAT failed, never HOW to fix
- * it. A request carries evidence ids, failed validation/check/criterion
- * names, the unchanged scope and branch, and fixed process instructions — no
- * implementation suggestions, patches, source code, raw logs, or secrets.
+ * Structured repair requests for one Manager-guided repair cycle. A request
+ * carries the Manager root-cause diagnosis (failing check, expected vs.
+ * actual, root cause, outcome-level required fix, protected areas,
+ * acceptance criteria, evidence used, previous repair outcome), the failed
+ * evidence ids, the unchanged scope and branch, and fixed process
+ * instructions — no patches, source code, raw logs, or secrets. The Worker
+ * still decides how to change the code.
  */
 
 export type Intent<T> = ({ ok: true } & T) | { ok: false; reason: string };
 
 /** Constant process rules sent with every repair. Never task- or code-specific advice. */
 export const REPAIR_INSTRUCTIONS = [
-  "Repair only the failures listed in this request; you decide how.",
+  "Repair the root cause in the Manager diagnosis; you decide how to change the code.",
   "Stay on the assigned branch. Do not create, switch, rename, or reset branches.",
   "Change only paths within allowedScope.",
   "Rerun every validation in rerunValidations and report the results.",
@@ -23,8 +27,17 @@ export const REPAIR_INSTRUCTIONS = [
 
 const MAX_OBJECTIVE = 4000;
 
-/** Builds the next repair request. Re-validates the evidence itself so a caller cannot forge a decision. */
-export function buildRepairRequest(evidence: ManagerEvidence): Intent<{ request: RepairRequest }> {
+/**
+ * Builds the next repair request with a fresh Manager diagnosis. Re-validates
+ * the evidence itself so a caller cannot forge a decision. From cycle 2 the
+ * previous diagnosis and its repair outcome are required, so the Manager
+ * always compares the new failure with what it diagnosed before.
+ */
+export function buildRepairRequest(
+  evidence: ManagerEvidence,
+  previous: { diagnosis: ManagerDiagnosis; repairOutcome: string } | null = null,
+  resume: { round: number; human: HumanDecisionEvidence | null } = { round: 1, human: null },
+): Intent<{ request: RepairRequest }> {
   const v = validateEvidence(evidence);
   if (v.decision !== "needs_repair") return { ok: false, reason: `decision is ${v.decision}, not needs_repair` };
 
@@ -33,6 +46,9 @@ export function buildRepairRequest(evidence: ManagerEvidence): Intent<{ request:
   if (attempt > v.budget.maxRepairAttempts) return { ok: false, reason: "repair budget exhausted" };
   const head = e.branch.verifiedHeadSha;
   if (head === null) return { ok: false, reason: "no verified head to repair from" };
+  if (attempt > 1 && previous === null) return { ok: false, reason: "previous Manager diagnosis is required for a later repair cycle" };
+  const diagnosed = diagnoseFailure({ evidence: e, validation: v, cycle: attempt, previous, round: resume.round, human: resume.human });
+  if (!diagnosed.ok) return { ok: false, reason: diagnosed.reason };
 
   const names = (prefix: string, codes?: readonly string[]) =>
     Array.from(
@@ -64,6 +80,7 @@ export function buildRepairRequest(evidence: ManagerEvidence): Intent<{ request:
       rerunValidations: Array.from(new Set(e.validations.filter((x) => x.requested).map((x) => x.name))).sort(),
       failureSummaries: v.findings.filter((f) => f.summary).map((f) => ({ evidenceId: f.evidenceId, summary: f.summary as string })),
       instructions: REPAIR_INSTRUCTIONS,
+      diagnosis: diagnosed.diagnosis,
     },
   };
 }
@@ -77,10 +94,35 @@ export function advanceRepairCounters(counters: RepairCounters, request: RepairR
   };
 }
 
-/** Deterministic, data-only rendering of a repair request (used as untrusted task data in the worker prompt). */
-export function renderRepairBlock(r: RepairRequest): string {
+function renderDiagnosis(d: ManagerDiagnosis, compact: boolean): string[] {
   const lines = [
-    `Repair attempt ${r.attempt} of ${r.maxRepairAttempts} (effort: ${r.workerEffort}).`,
+    `Manager diagnosis #${d.cycle} (${d.phase}${d.round > 1 ? `, round ${d.round}` : ""}):`,
+    `- failureCode: ${d.failureCode}`,
+    `- failingCheck: ${d.failingCheck}`,
+    `- expected: ${d.expected}`,
+    `- actual: ${d.actual}`,
+    `- rootCause: ${d.rootCause}`,
+    `- requiredFix: ${d.requiredFix}`,
+  ];
+  if (d.humanDecision) lines.push(`- humanDecision ${d.humanDecision.decisionId} (${d.humanDecision.kind}): ${d.humanDecision.guidance}`);
+  if (d.previous) {
+    const p = d.previous;
+    lines.push(
+      `- previousRepair: #${p.cycle} ${p.previousRepairOutcome}; trend=${p.trend}; fingerprintChanged=${p.fingerprintChanged}; previousFailureCode=${p.previousFailureCode}`,
+    );
+  }
+  if (compact) return lines;
+  lines.push(`- protectedAreas: ${d.protectedAreas.join(" ")}`);
+  lines.push(`- acceptanceCriteria: ${d.acceptanceCriteria.join("; ")}`);
+  lines.push(`- evidenceUsed: ${d.evidenceUsed.join(", ")}`);
+  return lines;
+}
+
+/** Deterministic, data-only rendering of a repair request (used as untrusted task data in the worker prompt). */
+export function renderRepairBlock(r: RepairRequest, compact = false): string {
+  const lines = [
+    `Repair attempt ${r.attempt} of ${r.maxRepairAttempts} (Manager-guided repair cycle; effort: ${r.workerEffort}).`,
+    ...renderDiagnosis(r.diagnosis, compact),
     `Failed evidence: ${r.failedEvidenceIds.join(", ") || "none"}.`,
   ];
   if (r.workerErrorType) lines.push(`Worker error: ${r.workerErrorType}.`);
@@ -115,7 +157,10 @@ export function repairWorkerContract(base: WorkerTaskContract, request: RepairRe
   if (!request.allowedDirtyPaths.every((path) => isInScope(path, base.allowedScope)))
     return { ok: false, reason: "repair dirty paths must remain within the task scope" };
   if (runId === base.runId) return { ok: false, reason: "repair needs a new runId" };
-  const objective = `${base.objective}\n\n${renderRepairBlock(request)}`;
+  if (request.diagnosis?.kind !== "manager_diagnosis" || request.diagnosis.taskId !== base.taskId || request.diagnosis.cycle !== request.attempt)
+    return { ok: false, reason: "repair requires the Manager diagnosis for this cycle" };
+  let objective = `${base.objective}\n\n${renderRepairBlock(request)}`;
+  if (objective.length > MAX_OBJECTIVE) objective = `${base.objective}\n\n${renderRepairBlock(request, true)}`;
   if (objective.length > MAX_OBJECTIVE) return { ok: false, reason: "repair objective exceeds contract limit" };
   return { ok: true, contract: { ...base, runId, expectedHeadSha: request.expectedHeadSha, objective, allowedDirtyPaths: [...request.allowedDirtyPaths] } };
 }

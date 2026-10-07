@@ -28,11 +28,14 @@ const ALLOWED_RUNTIME = new Set([
   "../github/qa",
   "../githubWrite/flow",
   "../manager/budget",
+  "../manager/diagnosis",
+  "../manager/humanDecision",
   "../manager/lifecycle",
   "../manager/repair",
   "../manager/sequencing",
   "../manager/validator",
   "../store/sanitize",
+  "../workers/permissions",
   "../workers/prompt",
 ]);
 /** Type-only imports allowed (erased at runtime). */
@@ -127,7 +130,7 @@ describe("scheduler / manager-loop boundaries", () => {
     expect(loop).toMatch(/case "open_pr":\s*return requestCommitApproval\(t\);/);
     expect(loop).toMatch(/async function requestCommitApproval[\s\S]*awaitApproval\(t, "commit_publish"/);
     expect(loop).toMatch(/async function commitAndPush[\s\S]*ports\.workspace\.commitValidated[\s\S]*return push\(t\);/);
-    expect(loop).toMatch(/return evaluate\(t, undefined, t\.pr \? "pre_push" : "post_qa"\);/);
+    expect(loop).toMatch(/const phase = t\.pr \? "pre_push" : "post_qa";[\s\S]*return evaluate\(t, undefined, phase\);/);
     expect(loop).toMatch(/taskState: phase === "pre_push" \? "running" : t\.state/);
   });
 });

@@ -39,7 +39,22 @@ export const sha = (n: number) => n.toString(16).padStart(40, "0");
 export const MAIN_SHA = sha(0xa0000);
 export const FAKE_METADATA_DIGEST = "c".repeat(64);
 
-export type WorkerScript = "success" | "failure" | "policy_error" | "head_mismatch" | "malformed_output" | "validation_failed" | "validation_failed_dirty" | "scope_violation" | "risk_red" | "git_metadata_changed";
+export type WorkerScript =
+  | "success"
+  | "failure"
+  | "policy_error"
+  | "head_mismatch"
+  | "malformed_output"
+  | "validation_failed"
+  | "validation_failed_dirty"
+  | "scope_violation"
+  | "risk_red"
+  | "git_metadata_changed"
+  /** Transient runtime failures (tool startup, quota, infrastructure). */
+  | "timeout"
+  /** Timed out after editing task files: the retry must inherit new dirty paths. */
+  | "timeout_dirty"
+  | "process_error";
 export type CiScript = "pass" | "fail" | "pending";
 
 export interface SimulationOptions {
@@ -70,6 +85,8 @@ export interface WorkerCall {
   branch: string;
   expectedHeadSha: string | null;
   repair: boolean;
+  /** Full contract objective, including any Manager repair instruction (untrusted task data). */
+  objective: string;
   requiredValidations: readonly string[];
   storedRiskLevel: string | null;
   allowedDirtyPaths: readonly string[];
@@ -216,6 +233,41 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
           riskObserved: { level: "red", notes: [] },
           needsApproval: true,
           errorType: "git_metadata_changed",
+        };
+      case "timeout":
+        return {
+          ...base,
+          status: "timeout",
+          summary: "worker run timed out",
+          filesChanged: [],
+          testsRun: [],
+          checkResult: "not_run",
+          headSha: start,
+          errorType: "timeout",
+        };
+      case "timeout_dirty":
+        edit();
+        return {
+          ...base,
+          status: "timeout",
+          summary: "worker run timed out",
+          filesChanged: files,
+          testsRun: [],
+          checkResult: "not_run",
+          headSha: start,
+          errorType: "timeout",
+        };
+      case "process_error":
+        return {
+          ...base,
+          status: "failure",
+          summary: "worker exited with code 1",
+          filesChanged: [],
+          testsRun: [],
+          checkResult: "not_run",
+          headSha: start,
+          fallbackRecommended: true,
+          errorType: "process_error",
         };
       case "policy_error":
         return {
@@ -378,6 +430,7 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
           branch: contract.branch,
           expectedHeadSha: contract.expectedHeadSha ?? null,
           repair: contract.objective.includes("Repair attempt"),
+          objective: contract.objective,
           requiredValidations: [...contract.requiredValidations],
           storedRiskLevel: contract.storedRiskLevel ?? null,
           allowedDirtyPaths: [...(contract.allowedDirtyPaths ?? [])],
@@ -541,7 +594,8 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
         ? {
             kind: "start" as ApprovalKind,
             requestedAction: APPROVAL_ACTIONS.pre_execution,
-            bindingShaOrActionId: redStartBindingId(contract),
+            // A parked red-risk repair is approved against its own new plan.
+            bindingShaOrActionId: snap.pendingRepair?.approvalBinding ?? snap.pendingRetry?.approvalBinding ?? redStartBindingId(contract),
           }
         : phase === "commit_publish"
           ? {

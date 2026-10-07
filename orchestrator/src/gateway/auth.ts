@@ -1,3 +1,4 @@
+import { isValidPrincipalId } from "../domain/types";
 import { GatewayError } from "./errors";
 import type {
   AuthContext,
@@ -6,8 +7,6 @@ import type {
   GatewayAuthenticator,
   GatewayCapability,
 } from "./types";
-
-const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
 export async function authenticateAndAuthorize(input: {
   authenticator: GatewayAuthenticator;
@@ -31,7 +30,7 @@ export async function authenticateAndAuthorize(input: {
   }
   if (
     !principal.authenticated ||
-    !SAFE_ID.test(principal.principalId) ||
+    !isValidPrincipalId(principal.principalId) ||
     principal.requestId !== input.authentication.requestId ||
     Number.isNaN(Date.parse(principal.authenticatedAt))
   ) {

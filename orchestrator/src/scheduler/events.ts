@@ -26,6 +26,10 @@ export const ORCHESTRATION_AUDIT_EVENTS = [
   "codex_worker_failed",
   "repair_requested",
   "repair_completed",
+  "infrastructure_retry_requested",
+  "human_decision_requested",
+  "human_decision_accepted",
+  "human_decision_rejected",
   "branch_push_requested",
   "pr_create_requested",
   "qa_wait",
@@ -80,6 +84,9 @@ const ACTOR: Partial<Record<OrchestrationAuditEvent, AuditActor>> = {
   manager_blocked: "manager",
   repair_requested: "manager",
   human_approval_requested: "manager",
+  human_decision_requested: "manager",
+  human_decision_accepted: "manager",
+  human_decision_rejected: "manager",
 };
 
 export function orchestrationAudit(event: OrchestrationAuditEvent, fromState: TaskState | null, toState: TaskState | null, meta: OrchestrationAuditMetadata): Omit<NewAuditEvent, "id"> {
