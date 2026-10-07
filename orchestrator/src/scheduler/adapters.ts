@@ -2,7 +2,7 @@ import type { RepoRef, RequiredCheck, GitHubReadClient } from "../github/types";
 import { inspectPullRequestQa } from "../github/client";
 import { DEFAULT_REQUIRED_CHECKS } from "../github/types";
 import { BASE_BRANCH } from "../branches/types";
-import { prepareAssignedWorkspace, checkWorkerPreconditions, type WorkspaceDeps } from "../githubWrite/workspace";
+import { prepareAssignedWorkspace, checkWorkerPreconditions, commitValidatedChanges, observeCommitState, type WorkspaceDeps } from "../githubWrite/workspace";
 import type { ApprovalRepository } from "../store/repositories";
 import { approvalAuthorizes } from "../store/repositories";
 import type { Approval, IsoTimestamp } from "../store/types";
@@ -19,9 +19,11 @@ export function createWorkspacePort(deps: WorkspaceDeps): WorkspacePort {
     },
     async checkPreconditions(input) {
       const status = await deps.git.status();
+      const metadataDigest = await deps.git.metadataDigest();
       return checkWorkerPreconditions({
         ...input,
         status,
+        metadataDigest,
         leases: deps.leases,
       });
     },
@@ -29,6 +31,12 @@ export function createWorkspacePort(deps: WorkspaceDeps): WorkspacePort {
       if (!deps.leases.holds(lease)) return null;
       const status = await deps.git.status();
       return { branch: status.branch, headSha: status.headSha };
+    },
+    observeCommitState(lease) {
+      return observeCommitState(lease, deps);
+    },
+    commitValidated(input) {
+      return commitValidatedChanges(input, deps);
     },
   };
 }
@@ -85,8 +93,12 @@ export function createEvidencePort(input: { git: GitInspector; validations(contr
       const before = contract.expectedHeadSha;
       if (!before) throw new Error("[scheduler] evidence requires the worker start SHA");
       const [status, changedPaths] = await Promise.all([input.git.status(), input.git.changedPathsSince(before)]);
-      if (status.branch !== contract.branch || status.headSha !== result.headSha) {
+      if (status.branch !== contract.branch || status.headSha !== result.headSha || status.headSha !== before) {
         throw new Error("[scheduler] worker result does not match trusted git state");
+      }
+      // Re-verified before the Manager sees any evidence: Worker-side Git metadata drift is never accepted.
+      if (!contract.gitMetadataDigest || (await input.git.metadataDigest()) !== contract.gitMetadataDigest) {
+        throw new Error("[scheduler] Git metadata changed since workspace preparation");
       }
       return {
         changedPaths,

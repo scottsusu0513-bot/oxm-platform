@@ -2,6 +2,11 @@ import { checkTaskBranchName, isValidSha } from "../branches/naming";
 import { isPlannerApproved } from "../branches/planner";
 import type { AssignedBranchPlan } from "../branches/types";
 import type { GitInspector, GitStatus, ProcessRunner, WorkerTaskContract } from "../workers/types";
+import { commitApprovalBinding, isPathInScope, type CommitApprovalEvidence } from "../workers/prompt";
+import { isSafeRepoPath } from "../workers/resultParser";
+import { normalizeContentIdentities, sameContentIdentities, type PathContentIdentity } from "../workers/gitIntegrity";
+import { approvalAuthorizes } from "../store/repositories";
+import type { Approval, IsoTimestamp } from "../store/types";
 import { expectedRemoteHead } from "./flow";
 import type { WorkspaceLease, WorkspaceLeaseRegistry } from "./lease";
 import { PUSH_REMOTE } from "./transport";
@@ -24,6 +29,7 @@ import type { BranchCreation } from "./types";
  */
 
 export const WORKSPACE_GIT_SUBCOMMANDS = ["fetch", "rev-parse", "switch"] as const;
+export const COMMIT_GIT_SUBCOMMANDS = ["add", "diff", "ls-files", "hash-object", "commit"] as const;
 
 export const PREPARE_ERRORS = [
   "policy_violation",
@@ -39,6 +45,11 @@ export const PREPARE_ERRORS = [
 export type PrepareErrorType = (typeof PREPARE_ERRORS)[number];
 
 export type PrepareResult = { ok: true; prepared: PreparedWorkspace } | { ok: false; error: PrepareErrorType; reason: string };
+export type CommitErrorType = "policy_violation" | "lease_conflict" | "dirty_worktree" | "verification_failed" | "git_error";
+export type CommitResult = { ok: true; headSha: string } | { ok: false; error: CommitErrorType; reason: string };
+export type CommitStateResult =
+  | { ok: true; branch: string; headSha: string; dirtyPaths: string[]; contentIdentities: PathContentIdentity[]; gitMetadataDigest: string }
+  | { ok: false; error: "lease_conflict" | "verification_failed"; reason: string };
 
 /** Proof that the workspace was put on the assigned branch at the expected SHA. Issued only here. */
 export interface PreparedWorkspace {
@@ -48,6 +59,8 @@ export interface PreparedWorkspace {
   readonly branch: string;
   readonly headSha: string;
   readonly allowedDirtyPaths: readonly string[];
+  /** Trusted Git metadata baseline captured after preparation; the Worker must leave it unchanged. */
+  readonly gitMetadataDigest: string;
 }
 
 const prepared = new WeakSet<object>();
@@ -105,6 +118,7 @@ export interface PrepareInput {
 }
 
 const fail = (error: PrepareErrorType, reason: string) => ({ ok: false as const, error, reason });
+const commitFail = (error: CommitErrorType, reason: string) => ({ ok: false as const, error, reason });
 
 export function dirtyViolations(status: GitStatus, allowed: readonly string[]): string[] {
   const ok = new Set(allowed);
@@ -178,6 +192,7 @@ export async function prepareAssignedWorkspace(input: PrepareInput, deps: Worksp
     if (after.headSha !== expected) return fail("verification_failed", "workspace HEAD is not the expected SHA after preparation");
     const dirtyAfter = dirtyViolations(after, allowedDirty);
     if (dirtyAfter.length) return fail("verification_failed", "unexpected dirty paths after preparation");
+    const gitMetadataDigest = await deps.git.metadataDigest();
 
     const result: PreparedWorkspace = Object.freeze({
       workspaceId: lease.workspaceId,
@@ -186,12 +201,159 @@ export async function prepareAssignedWorkspace(input: PrepareInput, deps: Worksp
       branch: plan.branch,
       headSha: expected,
       allowedDirtyPaths: Object.freeze(allowedDirty),
+      gitMetadataDigest,
     });
     prepared.add(result);
     return { ok: true, prepared: result };
   } catch (err) {
     const kind = err instanceof Error ? err.name : "non-Error";
     return fail("git_error", `workspace git operation failed (${kind}); failing closed`);
+  }
+}
+
+/** Trusted packaging of a validated Worker edit. The Worker cannot write Git metadata. */
+export async function commitValidatedChanges(
+  input: {
+    plan: unknown;
+    lease: unknown;
+    evidence: CommitApprovalEvidence;
+    approval: Approval;
+    at: IsoTimestamp;
+  },
+  deps: WorkspaceDeps,
+): Promise<CommitResult> {
+  const plan = input?.plan;
+  if (!isPlannerApproved(plan)) return commitFail("policy_violation", "branch plan was not produced by the deterministic planner");
+  const name = checkTaskBranchName(plan.branch);
+  if (!name.ok) return commitFail("policy_violation", name.reason);
+  const evidence = input.evidence;
+  if (!isValidSha(evidence.expectedHeadSha)) return commitFail("policy_violation", "expected HEAD is not a valid SHA");
+  if (evidence.taskId !== plan.taskId || evidence.branch !== plan.branch) {
+    return commitFail("policy_violation", "commit approval evidence belongs to another task/branch");
+  }
+  const authorized = approvalAuthorizes(input.approval, {
+    taskId: plan.taskId,
+    kind: "commit_publish",
+    bindingShaOrActionId: commitApprovalBinding(evidence),
+    at: input.at,
+  });
+  if (!authorized.ok || input.approval.requestedAction !== evidence.action) {
+    return commitFail("policy_violation", "approval does not authorize this exact trusted commit state");
+  }
+  if (
+    evidence.authorization?.commit !== true ||
+    evidence.authorization.normalPush !== true ||
+    evidence.authorization.openOrReusePr !== true ||
+    evidence.authorization.merge !== false ||
+    evidence.authorization.deploy !== false
+  ) return commitFail("policy_violation", "commit approval contains invalid authority limits");
+  const lease = input.lease;
+  if (!deps.leases.holds(lease)) return commitFail("lease_conflict", "workspace lease is not held");
+  if (lease.taskId !== plan.taskId || lease.branch !== plan.branch || lease.lineageId !== plan.lineageId) {
+    return commitFail("lease_conflict", "workspace lease belongs to a different task/branch");
+  }
+  const paths = Array.from(new Set(evidence.changedPaths)).sort();
+  if (paths.length === 0 || paths.some((path) => !isSafeRepoPath(path) || !isPathInScope(path, evidence.allowedScope))) {
+    return commitFail("policy_violation", "validated changed paths are empty, unsafe, or outside allowedScope");
+  }
+  const approvedContent = normalizeContentIdentities(evidence.contentIdentities ?? []);
+  if (
+    approvedContent.length !== paths.length ||
+    approvedContent.some((id, i) => id.path !== paths[i] || (id.mode === "absent") !== (id.blob === null) || (id.blob !== null && !/^[0-9a-f]{40}$/.test(id.blob)))
+  ) {
+    return commitFail("policy_violation", "approved content identities do not cover exactly the validated paths");
+  }
+  if (typeof evidence.gitMetadataDigest !== "string" || !/^[0-9a-f]{64}$/.test(evidence.gitMetadataDigest)) {
+    return commitFail("policy_violation", "approval is not bound to a Git metadata baseline");
+  }
+  const samePaths = (actual: readonly string[]) => {
+    const normalized = Array.from(new Set(actual)).sort();
+    return normalized.length === paths.length && normalized.every((path, index) => path === paths[index]);
+  };
+  const run = async (args: string[]): Promise<string> => {
+    if (!(COMMIT_GIT_SUBCOMMANDS as readonly string[]).includes(args[0])) throw new Error("git subcommand not allowed");
+    const result = await deps.runner.spawn({ command: "git", args, cwd: deps.repoRoot }).exit;
+    if (result.exitCode !== 0 || result.truncated) throw new Error(`git ${args[0]} failed`);
+    return result.stdout;
+  };
+  /** Approved bytes and Git metadata must be exactly what the human approved; drift makes the approval stale. */
+  const verifyApprovedState = async (): Promise<CommitResult | null> => {
+    if ((await deps.git.metadataDigest()) !== evidence.gitMetadataDigest) {
+      return commitFail("verification_failed", "Git metadata changed after approval; approval is stale");
+    }
+    if (!sameContentIdentities(await deps.git.contentIdentities(paths), approvedContent)) {
+      return commitFail("verification_failed", "working-tree content changed after approval; approval is stale");
+    }
+    return null;
+  };
+  try {
+    const before = await deps.git.status();
+    if (before.branch !== plan.branch || before.headSha !== evidence.expectedHeadSha) {
+      return commitFail("verification_failed", "workspace branch or HEAD moved before trusted commit");
+    }
+    if (!samePaths(before.dirtyPaths)) return commitFail("dirty_worktree", "working tree contains foreign, missing, or unowned dirty paths");
+    const stale = await verifyApprovedState();
+    if (stale) return stale;
+
+    const alreadyStaged = (await run(["diff", "--cached", "--no-renames", "--name-only", "-z", "--"])).split("\0").filter(Boolean);
+    if (alreadyStaged.length !== 0) return commitFail("dirty_worktree", "workspace contains pre-existing staged paths");
+    await run(["add", "--", ...paths]);
+    const staged = (await run(["diff", "--cached", "--no-renames", "--name-only", "-z", "--"])).split("\0").filter(Boolean);
+    if (!samePaths(staged)) return commitFail("dirty_worktree", "staged paths do not exactly match the validated paths");
+
+    // The index must hold exactly the approved bytes: present paths staged as Git would hash the
+    // approved file (filters included), absent paths removed. Symlinks are stored verbatim.
+    const index = new Map<string, string>();
+    for (const entry of (await run(["ls-files", "--stage", "-z", "--", ...paths])).split("\0").filter(Boolean)) {
+      const m = /^(\d{6}) ([0-9a-f]{40,64}) (\d)\t(.+)$/.exec(entry);
+      if (!m || m[3] !== "0" || index.has(m[4])) return commitFail("verification_failed", "index entry for an approved path is malformed or conflicted");
+      index.set(m[4], m[2]);
+    }
+    const files = approvedContent.filter((id) => id.mode === "100644" || id.mode === "100755").map((id) => id.path);
+    const hashed = files.length ? (await run(["hash-object", "--", ...files])).split(/\r?\n/).filter(Boolean) : [];
+    if (hashed.length !== files.length) return commitFail("verification_failed", "could not hash approved files");
+    const expectedIndex = new Map(files.map((path, i) => [path, hashed[i]]));
+    for (const id of approvedContent) if (id.mode === "120000") expectedIndex.set(id.path, id.blob as string);
+    if (index.size !== expectedIndex.size || Array.from(expectedIndex).some(([path, blob]) => index.get(path) !== blob)) {
+      return commitFail("verification_failed", "staged content does not match the approved bytes");
+    }
+    const staleAfterStage = await verifyApprovedState();
+    if (staleAfterStage) return staleAfterStage;
+
+    // No pathspec: commit exactly the verified index (a pathspec would re-read the working tree).
+    await run(["commit", "--no-verify", "--message", `chore(agent): apply task ${plan.taskId}`]);
+
+    const after = await deps.git.status();
+    const committedPaths = await deps.git.changedPathsSince(evidence.expectedHeadSha);
+    if (after.branch !== plan.branch || after.headSha === evidence.expectedHeadSha || !isValidSha(after.headSha)) {
+      return commitFail("verification_failed", "trusted commit did not advance the assigned branch HEAD");
+    }
+    if (after.dirtyPaths.length !== 0 || !samePaths(committedPaths)) {
+      return commitFail("verification_failed", "trusted commit did not contain exactly the validated paths");
+    }
+    return { ok: true, headSha: after.headSha };
+  } catch (err) {
+    const kind = err instanceof Error ? err.name : "non-Error";
+    return commitFail("git_error", `trusted commit operation failed (${kind}); failing closed`);
+  }
+}
+
+/** Read-only trusted state used before presenting and after granting approval. */
+export async function observeCommitState(lease: unknown, deps: WorkspaceDeps): Promise<CommitStateResult> {
+  if (!deps.leases.holds(lease)) return { ok: false, error: "lease_conflict", reason: "workspace lease is not held" };
+  try {
+    const status = await deps.git.status();
+    const dirtyPaths = Array.from(new Set(status.dirtyPaths)).sort();
+    return {
+      ok: true,
+      branch: status.branch,
+      headSha: status.headSha,
+      dirtyPaths,
+      contentIdentities: normalizeContentIdentities(await deps.git.contentIdentities(dirtyPaths)),
+      gitMetadataDigest: await deps.git.metadataDigest(),
+    };
+  } catch {
+    return { ok: false, error: "verification_failed", reason: "trusted workspace state is unavailable" };
   }
 }
 
@@ -209,6 +371,8 @@ export function checkWorkerPreconditions(input: {
   plan: unknown;
   contract: WorkerTaskContract;
   status: GitStatus;
+  /** Live Git metadata digest; must equal the baseline captured at preparation. */
+  metadataDigest: string;
   leases: WorkspaceLeaseRegistry;
   lease: unknown;
 }): PreconditionResult {
@@ -230,5 +394,9 @@ export function checkWorkerPreconditions(input: {
   if (dirtyViolations(status, contract.allowedDirtyPaths ?? p.allowedDirtyPaths).length) {
     return { ok: false, reason: "unrelated dirty paths present" };
   }
-  return { ok: true, contract: { ...contract, expectedHeadSha: p.headSha } };
+  if (input.metadataDigest !== p.gitMetadataDigest) return { ok: false, reason: "Git metadata changed since preparation" };
+  if (contract.gitMetadataDigest !== undefined && contract.gitMetadataDigest !== p.gitMetadataDigest) {
+    return { ok: false, reason: "contract expects a different Git metadata baseline" };
+  }
+  return { ok: true, contract: { ...contract, expectedHeadSha: p.headSha, gitMetadataDigest: p.gitMetadataDigest } };
 }

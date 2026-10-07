@@ -3,6 +3,7 @@ import type { AgentRuntimeService, TaskIntakeRequest } from "../intake/types";
 import type { ApprovalRepository } from "../store/repositories";
 import { isDangerousValue, REDACTED } from "../store/sanitize";
 import type { IsoTimestamp } from "../store/types";
+import { COMMIT_PUBLISH_ACTION, normalizeCommitApprovalEvidence, type CommitApprovalEvidence } from "../workers/prompt";
 import { authenticateAndAuthorize } from "./auth";
 import {
   approvalDecisionFingerprint,
@@ -177,6 +178,31 @@ function sanitizeSummary(value: string | null): string | null {
   return isDangerousValue(normalized) ? REDACTED : normalized.slice(0, 240);
 }
 
+function sanitizeCommitEvidence(value: CommitApprovalEvidence | undefined): CommitApprovalEvidence | undefined {
+  if (!value) return undefined;
+  const safeList = (items: readonly string[], max: number) =>
+    Array.isArray(items) && items.length > 0 && items.length <= max &&
+    items.every((item) => typeof item === "string" && item.length > 0 && item.length <= 400 && !/[\u0000-\u001f\u007f]/.test(item) && !isDangerousValue(item));
+  if (
+    !SAFE_KEY.test(value.taskId) ||
+    typeof value.branch !== "string" || value.branch.length > 240 || /[\u0000-\u001f\u007f]/.test(value.branch) ||
+    !/^[0-9a-f]{40}$/.test(value.expectedHeadSha) ||
+    !safeList(value.changedPaths, 200) || !safeList(value.allowedScope, 200) ||
+    !/^[0-9a-f]{64}$/.test(value.gitMetadataDigest) ||
+    !Array.isArray(value.contentIdentities) || value.contentIdentities.length !== new Set(value.changedPaths).size ||
+    value.contentIdentities.some((id) => !id || !value.changedPaths.includes(id.path) || !["100644", "100755", "120000", "absent"].includes(id.mode) || (id.mode === "absent" ? id.blob !== null : typeof id.blob !== "string" || !/^[0-9a-f]{40}$/.test(id.blob))) ||
+    !Array.isArray(value.validations) || value.validations.length > 50 ||
+    value.validations.some((v) => !v || typeof v.name !== "string" || v.name.length > 100 || /[\u0000-\u001f\u007f]/.test(v.name) || isDangerousValue(v.name) || typeof v.requested !== "boolean" || typeof v.executed !== "boolean" || typeof v.trusted !== "boolean" || !["passed", "failed", "skipped", "missing"].includes(v.status)) ||
+    !Array.isArray(value.acceptance) || value.acceptance.length > 50 ||
+    value.acceptance.some((a) => !a || !SAFE_KEY.test(a.criterionId) || !["satisfied", "failed", "unknown"].includes(a.status) || !["validation", "ci_check", "scope", "human", "worker_report"].includes(a.evidenceType) || (a.reference !== null && (typeof a.reference !== "string" || a.reference.length > 100 || /[\u0000-\u001f\u007f]/.test(a.reference) || isDangerousValue(a.reference)))) ||
+    !["green", "yellow", "red"].includes(value.observedRisk) ||
+    value.managerDecision !== "accepted" ||
+    value.action !== COMMIT_PUBLISH_ACTION ||
+    value.authorization?.commit !== true || value.authorization.normalPush !== true || value.authorization.openOrReusePr !== true || value.authorization.merge !== false || value.authorization.deploy !== false
+  ) throw new GatewayError("unavailable", "commit approval evidence is malformed", 503);
+  return normalizeCommitApprovalEvidence(value);
+}
+
 function sanitizeRequirement(
   value: PendingApprovalRequirement | null,
   taskId: string,
@@ -186,8 +212,8 @@ function sanitizeRequirement(
     value.taskId !== taskId ||
     !SAFE_KEY.test(value.taskId) ||
     !SAFE_KEY.test(value.approvalRequestId) ||
-    (value.kind !== "start" && value.kind !== "merge" && value.kind !== "execute_red_action") ||
-    (value.phase !== "pre_execution" && value.phase !== "post_qa") ||
+    (value.kind !== "start" && value.kind !== "commit_publish" && value.kind !== "merge" && value.kind !== "execute_red_action") ||
+    (value.phase !== "pre_execution" && value.phase !== "commit_publish" && value.phase !== "post_qa") ||
     (value.risk !== "green" && value.risk !== "yellow" && value.risk !== "red") ||
     value.status !== "pending" ||
     typeof value.action !== "string" ||
@@ -199,6 +225,7 @@ function sanitizeRequirement(
     value.bindingTarget.length > 256 ||
     /[\u0000-\u001f\u007f]/.test(value.bindingTarget) ||
     typeof value.reasonSummary !== "string" ||
+    (value.phase === "commit_publish") !== Boolean(value.commitEvidence) ||
     Number.isNaN(Date.parse(value.requestedAt)) ||
     Number.isNaN(Date.parse(value.expiresAt))
   )
@@ -217,6 +244,7 @@ function sanitizeRequirement(
     // Never relay provider prose: the external surface needs only a short,
     // structured explanation and must not become a raw-log/prompt channel.
     reasonSummary: `${value.phase} approval required for ${value.action}`,
+    ...(value.commitEvidence ? { commitEvidence: sanitizeCommitEvidence(value.commitEvidence) } : {}),
   };
 }
 

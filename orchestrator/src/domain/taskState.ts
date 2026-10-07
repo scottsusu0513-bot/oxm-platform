@@ -10,12 +10,12 @@ export const TASK_TRANSITIONS: Readonly<Record<TaskState, readonly TaskState[]>>
   // red-risk tasks go routed -> awaiting_approval -> queued before execution
   routed: ["queued", "awaiting_approval", "failed", "cancelled"],
   queued: ["running", "failed", "cancelled"],
-  running: ["pr_opened", "failed", "cancelled"],
+  running: ["awaiting_approval", "pr_opened", "failed", "cancelled"],
   pr_opened: ["qa_running", "failed", "cancelled"],
-  qa_running: ["qa_passed", "failed", "cancelled"],
+  qa_running: ["awaiting_approval", "qa_passed", "failed", "cancelled"],
   qa_passed: ["awaiting_approval", "complete", "failed", "cancelled"],
-  // pre_execution approval → queued; post_qa approval → complete
-  awaiting_approval: ["queued", "complete", "failed", "cancelled"],
+  // pre_execution → queued; commit_publish → running; post_qa → complete
+  awaiting_approval: ["queued", "running", "qa_running", "complete", "failed", "cancelled"],
   complete: [],
   failed: [],
   cancelled: [],
@@ -23,7 +23,7 @@ export const TASK_TRANSITIONS: Readonly<Record<TaskState, readonly TaskState[]>>
 
 export const TERMINAL_STATES: readonly TaskState[] = ["complete", "failed", "cancelled"];
 
-export type ApprovalPhase = "pre_execution" | "post_qa";
+export type ApprovalPhase = "pre_execution" | "commit_publish" | "post_qa";
 
 export interface TransitionContext {
   riskLevel: RiskLevel;
@@ -51,9 +51,10 @@ export function validateTransition(
 
   const red = ctx.riskLevel === "red";
 
-  // Approval gates (pre-execution and post-QA) are only for red-risk tasks.
-  if (to === "awaiting_approval" && !red) {
-    return { ok: false, reason: "only red-risk tasks enter awaiting_approval" };
+  // Red-risk gates exist before execution and after QA. Every risk level uses
+  // the additional running -> awaiting_approval commit/publish gate.
+  if (to === "awaiting_approval" && !red && from !== "running" && from !== "qa_running") {
+    return { ok: false, reason: "non-red tasks enter awaiting_approval only for commit authorization" };
   }
 
   // Red-risk tasks reach the queue only via awaiting_approval -> queued.
@@ -73,8 +74,13 @@ export function validateTransition(
     if (ctx.approved !== true) {
       return { ok: false, reason: "approval has not been granted" };
     }
-    const expected: TaskState = ctx.approvalPhase === "pre_execution" ? "queued" : "complete";
-    if (to !== expected) {
+    const expected: readonly TaskState[] =
+      ctx.approvalPhase === "pre_execution"
+        ? ["queued"]
+        : ctx.approvalPhase === "commit_publish"
+          ? ["running", "qa_running"]
+          : ["complete"];
+    if (!expected.includes(to)) {
       return {
         ok: false,
         reason: `awaiting_approval (${ctx.approvalPhase}) cannot transition to ${to}`,

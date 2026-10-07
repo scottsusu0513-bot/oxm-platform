@@ -16,7 +16,7 @@ import { gateTransition } from "../manager/sequencing";
 import type { ApprovalEvidenceState, ManagerValidation, RepairCounters } from "../manager/types";
 import { REPAIRABLE_STATES } from "../manager/validator";
 import type { WorkerResult, WorkerTaskContract } from "../workers/types";
-import { redStartBindingId } from "../workers/prompt";
+import { COMMIT_PUBLISH_ACTION, commitApprovalBinding, normalizeCommitApprovalEvidence, redStartBindingId, type CommitApprovalEvidence } from "../workers/prompt";
 import type { Approval, IsoTimestamp } from "../store/types";
 import { findDependencyCycle } from "./dependencies";
 import { buildManagerEvidence } from "./evidence";
@@ -59,7 +59,7 @@ import {
  *   branch plan -> lease -> create branch -> prepare workspace -> worker ->
  *   trusted run record -> evidence -> Manager validation ->
  *     needs_repair: same task / branch / worker, bounded attempts
- *     accepted (no PR): safe push -> open PR -> QA
+ *     accepted (no PR): commit/publish approval -> trusted commit -> safe push -> open PR -> QA
  *     QA final: validation -> qa_passed -> complete | human approval
  *     blocked: stop (failed) or replan marker
  *
@@ -86,6 +86,7 @@ const RANK: Record<RiskLevel, number> = { green: 0, yellow: 1, red: 2 };
 
 export const APPROVAL_ACTIONS = {
   pre_execution: "start",
+  commit_publish: COMMIT_PUBLISH_ACTION,
   post_qa: "complete_post_qa",
 } as const;
 
@@ -123,10 +124,11 @@ interface TaskRecord {
   blockingReason: string | null;
   escalations: EscalationRecord[];
   capabilities: Set<Capability>;
-  pendingSideEffect: "worker" | "push" | "pr" | null;
+  pendingSideEffect: "worker" | "commit" | "push" | "pr" | null;
   pendingSideEffectId: string | null;
   trustedApproval: Approval | null;
   approvalRequestedAt: IsoTimestamp | null;
+  commitApprovalEvidence: CommitApprovalEvidence | null;
   paused: boolean;
 }
 
@@ -230,6 +232,7 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       approval: structuredClone(t.approval),
       approvalPhase: t.approvalPhase,
       approvalRequestedAt: t.approvalRequestedAt,
+      commitApprovalEvidence: t.commitApprovalEvidence ? structuredClone(t.commitApprovalEvidence) : null,
       queueReason: t.queueReason,
       blockingReason: t.blockingReason,
       escalations: structuredClone(t.escalations),
@@ -366,6 +369,7 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       replans: t.replans,
       prNumber: t.pr?.number ?? null,
       headSha: t.receipt?.headSha ?? null,
+      approvalPhase: t.approvalPhase,
       qaStatus: t.qa?.status ?? null,
       nextQaPollDelayMs: t.nextQaPollDelayMs,
       queueReason: t.queueReason,
@@ -511,7 +515,7 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       qa: null,
       qaPolls: 0,
       nextQaPollDelayMs: null,
-      approval: { pre_execution: "none", post_qa: "none" },
+      approval: { pre_execution: "none", commit_publish: "none", post_qa: "none" },
       approvalPhase: null,
       queueReason: null,
       blockingReason: null,
@@ -521,6 +525,7 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       pendingSideEffectId: null,
       trustedApproval: null,
       approvalRequestedAt: null,
+      commitApprovalEvidence: null,
       paused: false,
     };
     if ((task.dependsOn ?? []).length > 0) t.capabilities.add("dependency_resolver");
@@ -955,7 +960,7 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     const reasons = step.validation.reasonCodes.join(",");
     switch (step.next) {
       case "open_pr":
-        return push(t);
+        return requestCommitApproval(t);
       case "advance_qa":
         // Accepted with final, passing CI on the exact head: QA is done.
         if (t.state === "qa_running" && t.qa?.status === "passed" && t.qa.headSha === t.receipt?.headSha) {
@@ -1051,6 +1056,82 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
   }
 
   // ---------------------------------------------------------- GitHub path
+
+  async function currentCommitApprovalEvidence(t: TaskRecord): Promise<CommitApprovalEvidence | null> {
+    if (!t.plan || !t.lease || !t.contract || !t.record || !t.contract.expectedHeadSha || !t.contract.gitMetadataDigest) return null;
+    const observed = await ports.workspace.observeCommitState(t.lease);
+    if (!observed.ok) return null;
+    const changedPaths = Array.from(new Set(t.record.changedPaths)).sort();
+    const dirtyPaths = Array.from(new Set(observed.dirtyPaths)).sort();
+    const identityPaths = observed.contentIdentities.map((id) => id.path).sort();
+    if (
+      observed.branch !== t.plan.branch ||
+      observed.headSha !== t.contract.expectedHeadSha ||
+      observed.gitMetadataDigest !== t.contract.gitMetadataDigest ||
+      changedPaths.length === 0 ||
+      changedPaths.length !== dirtyPaths.length ||
+      changedPaths.some((path, index) => path !== dirtyPaths[index]) ||
+      identityPaths.length !== changedPaths.length ||
+      identityPaths.some((path, index) => path !== changedPaths[index])
+    ) return null;
+    return normalizeCommitApprovalEvidence({
+      taskId: t.intake.taskId,
+      branch: t.plan.branch,
+      expectedHeadSha: t.contract.expectedHeadSha,
+      changedPaths,
+      contentIdentities: observed.contentIdentities,
+      gitMetadataDigest: observed.gitMetadataDigest,
+      allowedScope: t.intake.allowedScope ?? t.intake.expectedPaths,
+      validations: t.record.validations,
+      acceptance: t.record.acceptance,
+      observedRisk: t.record.observedRisk,
+      managerDecision: "accepted",
+      action: COMMIT_PUBLISH_ACTION,
+      authorization: {
+        commit: true,
+        normalPush: true,
+        openOrReusePr: true,
+        merge: false,
+        deploy: false,
+      },
+    });
+  }
+
+  async function requestCommitApproval(t: TaskRecord) {
+    const evidence = await currentCommitApprovalEvidence(t);
+    if (!evidence) {
+      return block(t, "commit approval state could not be verified", { terminal: true, trigger: "unsafe_branch_state" });
+    }
+    t.commitApprovalEvidence = evidence;
+    t.approval.commit_publish = "pending";
+    move(t, "awaiting_approval");
+    return awaitApproval(t, "commit_publish", "approval_required");
+  }
+
+  async function commitAndPush(t: TaskRecord, approval: Approval) {
+    if (!t.plan || !t.lease || !t.contract || !t.lastResult || !t.record || !t.commitApprovalEvidence) {
+      return block(t, "nothing verified to commit", { terminal: true, trigger: "missing_trusted_evidence" });
+    }
+    t.capabilities.add("github_write");
+    t.pendingSideEffect = "commit";
+    t.pendingSideEffectId = approval.id;
+    persistOrThrow();
+    const committed = await ports.workspace.commitValidated({
+      plan: t.plan,
+      lease: t.lease,
+      evidence: t.commitApprovalEvidence,
+      approval,
+      at: ports.now(),
+    });
+    if (!committed.ok) {
+      return block(t, `trusted commit failed: ${committed.error}`, { terminal: true, trigger: "unsafe_branch_state" });
+    }
+    t.pendingSideEffect = null;
+    t.pendingSideEffectId = null;
+    t.lastResult = { ...t.lastResult, headSha: committed.headSha };
+    t.record = { ...t.record, verifiedHeadSha: committed.headSha };
+    return push(t);
+  }
 
   async function push(t: TaskRecord) {
     if (!t.plan || !t.lastResult || !t.record)
@@ -1178,6 +1259,18 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
   // ------------------------------------------------------------ approvals
 
   async function approvalCheck(t: TaskRecord, phase: ApprovalPhase) {
+    if (phase === "commit_publish") {
+      const evidence = t.commitApprovalEvidence;
+      if (!evidence) return null;
+      return {
+        taskId: t.intake.taskId,
+        phase,
+        kind: "commit_publish" as const,
+        requestedAction: APPROVAL_ACTIONS.commit_publish,
+        bindingShaOrActionId: commitApprovalBinding(evidence),
+        evidence,
+      };
+    }
     if (phase === "post_qa") {
       const head = t.receipt?.headSha;
       if (!head) return null;
@@ -1238,6 +1331,26 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       // Notification only: forged, stale, wrong-kind/action/SHA and expired
       // approvals leave the task at the human gate.
       return;
+    }
+    if (phase === "commit_publish") {
+      const current = await currentCommitApprovalEvidence(t);
+      if (
+        !current ||
+        !t.commitApprovalEvidence ||
+        commitApprovalBinding(current) !== commitApprovalBinding(t.commitApprovalEvidence)
+      ) {
+        return block(t, "commit approval became stale after trusted state changed", {
+          terminal: true,
+          trigger: "unsafe_branch_state",
+        });
+      }
+      t.approval.commit_publish = "approved";
+      t.approvalPhase = null;
+      t.approvalRequestedAt = null;
+      const resumeState = t.pr ? "qa_running" : "running";
+      move(t, resumeState, { approved: true, approvalPhase: "commit_publish" });
+      t.status = "running";
+      return commitAndPush(t, resolved.approval);
     }
     t.trustedApproval = resolved.approval;
     t.approvalPhase = null;
@@ -1417,6 +1530,7 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       pendingSideEffectId: saved.pendingSideEffectId,
       trustedApproval: null,
       approvalRequestedAt: saved.approvalRequestedAt ?? null,
+      commitApprovalEvidence: saved.commitApprovalEvidence ? structuredClone(saved.commitApprovalEvidence) : null,
       paused: saved.paused === true,
     };
   }

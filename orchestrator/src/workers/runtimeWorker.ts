@@ -110,11 +110,15 @@ async function execute(
   const cancelled = () => terminal(c, "cancelled", risk, null);
   if (killSwitch.triggered) return cancelled();
   let before: GitStatus;
+  let beforeMetadata: string;
   try {
     before = await deps.git.status();
+    beforeMetadata = await deps.git.metadataDigest();
   } catch {
     return failure(c, "git_error", "could not read working tree status", risk);
   }
+  if (c.gitMetadataDigest !== undefined && beforeMetadata !== c.gitMetadataDigest)
+    return failure(c, "git_metadata_changed", "Git metadata changed since workspace preparation", "red", { needsApproval: true });
   if (killSwitch.triggered) return cancelled();
   if (before.branch !== c.branch) return failure(c, "branch_mismatch", "working tree is on a different branch than the task branch", risk);
   if (c.expectedHeadSha !== undefined && before.headSha !== c.expectedHeadSha)
@@ -175,6 +179,15 @@ async function execute(
     unsubscribe?.();
     if (removePrompt) await removePrompt().catch(() => {});
   }
+  // Checked for every outcome (including timeout/cancel): Git metadata is never the Worker's to change.
+  let afterMetadata: string | null = null;
+  try {
+    afterMetadata = await deps.git.metadataDigest();
+  } catch {
+    afterMetadata = null;
+  }
+  if (afterMetadata !== beforeMetadata)
+    return failure(c, "git_metadata_changed", "worker run changed or hid Git metadata; result refused", "red", { needsApproval: true });
   if (outcome !== "exited") return terminal(c, outcome, risk, before.headSha);
   return interpret(config, c, deps, risk, before, exit as ProcessExit);
 }
@@ -206,6 +219,11 @@ async function interpret(
   if (after.branch !== c.branch)
     return failure(c, "branch_changed", "worker left the task branch", "red", {
       headSha: null,
+    });
+  if (after.headSha !== before.headSha)
+    return failure(c, "git_metadata_changed", "worker moved HEAD; only the trusted layer may commit", "red", {
+      headSha: null,
+      needsApproval: true,
     });
   if (report.branch !== c.branch || report.headSha !== after.headSha)
     return failure(c, "result_mismatch", "reported branch/headSha do not match the working tree", risk, { headSha: after.headSha });

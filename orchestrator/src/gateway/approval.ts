@@ -64,10 +64,10 @@ export function validateApprovalDecisionRequest(
     if (!SAFE_KEY.test(String(input[key] ?? ""))) invalid(`${key} is malformed`);
   }
   const kind = input.kind;
-  if (kind !== "start" && kind !== "merge" && kind !== "execute_red_action")
+  if (kind !== "start" && kind !== "commit_publish" && kind !== "merge" && kind !== "execute_red_action")
     invalid("kind is unsupported");
   const phase = input.phase;
-  if (phase !== "pre_execution" && phase !== "post_qa")
+  if (phase !== "pre_execution" && phase !== "commit_publish" && phase !== "post_qa")
     invalid("phase is unsupported");
   const action = safeString(input.action, "action", 120);
   const bindingTarget = safeString(input.bindingTarget, "bindingTarget", 256);

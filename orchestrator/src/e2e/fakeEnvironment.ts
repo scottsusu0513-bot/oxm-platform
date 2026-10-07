@@ -157,7 +157,14 @@ export function createFakeSmokeEnvironment(
       });
       return { taskId: result.taskId, duplicate: result.duplicate };
     },
-    settle: () => simulation.loop.settle({ waitForWorkers: true }),
+    async settle() {
+      await simulation.loop.settle({ waitForWorkers: true });
+      if (simulation.loop.task(taskId)?.approvalPhase === "commit_publish") {
+        simulation.approve(taskId, "commit_publish");
+        simulation.loop.post({ type: "approval_granted", taskId, phase: "commit_publish" });
+        await simulation.loop.settle({ waitForWorkers: true });
+      }
+    },
     snapshot: (id) => simulation.loop.task(id),
     async pollQa(id) {
       await simulation.send({ type: "qa_updated", taskId: id });

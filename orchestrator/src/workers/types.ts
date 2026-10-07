@@ -9,6 +9,7 @@
  * Privacy: nothing here holds a full prompt, raw stdout/stderr, or secrets.
  */
 import type { ActionKind, RiskLevel, TaskAction, TaskCategory, WorkerKind } from "../domain/types";
+import type { PathContentIdentity } from "./gitIntegrity";
 import type { Approval, IsoTimestamp } from "../store/types";
 
 // ---------------------------------------------------------------------------
@@ -48,6 +49,12 @@ export interface WorkerTaskContract {
    * The worker never moves HEAD or switches branches to satisfy it.
    */
   expectedHeadSha?: string;
+  /**
+   * Git metadata digest captured by the orchestrator right after workspace
+   * preparation. The worker refuses to start unless it matches, and any change
+   * during or after the run is a security failure (see workers/gitIntegrity.ts).
+   */
+  gitMetadataDigest?: string;
 }
 
 export interface WorkerRunRequest {
@@ -82,6 +89,7 @@ export const WORKER_ERROR_TYPES = [
   "worker_error",
   "malformed_output",
   "branch_changed",
+  "git_metadata_changed",
   "result_mismatch",
   "scope_violation",
   "validation_incomplete",
@@ -199,6 +207,10 @@ export interface GitInspector {
   status(): Promise<GitStatus>;
   /** Paths changed between `fromSha` and the working tree (committed + uncommitted). */
   changedPathsSince(fromSha: string): Promise<string[]>;
+  /** Git blob identity (mode + raw-byte blob id, or absent) of each working-tree path. */
+  contentIdentities(paths: readonly string[]): Promise<PathContentIdentity[]>;
+  /** Digest of Git metadata that could alter trusted staging/commit; throws when unverifiable. */
+  metadataDigest(): Promise<string>;
 }
 
 export interface PromptFile {

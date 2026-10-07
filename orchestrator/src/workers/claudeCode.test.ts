@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Approval } from "../store/types";
 import { createClaudeCodeAdapter, isInside, preflightContract } from "./claudeCode";
-import { createFakeGit, createFakePromptFiles, createFakeRunner, createFakeTimer, type FakeProcessBehavior } from "./fake";
+import { createFakeGit, createFakePromptFiles, createFakeRunner, createFakeTimer, FAKE_GIT_METADATA_DIGEST, type FakeProcessBehavior } from "./fake";
 import { CLAUDE_DISALLOWED_TOOLS, isPathInScope, isValidScopeEntry, redStartBindingId, sha256Hex, validateContract } from "./prompt";
 import type { GitStatus, ProcessSpec, WorkerReport, WorkerTaskContract } from "./types";
 
@@ -31,7 +31,7 @@ const report = (over: Partial<WorkerReport> = {}): WorkerReport => ({
   testsRun: [{ command: "pnpm test", outcome: "passed" }],
   checkResult: "passed",
   branch: BRANCH,
-  headSha: HEAD,
+  headSha: BASE,
   prNumber: null,
   riskObserved: { level: "green", notes: [] },
   needsApproval: false,
@@ -44,11 +44,12 @@ const envelope = (result: unknown) =>
   JSON.stringify({ type: "result", subtype: "success", is_error: false, result: typeof result === "string" ? result : JSON.stringify(result) });
 
 const clean: GitStatus = { branch: BRANCH, headSha: BASE, dirtyPaths: [] };
-const after: GitStatus = { branch: BRANCH, headSha: HEAD, dirtyPaths: [] };
+// Workers edit without committing: HEAD stays at the prepared SHA.
+const after: GitStatus = { branch: BRANCH, headSha: BASE, dirtyPaths: ["server/db.ts"] };
 
-function setup(opts: { behavior?: (s: ProcessSpec) => FakeProcessBehavior; statuses?: GitStatus[]; changed?: string[]; model?: string } = {}) {
+function setup(opts: { behavior?: (s: ProcessSpec) => FakeProcessBehavior; statuses?: GitStatus[]; changed?: string[]; model?: string; metadata?: string[] } = {}) {
   const runner = createFakeRunner(opts.behavior ?? (() => ({ exit: { stdout: envelope(report()) } })));
-  const git = createFakeGit(opts.statuses ?? [clean, after], opts.changed ?? ["server/db.ts"]);
+  const git = createFakeGit(opts.statuses ?? [clean, after], opts.changed ?? ["server/db.ts"], opts.metadata);
   const promptFiles = createFakePromptFiles();
   const timer = createFakeTimer();
   const adapter = createClaudeCodeAdapter({ model: opts.model ?? "claude-opus-5-5", repoRoot: REPO, timeoutMs: 600_000 }, { runner, git, promptFiles, timer });
@@ -115,6 +116,37 @@ describe("branch safety", () => {
     expect(validateContract(contract({ expectedHeadSha: "HEAD" }))).toContain("invalid expectedHeadSha");
     const ok = await setup().adapter.start({ contract: contract({ expectedHeadSha: BASE }), now: NOW }).result;
     expect(ok.status).toBe("success");
+  });
+
+  it("refuses a worker that commits (moves HEAD): only the trusted layer creates commits", async () => {
+    const { adapter } = setup({ statuses: [clean, { ...after, headSha: HEAD }], behavior: () => ({ exit: { stdout: envelope(report({ headSha: HEAD })) } }) });
+    const r = await adapter.start({ contract: contract(), now: NOW }).result;
+    expect(r).toMatchObject({ status: "failure", errorType: "git_metadata_changed", headSha: null, needsApproval: true });
+    expect(r.riskObserved.level).toBe("red");
+  });
+
+  it("refuses the result when Git metadata changed during the run (config, hooks, refs, index flags)", async () => {
+    const { adapter, git } = setup({ metadata: [FAKE_GIT_METADATA_DIGEST, "e".repeat(64)] });
+    const r = await adapter.start({ contract: contract({ gitMetadataDigest: FAKE_GIT_METADATA_DIGEST }), now: NOW }).result;
+    expect(r).toMatchObject({ status: "failure", errorType: "git_metadata_changed", needsApproval: true, filesChanged: [] });
+    expect(r.riskObserved.level).toBe("red");
+    expect(git.metadataCalls).toBe(2);
+  });
+
+  it("refuses a timed-out run that also changed Git metadata (checked for every outcome)", async () => {
+    const { adapter, runner, timer } = setup({ behavior: () => ({}), metadata: [FAKE_GIT_METADATA_DIGEST, "e".repeat(64)] });
+    const handle = adapter.start({ contract: contract(), now: NOW });
+    await flush(() => runner.specs.length > 0);
+    timer.fire();
+    expect(await handle.result).toMatchObject({ status: "failure", errorType: "git_metadata_changed" });
+  });
+
+  it("does not start when Git metadata drifted from the prepared baseline", async () => {
+    const { adapter, runner } = setup({ metadata: ["e".repeat(64)] });
+    const r = await adapter.start({ contract: contract({ gitMetadataDigest: FAKE_GIT_METADATA_DIGEST }), now: NOW }).result;
+    expect(r).toMatchObject({ status: "failure", errorType: "git_metadata_changed" });
+    expect(runner.specs).toHaveLength(0);
+    expect(validateContract(contract({ gitMetadataDigest: "nope" }))).toContain("invalid gitMetadataDigest");
   });
 
   it("fails (red) if the worker leaves the task branch during the run", async () => {
@@ -354,7 +386,7 @@ describe("result handling", () => {
 describe("approval boundaries", () => {
   it("green task executes on the task branch without approval", async () => {
     const r = await setup().adapter.start({ contract: contract(), now: NOW }).result;
-    expect(r).toMatchObject({ status: "success", needsApproval: false, branch: BRANCH, headSha: HEAD, errorType: null });
+    expect(r).toMatchObject({ status: "success", needsApproval: false, branch: BRANCH, headSha: BASE, errorType: null });
   });
 
   it("yellow task executes but flags needsApproval (founder merge approval later)", async () => {
@@ -428,7 +460,7 @@ describe("allowedScope enforcement", () => {
 
   it("a worker cannot report success after changing an out-of-scope file (even if it hides it)", async () => {
     const r = await runWith(["client/src/App.tsx", "server/db.ts"], ["server/db.ts"]);
-    expect(r).toMatchObject({ status: "failure", errorType: "scope_violation", needsApproval: true, headSha: HEAD });
+    expect(r).toMatchObject({ status: "failure", errorType: "scope_violation", needsApproval: true, headSha: BASE });
     expect(r.filesChanged).toEqual(["client/src/App.tsx", "server/db.ts"]);
   });
 

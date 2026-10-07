@@ -57,6 +57,7 @@ export function createManagerApprovalRequirementReader(
         ).toISOString(),
         status: "pending",
         reasonSummary: `${check.phase} approval required for ${check.requestedAction}`,
+        ...(check.evidence ? { commitEvidence: structuredClone(check.evidence) } : {}),
       };
     },
   };

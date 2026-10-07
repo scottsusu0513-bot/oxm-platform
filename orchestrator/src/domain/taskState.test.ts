@@ -63,7 +63,7 @@ describe("taskState", () => {
     expect(validateTransition("routed", "awaiting_approval", { riskLevel: "yellow" }).ok).toBe(false);
   });
 
-  it("green/yellow tasks never use awaiting_approval", () => {
+  it("green/yellow tasks never use the red-risk approval entry points", () => {
     for (const riskLevel of ["green", "yellow"] as const) {
       for (const from of ["classified", "routed", "qa_passed"] as const) {
         expect(validateTransition(from, "awaiting_approval", { riskLevel }).ok).toBe(false);
@@ -93,5 +93,16 @@ describe("taskState", () => {
     // rejection/abort is always possible
     expect(validateTransition("awaiting_approval", "cancelled", red).ok).toBe(true);
     expect(validateTransition("awaiting_approval", "failed", red).ok).toBe(true);
+  });
+
+  it("requires the additional commit approval gate for every risk without replacing red gates", () => {
+    for (const riskLevel of ["green", "yellow", "red"] as const) {
+      expect(validateTransition("running", "awaiting_approval", { riskLevel }).ok).toBe(true);
+      expect(validateTransition("awaiting_approval", "running", { riskLevel, approvalPhase: "commit_publish", approved: true }).ok).toBe(true);
+      expect(validateTransition("qa_running", "awaiting_approval", { riskLevel }).ok).toBe(true);
+      expect(validateTransition("awaiting_approval", "qa_running", { riskLevel, approvalPhase: "commit_publish", approved: true }).ok).toBe(true);
+      expect(validateTransition("awaiting_approval", "running", { riskLevel, approvalPhase: "commit_publish", approved: false }).ok).toBe(false);
+    }
+    expect(validateTransition("routed", "awaiting_approval", green).ok).toBe(false);
   });
 });

@@ -1,14 +1,17 @@
+import { createHash } from "node:crypto";
+import { gitMetadataDigest, readContentIdentities } from "./gitIntegrity";
 import type { GitInspector, ProcessExit, ProcessRunner } from "./types";
 
 /**
  * Read-only git inspection over the injected ProcessRunner. Every invocation
  * is a fixed argument array of a read-only subcommand (rev-parse, status,
- * diff); caller data only ever appears as a validated SHA argument.
+ * diff, ls-files); caller data only ever appears as a validated SHA argument.
+ * Content identities and the metadata digest are plain filesystem reads.
  */
 
 const SHA_RE = /^[0-9a-f]{40}$/;
 
-export const READ_ONLY_GIT_SUBCOMMANDS = ["rev-parse", "status", "diff"] as const;
+export const READ_ONLY_GIT_SUBCOMMANDS = ["rev-parse", "status", "diff", "ls-files"] as const;
 
 export function createGitInspector(runner: ProcessRunner, repoRoot: string): GitInspector {
   const git = async (args: string[]): Promise<string> => {
@@ -29,10 +32,20 @@ export function createGitInspector(runner: ProcessRunner, repoRoot: string): Git
     },
     async changedPathsSince(fromSha) {
       if (!SHA_RE.test(fromSha)) throw new Error("invalid base SHA");
-      const diff = await git(["diff", "--name-only", "-z", fromSha, "--"]);
+      const diff = await git(["diff", "--no-renames", "--name-only", "-z", fromSha, "--"]);
       const status = await git(["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
       const all = new Set([...diff.split("\0").filter(Boolean), ...parsePorcelainZ(status)]);
       return Array.from(all).sort();
+    },
+    contentIdentities(paths) {
+      return readContentIdentities(repoRoot, paths);
+    },
+    async metadataDigest() {
+      const files = await gitMetadataDigest(repoRoot);
+      // assume-unchanged (lowercase tag) / skip-worktree ("S") index flags hide edits from status and add.
+      const listing = await git(["ls-files", "-v", "-z"]);
+      const hidden = listing.split("\0").filter((e) => e.length > 2 && (e[0] === "S" || /[a-z]/.test(e[0]))).sort();
+      return createHash("sha256").update(JSON.stringify([files, hidden])).digest("hex");
     },
   };
 }

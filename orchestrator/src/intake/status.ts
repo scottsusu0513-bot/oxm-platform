@@ -38,9 +38,7 @@ export function buildTaskStatus(input: {
     snap?.status === "needs_human_approval" ||
     task.state === "awaiting_approval";
   const phase = approvalState
-    ? (snap?.prNumber ?? task.prNumber) === null
-      ? "pre_execution"
-      : "post_qa"
+    ? snap?.approvalPhase ?? ((snap?.prNumber ?? task.prNumber) === null ? "pre_execution" : "post_qa")
     : null;
   const orchestrationStatus =
     intake.controlState === "paused"
@@ -71,6 +69,8 @@ export function buildTaskStatus(input: {
         pending?.kind ??
         (phase === "pre_execution"
           ? "start"
+          : phase === "commit_publish"
+            ? "commit_publish"
           : phase === "post_qa"
             ? "merge"
             : null),
@@ -79,6 +79,8 @@ export function buildTaskStatus(input: {
         pending?.bindingShaOrActionId ??
         (phase === "post_qa"
           ? (snap?.headSha ?? null)
+          : phase === "commit_publish"
+            ? null
           : phase === "pre_execution"
             ? `start:${task.id}`
             : null),
@@ -86,6 +88,8 @@ export function buildTaskStatus(input: {
         pending?.requestedAction ??
         (phase === "pre_execution"
           ? "start"
+          : phase === "commit_publish"
+            ? "commit_and_publish_task_branch_for_pr_review"
           : phase === "post_qa"
             ? "complete_post_qa"
             : null),

@@ -10,7 +10,8 @@ const BASE = "a".repeat(40);
 const HEAD = "b".repeat(40);
 const NOW = "2026-10-04T00:00:00.000Z";
 const before: GitStatus = { branch: BRANCH, headSha: BASE, dirtyPaths: [] };
-const after: GitStatus = { branch: BRANCH, headSha: HEAD, dirtyPaths: [] };
+// Workers edit without committing: HEAD stays at the prepared SHA.
+const after: GitStatus = { branch: BRANCH, headSha: BASE, dirtyPaths: ["server/db.ts"] };
 
 const contract = (over: Partial<WorkerTaskContract> = {}): WorkerTaskContract => ({
   taskId: "ui-42",
@@ -33,7 +34,7 @@ const report = (over: Partial<WorkerReport> = {}): WorkerReport => ({
   testsRun: [{ command: "pnpm test", outcome: "passed" }],
   checkResult: "passed",
   branch: BRANCH,
-  headSha: HEAD,
+  headSha: BASE,
   prNumber: null,
   riskObserved: { level: "green", notes: [] },
   needsApproval: false,
@@ -121,8 +122,19 @@ describe("Codex worker adapter", () => {
     expect(s.runtimeChecks).toBe(1);
   });
 
-  it.each(["switch", "checkout", "merge", "rebase", "reset", "push"])("required exec policy forbids git %s without invoking Codex", (operation) => {
+  it.each(["add", "commit", "switch", "checkout", "merge", "rebase", "reset", "push"])("required exec policy forbids git %s without invoking Codex", (operation) => {
     expect(requiredCodexPolicyDecision(["git", operation, "probe"])).toBe("forbidden");
+  });
+
+  it("accepts a successful uncommitted edit while keeping Worker-owned Git metadata read-only", async () => {
+    const uncommitted = { branch: BRANCH, headSha: BASE, dirtyPaths: ["client/src/Card.tsx"] };
+    const s = setup({
+      statuses: [before, uncommitted],
+      stdout: JSON.stringify(report({ headSha: BASE })),
+    });
+    const result = await s.adapter.start({ contract: contract(), now: NOW }).result;
+    expect(result).toMatchObject({ status: "success", headSha: BASE, filesChanged: ["client/src/Card.tsx"] });
+    expect(s.runner.specs[0].args).toContain('permissions.worker.filesystem={":minimal"="read",":workspace_roots"={"."="write",".git"="read",".codex/rules"="read"},":tmpdir"="write",":slash_tmp"="write"}');
   });
 
   it.each([
