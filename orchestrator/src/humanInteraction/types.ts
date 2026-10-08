@@ -8,6 +8,7 @@
  * HEAD, approval binding and authority are always resolved server-side.
  */
 import type { RiskLevel } from "../domain/types";
+import type { OwnerLanguage, PlainDecision } from "../executive/communication";
 
 interface NoticeBase {
   /** Stable dedupe identity (one notice per escalation / approval request / milestone). */
@@ -17,6 +18,10 @@ interface NoticeBase {
   taskId: string;
   /** Set when an earlier send attempt may have reached the human (crash or timeout). */
   possibleDuplicate?: boolean;
+  /** Owner's language (Traditional Chinese when the owner writes Chinese). */
+  lang?: OwnerLanguage;
+  /** Plain task name for the owner (their own goal words); never ids or bindings. */
+  ownerLabel?: string;
 }
 
 export interface HumanDecisionNotice extends NoticeBase {
@@ -32,6 +37,8 @@ export interface HumanDecisionNotice extends NoticeBase {
   currentBlocker: string;
   recommendation: string;
   inputRequested: string;
+  /** Owner-facing plain-language content (Executive communication layer). Internal fields above stay for audit. */
+  plain: PlainDecision;
   /** A reply is guidance only. */
   grantsApproval: false;
 }
@@ -63,6 +70,8 @@ export interface StartApprovalNotice extends NoticeBase {
   repair: boolean;
   /** Read-only task: approval authorizes a read-only run only. */
   readOnly: boolean;
+  /** Approving hands a red programming task back from Codex to Claude (same task, branch, progress). */
+  handback?: boolean;
   risk: RiskLevel;
   expiresAt: string;
   authorizes: { executeThisExactContract: true; commit: false; push: false; openPr: false; merge: false; deploy: false; gitPermissionsForWorker: false };
@@ -78,6 +87,18 @@ export const MILESTONES = [
   "awaiting_other_approval",
   "answered",
   "infrastructure_waiting",
+  // Executive progress milestones (meaningful lifecycle points only; never chain-of-thought).
+  "worker_assigned",
+  "repairing",
+  "quota_takeover",
+  "quota_handback",
+  "quota_paused",
+  "availability_paused",
+  "part_completed",
+  "combined_accepted",
+  "combined_not_accepted",
+  "combined_review_waiting",
+  "combined_repairing",
 ] as const;
 export type Milestone = (typeof MILESTONES)[number];
 

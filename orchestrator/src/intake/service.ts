@@ -10,6 +10,7 @@ import { seedRisk } from "./risk";
 import { describeSignal, detectRiskSignals, plannerSignals, signalActions } from "./riskSignals";
 import { checkMutability } from "../domain/types";
 import { seedRouting } from "./routing";
+import { categoryForArea, detectWorkAreas, workShape } from "../executive/workAssignment";
 import { buildTaskStatus } from "./status";
 import type {
   AgentRuntimeService,
@@ -177,8 +178,12 @@ export function createAgentRuntimeService(
     const signals = [...detectRiskSignals(riskText, mode), ...plannerSignals(input.riskObservations)];
     const extraActions = signals.flatMap(signalActions);
     // A read-only task only reads and checks: no edit, commit or PR action exists to classify or route.
+    // Fixed Worker assignment policy: a Manager-assigned work area decides the Codex/Claude side of
+    // the category; without one, a request that is purely site-visual still never lands on Claude.
+    const area = input.goal?.workArea ?? (workShape(detectWorkAreas(`${input.title}\n${input.instruction}`)) === "visual" ? "visual" : null);
     const classification = {
       ...classified,
+      ...(area ? { category: categoryForArea(area, classified.category) } : {}),
       actions: [...(mode === "read_only" ? [{ kind: "repo_read" as const }, { kind: "run_check" as const }] : classified.actions), ...extraActions],
     };
     if (classification.clarificationRequired || !classification.executable) {

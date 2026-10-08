@@ -75,6 +75,10 @@ export interface IntakeGoal {
   criteria: readonly string[];
   /** Planner risk observations (typed signal kinds). They can only raise risk, never lower it. */
   riskObservations?: readonly string[];
+  /** Work area of this (possibly decomposed) task; fixes the Worker via the assignment policy. */
+  workArea?: "programming" | "visual";
+  /** Decomposed request this part belongs to (combined review before the whole is accepted). */
+  group?: { id: string; parts: readonly { area: "programming" | "visual"; objective: string }[] };
 }
 
 export type ClassificationPath = "deterministic" | "llm_fallback";
@@ -179,6 +183,34 @@ export interface ApprovalNeededStatus {
   action: string | null;
 }
 
+/** Technical view the owner can ask for ("給我技術細節"); structured facts only, never model reasoning. */
+export interface TaskTechnicalDetails {
+  worker: WorkerKind | null;
+  workArea: "programming" | "visual" | null;
+  temporaryCover: boolean;
+  risk: RiskLevel;
+  approvalPhase: string | null;
+  validations: { name: string; status: string }[];
+  unmetCriteria: { id: string; text: string; status: string; summary: string | null }[];
+  ownerConstraints: { id: string; kind: string; status: string; evidence: string }[];
+  managerRootCause: string | null;
+  repairAttempts: { round: number; cycle: number; strategy: string | null; outcome: string }[];
+  changedPaths: string[];
+  citedFiles: string[];
+}
+
+/** Owner-facing Worker assignment state: area, primary, temporary cover, availability pause. */
+export interface TaskWorkforceStatus {
+  workArea: "programming" | "visual";
+  primaryWorker: WorkerKind;
+  temporaryCover: boolean;
+  handoffs: number;
+  /** Set while paused for Worker availability; resetAt only when the provider exposed a trusted time. */
+  availabilityPause: { waitingFor: WorkerKind[]; resetAt: string | null; exhausted: WorkerKind; cause: "quota" | "authentication" | "executable" | "service" } | null;
+  /** Combined review of the decomposed request (null for standalone tasks). */
+  combinedReview: { status: string; ownerSummary: string | null; lead: boolean; leadTaskId: string; round: number; cycle: number; repairTargets: ("programming" | "visual")[] } | null;
+}
+
 export interface AgentTaskStatus {
   taskId: string;
   title: string;
@@ -202,6 +234,10 @@ export interface AgentTaskStatus {
   mode: TaskMode;
   /** Manager-accepted answer of a read_only task. */
   answer: string | null;
+  /** Executive view of the Worker assignment (presentation only). */
+  workforce?: TaskWorkforceStatus;
+  /** Structured technical facts for an explicit owner request (presentation only). */
+  details?: TaskTechnicalDetails;
   approval: ApprovalNeededStatus;
   lastMeaningfulAuditEvent: Pick<
     AuditEvent,

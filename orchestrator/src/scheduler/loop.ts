@@ -11,12 +11,18 @@ import type { WorkspaceLease } from "../githubWrite/lease";
 import type { PushReceipt, TrustedPullRequest } from "../githubWrite/types";
 import { DEFAULT_MAX_REPAIR_ATTEMPTS, managerBudget } from "../manager/budget";
 import { managerStep, type ManagerStep } from "../manager/lifecycle";
-import { buildHumanEscalationReport, failureFingerprint, primaryFailureCode, repairOutcomeSummary } from "../manager/diagnosis";
+import { buildHumanEscalationReport, failureFingerprint, PROTECTED_AREAS, primaryFailureCode, repairOutcomeSummary } from "../manager/diagnosis";
 import { checkHumanDecisionBinding, humanDecisionResumeStep, normalizeHumanDecision } from "../manager/humanDecision";
 import { advanceRepairCounters, repairWorkerContract } from "../manager/repair";
 import { gateTransition } from "../manager/sequencing";
-import type { ApprovalEvidenceState, HumanDecisionRequest, HumanEscalationReport, ManagerValidation, RepairCounters, RepairCycleRecord, RepairRequest } from "../manager/types";
-import { REPAIRABLE_STATES, TRANSIENT_WORKER_ERRORS, validateEvidence } from "../manager/validator";
+import type { ApprovalEvidenceState, ManagerDiagnosis, HumanDecisionRequest, HumanEscalationReport, ManagerValidation, RepairCounters, RepairCycleRecord, RepairPlanningContext, RepairRequest } from "../manager/types";
+import { AVAILABILITY_WAIT_ERRORS, REPAIRABLE_STATES, TRANSIENT_WORKER_ERRORS, validateEvidence } from "../manager/validator";
+import { deriveEvidencePlan } from "../executive/evidencePlan";
+import { constraintSummary, deriveGuidanceConstraint, semanticGuidanceConstraint, type GuidanceConstraint } from "../executive/guidance";
+import { validateCombinedRepairPlan, validateCombinedReview, validateGuidanceInterpretation, validateManagerRepairPlan, type CombinedRepairPlan, type ManagerRepairPlan } from "../manager/managerPlan";
+import { constraintAcceptance, constraintChecks, semanticConstraintPrompts, verifyConstraints } from "../manager/constraintCheck";
+import { buildHandoffSummary, renderHandoffBlock, type HandoffReason, type HandoffSummary } from "../executive/handoff";
+import { ALL_AVAILABLE, PRIMARY_WORKER, areaForCategory, decideExecutionWorker, type ExecutionDecision, type WorkArea, type WorkerAvailabilityState } from "../executive/workAssignment";
 import type { WorkerResult, WorkerTaskContract } from "../workers/types";
 import { WORKER_INTERACTIVE_PROMPTS_ALLOWED } from "../workers/permissions";
 import { COMMIT_PUBLISH_ACTION, commitApprovalBinding, normalizeCommitApprovalEvidence, redStartBindingId, type CommitApprovalEvidence } from "../workers/prompt";
@@ -29,6 +35,11 @@ import { decideSchedule } from "./scheduler";
 import {
   CAPABILITIES,
   TERMINAL_ORCHESTRATION_STATUSES,
+  type AvailabilityCause,
+  type AvailabilityPause,
+  type GoalAcceptanceContext,
+  type GroupReview,
+  type ManagerCallCounts,
   type BranchPlanState,
   type ApprovalCheck,
   type Capability,
@@ -87,6 +98,8 @@ export const DEFAULT_ORCHESTRATION_POLICY: OrchestrationPolicy = Object.freeze({
   maxInfrastructureRetries: 2,
   maxHumanResumes: 3,
   maxReviewRetries: 5,
+  maxAvailabilityContinuations: 12,
+  managerMode: "gpt_required",
   maxReplans: 1,
   executableWorkers: Object.freeze(["claude", "codex"]) as readonly WorkerKind[],
   prDraft: false,
@@ -98,6 +111,8 @@ export const DEFAULT_ORCHESTRATION_POLICY: OrchestrationPolicy = Object.freeze({
 const EXECUTABLE_THIS_PHASE: readonly WorkerKind[] = ["claude", "codex"];
 
 const RANK: Record<RiskLevel, number> = { green: 0, yellow: 1, red: 2 };
+
+const NO_CALLS: ManagerCallCounts = Object.freeze({ interpretation: 0, semanticReview: 0, repairDiagnosis: 0, guidanceInterpretation: 0, combinedReview: 0, combinedDiagnosis: 0 });
 
 export const APPROVAL_ACTIONS = {
   pre_execution: "start",
@@ -162,6 +177,25 @@ interface TaskRecord {
   /** Finished run waiting for the Manager's goal reviewer (infrastructure); no repair cycle consumed. */
   pendingReview: boolean;
   reviewRetries: number;
+  /** Fixed assignment area (executive/workAssignment): programming -> Claude, visual -> Codex. */
+  workArea: WorkArea;
+  /** Codex temporarily covers this Claude programming task (Claude quota exhausted). */
+  temporaryCover: boolean;
+  handoffs: HandoffSummary[];
+  /** Paused for Worker availability; the exact continuation contract resumes later. */
+  availabilityPause: AvailabilityPause | null;
+  availabilityContinuations: number;
+  /** Accepted owner guidance: durable constraints on every later repair plan of this task. */
+  guidanceConstraints: GuidanceConstraint[];
+  /** Repair waiting for the GPT Manager's diagnosis (infrastructure; no repair cycle consumed yet). */
+  pendingDiagnosis: { request: RepairRequest; phase: "pre_push" | "post_qa" } | null;
+  /** The pending pre-execution approval hands a red task back to Claude. */
+  pendingHandback: boolean;
+  /** Diagnosis of a GPT-requested owner decision raised before any repair cycle ran (resume anchor). */
+  decisionDiagnosis: ManagerDiagnosis | null;
+  managerCalls: ManagerCallCounts;
+  /** The open human decision on this (lead) task belongs to its decomposed request's combined repair. */
+  groupDecision: boolean;
 }
 
 export interface ManagerLoop {
@@ -226,6 +260,10 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
   let last: ScheduleDecision[] = [];
   let resumed = false;
   let persistenceFailed = false;
+  // Trusted Worker availability (quota) as observed from typed run failures and runtime signals.
+  const availability: Record<WorkerKind, WorkerAvailabilityState> = { claude: { ...ALL_AVAILABLE.claude }, codex: { ...ALL_AVAILABLE.codex } };
+  // Final combined reviews of decomposed (Claude + Codex) requests.
+  const groups = new Map<string, GroupReview>();
 
   function persistedRecord(t: TaskRecord): PersistedTaskRecord {
     const record = t.record
@@ -289,6 +327,17 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       paused: t.paused,
       pendingReview: t.pendingReview,
       reviewRetries: t.reviewRetries,
+      workArea: t.workArea,
+      temporaryCover: t.temporaryCover,
+      handoffs: structuredClone(t.handoffs),
+      availabilityPause: t.availabilityPause ? structuredClone(t.availabilityPause) : null,
+      availabilityContinuations: t.availabilityContinuations,
+      guidanceConstraints: structuredClone(t.guidanceConstraints),
+      pendingDiagnosis: t.pendingDiagnosis ? structuredClone(t.pendingDiagnosis) : null,
+      pendingHandback: t.pendingHandback,
+      decisionDiagnosis: t.decisionDiagnosis ? structuredClone(t.decisionDiagnosis) : null,
+      managerCalls: { ...t.managerCalls },
+      groupDecision: t.groupDecision,
     };
   }
 
@@ -300,6 +349,7 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       tasks: Array.from(recs.values())
         .sort((a, b) => a.seq - b.seq)
         .map(persistedRecord),
+      ...(groups.size ? { groups: Array.from(groups.values()).map((g) => structuredClone(g)) } : {}),
     });
   }
 
@@ -308,7 +358,8 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
   const isTerminalStatus = (s: OrchestrationStatus) => TERMINAL_ORCHESTRATION_STATUSES.includes(s);
   const maxInfraRetries = Math.max(0, Math.floor(policy.maxInfrastructureRetries));
   // Each accepted human decision opens one more round of maxRepairAttempts cycles.
-  const maxWorkerExecutions = (t: TaskRecord) => 1 + t.maxRepairAttempts * t.humanRound + maxInfraRetries;
+  // Availability continuations (quota takeover/handback/resume) re-run the SAME work; they are bounded separately.
+  const maxWorkerExecutions = (t: TaskRecord) => 1 + t.maxRepairAttempts * t.humanRound + maxInfraRetries + t.availabilityContinuations;
   const capabilityList = (t: TaskRecord) => CAPABILITIES.filter((c) => t.capabilities.has(c));
 
   function audit(
@@ -366,7 +417,8 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       priority: t.priority.priority,
       state: t.state,
       status: t.status,
-      inFlight: t.plan !== null && !isTerminalStatus(t.status),
+      // A held group part has no workspace and no running work.
+      inFlight: t.plan !== null && !isTerminalStatus(t.status) && t.status !== "waiting_group",
       worker: t.worker,
       dependsOn: t.intake.dependsOn ?? [],
       workspaceId: t.intake.workspaceId,
@@ -380,7 +432,7 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
   function activeWork(): ActiveWork[] {
     const out: ActiveWork[] = [];
     for (const t of Array.from(recs.values())) {
-      if (!t.plan || isTerminalStatus(t.status)) continue;
+      if (!t.plan || isTerminalStatus(t.status) || t.status === "waiting_group") continue;
       out.push({
         taskId: t.intake.taskId,
         lineageId: t.plan.lineageId,
@@ -454,12 +506,39 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
         maxInfrastructureRetries: maxInfraRetries,
         infrastructureRetries: t.infraRetries,
         workerInteractivePromptsAllowed: WORKER_INTERACTIVE_PROMPTS_ALLOWED,
-        managerLlmCalls: 0 as const,
+        managerLlmCalls: Object.values(t.managerCalls).reduce((a, b) => a + b, 0),
+        managerCalls: { ...t.managerCalls },
+        managerMode: policy.managerMode,
         llmCallBudget: policy.llmCallBudget,
         deepReviewEnabled: false as const,
         activatedCapabilities: capabilityList(t),
         escalationCount: t.escalations.length,
       },
+      workArea: t.workArea,
+      primaryWorker: PRIMARY_WORKER[t.workArea],
+      temporaryCover: t.temporaryCover,
+      handoffs: t.handoffs,
+      availabilityPause: t.availabilityPause
+        ? { waitingFor: t.availabilityPause.waitingFor, resetAt: t.availabilityPause.resetAt, since: t.availabilityPause.since, exhausted: t.availabilityPause.exhausted, attempt: t.availabilityPause.attempt, cause: t.availabilityPause.cause ?? "quota" }
+        : null,
+      guidanceConstraints: t.guidanceConstraints,
+      pendingDiagnosis: t.pendingDiagnosis !== null,
+      evidence: t.record
+        ? {
+            validations: t.record.validations.map((v) => ({ name: v.name, status: v.status })),
+            acceptance: [...t.record.acceptance],
+            ownerConstraints: [...(t.record.ownerConstraints ?? [])],
+            changedPaths: [...t.record.changedPaths],
+            citedFiles: [...(t.record.citedFiles ?? [])],
+            criteria: t.intake.acceptanceCriteria.map((c) => ({ id: c.id, text: c.text })),
+          }
+        : null,
+      combinedReview: t.intake.goal?.group
+        ? {
+            ...(groups.get(t.intake.goal.group.id) ?? { groupId: t.intake.goal.group.id, status: "waiting_parts" as const, verdict: null, attempts: 0 }),
+            leadTaskId: groupParts(t.intake.goal.group.id)[0]?.intake.taskId ?? t.intake.taskId,
+          }
+        : null,
     });
   }
 
@@ -507,6 +586,8 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
   }
 
   function accept(t: TaskRecord, from: TaskState) {
+    // A part of a decomposed request: the whole is accepted only after the GPT Manager's combined review.
+    if (t.intake.goal?.group && groups.get(t.intake.goal.group.id)?.status !== "accepted") return holdForGroup(t, from);
     t.status = "accepted";
     t.queueReason = null;
     const freed = t.lease?.workspaceId ?? null;
@@ -514,6 +595,18 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     audit(t, "manager_accepted", { from, to: t.state });
     post({ type: "dependency_completed", taskId: t.intake.taskId });
     if (freed) post({ type: "workspace_available", workspaceId: freed });
+  }
+
+  /** A group part whose own work passed: frees the workspace and waits for the combined review (not terminal). */
+  function holdForGroup(t: TaskRecord, from: TaskState) {
+    t.status = "waiting_group";
+    t.queueReason = "own work passed; waiting for the combined review of the whole request";
+    const freed = t.lease?.workspaceId ?? null;
+    releaseLease(t);
+    audit(t, "manager_accepted", { from, to: t.state, reason: "part accepted; combined review pending" });
+    post({ type: "dependency_completed", taskId: t.intake.taskId });
+    if (freed) post({ type: "workspace_available", workspaceId: freed });
+    post({ type: "combined_review", groupId: t.intake.goal!.group!.id });
   }
 
   function awaitApproval(t: TaskRecord, phase: ApprovalPhase, trigger: string) {
@@ -613,7 +706,22 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       paused: false,
       pendingReview: false,
       reviewRetries: 0,
+      workArea: task.goal?.workArea ?? areaForCategory(task.category),
+      temporaryCover: task.routing.isFallback && task.routing.fallbackFrom === "claude" && task.routing.worker === "codex",
+      handoffs: [],
+      availabilityPause: null,
+      availabilityContinuations: 0,
+      guidanceConstraints: [],
+      pendingDiagnosis: null,
+      pendingHandback: false,
+      decisionDiagnosis: null,
+      // One GPT interpretation produced this task (a decomposed request counts it on its first part).
+      managerCalls: { ...NO_CALLS, interpretation: task.goal && !task.groupRepairOf && (!task.goal.group || task.goal.group.parts[0]?.area === task.goal.workArea) ? 1 : 0 },
+      groupDecision: false,
     };
+    // Intake routed a Claude task to Codex only because Claude's quota is exhausted: the loop must
+    // know, or the next safe boundary would hand the task straight back.
+    if (t.temporaryCover && availability.claude.status === "available") availability.claude = { status: "quota_exhausted", resetAt: null };
     if ((task.dependsOn ?? []).length > 0) t.capabilities.add("dependency_resolver");
     recs.set(task.taskId, t);
     if (task.routing.worker === null) {
@@ -767,6 +875,7 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
         baseBranch: BASE_BRANCH,
         baseSha,
         lineage: task.lineage,
+        ...(task.groupRepairOf ? { existingBranch: lineageBranchState(t), allowReuse: true } : {}),
       },
       { active: activeWork(), highConflictPaths: policy.highConflictPaths },
     );
@@ -905,7 +1014,17 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     return true;
   }
 
-  function startRun(t: TaskRecord, contract: WorkerTaskContract, attempt: number) {
+  function startRun(t: TaskRecord, contractIn: WorkerTaskContract, attempt: number) {
+    let contract = contractIn;
+    // Safe handoff boundary: a temporarily covered Claude programming task returns to Claude before
+    // its next run once Claude is available again (same task, branch, checkpoint, lineage). A red-risk
+    // contract is never changed here: its approval binds the exact contract, so Codex keeps covering.
+    if (t.temporaryCover && t.workArea === "programming" && t.worker === "codex" && availability.claude.status === "available" && t.risk !== "red") {
+      contract = handoffContract(t, contract, "codex", "claude", "claude_available_again");
+      t.worker = "claude";
+      t.temporaryCover = false;
+      audit(t, "worker_handback", { reason: "Claude available again; programming task handed back at a safe boundary (same task, branch, checkpoint)", fallbackFrom: "codex" });
+    }
     // Typed invariant: no Worker run (first run, repair, retry, or after any approval) may carry a
     // mutability different from the task's intent-derived mode.
     const mutability = checkMutability({ taskMode: modeOf(t), contractMode: contract.mode, intent: t.intake.goal?.intent ?? null });
@@ -991,13 +1110,7 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
         result,
         lease: t.lease,
         // The original goal and its criteria come from the immutable intake, never from the Worker.
-        goal: {
-          mode: modeOf(t),
-          title: t.intake.title,
-          objective: t.intake.objective,
-          goal: t.intake.goal ? structuredClone(t.intake.goal) : null,
-          criteria: structuredClone(t.intake.acceptanceCriteria),
-        },
+        goal: goalContext(t),
       });
     } catch (err) {
       // No prior failure: the evidence error is the primary failure (generic fail-closed path).
@@ -1010,11 +1123,20 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
         trigger: `worker_${result.errorType}`,
       });
     }
-    t.record = record;
+    t.managerCalls.semanticReview += record.managerReviewCalls ?? 0;
+    t.record = withConstraintVerdicts(t, record, result);
     const phase = t.pr ? "pre_push" : "post_qa";
     // A read-only task that changed anything is a policy violation, never a repairable result.
     if (modeOf(t) === "read_only" && record.changedPaths.length > 0)
       return block(t, "read-only task modified the workspace", { terminal: true, trigger: "scope_violation" });
+
+    // Worker usage quota exhausted: typed availability state, never a goal failure. The SAME task
+    // continues on an eligible Worker (Codex covers Claude programming work) or pauses; no repair
+    // cycle and no infrastructure retry is consumed.
+    if (result.errorType !== null && AVAILABILITY_WAIT_ERRORS.includes(result.errorType)) return onWorkerQuota(t, result);
+    // A Worker that needs a new login or whose executable is missing: availability, never a goal failure.
+    if (result.errorType === "authentication_unavailable" || result.errorType === "executable_unavailable")
+      return onWorkerUnavailable(t, result.errorType === "authentication_unavailable" ? "authentication" : "executable");
 
     // A transient runtime/tool/quota/infrastructure failure is re-run on the
     // same contract without a Manager diagnosis, so it never consumes a
@@ -1026,6 +1148,8 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       const unsafe = probe.findings.some((f) => f.severity === "blocked" && f.evidenceId !== "worker:result");
       if (!unsafe) return retryInfrastructure(t, result.errorType);
     }
+    // A service outage that outlasted the bounded retries pauses (same task, progress kept) instead of failing.
+    if ((result.errorType === "service_unavailable" || result.errorType === "rate_limited") && t.infraRetries >= maxInfraRetries) return onWorkerUnavailable(t, "service");
 
     // The Manager could not JUDGE the run (goal reviewer outage): wait, never a repair verdict.
     if (record.goalReviewUnavailable && result.status === "success") return awaitReview(t);
@@ -1055,6 +1179,12 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
 
   async function onReviewRetry(taskId: string) {
     const t = recs.get(taskId);
+    if (t && t.pendingDiagnosis && t.status === "waiting_infrastructure") {
+      if (t.reviewRetries >= policy.maxReviewRetries) return;
+      t.reviewRetries++;
+      const pd = t.pendingDiagnosis;
+      return planRepair(t, pd.request, pd.phase);
+    }
     if (!t || !t.pendingReview || t.status !== "waiting_infrastructure" || isTerminalStatus(t.status)) return;
     if (t.reviewRetries >= policy.maxReviewRetries) return; // exhausted: only a restart re-arms retries
     if (!t.lease || !t.contract || !t.lastResult || !t.runId)
@@ -1066,18 +1196,13 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       contract: t.contract,
       result: t.lastResult,
       lease: t.lease,
-      goal: {
-        mode: modeOf(t),
-        title: t.intake.title,
-        objective: t.intake.objective,
-        goal: t.intake.goal ? structuredClone(t.intake.goal) : null,
-        criteria: structuredClone(t.intake.acceptanceCriteria),
-      },
+      goal: goalContext(t),
     });
+    t.managerCalls.semanticReview += record.managerReviewCalls ?? 0;
     if (record.goalReviewUnavailable) return awaitReview(t);
     t.pendingReview = false;
     t.reviewRetries = 0;
-    t.record = record;
+    t.record = withConstraintVerdicts(t, record, t.lastResult);
     if (modeOf(t) === "read_only" && record.changedPaths.length > 0)
       return block(t, "read-only task modified the workspace", { terminal: true, trigger: "scope_violation" });
     t.status = t.repair.attempt > 0 ? "repair_requested" : "running";
@@ -1093,12 +1218,12 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     if (!head || head.branch !== t.plan.branch || expected === null || head.headSha !== expected || t.record.verifiedHeadSha !== expected) {
       return block(t, "workspace is not at the retry head", { terminal: true, trigger: "unsafe_branch_state" });
     }
-    const contract: WorkerTaskContract = {
+    const contract: WorkerTaskContract = handbackAtBoundary(t, {
       ...t.contract,
       runId: `${t.intake.taskId}-run-${t.runCount + 1}`,
       // Partial task-owned edits of the interrupted run (validated in scope) may remain dirty.
       allowedDirtyPaths: Array.from(new Set([...(t.contract.allowedDirtyPaths ?? []), ...t.record.changedPaths])).sort(),
-    };
+    });
     if (t.risk === "red") {
       // Recompute the binding of the retry contract. Unchanged -> the existing
       // approval still authorizes it. Changed (e.g. new task-owned dirty paths)
@@ -1124,11 +1249,650 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     if (!head || head.branch !== t.plan.branch || head.headSha !== contract.expectedHeadSha)
       return block(t, "workspace is not at the retry head", { terminal: true, trigger: "unsafe_branch_state" });
     t.pendingRetry = null;
+    t.pendingHandback = false;
     t.infraRetries++;
     escalate(t, `infrastructure_failure:${errorType}`, "retry_infrastructure");
     audit(t, "infrastructure_retry_requested", { reason: `transient ${errorType}; retry ${t.infraRetries} of ${maxInfraRetries}` });
     t.status = t.repair.attempt > 0 ? "repair_requested" : "running";
     startRun(t, contract, t.repair.attempt);
+  }
+
+  // ------------------------------------------------ Worker availability
+
+  /** Planning context of the task's GOAL: mode, durable owner guidance, evidence plan. */
+  function planningContext(t: TaskRecord, constraints: readonly GuidanceConstraint[] = t.guidanceConstraints): RepairPlanningContext {
+    const g = t.intake.goal ?? null;
+    const mode = modeOf(t);
+    return {
+      mode,
+      constraints,
+      evidencePlan: deriveEvidencePlan({ mode, intent: g?.intent ?? null, originalRequest: g?.originalRequest ?? t.intake.objective, interpretedObjective: g?.interpretedObjective ?? t.intake.title, constraints }),
+    };
+  }
+
+  /** Goal context for the trusted evidence layer; the evidence plan tells it which source answers the goal. */
+  function goalContext(t: TaskRecord): GoalAcceptanceContext {
+    return {
+      mode: modeOf(t),
+      title: t.intake.title,
+      objective: t.intake.objective,
+      goal: t.intake.goal ? structuredClone(t.intake.goal) : null,
+      criteria: structuredClone(t.intake.acceptanceCriteria),
+      evidencePlan: planningContext(t).evidencePlan ?? undefined,
+      ...(t.guidanceConstraints.length ? { ownerConstraints: semanticConstraintPrompts(constraintChecks(t.guidanceConstraints, modeOf(t))) } : {}),
+    };
+  }
+
+  /**
+   * Durable owner constraints verified against TRUSTED evidence (mechanical) and the GPT review (semantic).
+   * The verdicts join the acceptance record: a violated or unsupported constraint blocks acceptance.
+   */
+  function withConstraintVerdicts(t: TaskRecord, record: TrustedRunRecord, result: WorkerResult | null): TrustedRunRecord {
+    if (t.guidanceConstraints.length === 0) return record;
+    const checks = constraintChecks(t.guidanceConstraints, modeOf(t));
+    if (checks.length === 0) return record;
+    const verdicts = verifyConstraints({
+      checks,
+      changedPaths: record.changedPaths,
+      previousChangedPaths: t.record?.changedPaths ?? [],
+      workerCommands: (result?.testsRun ?? []).map((r) => r.command),
+      citedFiles: record.citedFiles ?? [],
+      semantic: new Map((record.constraintVerdicts ?? []).map((v) => [v.id, { status: v.status, evidence: v.evidence }])),
+    });
+    for (const v of verdicts.filter((x) => x.status !== "satisfied")) audit(t, "owner_constraint_unmet", { reason: `${v.checkId} ${v.kind} ${v.status}: ${v.evidence}` });
+    return { ...record, ownerConstraints: verdicts, acceptance: [...record.acceptance, ...constraintAcceptance(verdicts, t.runId ?? "run")] };
+  }
+
+  const MAX_OBJECTIVE = 4000;
+  const HANDOFF_MARK = "\n\nWORKER HANDOFF (";
+
+  /** Same contract with the Manager's structured handoff appended (replacing an earlier one). */
+  function handoffContract(t: TaskRecord, contract: WorkerTaskContract, from: WorkerKind, to: WorkerKind, reason: HandoffReason): WorkerTaskContract {
+    const cut = contract.objective.indexOf(HANDOFF_MARK);
+    const base = cut === -1 ? contract.objective : contract.objective.slice(0, cut);
+    const summary = buildHandoffSummary({
+      taskId: t.intake.taskId,
+      lineageId: t.lineageId,
+      branch: t.plan?.branch ?? contract.branch,
+      checkpointHeadSha: contract.expectedHeadSha ?? "",
+      from,
+      to,
+      reason,
+      objective: t.intake.objective,
+      acceptanceCriteria: t.intake.acceptanceCriteria.map((c) => c.text),
+      changedPaths: t.record?.changedPaths ?? [],
+      validations: t.record?.validations ?? [],
+      acceptance: t.record?.acceptance ?? [],
+      latestDiagnosis: t.repairCycles.at(-1)?.diagnosis ?? null,
+      lastRun: t.lastResult ? { runId: t.runId, status: t.lastResult.status, errorType: t.lastResult.errorType, claim: t.lastResult.status === "success" ? t.lastResult.summary || null : null } : null,
+      allowedScope: contract.allowedScope,
+      round: t.humanRound,
+      repairAttempt: t.repair.attempt,
+      cyclesRecorded: t.repairCycles.length,
+      previousHandoffs: t.handoffs.length,
+      now: ports.now(),
+    });
+    t.handoffs.push(summary);
+    if (t.handoffs.length > 20) t.handoffs.shift();
+    const room = MAX_OBJECTIVE - base.length - 2;
+    const block = renderHandoffBlock(summary);
+    const text = room >= 200 ? (block.length > room ? `${block.slice(0, room - 1)}…` : block) : "";
+    return { ...contract, objective: text ? `${base}\n\n${text}` : base };
+  }
+
+  async function onWorkerQuota(t: TaskRecord, result: WorkerResult) {
+    const exhausted = t.worker as WorkerKind;
+    const resetAt = result.availability?.resetAt ?? null;
+    availability[exhausted] = { status: "quota_exhausted", resetAt };
+    escalate(t, `infrastructure_failure:quota_exhausted:${exhausted}`, "wait");
+    audit(t, "worker_quota_exhausted", { reason: `${exhausted} usage quota exhausted; reset ${resetAt ?? "time cannot be determined"}; no repair cycle consumed` });
+    if (!t.lease || !t.plan || !t.contract || !t.record)
+      return block(t, "availability continuation state incomplete", { terminal: true, trigger: "missing_trusted_evidence" });
+    const head = await ports.workspace.head(t.lease);
+    const expected = t.contract.expectedHeadSha ?? null;
+    if (!head || head.branch !== t.plan.branch || expected === null || head.headSha !== expected)
+      return block(t, "workspace is not at the checkpoint head", { terminal: true, trigger: "unsafe_branch_state" });
+    const contract: WorkerTaskContract = {
+      ...t.contract,
+      runId: `${t.intake.taskId}-run-${t.runCount + 1}`,
+      // Progress of the interrupted run (Git-observed, in scope) is kept: the task continues, never restarts.
+      allowedDirtyPaths: Array.from(new Set([...(t.contract.allowedDirtyPaths ?? []), ...t.record.changedPaths])).sort(),
+    };
+    return continueAfterAvailability(t, contract, t.repair.attempt, exhausted);
+  }
+
+  const WORKER_CONTINUATION = "worker_continuation";
+
+  async function continueAfterAvailability(t: TaskRecord, contract: WorkerTaskContract, attempt: number, exhausted: WorkerKind, explicit = false, cause: AvailabilityCause = "quota") {
+    const d: ExecutionDecision = decideExecutionWorker({ area: t.workArea, current: t.worker, temporary: t.temporaryCover, availability });
+    if (d.action === "pause") return pauseForAvailability(t, contract, attempt, d, exhausted, cause);
+    // Automatic re-probes are bounded; past the budget only an explicit trusted availability signal (or the
+    // owner) moves the task. It never fails the task: it stays paused with its progress.
+    if (!explicit && t.availabilityContinuations >= policy.maxAvailabilityContinuations)
+      return pauseForAvailability(t, contract, attempt, { action: "pause", waitingFor: [exhausted], resetAt: null, reason: "automatic availability re-probes exhausted; waiting for a confirmed availability signal" }, exhausted, cause);
+    let next = contract;
+    if (d.worker !== t.worker && t.worker) {
+      const reason: HandoffReason = d.worker === "codex" ? "claude_quota_exhausted" : "claude_available_again";
+      next = handoffContract(t, contract, t.worker, d.worker, reason);
+      audit(t, d.worker === "claude" ? "worker_handback" : "worker_handoff", { reason: d.reason, fallbackFrom: t.worker });
+      t.pendingHandback = d.worker === "claude";
+      t.worker = d.worker;
+    }
+    t.temporaryCover = d.temporary;
+    if (t.risk === "red") {
+      // The continuation is a new exact contract: it needs its own fresh pre-execution approval.
+      const resolved = await ports.approvals.resolve(redRepairCheck(t, next));
+      t.approval.pre_execution = resolved.state;
+      if (resolved.state === "rejected") return block(t, "pre_execution approval rejected", { terminal: true, trigger: "approval_rejected" });
+      if (resolved.state !== "approved" || !resolved.approval) {
+        t.trustedApproval = null;
+        t.availabilityPause = null;
+        t.pendingRetry = { contract: structuredClone(next), errorType: WORKER_CONTINUATION };
+        t.approval.pre_execution = "pending";
+        return awaitApproval(t, "pre_execution", "approval_required");
+      }
+      t.trustedApproval = resolved.approval;
+    }
+    return launchContinuation(t, next);
+  }
+
+  async function launchContinuation(t: TaskRecord, contract: WorkerTaskContract) {
+    if (!t.lease || !t.plan) return block(t, "availability continuation state incomplete", { terminal: true, trigger: "missing_trusted_evidence" });
+    const head = await ports.workspace.head(t.lease);
+    if (!head || head.branch !== t.plan.branch || head.headSha !== contract.expectedHeadSha)
+      return block(t, "workspace is not at the checkpoint head", { terminal: true, trigger: "unsafe_branch_state" });
+    t.pendingRetry = null;
+    t.pendingHandback = false;
+    t.availabilityPause = null;
+    t.availabilityContinuations++;
+    t.status = t.repair.attempt > 0 ? "repair_requested" : "running";
+    t.queueReason = null;
+    audit(t, "worker_availability_resumed", { reason: `same task continues on ${t.worker}${t.temporaryCover ? " (temporary cover)" : ""}; continuation ${t.availabilityContinuations}` });
+    startRun(t, contract, t.repair.attempt);
+  }
+
+  function pauseForAvailability(t: TaskRecord, contract: WorkerTaskContract, attempt: number, d: Extract<ExecutionDecision, { action: "pause" }>, exhausted: WorkerKind, cause: AvailabilityCause = "quota") {
+    t.availabilityPause = { waitingFor: [...d.waitingFor], resetAt: d.resetAt, since: ports.now(), exhausted, contract: structuredClone(contract), attempt, cause };
+    t.status = cause === "quota" ? "waiting_worker_quota" : "waiting_worker_availability";
+    t.queueReason = `${d.reason}; ${d.resetAt ? `trusted reset time ${d.resetAt}` : "exact reset time cannot be determined"}. Same task, branch and checkpoint preserved; no repair cycle consumed.`.slice(0, 240);
+    escalate(t, "worker_quota_exhausted", "wait");
+    // The lease is kept: the uncommitted progress must stay intact for the resume.
+    audit(t, "worker_availability_wait", { reason: t.queueReason });
+  }
+
+  async function resumePaused(t: TaskRecord, explicit = false) {
+    const p = t.availabilityPause;
+    if (!p || (t.status !== "waiting_worker_quota" && t.status !== "waiting_worker_availability") || t.workerRunning || isTerminalStatus(t.status)) return;
+    const d = decideExecutionWorker({ area: t.workArea, current: t.worker, temporary: t.temporaryCover, availability });
+    if (d.action === "pause") {
+      p.waitingFor = [...d.waitingFor];
+      p.resetAt = d.resetAt;
+      return;
+    }
+    return continueAfterAvailability(t, structuredClone(p.contract), p.attempt, p.exhausted, explicit, p.cause ?? "quota");
+  }
+
+  async function onAvailabilityChanged(worker: WorkerKind, status: WorkerAvailabilityState["status"], resetAt: string | null) {
+    if (worker !== "claude" && worker !== "codex") return;
+    if (status !== "available" && status !== "quota_exhausted" && status !== "unavailable") return;
+    availability[worker] = { status, resetAt: status === "available" ? null : resetAt };
+    for (const t of Array.from(recs.values()).sort((a, b) => a.seq - b.seq)) {
+      // A red covered task waiting for approval of a CODEX contract: the Manager re-targets the pending
+      // contract to Claude (safe boundary, nothing is running), which needs its own fresh approval.
+      if (worker === "claude" && status === "available" && t.status === "needs_human_approval" && t.approvalPhase === "pre_execution" && (t.pendingRepair || t.pendingRetry)) {
+        if (t.pendingRepair) t.pendingRepair = { ...t.pendingRepair, contract: handbackAtBoundary(t, t.pendingRepair.contract) };
+        else if (t.pendingRetry) t.pendingRetry = { ...t.pendingRetry, contract: handbackAtBoundary(t, t.pendingRetry.contract) };
+        if (t.pendingHandback) {
+          t.trustedApproval = null;
+          t.approval.pre_execution = "pending";
+          t.approvalRequestedAt = ports.now();
+        }
+        continue;
+      }
+      await resumePaused(t, status === "available");
+    }
+  }
+
+  /** Paused tasks whose trusted reset time passed are retried on the same contract (a renewed quota error pauses again). */
+  async function onAvailabilityCheck(probeAfterMs: number | null) {
+    const now = Date.parse(ports.now());
+    const probe = probeAfterMs !== null && Number.isFinite(probeAfterMs) && probeAfterMs >= 60_000 ? probeAfterMs : null;
+    for (const k of ["claude", "codex"] as const) {
+      const a = availability[k];
+      if (a.status !== "available" && a.resetAt && Date.parse(a.resetAt) <= now) availability[k] = { status: "available", resetAt: null };
+    }
+    for (const t of Array.from(recs.values()).sort((a, b) => a.seq - b.seq)) {
+      const p = t.availabilityPause;
+      const elapsed = p && p.resetAt && Date.parse(p.resetAt) <= now;
+      const probeDue = p && !p.resetAt && probe !== null && Date.parse(p.since) + probe <= now;
+      if (p && (elapsed || probeDue))
+        for (const k of p.waitingFor)
+          if (availability[k].status !== "available" && (availability[k].resetAt === null || Date.parse(availability[k].resetAt!) <= now)) availability[k] = { status: "available", resetAt: null };
+      await resumePaused(t);
+    }
+  }
+
+  // ------------------------------------------- GPT Manager repair planning
+
+  /** Red-aware handback at a safe boundary: returns the (possibly) handed-back contract. */
+  function handbackAtBoundary(t: TaskRecord, contract: WorkerTaskContract): WorkerTaskContract {
+    if (!(t.temporaryCover && t.workArea === "programming" && t.worker === "codex" && availability.claude.status === "available")) return contract;
+    const next = handoffContract(t, contract, "codex", "claude", "claude_available_again");
+    t.worker = "claude";
+    t.temporaryCover = false;
+    t.pendingHandback = true;
+    audit(t, "worker_handback", { reason: `Claude available again; programming task handed back at a safe boundary${t.risk === "red" ? " (fresh pre-execution approval of the exact handback contract required)" : ""}`, fallbackFrom: "codex" });
+    return next;
+  }
+
+  /** Non-quota availability: pause the SAME task (progress kept); never a goal failure, never a repair cycle. */
+  async function onWorkerUnavailable(t: TaskRecord, cause: Exclude<AvailabilityCause, "quota">) {
+    const w = t.worker as WorkerKind;
+    availability[w] = { status: "unavailable", resetAt: null, cause };
+    escalate(t, `infrastructure_failure:${cause}:${w}`, "wait");
+    audit(t, "worker_availability_wait", { reason: `${w} unavailable (${cause}); task paused with its progress; no repair cycle consumed` });
+    if (!t.lease || !t.plan || !t.contract || !t.record)
+      return block(t, "availability continuation state incomplete", { terminal: true, trigger: "missing_trusted_evidence" });
+    const head = await ports.workspace.head(t.lease);
+    const expected = t.contract.expectedHeadSha ?? null;
+    if (!head || head.branch !== t.plan.branch || expected === null || head.headSha !== expected)
+      return block(t, "workspace is not at the checkpoint head", { terminal: true, trigger: "unsafe_branch_state" });
+    const contract: WorkerTaskContract = {
+      ...t.contract,
+      runId: `${t.intake.taskId}-run-${t.runCount + 1}`,
+      allowedDirtyPaths: Array.from(new Set([...(t.contract.allowedDirtyPaths ?? []), ...t.record.changedPaths])).sort(),
+    };
+    return continueAfterAvailability(t, contract, t.repair.attempt, w, false, cause);
+  }
+
+  /**
+   * GPT Manager owns the repair plan. The deterministic diagnosis supplies the trusted failure facts;
+   * the Manager returns a structured plan that the policy gate validates (scope, mutability, authority,
+   * owner constraints, stagnation). A missing, failing or refused Manager is infrastructure: the task waits
+   * (no repair cycle consumed) and review_retry re-plans the SAME repair.
+   */
+  async function planRepair(t: TaskRecord, req: RepairRequest | null, phase: "pre_push" | "post_qa") {
+    if (!req) return startRepair(t, null);
+    if (!ports.manager?.diagnose) {
+      // Production never lets the deterministic diagnosis stand in for the GPT Manager.
+      if (policy.managerMode === "gpt_required") return awaitManagerDiagnosis(t, req, phase, "GPT Manager is not configured");
+      t.pendingDiagnosis = null;
+      return startRepair(t, req);
+    }
+    const d = req.diagnosis;
+    const last = t.repairCycles.filter((c) => c.diagnosis.taskId === t.intake.taskId).at(-1) ?? null;
+    // Stagnation means a repair actually ran and left the failure unchanged (a decision anchor is not a repair).
+    const prevRound = d.cycle === 1 && d.round > 1 ? d.round - 1 : d.round;
+    const stagnated = d.previous?.trend === "stagnated" && t.repairCycles.some((c) => c.round === prevRound && c.cycle === d.previous!.cycle && c.repairRunId !== null);
+    const constraints = t.guidanceConstraints;
+    let raw: unknown;
+    t.managerCalls.repairDiagnosis++;
+    try {
+      raw = await ports.manager.diagnose({
+        taskId: t.intake.taskId,
+        mode: modeOf(t),
+        intent: t.intake.goal?.intent ?? null,
+        originalRequest: t.intake.goal?.originalRequest ?? t.intake.objective,
+        interpretedObjective: t.intake.goal?.interpretedObjective ?? t.intake.objective,
+        criteria: t.intake.acceptanceCriteria.map((c) => ({ id: c.id, text: c.text, kind: c.kind ?? "technical" })),
+        allowedScope: req.allowedScope,
+        protectedAreas: d.protectedAreas,
+        risk: t.risk,
+        requiredValidations: t.intake.requiredValidations,
+        validations: (t.record?.validations ?? []).map((v) => ({ name: v.name, status: v.status })),
+        acceptance: (t.record?.acceptance ?? []).map((a) => ({ criterionId: a.criterionId, status: a.status, summary: a.summary ?? null })),
+        worker: { kind: t.worker ?? "none", status: t.lastResult?.status ?? "none", errorType: t.lastResult?.errorType ?? null, claim: t.lastResult?.summary || null },
+        changedPaths: t.record?.changedPaths ?? [],
+        headSha: req.expectedHeadSha,
+        sourceTargets: Array.from(new Set([...(planningContext(t).evidencePlan?.targets ?? []), ...constraints.flatMap((c) => c.evidenceTargets)])).slice(0, 8),
+        failure: { failureCode: d.failureCode, failingCheck: d.failingCheck, expected: d.expected, actual: d.actual, fingerprint: d.fingerprint },
+        round: d.round,
+        cycle: d.cycle,
+        maxCycles: t.maxRepairAttempts,
+        previousAttempts: t.repairCycles.map((c) => ({ round: c.round, cycle: c.cycle, strategy: c.diagnosis.managerPlan?.repairStrategy ?? null, fingerprint: c.diagnosis.fingerprint, outcome: repairOutcomeSummary(c) })),
+        stagnated,
+        ownerConstraints: constraints.map((c) => ({ id: c.decisionId, summary: constraintSummary(c) })),
+        evidenceRequirements: d.evidenceRequests ?? [],
+      });
+    } catch {
+      return awaitManagerDiagnosis(t, req, phase, "GPT Manager diagnosis unavailable");
+    }
+    const gate = validateManagerRepairPlan(raw, {
+      mode: modeOf(t),
+      allowedScope: req.allowedScope,
+      requiredValidations: t.intake.requiredValidations,
+      policyProtectedAreas: d.protectedAreas.length ? d.protectedAreas : [...PROTECTED_AREAS],
+      constraints,
+      stagnated,
+      previousStrategy: last?.diagnosis.managerPlan?.repairStrategy ?? null,
+    });
+    if (!gate.ok) {
+      audit(t, "manager_diagnosis_refused", { reason: `${gate.code}: ${gate.reason}` });
+      return awaitManagerDiagnosis(t, req, phase, `GPT Manager diagnosis refused by policy (${gate.code})`);
+    }
+    const plan = gate.value;
+    t.pendingDiagnosis = null;
+    t.reviewRetries = 0;
+    audit(t, "manager_diagnosis_accepted", { reason: `strategy ${plan.strategyChanged ? "changed" : "kept"}; validations [${plan.validationPlan.join(",")}]; owner decision ${plan.ownerDecision ? "requested" : "not needed"}` });
+    if (t.status === "waiting_infrastructure") t.status = t.repair.attempt > 0 ? "repair_requested" : "running";
+    if (plan.ownerDecision) {
+      const evidence = evidenceFor(t, phase);
+      return escalateHumanDecision(t, validateEvidence(evidence), evidence, phase, plan, { ...d, managerPlan: plan });
+    }
+    return startRepair(t, {
+      ...req,
+      rerunValidations: [...plan.validationPlan],
+      diagnosis: { ...d, managerPlan: plan, protectedAreas: plan.protectedAreas },
+    });
+  }
+
+  function awaitManagerDiagnosis(t: TaskRecord, req: RepairRequest, phase: "pre_push" | "post_qa", why: string) {
+    t.pendingDiagnosis = { request: structuredClone(req), phase };
+    t.status = "waiting_infrastructure";
+    const exhausted = t.reviewRetries >= policy.maxReviewRetries;
+    t.queueReason = `${why} (Manager infrastructure)${exhausted ? "; retries used up, waiting for the operator" : `; retry ${t.reviewRetries}/${policy.maxReviewRetries}`}. No repair cycle consumed.`.slice(0, 240);
+    escalate(t, "manager_diagnosis_unavailable", "wait");
+    audit(t, "goal_review_unavailable", { reason: t.queueReason });
+  }
+
+  // ------------------------------------------------- combined group review
+
+  function groupParts(groupId: string): TaskRecord[] {
+    return Array.from(recs.values())
+      .filter((r) => r.intake.goal?.group?.id === groupId)
+      .sort((a, b) => a.seq - b.seq);
+  }
+
+  function groupState(groupId: string): GroupReview {
+    return groups.get(groupId) ?? { groupId, status: "waiting_parts", verdict: null, attempts: 0, round: 1, cycle: 0, cycles: [], constraints: [] };
+  }
+
+  /** Latest task (original part or its newest cross-part repair) of one area. */
+  function latestMember(groupId: string, area: "programming" | "visual"): TaskRecord | null {
+    return groupParts(groupId).filter((t) => (t.intake.goal?.workArea ?? t.workArea) === area).at(-1) ?? null;
+  }
+
+  /** Trusted state of a lineage branch (for a cross-part repair to continue it). */
+  function lineageBranchState(t: TaskRecord) {
+    const prior = Array.from(recs.values())
+      .filter((r) => r !== t && r.lineageId === t.lineageId && r.plan && r.receipt && r.pr)
+      .sort((a, b) => a.seq - b.seq)
+      .at(-1);
+    if (!prior || !prior.plan || !prior.receipt || !prior.pr) return null;
+    const changed = Array.from(new Set(Array.from(recs.values()).filter((r) => r.lineageId === t.lineageId).flatMap((r) => r.record?.changedPaths ?? []))).sort();
+    return { name: prior.plan.branch, headSha: prior.receipt.headSha, baseSha: prior.plan.baseSha, lineageId: t.lineageId, prNumber: prior.pr.number, prState: "open" as const, changedPaths: changed, workerRunning: false };
+  }
+
+  const findingsKey = (v: { conflicts: readonly string[]; missingPieces: readonly string[] } | null) => (v ? [...v.conflicts, ...v.missingPieces].map((x) => x.toLowerCase().trim()).sort().join("|") : "");
+
+  function finalizeGroup(groupId: string) {
+    for (const t of groupParts(groupId)) {
+      if (t.status !== "waiting_group") continue;
+      t.status = "accepted";
+      t.queueReason = null;
+      audit(t, "manager_accepted", { reason: "combined review accepted the whole request" });
+      post({ type: "dependency_completed", taskId: t.intake.taskId });
+    }
+  }
+
+  /**
+   * Final GPT Manager review of a decomposed request. Accepted: every part is accepted. Not accepted:
+   * the GPT Manager diagnoses the cross-part failure and the necessary part(s) are repaired on their own
+   * lineage branches (same request/group), then reviewed again — two cycles per round, then the owner.
+   */
+  async function onCombinedReview(groupId: string) {
+    const members = groupParts(groupId);
+    const group = members[0]?.intake.goal?.group;
+    if (!group) return;
+    const g = groupState(groupId);
+    if (g.status === "accepted" || g.status === "reviewing" || g.status === "needs_human_decision") return;
+    const latest = group.parts.map((p) => latestMember(groupId, p.area));
+    if (!latest.every((t) => t && t.status === "waiting_group")) {
+      if (g.status !== "repairing") groups.set(groupId, { ...g, status: "waiting_parts" });
+      return;
+    }
+    // A failed review whose diagnosis was unavailable retries the diagnosis, not the review.
+    if (g.status === "diagnosis_unavailable" && g.verdict?.verdict === "not_accepted") return planCombinedRepair(groupId);
+    if (!ports.manager?.reviewCombined) {
+      groups.set(groupId, { ...g, status: "review_unavailable" });
+      return;
+    }
+    groups.set(groupId, { ...g, status: "reviewing", attempts: g.attempts + 1 });
+    const lead = members[0];
+    lead.managerCalls.combinedReview++;
+    const parts = latest as TaskRecord[];
+    const criteria = Array.from(new Set(members.flatMap((t) => t.intake.acceptanceCriteria.filter((c) => c.kind === "goal").map((c) => c.text))));
+    let raw: unknown;
+    try {
+      raw = await ports.manager.reviewCombined({
+        groupId,
+        originalRequest: lead.intake.goal?.originalRequest ?? lead.intake.objective,
+        interpretedObjective: lead.intake.goal?.interpretedObjective ?? lead.intake.title,
+        criteria,
+        ownerLanguage: /[\u3400-\u9fff]/.test(lead.intake.goal?.originalRequest ?? "") ? "zh" : "en",
+        parts: parts.map((t) => ({
+          taskId: t.intake.taskId,
+          area: t.intake.goal?.workArea ?? t.workArea,
+          worker: t.worker ?? "none",
+          subGoal: group.parts.find((p) => p.area === (t.intake.goal?.workArea ?? t.workArea))?.objective ?? t.intake.objective,
+          changedPaths: Array.from(new Set(members.filter((m) => m.lineageId === t.lineageId).flatMap((m) => m.record?.changedPaths ?? []))).sort(),
+          validations: (t.record?.validations ?? []).map((v) => ({ name: v.name, status: v.status })),
+          acceptance: (t.record?.acceptance ?? []).map((a) => ({ criterionId: a.criterionId, status: a.status })),
+          workerClaim: t.lastResult?.summary || null,
+          prNumber: t.pr?.number ?? null,
+          ...(t.plan ? { baseSha: t.plan.baseSha } : {}),
+          ...(t.receipt ? { headSha: t.receipt.headSha } : {}),
+        })),
+      });
+    } catch {
+      groups.set(groupId, { ...groupState(groupId), status: "review_unavailable" });
+      for (const t of members) audit(t, "goal_review_unavailable", { reason: "combined review unavailable (Manager infrastructure); retried later" });
+      return;
+    }
+    const gate = validateCombinedReview(raw);
+    if (!gate.ok) {
+      groups.set(groupId, { ...groupState(groupId), status: "review_unavailable" });
+      for (const t of members) audit(t, "manager_diagnosis_refused", { reason: `combined review refused (${gate.code})` });
+      return;
+    }
+    const verdict = gate.value;
+    const cur = groupState(groupId);
+    const cycles = (cur.cycles ?? []).map((c, i, all) => (i === all.length - 1 && c.outcome === null ? { ...c, outcome: verdict.verdict === "accepted" ? "combined review accepted" : `combined review not accepted (${verdict.conflicts.length} conflict(s), ${verdict.missingPieces.length} missing)` } : c));
+    groups.set(groupId, { ...cur, status: verdict.verdict, verdict, cycles });
+    for (const t of members)
+      audit(t, verdict.verdict === "accepted" ? "combined_review_accepted" : "combined_review_rejected", {
+        reason: `integrates=${verdict.integrates} intent=${verdict.satisfiesOriginalIntent} conflicts=${verdict.conflicts.length} missing=${verdict.missingPieces.length}`,
+      });
+    if (verdict.verdict === "accepted") return finalizeGroup(groupId);
+    return planCombinedRepair(groupId);
+  }
+
+  /** GPT cross-part diagnosis -> repair tasks for the part(s) that must change (same lineage branches). */
+  async function planCombinedRepair(groupId: string) {
+    const members = groupParts(groupId);
+    const lead = members[0];
+    const group = lead?.intake.goal?.group;
+    if (!lead || !group) return;
+    const g = groupState(groupId);
+    const round = g.round ?? 1;
+    const cycle = g.cycle ?? 0;
+    const roundCycles = (g.cycles ?? []).filter((c) => c.round === round);
+    if (cycle >= Math.max(1, policy.maxRepairAttempts)) return escalateGroupDecision(groupId, null);
+    if (!ports.manager?.diagnoseCombined) {
+      groups.set(groupId, { ...g, status: "diagnosis_unavailable" });
+      audit(lead, "goal_review_unavailable", { reason: "cross-part repair diagnosis needs the GPT Manager (not configured); no repair cycle consumed" });
+      return;
+    }
+    const last = roundCycles.at(-1) ?? null;
+    const stagnated = !!last && last.findingsKey === findingsKey(g.verdict);
+    const parts = group.parts.map((p) => latestMember(groupId, p.area)).filter((t): t is TaskRecord => t !== null);
+    const constraints = g.constraints ?? [];
+    lead.managerCalls.combinedDiagnosis++;
+    let raw: unknown;
+    try {
+      raw = await ports.manager.diagnoseCombined({
+        groupId,
+        originalRequest: lead.intake.goal?.originalRequest ?? lead.intake.objective,
+        interpretedObjective: lead.intake.goal?.interpretedObjective ?? lead.intake.title,
+        conflicts: g.verdict?.conflicts ?? [],
+        missingPieces: g.verdict?.missingPieces ?? [],
+        parts: parts.map((t) => ({
+          area: t.intake.goal?.workArea ?? t.workArea,
+          worker: t.worker ?? "none",
+          subGoal: group.parts.find((p) => p.area === (t.intake.goal?.workArea ?? t.workArea))?.objective ?? t.intake.objective,
+          changedPaths: Array.from(new Set(members.filter((m) => m.lineageId === t.lineageId).flatMap((m) => m.record?.changedPaths ?? []))).sort(),
+          allowedScope: t.intake.allowedScope ?? t.intake.expectedPaths,
+        })),
+        round,
+        cycle: cycle + 1,
+        maxCycles: policy.maxRepairAttempts,
+        previousAttempts: (g.cycles ?? []).map((c) => ({ round: c.round, cycle: c.cycle, strategy: c.plan.repairStrategy, targets: c.plan.targets.map((x) => x.area), outcome: c.outcome ?? "pending" })),
+        stagnated,
+        ownerConstraints: constraints.map((c) => ({ id: c.decisionId, summary: constraintSummary(c) })),
+      });
+    } catch {
+      groups.set(groupId, { ...groupState(groupId), status: "diagnosis_unavailable" });
+      audit(lead, "goal_review_unavailable", { reason: "cross-part repair diagnosis unavailable (Manager infrastructure); no repair cycle consumed" });
+      return;
+    }
+    const gate = validateCombinedRepairPlan(raw, {
+      parts: parts.map((t) => ({ area: t.intake.goal?.workArea ?? t.workArea, allowedScope: t.intake.allowedScope ?? t.intake.expectedPaths })),
+      constraints,
+      stagnated,
+      previousStrategy: last?.plan.repairStrategy ?? null,
+    });
+    if (!gate.ok) {
+      groups.set(groupId, { ...groupState(groupId), status: "diagnosis_unavailable" });
+      audit(lead, "manager_diagnosis_refused", { reason: `cross-part repair plan refused (${gate.code}): ${gate.reason}` });
+      return;
+    }
+    const plan = gate.value;
+    if (plan.ownerDecision) return escalateGroupDecision(groupId, plan);
+    const next = cycle + 1;
+    const created: string[] = [];
+    for (const target of plan.targets) {
+      const part = latestMember(groupId, target.area);
+      if (!part) continue;
+      const id = createGroupRepairTask(part, target, plan, round, next, created.at(-1) ?? null, constraints);
+      if (id) created.push(id);
+    }
+    if (created.length === 0) {
+      groups.set(groupId, { ...groupState(groupId), status: "diagnosis_unavailable" });
+      return;
+    }
+    const cur = groupState(groupId);
+    groups.set(groupId, { ...cur, status: "repairing", cycle: next, cycles: [...(cur.cycles ?? []), { round, cycle: next, plan, repairTaskIds: created, outcome: null, findingsKey: findingsKey(cur.verdict) }] });
+    audit(lead, "repair_requested", { attempt: next, reason: `cross-part repair round ${round} cycle ${next}: ${plan.targets.map((x) => x.area).join(" + ")}` });
+  }
+
+  /** Repair task for one part: same request/group, same lineage branch and PR; only the necessary work. */
+  function createGroupRepairTask(part: TaskRecord, target: { area: "programming" | "visual"; repairObjective: string; repairInstructions: string[]; touchesPaths: string[] }, plan: { rootCause: string }, round: number, cycle: number, after: string | null, constraints: readonly GuidanceConstraint[]): string | null {
+    const lineage = part.intake.lineage ?? { rootTaskId: part.intake.taskId, title: part.intake.title };
+    const taskId = `${lineage.rootTaskId}-g${round}c${cycle}`.slice(0, 64);
+    if (recs.has(taskId) || !isValidBranchTaskId(taskId)) return null;
+    const root = recs.get(lineage.rootTaskId) ?? part;
+    const repairBlock = [
+      `CROSS-PART REPAIR (combined review, round ${round}, cycle ${cycle}) of the ${target.area} part of a split request. Continue the existing branch and PR; do not redo correct work; do not change the other part.`,
+      `Root cause (GPT Manager): ${plan.rootCause}`,
+      `Objective: ${target.repairObjective}`,
+      `Instructions: ${target.repairInstructions.map((x, i) => `${i + 1}) ${x}`).join(" ")}`,
+      ...(target.touchesPaths.length ? [`May change: ${target.touchesPaths.join(", ")}`] : []),
+    ].join("\n");
+    const room = 4000 - root.intake.objective.length - 2;
+    const objective = room > 200 ? `${root.intake.objective}\n\n${repairBlock.slice(0, room)}` : `${repairBlock}`.slice(0, 4000);
+    const intakeTask: TaskIntake = {
+      ...structuredClone(part.intake),
+      taskId,
+      lineage,
+      objective,
+      classification: { ...structuredClone(part.intake.classification), taskId },
+      dependsOn: after ? [after] : [],
+      groupRepairOf: part.intake.taskId,
+    };
+    intake(intakeTask);
+    const t = recs.get(taskId);
+    if (!t) return null;
+    t.guidanceConstraints = structuredClone([...constraints]);
+    return taskId;
+  }
+
+  /** Two cross-part cycles did not converge (or the Manager needs a product decision): one owner decision for the group. */
+  function escalateGroupDecision(groupId: string, plan: CombinedRepairPlan | null) {
+    const members = groupParts(groupId);
+    const lead = members[0];
+    if (!lead) return;
+    const g = groupState(groupId);
+    const round = g.round ?? 1;
+    const key = findingsKey(g.verdict) || "combined";
+    const request: HumanDecisionRequest = {
+      kind: "human_decision_request",
+      // Group decisions use a reserved round range (101+) so they never collide with the lead task's own escalations.
+      escalationId: `${lead.intake.taskId}.hd.${100 + round}`,
+      taskId: lead.intake.taskId,
+      lineageId: lead.lineageId,
+      branch: lead.plan?.branch ?? "",
+      expectedHeadSha: lead.receipt?.headSha ?? lead.plan?.baseSha ?? "",
+      round,
+      cyclesCompleted: g.cycle ?? 0,
+      fingerprint: `combined:${key}`.slice(0, 200),
+    };
+    const cycles = (g.cycles ?? []).filter((c) => c.round === round);
+    const lastPlan = plan ?? cycles.at(-1)?.plan ?? null;
+    const report: HumanEscalationReport = {
+      kind: "human_escalation_report",
+      state: "needs_human_decision",
+      taskId: lead.intake.taskId,
+      round,
+      decisionRequest: request,
+      cyclesCompleted: cycles.length,
+      originalFailure: null,
+      diagnoses: [],
+      repairOutcomes: cycles.map((c) => ({ cycle: c.cycle, repairRunId: null, workerResult: `repaired ${c.plan.targets.map((x) => x.area).join("+")}`, revalidation: c.outcome ?? "not reviewed" })),
+      currentBlocker: {
+        failureCode: "combined_review_failed",
+        failingCheck: "combined:review",
+        expected: "the programming and visual parts together satisfy the original request",
+        actual: [...(g.verdict?.conflicts ?? []), ...(g.verdict?.missingPieces ?? [])].join("; ").slice(0, 300) || "combined review not accepted",
+        fingerprint: request.fingerprint,
+      },
+      fingerprintTrend: cycles.length > 1 && cycles.every((c) => c.findingsKey === key) ? "stagnated" : "changed",
+      currentComparison: null,
+      managerRecommendation: (lastPlan?.rootCause ?? "The two parts still do not fit together.").slice(0, 320),
+      humanDecisionRequired: "Give guidance for the combined request (which side is right, what matters most), or cancel. Guidance never approves commit, publish, merge or deploy.",
+      groupDecision: true,
+      ...(plan?.ownerDecision ? { ownerDecision: structuredClone(plan.ownerDecision) } : {}),
+    };
+    lead.humanEscalation = report;
+    lead.humanDecisionRequest = request;
+    lead.escalationHistory.push(structuredClone(report));
+    lead.groupDecision = true;
+    lead.status = "needs_human_decision";
+    lead.blockingReason = `needs_human_decision: combined review of the split request not accepted after ${cycles.length} cross-part repair cycle(s)`;
+    groups.set(groupId, { ...g, status: "needs_human_decision" });
+    escalate(lead, "repeated_repair_failure", "request_human_decision");
+    audit(lead, "human_decision_requested", { reason: `${request.escalationId}: ${lead.blockingReason}` });
+  }
+
+  /** Owner guidance on a group decision: durable group constraint, new round of cross-part repair. */
+  async function onGroupDecision(t: TaskRecord, d: { decisionId: string; escalationId: string; guidance: string }) {
+    const groupId = t.intake.goal?.group?.id;
+    if (!groupId) return logHumanDecision(t, "rejected", "group decision without a group", d);
+    const g = groupState(groupId);
+    const round = g.round ?? 1;
+    if (round - 1 >= policy.maxHumanResumes) return logHumanDecision(t, "rejected", "human resume budget exhausted; cancel the task", d);
+    const constraint = await interpretOwnerGuidance(t, d, round + 1, g.constraints ?? []);
+    if (!constraint) return;
+    t.consumedHumanDecisionIds.push(d.decisionId);
+    logHumanDecision(t, "accepted", `resumed the combined repair of the split request as round ${round + 1}`, d);
+    t.guidanceConstraints.push(constraint);
+    audit(t, "human_guidance_constraint_recorded", { reason: `group decision ${d.decisionId} (${constraint.source ?? "deterministic"})` });
+    t.status = "waiting_group";
+    t.groupDecision = false;
+    t.humanDecisionRequest = null;
+    t.humanEscalation = null;
+    t.blockingReason = null;
+    groups.set(groupId, { ...g, status: "not_accepted", round: round + 1, cycle: 0, constraints: [...(g.constraints ?? []), constraint] });
+    return planCombinedRepair(groupId);
   }
 
   // -------------------------------------------------------- Manager step
@@ -1144,7 +1908,7 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       result: t.lastResult as WorkerResult,
       record: t.record as TrustedRunRecord,
       allowedScope: t.intake.allowedScope ?? t.intake.expectedPaths,
-      acceptanceCriteriaIds: t.intake.acceptanceCriteria.map((c) => c.id),
+      acceptanceCriteriaIds: [...t.intake.acceptanceCriteria.map((c) => c.id), ...(t.record?.ownerConstraints ?? []).map((v) => v.checkId)],
       storedRisk: t.risk,
       approval: postQaPhase ? t.approval.post_qa : t.approval.pre_execution,
       plan,
@@ -1195,7 +1959,7 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       current.revalidation = { decision: v.decision, failureCode: primaryFailureCode(v), fingerprint: failureFingerprint(v) || null };
     }
     const previous = previousDiagnosis(t);
-    const step = managerStep({ evidence, approvalPhase, previousDiagnosis: previous, round: t.humanRound });
+    const step = managerStep({ evidence, approvalPhase, previousDiagnosis: previous, round: t.humanRound, planning: planningContext(t) });
     if (!step.ok)
       return block(t, `manager: ${step.reason}`, {
         terminal: true,
@@ -1235,10 +1999,10 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       }
       case "dispatch_repair":
         // A stricter orchestration policy may allow fewer cycles than the Manager budget.
-        if (step.repairRequest && step.repairRequest.attempt > t.maxRepairAttempts) return escalateHumanDecision(t, step, evidence, phase);
-        return startRepair(t, step.repairRequest);
+        if (step.repairRequest && step.repairRequest.attempt > t.maxRepairAttempts) return escalateHumanDecision(t, step.validation, evidence, phase);
+        return planRepair(t, step.repairRequest, phase);
       case "escalate_human_decision":
-        return escalateHumanDecision(t, step, evidence, phase);
+        return escalateHumanDecision(t, step.validation, evidence, phase);
       case "replan_branch":
         // Work already exists on the branch: no automatic replan after execution.
         return block(t, `replan required: ${reasons}`, {
@@ -1303,6 +2067,9 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
         terminal: true,
         trigger: "unsafe_branch_state",
       });
+    // Safe boundary: Claude is back -> the covered task returns to Claude BEFORE any approval is resolved,
+    // so a red task's fresh approval binds the exact Claude handback contract.
+    contract.contract = handbackAtBoundary(t, contract.contract);
     if (t.risk === "red") {
       // Every repair plan is a materially new contract (objective = diagnosis /
       // human guidance, dirty paths): it needs its own fresh pre-execution
@@ -1338,6 +2105,7 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     if (!head || head.branch !== req.branch || head.headSha !== req.expectedHeadSha)
       return block(t, "workspace is not at the repair head", { terminal: true, trigger: "unsafe_branch_state" });
     t.pendingRepair = null;
+    t.pendingHandback = false;
     t.capabilities.add("repair_loop");
     t.repair = advanceRepairCounters(t.repair, req);
     t.repairCycles.push({ round: t.humanRound, cycle: req.attempt, diagnosis: structuredClone(req.diagnosis), repairRunId: contract.runId, workerResult: null, revalidation: null });
@@ -1352,9 +2120,14 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
    * commit, push or PR happens, and the escalation report names the
    * decision a human must make.
    */
-  function escalateHumanDecision(t: TaskRecord, step: ManagerStep, evidence: ReturnType<typeof evidenceFor>, phase: "pre_push" | "post_qa") {
+  function escalateHumanDecision(t: TaskRecord, validation: ManagerValidation, evidence: ReturnType<typeof evidenceFor>, phase: "pre_push" | "post_qa", plan: ManagerRepairPlan | null = null, diagnosis: ManagerDiagnosis | null = null) {
     if (isTerminalStatus(t.status)) return;
-    const report = buildHumanEscalationReport({ evidence, validation: step.validation, cycles: t.repairCycles, prNumber: t.pr?.number ?? null, round: t.humanRound });
+    t.decisionDiagnosis = diagnosis ? structuredClone(diagnosis) : null;
+    const built = buildHumanEscalationReport({ evidence, validation, cycles: t.repairCycles, prNumber: t.pr?.number ?? null, round: t.humanRound });
+    // The GPT Manager decided the owner genuinely has to choose: its question and options travel with the report.
+    const report = plan?.ownerDecision
+      ? { ...built, ownerDecision: structuredClone(plan.ownerDecision), managerRecommendation: plan.rootCause.slice(0, 320) }
+      : built;
     t.humanEscalation = report;
     t.humanDecisionRequest = report.decisionRequest;
     t.escalationPhase = phase;
@@ -1374,6 +2147,56 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
   }
 
   /**
+   * The GPT Manager interprets owner guidance semantically (primary); keyword parsing only adds.
+   * Returns null after logging a rejection (nothing consumed) when the Manager is missing or fails.
+   */
+  async function interpretOwnerGuidance(t: TaskRecord, d: { decisionId: string; escalationId: string; guidance: string }, round: number, extraConstraints: readonly GuidanceConstraint[] = []): Promise<GuidanceConstraint | null> {
+    if (!ports.manager?.interpretGuidance) {
+      if (policy.managerMode === "gpt_required") {
+        logHumanDecision(t, "rejected", "manager_unavailable: the GPT Manager is not configured; the guidance was not consumed", d);
+        // Keep the bound decision request so the exact same task can be resumed
+        // after infrastructure recovery.  The submitted guidance is deliberately
+        // not retained or consumed; the owner must submit it again.
+        t.status = "waiting_infrastructure";
+        t.queueReason = "GPT Manager guidance interpretation unavailable; guidance was not consumed";
+        return null;
+      }
+      return deriveGuidanceConstraint({ decisionId: d.decisionId, round, guidance: d.guidance });
+    }
+    const options = t.humanEscalation?.ownerDecision?.options ?? [];
+    let raw: unknown;
+    t.managerCalls.guidanceInterpretation++;
+    try {
+      raw = await ports.manager.interpretGuidance({
+        taskId: t.intake.taskId,
+        guidance: d.guidance,
+        originalRequest: t.intake.goal?.originalRequest ?? t.intake.objective,
+        interpretedObjective: t.intake.goal?.interpretedObjective ?? t.intake.title,
+        mode: modeOf(t),
+        currentBlocker: t.humanEscalation ? `${t.humanEscalation.currentBlocker.failingCheck}: ${t.humanEscalation.currentBlocker.actual}` : "",
+        ownerOptions: options,
+        previousConstraints: [...t.guidanceConstraints, ...extraConstraints].map(constraintSummary),
+        currentWorker: t.worker,
+      });
+    } catch {
+      logHumanDecision(t, "rejected", "manager_unavailable: the Manager could not interpret the guidance right now; nothing was consumed", d);
+      t.status = "waiting_infrastructure";
+      t.queueReason = "GPT Manager guidance interpretation unavailable; guidance was not consumed";
+      return null;
+    }
+    const gate = validateGuidanceInterpretation(raw, { optionIds: options.map((o) => o.id) });
+    if (!gate.ok) {
+      logHumanDecision(t, "rejected", `manager_unavailable: guidance interpretation refused (${gate.code}); nothing was consumed`, d);
+      t.status = "waiting_infrastructure";
+      t.queueReason = "GPT Manager guidance interpretation unavailable; guidance was not consumed";
+      return null;
+    }
+    const sem = gate.value;
+    const chosen = sem.ownerDecisionSelection ? options.find((o) => o.id === sem.ownerDecisionSelection) : undefined;
+    return semanticGuidanceConstraint({ decisionId: d.decisionId, round, guidance: d.guidance, semantic: chosen && !sem.requiredApproach ? { ...sem, requiredApproach: chosen.summary } : sem });
+  }
+
+  /**
    * Resume of a needs_human_decision task. The decision is untrusted input:
    * it is normalized, de-duplicated by decisionId (idempotent), bound to the
    * open escalation (task, branch, escalation id, expected HEAD) and to the
@@ -1390,9 +2213,16 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     if (t.consumedHumanDecisionIds.includes(d.decisionId)) return logHumanDecision(t, "duplicate", "decision already consumed; ignored", d);
     if (d.taskId !== taskId) return logHumanDecision(t, "rejected", "human decision belongs to another task", d);
     const request = t.humanDecisionRequest;
-    if (t.status !== "needs_human_decision" || !request) return logHumanDecision(t, "rejected", `task is ${t.status}, not awaiting a human decision`, d);
+    const awaitingGuidanceInfrastructure =
+      t.status === "waiting_infrastructure" &&
+      request !== null &&
+      t.queueReason?.startsWith("GPT Manager guidance interpretation unavailable") === true;
+    if ((t.status !== "needs_human_decision" && !awaitingGuidanceInfrastructure) || !request)
+      return logHumanDecision(t, "rejected", `task is ${t.status}, not awaiting a human decision`, d);
     const bound = checkHumanDecisionBinding(request, d);
     if (!bound.ok) return logHumanDecision(t, "rejected", bound.reason, d);
+    // A decision on a decomposed request's combined repair binds to the SAME group (lead task).
+    if (t.groupDecision) return onGroupDecision(t, d);
     if (t.humanRound - 1 >= policy.maxHumanResumes) return logHumanDecision(t, "rejected", "human resume budget exhausted; cancel the task", d);
     if (t.maxRepairAttempts === 0) return logHumanDecision(t, "rejected", "repair cycles are disabled by policy", d);
     if (!t.lease || !t.plan || !t.lastResult || !t.record || !t.worker || !t.escalationPhase)
@@ -1400,15 +2230,32 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     const head = await ports.workspace.head(t.lease);
     if (!head || head.branch !== t.plan.branch || head.headSha !== request.expectedHeadSha)
       return logHumanDecision(t, "rejected", "workspace no longer matches the escalated branch/HEAD", d);
-    const last = t.repairCycles.filter((c) => c.round === t.humanRound).at(-1);
+    const lastCycle = t.repairCycles.filter((c) => c.round === t.humanRound).at(-1);
+    // A GPT-requested decision may come before any repair ran: its own diagnosis anchors the resume.
+    const last: RepairCycleRecord | undefined =
+      lastCycle ?? (t.decisionDiagnosis && t.decisionDiagnosis.round === t.humanRound ? { round: t.humanRound, cycle: 0, diagnosis: t.decisionDiagnosis, repairRunId: null, workerResult: null, revalidation: null } : undefined);
     if (!last) return logHumanDecision(t, "rejected", "no Manager diagnosis to resume from", d);
 
     // Same trusted evidence the escalation was judged on, with counters reset for the new round.
     const evidence = { ...evidenceFor(t, t.escalationPhase), repair: { attempt: 0, prior: [] } };
-    const step = humanDecisionResumeStep({ evidence, request, decision: d, previous: { diagnosis: last.diagnosis, repairOutcome: repairOutcomeSummary(last) } });
+    // The guidance becomes a durable planning constraint for this and every later repair of the task.
+    // The GPT Manager interprets it semantically (primary); the keyword reading only adds conservatively.
+    const constraint = await interpretOwnerGuidance(t, d, t.humanRound + 1);
+    if (!constraint) return;
+    const step = humanDecisionResumeStep({
+      evidence,
+      request,
+      decision: d,
+      previous: { diagnosis: last.diagnosis, repairOutcome: repairOutcomeSummary(last) },
+      planning: planningContext(t, [...t.guidanceConstraints, constraint]),
+    });
     if (!step.ok) return logHumanDecision(t, "rejected", step.reason, d);
 
     t.consumedHumanDecisionIds.push(d.decisionId);
+    t.guidanceConstraints.push(constraint);
+    audit(t, "human_guidance_constraint_recorded", {
+      reason: `decision ${d.decisionId} (${constraint.source ?? "deterministic"}): rejected validations [${constraint.rejectedValidations.join(",")}]; evidence targets [${constraint.evidenceTargets.join(",")}]; restrictions [${(constraint.semantic?.executionRestrictions ?? []).join(",")}]; selection ${constraint.semantic?.ownerDecisionSelection ?? "none"}`,
+    });
     for (const a of step.audit) ports.audit(a);
     logHumanDecision(t, "accepted", `resumed as round ${step.human.round}`, d);
     t.humanRound = step.human.round;
@@ -1418,7 +2265,7 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     t.escalationPhase = null;
     t.blockingReason = null;
     escalate(t, `human_decision:${d.decisionId}`, "return_to_worker");
-    return startRepair(t, step.repairRequest);
+    return planRepair(t, step.repairRequest, t.pr ? "pre_push" : "post_qa");
   }
 
   // ---------------------------------------------------------- GitHub path
@@ -1566,6 +2413,13 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     const t = recs.get(taskId);
     if (!t || isTerminalStatus(t.status) || !t.receipt || !t.plan) return;
     if (t.pr) return resetQa(t);
+    // A cross-part repair continues its lineage branch: the trusted PR of that branch is updated, not reopened.
+    if (t.plan.decision === "reuse_branch" && t.plan.prNumber !== null) {
+      t.pr = { taskId: t.intake.taskId, number: t.plan.prNumber, branch: t.plan.branch, baseSha: t.plan.baseSha, headSha: t.receipt.headSha, draft: false };
+      move(t, "pr_opened");
+      post({ type: "pr_opened", taskId });
+      return;
+    }
     audit(t, "pr_create_requested");
     t.pendingSideEffect = "pr";
     t.pendingSideEffectId = t.receipt.headSha;
@@ -1707,6 +2561,7 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       riskReasons: [...t.intake.classification.risk.reasons].slice(0, 12),
       repair,
       mode: modeOf(t),
+      ...(t.pendingHandback ? { handback: true } : {}),
     };
   }
 
@@ -1762,6 +2617,7 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       // Fresh approval of exactly the changed retry contract: resume the same retry.
       t.approval.pre_execution = "approved";
       const { contract, errorType } = t.pendingRetry;
+      if (errorType === WORKER_CONTINUATION) return launchContinuation(t, contract);
       return launchRetry(t, contract, errorType);
     }
     if (t.state === "awaiting_approval" && phase === "pre_execution") {
@@ -1808,6 +2664,12 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
         return onHumanDecision(e.taskId, e.decision);
       case "review_retry":
         return onReviewRetry(e.taskId);
+      case "worker_availability_changed":
+        return onAvailabilityChanged(e.worker, e.status, e.resetAt ?? null);
+      case "availability_check":
+        return onAvailabilityCheck(e.probeAfterMs ?? null);
+      case "combined_review":
+        return onCombinedReview(e.groupId);
     }
   }
 
@@ -1962,6 +2824,17 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       paused: saved.paused === true,
       pendingReview: saved.pendingReview === true,
       reviewRetries: saved.reviewRetries ?? 0,
+      workArea: saved.workArea ?? saved.intake.goal?.workArea ?? areaForCategory(saved.intake.category),
+      temporaryCover: saved.temporaryCover === true,
+      handoffs: structuredClone(saved.handoffs ?? []),
+      availabilityPause: saved.availabilityPause ? structuredClone(saved.availabilityPause) : null,
+      availabilityContinuations: saved.availabilityContinuations ?? 0,
+      guidanceConstraints: structuredClone(saved.guidanceConstraints ?? []),
+      pendingDiagnosis: saved.pendingDiagnosis ? structuredClone(saved.pendingDiagnosis) : null,
+      pendingHandback: saved.pendingHandback === true,
+      decisionDiagnosis: saved.decisionDiagnosis ? structuredClone(saved.decisionDiagnosis) : null,
+      managerCalls: { ...NO_CALLS, ...(saved.managerCalls ?? {}) },
+      groupDecision: saved.groupDecision === true,
     };
   }
 
@@ -1975,13 +2848,20 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     running = true;
     try {
       seq = checkpoint.sequence;
+      // A review interrupted by a restart is retried, never assumed.
+      for (const g of checkpoint.groups ?? []) groups.set(g.groupId, { ...structuredClone(g), status: g.status === "reviewing" ? "review_unavailable" : g.status });
       for (const saved of [...checkpoint.tasks].sort((a, b) => a.seq - b.seq)) {
         const t = restoreTask(saved);
         recs.set(t.intake.taskId, t);
       }
       for (const t of Array.from(recs.values()).sort((a, b) => a.seq - b.seq)) {
-        if (isTerminalStatus(t.status) || t.status === "needs_human_approval" || t.status === "needs_human_decision" || t.status === "qa_pending") continue;
-        if (t.pendingReview) {
+        // A task paused for Worker availability stays paused until a trusted availability signal or its reset time.
+        if (isTerminalStatus(t.status) || t.status === "needs_human_approval" || t.status === "needs_human_decision" || t.status === "qa_pending" || t.status === "waiting_worker_quota" || t.status === "waiting_worker_availability") continue;
+        // Guidance could not be interpreted before the restart.  Its bound owner
+        // decision remains open, but no submitted guidance was retained; wait for
+        // the owner to resend after the GPT Manager is available.
+        if (t.status === "waiting_infrastructure" && t.humanDecisionRequest && t.queueReason?.startsWith("GPT Manager guidance interpretation unavailable")) continue;
+        if (t.pendingReview || t.pendingDiagnosis) {
           // Re-arm bounded review retries for the same finished run; never re-run the Worker or re-judge stale evidence.
           t.reviewRetries = 0;
           post({ type: "review_retry", taskId: t.intake.taskId });

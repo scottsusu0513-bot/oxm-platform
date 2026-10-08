@@ -31,7 +31,20 @@ export function normalizeIntentDecision(raw: unknown, input: { knownTaskIds: rea
     const checked = validatePlannerGoal({ title: r.title, interpretedObjective: r.interpretedObjective, criteria: r.criteria, riskObservations: r.riskObservations ?? [] });
     if (!checked.ok || !checked.title) return CLARIFY;
     const ti = intent as TaskCreatingIntent;
-    return { kind: "task", intent: ti, mode: modeForIntent(ti), title: checked.title, interpretedObjective: checked.interpretedObjective, criteria: checked.criteria, riskObservations: checked.riskObservations };
+    const areas = r.workAreas && typeof r.workAreas === "object" && !Array.isArray(r.workAreas) ? (r.workAreas as Record<string, unknown>) : null;
+    const part = (v: unknown) => text(v, 1500);
+    return {
+      kind: "task",
+      intent: ti,
+      mode: modeForIntent(ti),
+      title: checked.title,
+      interpretedObjective: checked.interpretedObjective,
+      criteria: checked.criteria,
+      riskObservations: checked.riskObservations,
+      ...(areas ? { workAreas: { programming: areas.programming === true, visual: areas.visual === true } } : {}),
+      programmingObjective: part(r.programmingObjective),
+      visualObjective: part(r.visualObjective),
+    };
   }
   if (input.requireTask) return { kind: "clarify", question: "/goal creates a new task, but this reads like a question about an existing task. Send it without /goal." };
   const taskId = typeof r.taskId === "string" && input.knownTaskIds.includes(r.taskId) ? r.taskId : null;
@@ -40,6 +53,26 @@ export function normalizeIntentDecision(raw: unknown, input: { knownTaskIds: rea
 }
 
 const STATUSES = new Set(["satisfied", "not_satisfied", "unsupported"]);
+const CONSTRAINT_STATUSES = new Set(["satisfied", "violated", "unsupported"]);
+
+/** Reviewer verdicts on owner constraints; missing/duplicate/evidence-less "satisfied" -> unsupported. */
+export function normalizeConstraintVerdicts(raw: unknown, ids: readonly string[]): Map<string, { status: "satisfied" | "violated" | "unsupported"; evidence: string }> {
+  const rows = raw && typeof raw === "object" && Array.isArray((raw as { constraints?: unknown }).constraints) ? (raw as { constraints: unknown[] }).constraints : [];
+  const out = new Map<string, { status: "satisfied" | "violated" | "unsupported"; evidence: string }>();
+  const dup = new Set<string>();
+  for (const row of rows) {
+    if (!row || typeof row !== "object") continue;
+    const r = row as Record<string, unknown>;
+    if (typeof r.id !== "string" || !ids.includes(r.id)) continue;
+    if (out.has(r.id)) dup.add(r.id);
+    const status = CONSTRAINT_STATUSES.has(String(r.status)) ? (r.status as "satisfied" | "violated" | "unsupported") : "unsupported";
+    const evidence = text(r.evidence, 300) ?? "";
+    const reason = text(r.reason, 300) ?? "";
+    out.set(r.id, { status: status === "satisfied" && !evidence ? "unsupported" : status, evidence: evidence || reason || "no evidence cited" });
+  }
+  for (const id of Array.from(dup)) out.set(id, { status: "unsupported", evidence: "reviewer returned conflicting verdicts" });
+  return out;
+}
 
 /**
  * Validates the reviewer's raw output against the exact criteria under

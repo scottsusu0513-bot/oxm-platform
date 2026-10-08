@@ -1,6 +1,7 @@
 import type { AcceptanceEvidence, ValidationEvidence } from "../manager/types";
 import type { GoalAcceptanceContext } from "../scheduler/types";
-import { normalizeGoalReview } from "./normalize";
+import { gatherSourceEvidence, type SourceEvidencePorts } from "../executive/evidencePlan";
+import { normalizeConstraintVerdicts, normalizeGoalReview } from "./normalize";
 import type { CriterionReview, GoalReviewer } from "./types";
 
 export const MAX_REVIEW_DIFF = 150_000;
@@ -30,6 +31,8 @@ export interface SemanticAcceptanceInput {
   answer: string | null;
   /** Trusted repository read for cited files (null when absent / unreadable). */
   fileContent: (path: string) => string | null;
+  /** Trusted repository listing/search used to gather the Manager's own source evidence (read-only work). */
+  sourcePorts?: Omit<SourceEvidencePorts, "read">;
   timeoutMs: number;
 }
 
@@ -50,6 +53,12 @@ export interface SemanticAcceptanceResult {
    * goal criteria as failed (no Manager repair cycle may be consumed).
    */
   reviewUnavailable: boolean;
+  /** GPT reviewer calls made (accounting). */
+  reviewCalls: number;
+  /** Repository files the answer cites that the trusted reader could read. */
+  citedFiles: string[];
+  /** Semantic owner-constraint verdicts (only for constraints that were asked). */
+  constraintVerdicts: { id: string; status: "satisfied" | "violated" | "unsupported"; evidence: string }[];
 }
 
 export async function semanticAcceptance(input: SemanticAcceptanceInput): Promise<SemanticAcceptanceResult> {
@@ -58,6 +67,10 @@ export async function semanticAcceptance(input: SemanticAcceptanceInput): Promis
   const goalCriteria = input.goal.criteria.filter((c) => c.kind === "goal");
   let reviews: CriterionReview[] = [];
   let reviewUnavailable = false;
+  let reviewCalls = 0;
+  let cited: string[] = [];
+  const constraintIds = (input.goal.ownerConstraints ?? []).map((c) => c.id);
+  let constraintVerdicts: SemanticAcceptanceResult["constraintVerdicts"] = [];
   if (goalCriteria.length > 0) {
     const unavailable = (reason: string): CriterionReview[] => goalCriteria.map((c) => ({ id: c.id, status: "unsupported", evidence: "", reason }));
     if (!input.reviewer) {
@@ -74,7 +87,26 @@ export async function semanticAcceptance(input: SemanticAcceptanceInput): Promis
               .filter((f): f is { path: string; content: string } => f.content !== null)
               .map((f) => ({ path: f.path, excerpt: f.content.slice(0, MAX_CITED_BYTES) }))
           : [];
-      try {
+      // The Manager gathers source evidence from its own evidence plan, so a Worker that cites
+      // nothing cannot leave the reviewer without the repository content the goal needs.
+      const plan = input.goal.evidencePlan ?? null;
+      const sourceEvidence =
+        input.goal.mode === "read_only" && plan && plan.kind !== "change"
+          ? (
+              await gatherSourceEvidence({ plan, cited: [], ports: { read: input.fileContent, ...(input.sourcePorts ?? {}) } }).catch(() => [])
+            ).filter((f) => !citedFiles.some((c) => c.path === f.path))
+          : [];
+      cited = citedFiles.map((f) => f.path);
+      if (plan && !plan.validationIsEvidence && citedFiles.length === 0 && sourceEvidence.length === 0) {
+        // No repository source at all: passing validations can never answer the question.
+        reviews = goalCriteria.map((c) => ({
+          id: c.id,
+          status: "unsupported",
+          evidence: "",
+          reason: "no repository source evidence (file path + excerpt) was produced; validation results cannot answer this goal",
+        }));
+      } else try {
+        reviewCalls++;
         const raw = await withTimeout(
           input.reviewer.review({
             mode: input.goal.mode,
@@ -88,11 +120,16 @@ export async function semanticAcceptance(input: SemanticAcceptanceInput): Promis
             diffTruncated: input.diff.truncated,
             answer: reportMode ? input.answer : null,
             citedFiles,
+            ...(sourceEvidence.length ? { sourceEvidence } : {}),
+            ...(plan && plan.kind !== "change" ? { evidenceRequirements: plan.requirements } : {}),
+            ...(input.goal.ownerConstraints?.length ? { ownerConstraints: input.goal.ownerConstraints } : {}),
           }),
           input.timeoutMs,
         );
         if (!raw || typeof raw !== "object" || !Array.isArray((raw as { criteria?: unknown }).criteria)) throw new Error("unusable review output");
         reviews = normalizeGoalReview(raw, goalCriteria);
+        const verdicts = normalizeConstraintVerdicts(raw, constraintIds);
+        constraintVerdicts = constraintIds.filter((id) => verdicts.has(id)).map((id) => ({ id, ...verdicts.get(id)! }));
       } catch {
         reviews = unavailable("goal review failed or timed out");
         reviewUnavailable = true;
@@ -114,7 +151,7 @@ export async function semanticAcceptance(input: SemanticAcceptanceInput): Promis
       summary: `${c.id} (${c.text.slice(0, 120)}) ${r.status === "not_satisfied" ? "not met" : "not supported by evidence"}: ${r.reason || "no reason given"}`.slice(0, 300),
     };
   });
-  return { acceptance, reviewUnavailable };
+  return { acceptance, reviewUnavailable, reviewCalls, citedFiles: cited, constraintVerdicts };
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {

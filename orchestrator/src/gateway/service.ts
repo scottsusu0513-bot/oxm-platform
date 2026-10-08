@@ -7,6 +7,8 @@ import { MAX_HUMAN_GUIDANCE_LENGTH, type HumanDecisionInput } from "../manager/t
 import { isValidEscalationId } from "../domain/types";
 import type { IsoTimestamp } from "../store/types";
 import { normalizeIntentDecision } from "../planning/normalize";
+import { decomposeWork, rawWorkAreas, resolveWorkAreas, workShape } from "../executive/workAssignment";
+import { deriveEvidencePlan, renderEvidenceInstruction } from "../executive/evidencePlan";
 import type { IntentPlanner } from "../planning/types";
 import type { StartApprovalEvidence } from "../scheduler/types";
 import { COMMIT_PUBLISH_ACTION, normalizeCommitApprovalEvidence, type CommitApprovalEvidence } from "../workers/prompt";
@@ -124,6 +126,13 @@ function pendingView(r: TrustedHumanDecisionRequirement): PendingHumanDecisionVi
       attempted: shortText(a.attempted, 240),
       outcome: shortText(a.outcome, 160),
     })),
+    ownerDecision: r.ownerDecision
+      ? {
+          question: shortText(r.ownerDecision.question, 300),
+          options: r.ownerDecision.options.slice(0, 4).map((o) => ({ id: shortText(o.id, 8), summary: shortText(o.summary, 300) })),
+          recommended: r.ownerDecision.recommended ? shortText(r.ownerDecision.recommended, 8) : null,
+        }
+      : null,
     grantsApproval: false,
   };
 }
@@ -250,9 +259,63 @@ function externalStatus(status: NonNullable<ReturnType<AgentRuntimeService["getT
     waitReason: sanitizeSummary(status.waitReason),
     mode: status.mode === "read_only" ? "read_only" : "change",
     answer: sanitizeAnswer(status.answer),
+    ...(status.workforce ? { workforce: sanitizeWorkforce(status.workforce) } : {}),
+    ...(status.details ? { details: sanitizeDetails(status.details) } : {}),
     approvalRequired: status.approval.required,
     createdAt: status.createdAt,
     updatedAt: status.updatedAt,
+  };
+}
+
+/** Technical text for the owner: one line, bounded, SHAs/digests removed, credential-like values redacted. */
+function techText(value: string | null | undefined, max = 300): string {
+  const line = (value ?? "").replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").replace(/\b[0-9a-f]{16,64}\b/gi, "").replace(/\bfp=\S+/g, "").trim();
+  if (!line) return "";
+  return line.split(/\s+/).some((w) => isDangerousValue(w)) || isDangerousValue(line) ? REDACTED : line.slice(0, max);
+}
+
+function sanitizeDetails(d: import("../intake/types").TaskTechnicalDetails): import("../intake/types").TaskTechnicalDetails {
+  const paths = (list: readonly string[]) => list.slice(0, 30).map((p) => techText(p, 200)).filter(Boolean);
+  return {
+    worker: d.worker === "claude" || d.worker === "codex" ? d.worker : null,
+    workArea: d.workArea === "visual" || d.workArea === "programming" ? d.workArea : null,
+    temporaryCover: d.temporaryCover === true,
+    risk: d.risk,
+    approvalPhase: d.approvalPhase ? techText(d.approvalPhase, 40) : null,
+    validations: d.validations.slice(0, 10).map((v) => ({ name: techText(v.name, 40), status: techText(v.status, 20) })),
+    unmetCriteria: d.unmetCriteria.slice(0, 12).map((c) => ({ id: techText(c.id, 16), text: techText(c.text, 200), status: techText(c.status, 20), summary: c.summary ? techText(c.summary) : null })),
+    ownerConstraints: d.ownerConstraints.slice(0, 12).map((c) => ({ id: techText(c.id, 16), kind: techText(c.kind, 40), status: techText(c.status, 20), evidence: techText(c.evidence) })),
+    managerRootCause: d.managerRootCause ? techText(d.managerRootCause, 400) : null,
+    repairAttempts: d.repairAttempts.slice(-8).map((a) => ({ round: a.round, cycle: a.cycle, strategy: a.strategy ? techText(a.strategy, 200) : null, outcome: techText(a.outcome, 80) })),
+    changedPaths: paths(d.changedPaths),
+    citedFiles: paths(d.citedFiles),
+  };
+}
+
+const WORKERS = new Set(["claude", "codex"]);
+function sanitizeWorkforce(w: NonNullable<import("../intake/types").AgentTaskStatus["workforce"]>): NonNullable<GatewayTaskStatus["workforce"]> {
+  const worker = (k: string) => (WORKERS.has(k) ? (k as "claude" | "codex") : "claude");
+  const p = w.availabilityPause;
+  const reset = p?.resetAt && /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(p.resetAt) ? p.resetAt : null;
+  return {
+    workArea: w.workArea === "visual" ? "visual" : "programming",
+    primaryWorker: worker(w.primaryWorker),
+    temporaryCover: w.temporaryCover === true,
+    handoffs: Number.isSafeInteger(w.handoffs) ? w.handoffs : 0,
+    availabilityPause: p
+      ? { waitingFor: p.waitingFor.filter((k: string) => WORKERS.has(k)).map(worker), resetAt: reset, exhausted: worker(p.exhausted), cause: (["quota", "authentication", "executable", "service"] as const).find((c) => c === p.cause) ?? "quota" }
+      : null,
+    combinedReview: w.combinedReview
+      ? {
+          status: (["waiting_parts", "reviewing", "review_unavailable", "accepted", "not_accepted", "repairing", "diagnosis_unavailable", "needs_human_decision"] as const).find((x) => x === w.combinedReview!.status) ?? "review_unavailable",
+          ownerSummary: w.combinedReview.ownerSummary && !isDangerousValue(w.combinedReview.ownerSummary) ? w.combinedReview.ownerSummary.slice(0, 400) : null,
+          lead: w.combinedReview.lead === true,
+          leadTaskId: SAFE_KEY.test(w.combinedReview.leadTaskId) ? w.combinedReview.leadTaskId : "",
+          round: Number.isSafeInteger(w.combinedReview.round) ? w.combinedReview.round : 1,
+          cycle: Number.isSafeInteger(w.combinedReview.cycle) ? w.combinedReview.cycle : 0,
+          repairTargets: w.combinedReview.repairTargets.filter((x) => x === "programming" || x === "visual"),
+        }
+      : null,
   };
 }
 
@@ -287,7 +350,7 @@ function sanitizeCommitEvidence(value: CommitApprovalEvidence | undefined): Comm
     !Array.isArray(value.validations) || value.validations.length > 50 ||
     value.validations.some((v) => !v || typeof v.name !== "string" || v.name.length > 100 || /[\u0000-\u001f\u007f]/.test(v.name) || isDangerousValue(v.name) || typeof v.requested !== "boolean" || typeof v.executed !== "boolean" || typeof v.trusted !== "boolean" || !["passed", "failed", "skipped", "missing"].includes(v.status)) ||
     !Array.isArray(value.acceptance) || value.acceptance.length > 50 ||
-    value.acceptance.some((a) => !a || !SAFE_KEY.test(a.criterionId) || !["satisfied", "failed", "unknown"].includes(a.status) || !["validation", "ci_check", "scope", "human", "worker_report", "manager_review"].includes(a.evidenceType) || (a.reference !== null && (typeof a.reference !== "string" || a.reference.length > 100 || /[\u0000-\u001f\u007f]/.test(a.reference) || isDangerousValue(a.reference)))) ||
+    value.acceptance.some((a) => !a || !SAFE_KEY.test(a.criterionId) || !["satisfied", "failed", "unknown"].includes(a.status) || !["validation", "ci_check", "scope", "human", "worker_report", "manager_review", "constraint_check"].includes(a.evidenceType) || (a.reference !== null && (typeof a.reference !== "string" || a.reference.length > 100 || /[\u0000-\u001f\u007f]/.test(a.reference) || isDangerousValue(a.reference)))) ||
     !["green", "yellow", "red"].includes(value.observedRisk) ||
     value.managerDecision !== "accepted" ||
     value.action !== COMMIT_PUBLISH_ACTION ||
@@ -352,6 +415,7 @@ function sanitizeStartEvidence(value: StartApprovalEvidence): StartApprovalEvide
     allowedScope: list(value.allowedScope, 50, 200),
     riskReasons: list(value.riskReasons, 12, 200),
     repair: value.repair === true,
+    ...(value.handback === true ? { handback: true } : {}),
     mode: value.mode === "read_only" ? "read_only" : "change",
   };
 }
@@ -786,7 +850,8 @@ export function createAgentGatewayService(deps: GatewayDependencies): AgentGatew
       const status = deps.runtime.getTaskStatus(taskId);
       if (!status) reject("not_found", "escalation not found", 404, "unknown_escalation");
       const current = reader.current(taskId);
-      if (!current || isTerminalState((status as NonNullable<typeof status>).taskState))
+      // A group decision lives on a lead task whose own (part) work is complete; any other closed task is final.
+      if (!current || (isTerminalState((status as NonNullable<typeof status>).taskState) && current.groupDecision !== true))
         reject("conflict", "escalation is closed or no human decision is pending", 409, "escalation_closed", taskId);
       const open = current as TrustedHumanDecisionRequirement;
       if (open.request.taskId !== taskId) throw new GatewayError("unavailable", "human decision requirement is malformed", 503);
@@ -861,24 +926,57 @@ export function createAgentGatewayService(deps: GatewayDependencies): AgentGatew
       const d = stored.decision;
       if (d.kind !== "task") throw new GatewayError("conflict", "interpretation does not describe a new task", 409);
       // Every task field comes from the stored, validated interpretation; nothing from the caller.
-      const intake: TaskIntakeRequest = {
-        requestId: auth.requestId,
-        idempotencyKey: stored.interpretationId,
-        userInstruction: `${d.intent === "audit_and_fix" ? `${AUDIT_AND_FIX_POLICY}\n\n` : ""}${d.interpretedObjective}\n\nOwner request (verbatim): ${stored.originalRequest}`.slice(0, 8_000),
-        title: d.title,
-        ...(stored.priority ? { priority: stored.priority } : {}),
-        goal: { intent: d.intent, originalRequest: stored.originalRequest, interpretedObjective: d.interpretedObjective, criteria: d.criteria, riskObservations: d.riskObservations ?? [] },
-        source: { type: "gateway", requesterId: auth.principalId, reference: auth.source },
-        submittedAt: deps.now(),
-      };
-      deps.audit.record({ event: "task_submit_requested", principalId: auth.principalId, requestId: auth.requestId, action: "submit_interpreted_task", outcome: "requested" });
-      const result = await deps.runtime.submitTask(intake);
-      if (result.outcome === "needs_clarification") throw new GatewayError("invalid_request", "task needs clarification", 400);
-      if (result.outcome === "rejected")
-        throw new GatewayError(result.reasonCode === "idempotency_conflict" ? "idempotency_conflict" : "invalid_request", result.reason, result.reasonCode === "idempotency_conflict" ? 409 : 400);
-      return { taskId: result.taskId, status: externalStatus(result.status), duplicate: result.outcome === "duplicate" };
+      // The fixed Worker assignment policy decides the work area(s); a mixed request is decomposed
+      // into a Claude programming task and a Codex visual task (the Manager reviews each).
+      const areas = resolveWorkAreas(d.workAreas ?? null, `${stored.originalRequest}\n${d.interpretedObjective}`);
+      const parts: { area: "programming" | "visual"; objective: string }[] =
+        d.mode === "read_only"
+          ? [{ area: workShape(areas) === "visual" ? "visual" : "programming", objective: d.interpretedObjective }]
+          : decomposeWork({ areas, objective: d.interpretedObjective, programmingObjective: d.programmingObjective ?? null, visualObjective: d.visualObjective ?? null });
+      const evidence = d.mode === "read_only" ? renderEvidenceInstruction(deriveEvidencePlan({ mode: d.mode, intent: d.intent, originalRequest: stored.originalRequest, interpretedObjective: d.interpretedObjective })) : "";
+      const zh = /[\u3400-\u9fff]/.test(`${d.title}${stored.originalRequest}`);
+      const results: { taskId: string; status: GatewayTaskStatus; duplicate: boolean }[] = [];
+      for (const part of parts) {
+        const split = parts.length > 1;
+        const intake: TaskIntakeRequest = {
+          requestId: split ? `${auth.requestId}.${part.area}`.slice(0, 128) : auth.requestId,
+          idempotencyKey: split ? `${stored.interpretationId}.${part.area}`.slice(0, 128) : stored.interpretationId,
+          userInstruction: `${d.intent === "audit_and_fix" ? `${AUDIT_AND_FIX_POLICY}\n\n` : ""}${part.objective}${evidence ? `\n\n${evidence}` : ""}\n\nOwner request (verbatim): ${stored.originalRequest}`.slice(0, 8_000),
+          title: split ? `${d.title}${part.area === "visual" ? (zh ? "（畫面）" : " (visual)") : zh ? "（程式）" : " (programming)"}`.slice(0, 160) : d.title,
+          ...(stored.priority ? { priority: stored.priority } : {}),
+          goal: {
+            intent: d.intent,
+            originalRequest: stored.originalRequest,
+            interpretedObjective: d.interpretedObjective,
+            criteria: split ? criteriaForArea(d.criteria, part.area) : d.criteria,
+            riskObservations: d.riskObservations ?? [],
+            workArea: part.area,
+            // Parts of one decomposed request are accepted together, after the GPT Manager's combined review.
+            ...(split ? { group: { id: stored.interpretationId, parts: parts.map((x) => ({ area: x.area, objective: x.objective.slice(0, 2_000) })) } } : {}),
+          },
+          source: { type: "gateway", requesterId: auth.principalId, reference: auth.source },
+          submittedAt: deps.now(),
+        };
+        deps.audit.record({ event: "task_submit_requested", principalId: auth.principalId, requestId: auth.requestId, action: "submit_interpreted_task", outcome: split ? `requested_${part.area}_part` : "requested" });
+        const result = await deps.runtime.submitTask(intake);
+        if (result.outcome === "needs_clarification") throw new GatewayError("invalid_request", "task needs clarification", 400);
+        if (result.outcome === "rejected")
+          throw new GatewayError(result.reasonCode === "idempotency_conflict" ? "idempotency_conflict" : "invalid_request", result.reason, result.reasonCode === "idempotency_conflict" ? 409 : 400);
+        results.push({ taskId: result.taskId, status: externalStatus(result.status), duplicate: result.outcome === "duplicate" });
+      }
+      return { ...results[0], ...(results.length > 1 ? { relatedTaskIds: results.slice(1).map((r) => r.taskId), parts: results.map((r, i) => ({ taskId: r.taskId, area: parts[i].area })) } : {}) };
     },
   };
+}
+
+/** Criteria of one decomposed part: a criterion that only concerns the other area stays with that part. */
+function criteriaForArea(criteria: readonly string[], area: "programming" | "visual"): string[] {
+  const other = area === "visual" ? "programming" : "visual";
+  const kept = criteria.filter((c) => {
+    const d = rawWorkAreas(c);
+    return !(d[other] && !d[area]);
+  });
+  return kept.length ? kept : [...criteria];
 }
 
 /** Server-side (trusted) working order for audit_and_fix; not owner- or planner-supplied. */

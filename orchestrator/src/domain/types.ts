@@ -61,6 +61,17 @@ export interface TaskGoal {
   /** The owner's original words (sanitized). */
   originalRequest: string;
   interpretedObjective: string;
+  /**
+   * Work area fixed by the Manager's assignment policy (executive/workAssignment):
+   * programming -> Claude, visual -> Codex. A mixed request is decomposed into
+   * one task per area before it reaches intake.
+   */
+  workArea?: "programming" | "visual";
+  /**
+   * Set on each part of a decomposed (mixed) request: the parts are accepted together only after
+   * the GPT Manager's final combined review against the original owner request.
+   */
+  group?: { id: string; parts: readonly { area: "programming" | "visual"; objective: string }[] };
 }
 export type RiskLevel = (typeof RISK_LEVELS)[number];
 

@@ -58,7 +58,21 @@ export type WorkerScript =
   | "timeout_dirty"
   | "process_error"
   /** Edits files even though the contract is read_only (policy violation probe). */
-  | "mutate_readonly";
+  | "mutate_readonly"
+  /** Worker usage quota exhausted (typed availability failure); no reset time exposed. */
+  | "quota_exhausted"
+  /** Edited task files, then hit the quota: the continuation must inherit the progress. */
+  | "quota_exhausted_dirty"
+  /** Quota exhausted with a trusted provider reset time (2026-10-07T18:00:00.000Z). */
+  | "quota_exhausted_reset"
+  /** Quota exhausted with a trusted reset time that has already passed on the simulation clock. */
+  | "quota_exhausted_elapsed"
+  /** The Worker CLI needs a new login (typed availability failure). */
+  | "auth_unavailable"
+  /** The Worker executable cannot be found. */
+  | "executable_unavailable"
+  /** The Worker's service is down (transient; bounded retries, then a pause). */
+  | "service_unavailable";
 export type CiScript = "pass" | "fail" | "pending";
 
 export interface SimulationOptions {
@@ -88,6 +102,19 @@ export interface SimulationOptions {
   goalReviewer?: GoalReviewer;
   /** Answer text a read_only Worker returns, per task (default cites the task's own file). */
   answers?: Record<string, string>;
+  /**
+   * Fake tracked repository content. When set, the trusted evidence layer reads
+   * it (cited files and the Manager's own evidence gathering: listing + search)
+   * instead of returning a placeholder for any path.
+   */
+  repoFiles?: Record<string, string>;
+  /**
+   * Commands a Worker run reports in its own run record, per task and run (the last entry repeats).
+   * Replaces the default test commands; used to probe owner-constraint verification.
+   */
+  workerCommands?: Record<string, readonly (readonly string[])[]>;
+  /** GPT Manager reasoning port (scripted in tests); absent = deterministic-only Manager. */
+  manager?: OrchestrationPorts["manager"];
 }
 
 export interface WorkerCall {
@@ -177,6 +204,7 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
   let nextSha = 0xb0000;
   let mainReads = 0;
   const now = () => "2026-10-04T12:00:00.000Z";
+  const trustedTestRuns = new Map<string, WorkerResult["testsRun"]>();
   const approvals = createInMemoryApprovalRepository(now);
   const intakes = new Map<string, TaskIntake>();
 
@@ -272,6 +300,44 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
           headSha: start,
           errorType: "timeout",
         };
+      case "quota_exhausted":
+      case "quota_exhausted_dirty":
+      case "quota_exhausted_reset":
+      case "quota_exhausted_elapsed":
+        if (script === "quota_exhausted_dirty") edit();
+        return {
+          ...base,
+          status: "failure",
+          summary: "worker runtime unavailable: quota_exhausted",
+          filesChanged: script === "quota_exhausted_dirty" ? files : [],
+          testsRun: [],
+          checkResult: "not_run",
+          headSha: start,
+          fallbackRecommended: true,
+          errorType: "quota_exhausted",
+          availability: {
+            kind: "quota_exhausted",
+            resetAt: script === "quota_exhausted_reset" ? "2026-10-07T18:00:00.000Z" : script === "quota_exhausted_elapsed" ? "2026-10-04T11:00:00.000Z" : null,
+          },
+        };
+      case "auth_unavailable":
+      case "executable_unavailable":
+      case "service_unavailable": {
+        const errorType = script === "auth_unavailable" ? "authentication_unavailable" : script;
+        const kind = script === "auth_unavailable" ? "authentication_unavailable" : script;
+        return {
+          ...base,
+          status: "failure",
+          summary: `worker runtime unavailable: ${kind}`,
+          filesChanged: [],
+          testsRun: [],
+          checkResult: "not_run",
+          headSha: start,
+          fallbackRecommended: true,
+          errorType,
+          availability: { kind, resetAt: null },
+        };
+      }
       case "process_error":
         return {
           ...base,
@@ -350,6 +416,7 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
   };
 
   const ports: OrchestrationPorts = {
+    ...(opts.manager ? { manager: opts.manager } : {}),
     github,
     leases,
     audit: (e) => audit.push(structuredClone(e)),
@@ -453,7 +520,13 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
         const script = opts.worker?.[contract.taskId] ?? ["success"];
         const outcome = script[Math.min(n - 1, script.length - 1)];
         const result = new Promise<WorkerResult>((resolve) => {
-          const finish = () => resolve(resultFor(contract, outcome));
+          const cmds = opts.workerCommands?.[contract.taskId];
+          const finish = () => {
+            const r = resultFor(contract, outcome);
+            // The orchestrator's own (trusted) validations stay independent of what the Worker reports running.
+            if (cmds) trustedTestRuns.set(contract.runId, r.testsRun);
+            resolve(cmds ? { ...r, testsRun: cmds[Math.min(n - 1, cmds.length - 1)].map((command) => ({ command, outcome: "passed" as const })) } : r);
+          };
           if (opts.holdWorkers) held.set(contract.taskId, finish);
           else finish();
         });
@@ -470,7 +543,8 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
         if (!contract.gitMetadataDigest || metadataOf(lease.taskId) !== contract.gitMetadataDigest) {
           throw new Error("[fake] Git metadata changed since workspace preparation");
         }
-        const outcomeOf = (needle: string) => result.testsRun.find((r) => r.command.includes(needle))?.outcome ?? "not_run";
+        const trustedRuns = trustedTestRuns.get(runId) ?? result.testsRun;
+        const outcomeOf = (needle: string) => trustedRuns.find((r) => r.command.includes(needle))?.outcome ?? "not_run";
         const validations = contract.requiredValidations.map((name) => {
           const o = outcomeOf(
             name === "tests"
@@ -501,7 +575,15 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
                   reviewId: runId,
                   diff: { text: result.filesChanged.map((p) => `+++ b/${p}\n+${files.get(p) ?? ""}`).join("\n"), truncated: false },
                   answer: result.summary,
-                  fileContent: (p) => files.get(p) ?? `// repository file ${p}`,
+                  fileContent: (p) => files.get(p) ?? (opts.repoFiles ? (opts.repoFiles[p] ?? null) : `// repository file ${p}`),
+                  ...(opts.repoFiles
+                    ? {
+                        sourcePorts: {
+                          listFiles: async () => Object.keys(opts.repoFiles!),
+                          searchContent: async (kw: string) => Object.entries(opts.repoFiles!).filter(([, c]) => c.toLowerCase().includes(kw.toLowerCase())).map(([p]) => p),
+                        },
+                      }
+                    : {}),
                   timeoutMs: 5_000,
                 })
             : null;
@@ -509,6 +591,7 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
           changedPaths: result.filesChanged,
           validations,
           ...(judged?.reviewUnavailable ? { goalReviewUnavailable: true } : {}),
+          ...(judged ? { managerReviewCalls: judged.reviewCalls, citedFiles: judged.citedFiles, constraintVerdicts: judged.constraintVerdicts } : {}),
           acceptance: judged
             ? judged.acceptance
             : contract.acceptanceCriteria.map((_, i) => ({
@@ -584,7 +667,8 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
     },
   };
 
-  const loop = createManagerLoop(ports, opts.policy);
+  // Explicit fixture: a simulation may run the deterministic Manager when no GPT port is injected.
+  const loop = createManagerLoop(ports, { managerMode: "deterministic_fixture", ...opts.policy });
   const decideApproval = (taskId: string, phase: "pre_execution" | "commit_publish" | "post_qa", status: "approved" | "rejected" | "expired", overrides = {}) => {
     const task = intakes.get(taskId);
     const latestContract = contractsByTask.get(taskId);
@@ -615,7 +699,8 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
       gitMetadataDigest: metadataOf(taskId),
       allowedScope: contract.allowedScope,
       validations: record.validations,
-      acceptance: record.acceptance,
+      // The Manager's final acceptance record (incl. owner-constraint verdicts the loop added).
+      acceptance: snap.evidence?.acceptance ?? record.acceptance,
       observedRisk: record.observedRisk,
       managerDecision: "accepted",
       action: COMMIT_PUBLISH_ACTION,
@@ -756,9 +841,12 @@ export function fakeIntake(input: FakeIntakeInput, overrides: Partial<TaskIntake
 /** Polls QA once per call (as an external timer would) until the task leaves qa_pending; bounded. */
 export async function driveQa(sim: Simulation, taskId: string, maxPolls = 10): Promise<number> {
   let polls = 0;
+  let approvals = 0;
   while (polls < maxPolls) {
     const task = sim.loop.task(taskId);
-    if (task?.approvalPhase === "commit_publish") {
+    if (task?.approvalPhase === "commit_publish" && task.status === "needs_human_approval") {
+      // Bounded: an approval that does not take (binding mismatch) must fail the test, not hang it.
+      if (++approvals > 3) throw new Error(`[fake] commit approval for ${taskId} did not take`);
       sim.approve(taskId, "commit_publish");
       await sim.send({ type: "approval_granted", taskId, phase: "commit_publish" });
       continue;

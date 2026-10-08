@@ -97,7 +97,22 @@ const FIXED_GOAL_CRITERIA: Readonly<Record<TaskGoal["intent"], readonly string[]
 function checkGoal(value: unknown): { ok: true; goal: TaskGoal; criteria: string[]; riskObservations: string[] } | { ok: false; reason: string } {
   const g = value as Record<string, unknown> | null;
   if (!g || typeof g !== "object" || Array.isArray(g)) return { ok: false, reason: "goal must be an object" };
-  if (Object.keys(g).some((k) => !["intent", "originalRequest", "interpretedObjective", "criteria", "riskObservations"].includes(k))) return { ok: false, reason: "goal contains an unsupported field" };
+  if (Object.keys(g).some((k) => !["intent", "originalRequest", "interpretedObjective", "criteria", "riskObservations", "workArea", "group"].includes(k))) return { ok: false, reason: "goal contains an unsupported field" };
+  const group = g.group as { id?: unknown; parts?: unknown } | undefined;
+  if (
+    group !== undefined &&
+    (!group ||
+      typeof group !== "object" ||
+      typeof group.id !== "string" ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(group.id) ||
+      !Array.isArray(group.parts) ||
+      group.parts.length < 2 ||
+      group.parts.length > 4 ||
+      !group.parts.every((p) => p && typeof p === "object" && (p.area === "programming" || p.area === "visual") && typeof p.objective === "string" && p.objective.length <= 2_000 && !isDangerousValue(p.objective)) ||
+      !group.parts.some((p: { area: string }) => p.area === g.workArea))
+  )
+    return { ok: false, reason: "goal group is malformed" };
+  if (g.workArea !== undefined && g.workArea !== "programming" && g.workArea !== "visual") return { ok: false, reason: "goal work area is unsupported" };
   if (!(TASK_CREATING_INTENTS as readonly string[]).includes(String(g.intent))) return { ok: false, reason: "goal intent does not create a task" };
   // The owner's own words keep the raw-input checks; planner-derived fields use the structured planner validator.
   const originalRequest = typeof g.originalRequest === "string" ? normalizeObjective(g.originalRequest) : "";
@@ -106,7 +121,13 @@ function checkGoal(value: unknown): { ok: true; goal: TaskGoal; criteria: string
   if (!planned.ok) return { ok: false, reason: `goal ${planned.reason}` };
   return {
     ok: true,
-    goal: { intent: g.intent as TaskGoal["intent"], originalRequest, interpretedObjective: planned.interpretedObjective },
+    goal: {
+      intent: g.intent as TaskGoal["intent"],
+      originalRequest,
+      interpretedObjective: planned.interpretedObjective,
+      ...(g.workArea ? { workArea: g.workArea as "programming" | "visual" } : {}),
+      ...(group ? { group: { id: group.id as string, parts: (group.parts as { area: "programming" | "visual"; objective: string }[]).map((p) => ({ area: p.area, objective: p.objective })) } } : {}),
+    },
     criteria: planned.criteria,
     riskObservations: planned.riskObservations,
   };
@@ -288,7 +309,7 @@ export function validateAndNormalizeRequest(
     if (!g.ok) return reject("invalid_goal", g.reason);
     if (criteria.length) return reject("invalid_goal", "an interpreted goal carries its own criteria");
     mode = modeForIntent(g.goal.intent);
-    goal = { intent: g.goal.intent, originalRequest: g.goal.originalRequest, interpretedObjective: g.goal.interpretedObjective };
+    goal = { intent: g.goal.intent, originalRequest: g.goal.originalRequest, interpretedObjective: g.goal.interpretedObjective, ...(g.goal.workArea ? { workArea: g.goal.workArea } : {}), ...(g.goal.group ? { group: g.goal.group } : {}) };
     riskObservations = g.riskObservations;
     // Planner criteria first, then fixed criteria the planner can never drop or weaken.
     acceptanceCriteria = [

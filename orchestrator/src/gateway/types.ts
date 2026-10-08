@@ -101,6 +101,26 @@ export interface GatewayTaskStatus {
   mode: TaskMode;
   /** Manager-accepted answer of a completed read_only task (sanitized). */
   answer: string | null;
+  /** Structured technical facts, shown only when the owner explicitly asks (sanitized; no SHAs, secrets or model reasoning). */
+  details?: import("../intake/types").TaskTechnicalDetails;
+  /** Worker assignment state (area, temporary cover, availability pause); presentation only, never authority. */
+  workforce?: {
+    workArea: "programming" | "visual";
+    primaryWorker: WorkerKind;
+    temporaryCover: boolean;
+    handoffs: number;
+    availabilityPause: { waitingFor: WorkerKind[]; resetAt: string | null; exhausted: WorkerKind; cause: "quota" | "authentication" | "executable" | "service" } | null;
+    /** lead: the part that carries the owner-facing combined result (one message per request). */
+    combinedReview: {
+      status: "waiting_parts" | "reviewing" | "review_unavailable" | "accepted" | "not_accepted" | "repairing" | "diagnosis_unavailable" | "needs_human_decision";
+      ownerSummary: string | null;
+      lead: boolean;
+      leadTaskId: string;
+      round: number;
+      cycle: number;
+      repairTargets: ("programming" | "visual")[];
+    } | null;
+  };
   approvalRequired: boolean;
   createdAt: IsoTimestamp;
   updatedAt: IsoTimestamp;
@@ -203,6 +223,10 @@ export interface TrustedHumanDecisionRequirement {
   rootCause?: string;
   /** What each Manager-guided repair cycle of this round attempted and how it ended. */
   repairAttempts?: readonly { cycle: number; attempted: string; outcome: string }[];
+  /** A decomposed request's combined-repair decision (its lead task's own work is complete). */
+  groupDecision?: boolean;
+  /** GPT Manager question + options when it asked the owner to choose. */
+  ownerDecision?: { question: string; options: readonly { id: string; summary: string }[]; recommended: string | null } | null;
 }
 
 export interface HumanDecisionOutcomeRecord {
@@ -230,6 +254,8 @@ export interface PendingHumanDecisionView {
   managerRecommendation: string;
   inputRequested: string;
   fingerprintTrend: "stagnated" | "changed";
+  /** GPT Manager's question + options when it asked the owner to choose (owner language). */
+  ownerDecision?: { question: string; options: { id: string; summary: string }[]; recommended: string | null } | null;
   rootCause: string;
   repairAttempts: { cycle: number; attempted: string; outcome: string }[];
   /** A decision is guidance only: it never approves commit, publish, merge, deploy, or red risk. */
@@ -384,5 +410,6 @@ export interface AgentGatewayService {
   /** Natural-language owner message -> validated internal intent (stored, idempotent). */
   interpretOwnerMessage(call: GatewayCall<unknown>): Promise<InterpretationView>;
   /** Creates the task described by a stored task interpretation through normal intake. */
-  submitInterpretedTask(call: GatewayCall<unknown>): Promise<{ taskId: string; status: GatewayTaskStatus; duplicate: boolean }>;
+  /** A mixed programming+visual request returns the programming task first and the visual part in relatedTaskIds. */
+  submitInterpretedTask(call: GatewayCall<unknown>): Promise<{ taskId: string; status: GatewayTaskStatus; duplicate: boolean; relatedTaskIds?: string[]; parts?: { taskId: string; area: "programming" | "visual" }[] }>;
 }

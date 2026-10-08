@@ -26,9 +26,9 @@ describe("routing", () => {
     });
   });
 
-  it.each(["unavailable", "quota_exhausted", "misconfigured"] as const)("claude %s → codex fallback for coding", (status) => {
+  it("claude quota_exhausted → codex temporarily covers coding", () => {
     const d = routeTask(cls("backend"), {
-      claude: status,
+      claude: "quota_exhausted",
       codex: "available",
     });
     expect(d).toMatchObject({
@@ -36,6 +36,10 @@ describe("routing", () => {
       primary: "claude",
       isFallback: true,
     });
+  });
+
+  it.each(["unavailable", "misconfigured"] as const)("claude %s (not quota) → no codex takeover; waits for claude", (status) => {
+    expect(routeTask(cls("backend"), { claude: status, codex: "available" })).toMatchObject({ worker: null, primary: "claude", reasonCode: "fallback_forbidden" });
   });
 
   it("no worker when claude and codex both unavailable", () => {
@@ -48,7 +52,7 @@ describe("routing", () => {
   });
 
   it("does not fallback when policy forbids it", () => {
-    expect(routeTask(cls("backend"), { claude: "unavailable", codex: "available" }, { allowClaudeToCodexFallback: false })).toMatchObject({
+    expect(routeTask(cls("backend"), { claude: "quota_exhausted", codex: "available" }, { allowClaudeToCodexFallback: false })).toMatchObject({
       worker: null,
       reasonCode: "fallback_forbidden",
     });

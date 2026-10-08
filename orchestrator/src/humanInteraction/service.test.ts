@@ -1,3 +1,4 @@
+import { findInternalJargon } from "../executive/communication";
 import { describe, expect, it } from "vitest";
 import { createManagerLoop } from "../scheduler/loop";
 import { createSimulation, fakeIntake, type Simulation, type WorkerScript } from "../scheduler/fake";
@@ -68,6 +69,27 @@ describe("human interaction — outbound needs_human_decision", () => {
   });
 });
 
+describe("production GPT Manager intake requirement", () => {
+  it("does not silently submit through legacy intake when the GPT planner is unavailable", async () => {
+    const audit = createInMemoryAuditRepository(() => "2026-10-07T00:00:00.000Z");
+    const sim = createSimulation({ autoApproveCommits: false });
+    const h = createHumanInteractionHarness({
+      loop: sim.loop,
+      approvals: sim.approvals,
+      audit,
+      now: sim.ports.now,
+      managerRequired: true,
+    });
+
+    const result = await h.service.submitGoal({ kind: "goal", idempotencyKey: "tg.prod.no-manager", text: "修正登入權限檢查" });
+    expect(result).toMatchObject({ outcome: "info" });
+    expect(result.message).toContain("GPT Manager");
+    expect(result.message).toContain("沒有建立任務");
+    expect(sim.loop.tasks()).toEqual([]);
+    expect(h.ledger.tracked()).toEqual([]);
+  });
+});
+
 describe("human interaction — inbound guidance", () => {
   it("an owner reply to the notice resumes the bound escalation exactly once", async () => {
     const { service, transport, sim, emitted } = await escalated(["hi3"]);
@@ -77,6 +99,7 @@ describe("human interaction — inbound guidance", () => {
     const r = await service.handleReply({ kind: "reply", idempotencyKey: "tg.msg.11", replyToDeliveryRef: ref, text: `  ${GUIDANCE}\n` });
     expect(r.outcome).toBe("resumed");
     expect(r.message).toContain("does NOT approve");
+    expect(findInternalJargon(r.message)).toEqual([]);
     await sim.loop.settle();
     expect(emitted).toHaveLength(1);
     expect(emitted[0].decision).toMatchObject({ taskId: "hi3", escalationId: "hi3.hd.1", guidance: GUIDANCE, kind: "continue_with_guidance", decidedBy: "telegram-owner" });
@@ -92,10 +115,13 @@ describe("human interaction — inbound guidance", () => {
   it("binds to trusted escalation state: a reply to an unknown or stale message cannot resume", async () => {
     const { service, transport, sim, emitted } = await escalated(["hi4"]);
     await service.observe();
-    expect((await service.handleReply({ kind: "reply", idempotencyKey: "tg.msg.1", replyToDeliveryRef: "99999", text: GUIDANCE })).outcome).toBe("info");
-    // Resume once; the old notice is now stale.
-    expect((await service.handleReply({ kind: "reply", idempotencyKey: "tg.msg.2", replyToDeliveryRef: transport.sent[0].deliveryRef, text: GUIDANCE })).outcome).toBe("resumed");
+    // A reply to an unknown message is an ordinary message: with exactly ONE open decision it binds to
+    // that decision's CURRENT server-side escalation (never to whatever the unknown message was).
+    expect((await service.handleReply({ kind: "reply", idempotencyKey: "tg.msg.1", replyToDeliveryRef: "99999", text: GUIDANCE })).outcome).toBe("resumed");
     await sim.loop.settle();
+    expect(emitted).toHaveLength(1);
+    expect(emitted[0].decision).toMatchObject({ taskId: "hi4", escalationId: "hi4.hd.1" });
+    // The old decision message is now stale: an explicit reply to it cannot resume anything.
     const stale = await service.handleReply({ kind: "reply", idempotencyKey: "tg.msg.3", replyToDeliveryRef: transport.sent[0].deliveryRef, text: "another idea" });
     expect(stale.outcome).toBe("stale");
     expect(emitted).toHaveLength(1);
@@ -118,17 +144,37 @@ describe("human interaction — inbound guidance", () => {
     expect(sim.loop.task("hi5b")!.status).toBe("needs_human_decision");
   });
 
-  it("never guesses: an uncorrelated message is neither guidance nor a goal, even with one open escalation", async () => {
-    for (const ids of [["hi6a", "hi6b"], ["hi6c"]]) {
-      const { service, emitted, sim } = await escalated(ids);
-      await service.observe();
-      const before = sim.loop.tasks().length;
-      const r = await service.handleReply({ kind: "reply", idempotencyKey: "tg.msg.31", replyToDeliveryRef: null, text: GUIDANCE });
-      expect(r.outcome).toBe("info");
-      expect(r.message).toMatch(/planner is unavailable[\s\S]*\/goal/);
-      expect(emitted).toHaveLength(0);
-      expect(sim.loop.tasks()).toHaveLength(before);
-    }
+  it("exactly one pending decision: an ordinary message (no Reply) is guidance for it, bound server-side", async () => {
+    const { service, emitted, sim } = await escalated(["hi6c"]);
+    await service.observe();
+    const before = sim.loop.tasks().length;
+    const r = await service.handleReply({ kind: "reply", idempotencyKey: "tg.msg.31", replyToDeliveryRef: null, text: GUIDANCE });
+    expect(r.outcome).toBe("resumed");
+    expect(r.message).toContain("does NOT approve");
+    await sim.loop.settle();
+    expect(emitted).toHaveLength(1);
+    expect(emitted[0].decision).toMatchObject({ taskId: "hi6c", escalationId: "hi6c.hd.1", guidance: GUIDANCE });
+    // No new task was created and a redelivery is not replayed.
+    expect(sim.loop.tasks()).toHaveLength(before);
+    expect((await service.handleReply({ kind: "reply", idempotencyKey: "tg.msg.31", replyToDeliveryRef: null, text: GUIDANCE })).outcome).toBe("duplicate");
+    await sim.loop.settle();
+    expect(emitted).toHaveLength(1);
+  });
+
+  it("several pending decisions: never guesses; asks which one in plain language and changes nothing", async () => {
+    const { service, emitted, sim } = await escalated(["hi6a", "hi6b"]);
+    await service.observe();
+    const before = sim.loop.tasks().length;
+    const r = await service.handleReply({ kind: "reply", idempotencyKey: "tg.msg.32", replyToDeliveryRef: null, text: GUIDANCE });
+    expect(r.outcome).toBe("needs_selection");
+    expect(r.message).toMatch(/2 decisions are waiting for you[\s\S]*1\.「[\s\S]*2\.「/);
+    // A Chinese owner gets the same question in Traditional Chinese.
+    const zh = await service.handleReply({ kind: "reply", idempotencyKey: "tg.msg.33", replyToDeliveryRef: null, text: "請改用 UTC 比較時間" });
+    expect(zh.outcome).toBe("needs_selection");
+    expect(zh.message).toMatch(/目前有 2 件事在等你決定/);
+    expect(r.message).not.toMatch(/hd\.\d|escalation/i);
+    expect(emitted).toHaveLength(0);
+    expect(sim.loop.tasks()).toHaveLength(before);
   });
 
   it("the notice Ref correlates a reply when the delivery itself was never recorded (crash window)", async () => {
@@ -224,7 +270,8 @@ describe("human interaction — commit/publish approval", () => {
     const ref = transport.sent[0].notice.ref;
     const r = await service.handleAction({ kind: "action", idempotencyKey: `tg.cb.${ref}.approve`, ref, action: "approve" });
     expect(r.outcome).toBe("approved");
-    expect(r.message).toContain("Merge and deploy are NOT approved");
+    // No tracked label -> default Traditional Chinese; it states merge/deploy are not part of it.
+    expect(r.message).toContain("不會合併，也不會部署");
     await sim.loop.settle();
     expect(approvalEvents).toEqual([{ taskId: "ap2", decision: "approved" }]);
     expect(sim.commits).toHaveLength(1);
@@ -295,7 +342,7 @@ describe("human interaction — restart", () => {
 
     // Process restart: new loop restored from the audit-backed checkpoint, new ledger/service over the same audit.
     first.sim.ports.leases.release(first.sim.ports.leases.current("ws-rs1"));
-    const loop2 = createManagerLoop(first.sim.ports);
+    const loop2 = createManagerLoop(first.sim.ports, { managerMode: "deterministic_fixture" });
     await loop2.resume();
     await loop2.settle();
     expect(loop2.task("rs1")).toMatchObject({ status: "needs_human_decision" });
@@ -330,7 +377,7 @@ describe("human interaction — restart", () => {
     expect(h1.transport.sent).toHaveLength(1);
 
     sim.ports.leases.release(sim.ports.leases.current("ws-rs2"));
-    const loop2 = createManagerLoop(sim.ports);
+    const loop2 = createManagerLoop(sim.ports, { managerMode: "deterministic_fixture" });
     await loop2.resume();
     await loop2.settle();
     expect(loop2.task("rs2")).toMatchObject({ status: "needs_human_approval", approvalPhase: "commit_publish" });

@@ -38,3 +38,39 @@ export function createWorkingTreeDiff(runner: ProcessRunner, repoRoot: string): 
     return [tracked.stdout, ...newFiles].join("\n");
   };
 }
+
+const MAX_LISTED = 20_000;
+
+/** Trusted diff between two commits (a part's base and its pushed head), bounded by the caller. */
+export function createCommitRangeDiff(runner: ProcessRunner, repoRoot: string): (fromSha: string, toSha: string) => Promise<string> {
+  return async (fromSha, toSha) => {
+    if (!/^[0-9a-f]{40}$/.test(fromSha) || !/^[0-9a-f]{40}$/.test(toSha)) throw new Error("invalid diff range");
+    const out = await runner.spawn({ command: "git", args: ["diff", "--no-color", "--no-ext-diff", fromSha, toSha], cwd: repoRoot }).exit;
+    if (out.exitCode !== 0) throw new Error("git diff failed");
+    return out.stdout;
+  };
+}
+
+/**
+ * Trusted, read-only repository search for the Manager's own evidence
+ * gathering: tracked file listing and fixed-string content search. Never a
+ * shell; the keyword is a literal (-F) argument after "--e"; secret-looking
+ * paths are dropped like in createRepoFileReader.
+ */
+export function createRepoSearch(runner: ProcessRunner, repoRoot: string): { listFiles(): Promise<string[]>; searchContent(keyword: string): Promise<string[]> } {
+  const safe = (paths: string[]) => paths.filter((p) => isSafeRepoPath(p) && !/(^|\/)\.env|(^|\/)\.git\//.test(p)).slice(0, MAX_LISTED);
+  return {
+    async listFiles() {
+      const out = await runner.spawn({ command: "git", args: ["ls-files", "-z"], cwd: repoRoot }).exit;
+      if (out.exitCode !== 0 || out.truncated) return [];
+      return safe(out.stdout.split("\0").filter(Boolean));
+    },
+    async searchContent(keyword) {
+      if (!/^[A-Za-z0-9_\u3400-\u9fff -]{3,60}$/.test(keyword)) return [];
+      const out = await runner.spawn({ command: "git", args: ["grep", "-l", "-I", "-i", "-F", "-z", "-e", keyword, "--", "client", "server", "shared"], cwd: repoRoot }).exit;
+      // git grep exits 1 when nothing matches.
+      if ((out.exitCode !== 0 && out.exitCode !== 1) || out.truncated) return [];
+      return safe(out.stdout.split("\0").filter(Boolean)).slice(0, 50);
+    },
+  };
+}

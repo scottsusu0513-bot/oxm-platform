@@ -1,4 +1,5 @@
 import { isDangerousValue, REDACTED } from "../store/sanitize";
+import { applyGuidanceConstraints, type GuidedRepairPlan } from "../executive/guidance";
 import type {
   DiagnosisFinding,
   DiagnosisPhase,
@@ -10,6 +11,7 @@ import type {
   ManagerValidation,
   PreviousRepairComparison,
   RepairCycleRecord,
+  RepairPlanningContext,
 } from "./types";
 
 /**
@@ -166,15 +168,28 @@ function rootCauseFor(primary: DiagnosisFinding, e: ManagerEvidence, phase: Diag
   return s(`${cause}${dep}`);
 }
 
-function requiredFixFor(primary: DiagnosisFinding, e: ManagerEvidence, prev: PreviousRepairComparison | null): string {
+function requiredFixFor(primary: DiagnosisFinding, prev: PreviousRepairComparison | null, planning: RepairPlanningContext | null, guided: GuidedRepairPlan): string {
   const name = nameOf(primary.evidenceId);
-  const reruns = Array.from(new Set(e.validations.filter((v) => v.requested).map((v) => v.name))).sort().join(", ");
+  const reruns = guided.rerunValidations.join(", ");
+  const readOnly = planning?.mode === "read_only";
+  const plan = planning?.evidencePlan ?? null;
+  const targets = guided.evidenceTargets.length ? guided.evidenceTargets : (plan?.targets ?? []);
+  const where = targets.length ? ` Start from: ${targets.join(", ")}.` : "";
   let fix: string;
-  if (primary.failureCode === "ci_failed") fix = `Make CI check '${name}' pass by correcting task-owned changes within scope; reproduce it via the required validations (${reruns}) before reporting.`;
-  else if (primary.evidenceId.startsWith("validation:")) fix = `Make validation '${name}' pass by correcting task-owned changes within scope, then rerun ${reruns}.`;
-  else if (primary.evidenceId.startsWith("acceptance:")) fix = `Produce trusted passing evidence for criterion ${name} (rerun ${reruns}) within scope.`;
-  else fix = `Complete the objective within scope and rerun ${reruns} until every required validation passes.`;
-  if (prev?.trend === "stagnated") fix = `${fix} Use another approach than repair #${prev.cycle}: it left the failure unchanged.`;
+  if (primary.failureCode === "ci_failed") fix = `Make CI check '${name}' pass by correcting task-owned changes within scope; reproduce it via the required validations (${reruns || "none"}) before reporting.`;
+  else if (primary.evidenceId.startsWith("validation:") && readOnly)
+    fix = `Read-only task: do not change any file. Validation '${name}' reflects the repository state, not the answer; report it as a finding and base the answer on direct repository evidence.${where}`;
+  else if (primary.evidenceId.startsWith("validation:")) fix = `Make validation '${name}' pass by correcting task-owned changes within scope, then rerun ${reruns || name}.`;
+  else if (primary.evidenceId.startsWith("acceptance:") && (readOnly || guided.wantsDirectEvidence))
+    // Concrete evidence requirements travel in diagnosis.evidenceRequests (kept out of this bounded line).
+    fix = `Gather the direct repository evidence criterion ${name} needs: read the relevant source files and quote exact file paths with line references and bounded excerpts in the answer.${where}${
+      reruns ? ` Validation (${reruns}) is secondary and never the evidence for the goal.` : " Do not rerun validations as a substitute for evidence."
+    }`;
+  else if (primary.evidenceId.startsWith("acceptance:")) fix = `Produce trusted passing evidence for criterion ${name}${reruns ? ` (rerun ${reruns})` : ""} within scope.`;
+  else fix = `Complete the objective within scope${reruns ? ` and rerun ${reruns} until every required validation passes` : ""}.`;
+  if (prev?.trend === "stagnated")
+    fix = `${fix} Use another approach than repair #${prev.cycle}: it left the failure unchanged${primary.evidenceId.startsWith("acceptance:") ? " (it did not return the evidence the Manager needs)" : ""}.`;
+  if (guided.justification) fix = `${fix} ${guided.justification}`;
   return s(fix);
 }
 
@@ -193,6 +208,8 @@ export function diagnoseFailure(input: {
   round?: number;
   /** Human decision consumed as evidence; required for, and only allowed on, cycle 1 of a round > 1. */
   human?: HumanDecisionEvidence | null;
+  /** GOAL-level planning context: mode, durable owner constraints, evidence plan (every cycle). */
+  planning?: RepairPlanningContext | null;
 }): { ok: true; diagnosis: ManagerDiagnosis } | { ok: false; reason: string } {
   const { evidence: e, validation: v, cycle } = input;
   const round = input.round ?? 1;
@@ -222,12 +239,25 @@ export function diagnoseFailure(input: {
     ...(phase === "post_pr_ci" ? (e.ci?.requiredChecks ?? []).map((c) => `ci:${c} success on the repaired head`) : []),
     "changed paths stay within allowedScope",
   ];
+  const planning = input.planning ?? null;
+  const guided = applyGuidanceConstraints({
+    mode: planning?.mode ?? "change",
+    rerunValidations: Array.from(new Set(e.validations.filter((x) => x.requested).map((x) => x.name))),
+    constraints: planning?.constraints ?? [],
+  });
   let rootCause = rootCauseFor(primary, e, phase, findings, prev);
-  let requiredFix = requiredFixFor(primary, e, prev);
+  let requiredFix = requiredFixFor(primary, prev, planning, guided);
   if (human) {
     rootCause = s(`Human decision ${human.decisionId} adds information after round ${round - 1} stalled. ${rootCause}`);
     requiredFix = s(`Apply the human decision (humanDecision.guidance) to this failure. ${requiredFix}`);
+  } else if (guided.constraintLines.length > 0) {
+    requiredFix = s(`Honor the owner's earlier guidance (ownerConstraints). ${requiredFix}`);
   }
+  const plan = planning?.evidencePlan ?? null;
+  const evidenceRequests = [
+    ...(plan && plan.kind !== "change" ? plan.requirements : []),
+    ...(guided.evidenceTargets.length ? [`Inspect: ${guided.evidenceTargets.join(", ")}`] : []),
+  ].slice(0, MAX_LIST);
   const diagnosis: ManagerDiagnosis = {
     kind: "manager_diagnosis",
     taskId: e.taskId,
@@ -254,6 +284,10 @@ export function diagnoseFailure(input: {
     findings: findings.slice(0, MAX_LIST),
     previous: prev,
     humanDecision: human ? structuredClone(human) : null,
+    ...(guided.constraintLines.length ? { ownerConstraints: guided.constraintLines.slice(0, MAX_LIST).map(s) } : {}),
+    ...(evidenceRequests.length ? { evidenceRequests: evidenceRequests.map(s) } : {}),
+    ...(guided.deferredValidations.length ? { deferredValidations: [...guided.deferredValidations] } : {}),
+    ...(guided.justification ? { constraintJustification: s(guided.justification) } : {}),
   };
   return { ok: true, diagnosis };
 }

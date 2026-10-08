@@ -14,6 +14,7 @@ import {
   type ManagerDiagnosis,
   type ManagerEvidence,
   type ManagerValidation,
+  type RepairPlanningContext,
   type RepairRequest,
 } from "./types";
 import { validateEvidence } from "./validator";
@@ -86,6 +87,8 @@ export function humanDecisionResumeStep(input: {
   request: HumanDecisionRequest;
   decision: HumanDecisionInput;
   previous: { diagnosis: ManagerDiagnosis; repairOutcome: string };
+  /** GOAL context including this decision as a durable owner constraint. */
+  planning?: RepairPlanningContext | null;
 }): Intent<{ human: HumanDecisionEvidence; validation: ManagerValidation; repairRequest: RepairRequest; audit: Omit<NewAuditEvent, "id">[] }> {
   const { evidence: e, request, decision } = input;
   const bound = checkHumanDecisionBinding(request, decision);
@@ -106,7 +109,7 @@ export function humanDecisionResumeStep(input: {
     guidance: decision.guidance,
     decidedBy: decision.decidedBy,
   };
-  const built = buildRepairRequest(e, input.previous, { round: human.round, human });
+  const built = buildRepairRequest(e, input.previous, { round: human.round, human }, input.planning ?? null);
   if (!built.ok) return built;
 
   const meta: ManagerAuditMetadataInput = {

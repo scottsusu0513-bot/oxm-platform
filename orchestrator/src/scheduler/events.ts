@@ -37,6 +37,17 @@ export const ORCHESTRATION_AUDIT_EVENTS = [
   "manager_accepted",
   "manager_blocked",
   "human_approval_requested",
+  "worker_quota_exhausted",
+  "worker_availability_wait",
+  "worker_availability_resumed",
+  "worker_handoff",
+  "worker_handback",
+  "human_guidance_constraint_recorded",
+  "manager_diagnosis_accepted",
+  "manager_diagnosis_refused",
+  "combined_review_accepted",
+  "combined_review_rejected",
+  "owner_constraint_unmet",
 ] as const;
 export type OrchestrationAuditEvent = (typeof ORCHESTRATION_AUDIT_EVENTS)[number];
 

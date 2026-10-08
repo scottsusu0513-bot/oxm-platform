@@ -57,6 +57,8 @@ export function createHumanInteractionHarness(input: {
   nextTaskId?: () => string;
   /** Trusted planning layer for natural-language intake (absent = planner unavailable). */
   planner?: IntentPlanner;
+  /** Production behavior: never fall back to legacy non-GPT intake. */
+  managerRequired?: boolean;
   idPrefix?: string;
 }): {
   gateway: AgentGatewayService;
@@ -174,6 +176,7 @@ export function createHumanInteractionHarness(input: {
     ledger,
     transport,
     now: input.now,
+    ...(input.managerRequired ? { managerRequired: true } : {}),
   });
   return { gateway, service, ledger, transport, owner, emitted, approvalEvents, cancelCalls };
 }

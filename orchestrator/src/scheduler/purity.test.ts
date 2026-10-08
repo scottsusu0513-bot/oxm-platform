@@ -25,12 +25,18 @@ const ALLOWED_RUNTIME = new Set([
   "../branches/types",
   "../domain/taskState",
   "../domain/types",
+  "../executive/evidencePlan",
+  "../executive/guidance",
+  "../executive/handoff",
+  "../executive/workAssignment",
   "../github/qa",
   "../githubWrite/flow",
   "../manager/budget",
   "../manager/diagnosis",
   "../manager/humanDecision",
   "../manager/lifecycle",
+  "../manager/managerPlan",
+  "../manager/constraintCheck",
   "../manager/repair",
   "../manager/sequencing",
   "../manager/validator",
@@ -39,7 +45,7 @@ const ALLOWED_RUNTIME = new Set([
   "../workers/prompt",
 ]);
 /** Type-only imports allowed (erased at runtime). */
-const ALLOWED_TYPE_ONLY = new Set([...ALLOWED_RUNTIME, "../github/types", "../githubWrite/types", "../githubWrite/lease", "../githubWrite/workspace", "../manager/types", "../store/types", "../workers/types"]);
+const ALLOWED_TYPE_ONLY = new Set([...ALLOWED_RUNTIME, "../planning/managerReasoning", "../github/types", "../githubWrite/types", "../githubWrite/lease", "../githubWrite/workspace", "../manager/types", "../store/types", "../workers/types"]);
 ALLOWED_TYPE_ONLY.add("../codespace/types");
 
 function imports(f: string): { spec: string; typeOnly: boolean }[] {

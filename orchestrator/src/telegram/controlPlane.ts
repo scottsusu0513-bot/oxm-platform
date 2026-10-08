@@ -96,7 +96,7 @@ export function createTelegramControlPlane(deps: TelegramControlPlaneDeps): Tele
       case "help":
         return feedback(parsed.chatId, parsed.messageId, { outcome: "info", message: HELP_TEXT });
       case "usage":
-        return feedback(parsed.chatId, parsed.messageId, { outcome: "info", message: parsed.command === "goal" ? GOAL_USAGE : "Usage: /status <task id or at least 4 of its characters>" });
+        return feedback(parsed.chatId, parsed.messageId, { outcome: "info", message: parsed.command === "goal" ? GOAL_USAGE : "用法：/status <任務編號（至少 4 個字元）>" });
       case "goal":
         return feedback(parsed.chatId, parsed.messageId, await deps.service.submitGoal(parsed.inbound));
       case "tasks":

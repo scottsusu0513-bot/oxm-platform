@@ -83,7 +83,7 @@ describe("goal-reviewer outage never consumes a Manager-guided repair cycle", ()
     const { sim } = await start(r, true);
     expect(sim.loop.task("o-task-1")!.status).toBe("waiting_infrastructure");
     sim.ports.leases.release(sim.ports.leases.current("default"));
-    const loop2 = createManagerLoop(sim.ports);
+    const loop2 = createManagerLoop(sim.ports, { managerMode: "deterministic_fixture" });
     await loop2.resume();
     await loop2.settle();
     expect(loop2.task("o-task-1")).toMatchObject({ status: "waiting_infrastructure", reviewRetries: 1 });
@@ -99,7 +99,7 @@ describe("goal-reviewer outage never consumes a Manager-guided repair cycle", ()
     await service.observe();
     const infra = transport.sent.filter((s) => s.notice.kind === "milestone" && (s.notice as MilestoneNotice).milestone === "infrastructure_waiting");
     expect(infra).toHaveLength(1);
-    expect((infra[0].notice as MilestoneNotice).detail).toMatch(/waiting, not failed; no repair cycle was used/);
+    expect((infra[0].notice as MilestoneNotice).detail).toMatch(/has not failed and no fix attempt was used/);
   });
 
   it("a substantive 'unsupported' verdict is still a real repair (not an outage)", async () => {
