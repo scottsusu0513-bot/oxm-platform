@@ -75,20 +75,24 @@ function inferredTitle(instruction: string): string {
 }
 
 /** Criteria every interpreted goal of this intent carries regardless of the planner. */
+/**
+ * The few fixed CORE success conditions per intent (goal-oriented, never a
+ * per-sentence checklist of the Worker's report). How the result is phrased
+ * to the owner, including any unverified boundary, is the Manager's
+ * synthesis, not a blocking criterion.
+ */
 const FIXED_GOAL_CRITERIA: Readonly<Record<TaskGoal["intent"], readonly string[]>> = {
   investigate_or_answer: [
     "The owner's question is answered directly",
-    "The answer is supported by cited repository evidence (file paths)",
-    "Uncertainty and unverified assumptions are stated explicitly",
+    "The core answer is supported by trusted repository evidence (file paths)",
   ],
   audit_or_review: [
     "Every requested area was actually inspected",
-    "Each finding is supported by cited repository evidence (file paths)",
-    "Uncertainty and unverified assumptions are stated explicitly",
+    "The findings the conclusion rests on are supported by trusted repository evidence (file paths); inferences and recommendations may stand when identified as such",
   ],
   change_code: ["Existing behaviour outside the requested change is preserved"],
   audit_and_fix: [
-    "Every requested audit area was inspected and each finding is reported with cited repository evidence",
+    "Every requested audit area was inspected, and each finding that drives a code change is reported with cited repository evidence",
     "Every code change corresponds to a reported, evidence-backed finding; no unrelated code is changed",
     "Each supported finding within the requested scope is fixed",
   ],

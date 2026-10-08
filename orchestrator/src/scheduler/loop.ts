@@ -266,9 +266,11 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
   const groups = new Map<string, GroupReview>();
 
   function persistedRecord(t: TaskRecord): PersistedTaskRecord {
+    // Prose (answers, summaries) is never persisted.
+    const { managerAnswer: _answer, ...trusted } = t.record ?? {};
     const record = t.record
       ? {
-          ...t.record,
+          ...(trusted as TrustedRunRecord),
           validations: t.record.validations.map(({ summary: _summary, ...v }) => v),
           acceptance: t.record.acceptance.map(({ summary: _summary, ...a }) => a),
         }
@@ -455,7 +457,8 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       title: t.intake.title,
       category: t.intake.category,
       mode: modeOf(t),
-      answer: modeOf(t) === "read_only" && t.status === "accepted" ? (t.lastResult?.summary ?? null) : null,
+      // Only the Manager's evidence-filtered synthesis reaches the owner; the Worker's raw report never does.
+      answer: modeOf(t) === "read_only" && t.status === "accepted" ? (t.record?.managerAnswer || null) : null,
       risk: t.risk,
       priority: t.priority,
       state: t.state,

@@ -1,5 +1,5 @@
 import { AGENT_INTENTS, TASK_CREATING_INTENTS, modeForIntent, type AgentIntent, type TaskCreatingIntent } from "../domain/types";
-import { isDangerousValue } from "../store/sanitize";
+import { isDangerousValue, REDACTED } from "../store/sanitize";
 import { validatePlannerGoal } from "./structured";
 import type { CriterionReview, IntentDecision } from "./types";
 
@@ -72,6 +72,29 @@ export function normalizeConstraintVerdicts(raw: unknown, ids: readonly string[]
   }
   for (const id of Array.from(dup)) out.set(id, { status: "unsupported", evidence: "reviewer returned conflicting verdicts" });
   return out;
+}
+
+export const MAX_OWNER_ANSWER = 4_000;
+
+/**
+ * The Manager's owner answer (read-only work), or null when missing or not a
+ * string. Output hygiene only: line endings normalized, secret-like
+ * substrings redacted, length bounded. The Manager's prose is NOT
+ * re-validated claim by claim; that judgement is the Manager's.
+ */
+export function normalizeOwnerAnswer(raw: unknown): string | null {
+  const value = raw && typeof raw === "object" ? (raw as { ownerAnswer?: unknown }).ownerAnswer : undefined;
+  if (typeof value !== "string") return null;
+  const answer = value
+    .replace(/\r\n?/g, "\n")
+    .replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, "")
+    .replace(/\b(bearer|basic)\s+\S+/gi, REDACTED)
+    .split(/(\s+)/)
+    .map((tok) => (isDangerousValue(tok) ? REDACTED : tok))
+    .join("")
+    .trim();
+  if (!answer) return null;
+  return answer.length > MAX_OWNER_ANSWER ? `${answer.slice(0, MAX_OWNER_ANSWER - 1)}…` : answer;
 }
 
 /**

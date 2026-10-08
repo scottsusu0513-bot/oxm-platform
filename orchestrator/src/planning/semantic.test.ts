@@ -37,6 +37,8 @@ function reviewer(script: (call: number, input: GoalReviewInput) => Record<strin
         criteria: input.criteria
           .filter((c) => verdicts[c.id] !== "omit")
           .map((c) => ({ id: c.id, status: verdicts[c.id] ?? "satisfied", evidence: verdicts[c.id] === "satisfied" || !verdicts[c.id] ? `diff shows ${c.id}` : "", reason: verdicts[c.id] && verdicts[c.id] !== "satisfied" ? `${c.id} not visible in the diff` : "" })),
+        // Like the real schema, the Manager always writes its owner answer (used for read-only work only).
+        ownerAnswer: input.mode === "read_only" ? "Manager answer." : "",
       };
     },
   };

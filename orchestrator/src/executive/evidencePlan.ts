@@ -6,9 +6,11 @@ import { extractEvidenceTargets, type GuidanceConstraint } from "./guidance";
  * of gatherSourceEvidence.
  *
  * The Manager reasons from the GOAL about which evidence actually answers
- * it. For a factual code question ("what is the homepage search
- * placeholder?") that is the source file, the literal value and its
- * conditional variants, plus an unchanged workspace — never a typecheck run.
+ * it: for a factual code question, the source that defines the fact; for an
+ * explanation or audit, the source that implements what is described —
+ * plus an unchanged workspace, never a typecheck run. Requirements name the
+ * evidence for the CORE result only; the Worker reports everything else it
+ * finds in natural language and the Manager decides what reaches the owner.
  * Technical validation stays secondary for read-only work.
  */
 
@@ -58,10 +60,11 @@ export function deriveEvidencePlan(input: {
   const secondary = "Validation runs such as typecheck are secondary and are never evidence for the answer.";
   const scope =
     "State as fact only what the repository source shows; briefly mark anything not actually verified (deployed site, rendered UI per device/locale, runtime, external services) as unverified, without inventing uncertainty the source settles.";
+  const report = "Report fully in natural language (findings, risks, inferences, recommendations, uncertainty), marking what the source confirms versus what you infer; the Manager decides what reaches the owner.";
   if (input.intent === "audit_or_review") {
     return {
       kind: "audit",
-      requirements: ["Every requested area is inspected by reading its source files.", "Each finding cites the exact file path and a bounded excerpt.", scope, workspace, secondary],
+      requirements: ["Every requested area is inspected by reading its source files.", "Each finding you present as confirmed cites the exact file path and a bounded excerpt.", scope, report, workspace, secondary],
       targets,
       validationIsEvidence: false,
     };
@@ -72,8 +75,9 @@ export function deriveEvidencePlan(input: {
       requirements: [
         "Identify the actual source file/component that defines the value; give its exact repository path.",
         "Quote the exact literal value as written in source, with a path:line reference and a short excerpt.",
-        "Report conditional variants (device, locale, state, props) or state explicitly that none exist.",
+        "Mention conditional variants only where the source shows the value itself differs by condition; exhaustive proof that no variant exists is not required.",
         scope,
+        report,
         workspace,
         secondary,
       ],
@@ -83,7 +87,7 @@ export function deriveEvidencePlan(input: {
   }
   return {
     kind: "behaviour_explanation",
-    requirements: ["Explain the behaviour from the source files that implement it, citing exact paths and bounded excerpts.", "State uncertainty and unverified assumptions explicitly.", scope, workspace, secondary],
+    requirements: ["Explain the behaviour from the source files that implement it, citing exact paths and bounded excerpts for the core explanation.", scope, report, workspace, secondary],
     targets,
     validationIsEvidence: false,
   };

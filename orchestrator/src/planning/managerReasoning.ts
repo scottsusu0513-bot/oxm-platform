@@ -120,6 +120,7 @@ Rules:
 - validationPlan: which of the REQUIRED validations the Worker should rerun as part of this repair (never others). Do not list a validation an owner constraint prohibits.
 - protectedAreas: extra areas that must not change (the policy areas always apply anyway).
 - Never propose: git commit/push/merge/rebase/reset, deployment, production database writes or migrations, changing risk, approvals, permissions, CI or secrets, weakening/skipping tests, or turning a read-only task into a change.
+- TARGETED FOLLOW-UP: repair only what blocks the owner's core goal (core goal not met, core evidence missing or contradictory, a failed required validation, a security/permission/data-integrity problem, or an unsupported claim that would change the core result). Keep verified work and say so (e.g. "the earlier findings stand; only check whether the shared login hook is affected"). Never request a repair for an unsupported ancillary claim, inference or recommendation that does not change the core result; it is simply left out of the owner answer.
 - restartFromScratch=true only if the existing work is unusable; explain that in rootCause.
 - constraintCompliance: one entry per OWNER CONSTRAINT id stating how the plan honours it.
 - ownerDecisionNeeded=true only when the owner genuinely must choose (conflicting requirements, missing business information); then write ownerDecisionQuestion and 2-4 ownerOptions (ids "A","B",...) in the owner's language with recommendedOption.

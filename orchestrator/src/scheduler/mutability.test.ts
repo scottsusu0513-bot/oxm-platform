@@ -44,7 +44,7 @@ function planner(observations: Record<string, string[]> = {}): IntentPlanner {
 
 const approve: GoalReviewer = {
   async review(input) {
-    return { criteria: input.criteria.map((c) => ({ id: c.id, status: "satisfied", evidence: "verified", reason: "" })) };
+    return { criteria: input.criteria.map((c) => ({ id: c.id, status: "satisfied", evidence: "verified", reason: "" })), ownerAnswer: "Verified answer (Manager synthesis)." };
   },
 };
 

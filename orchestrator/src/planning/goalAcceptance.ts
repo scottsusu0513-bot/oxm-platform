@@ -1,7 +1,7 @@
 import type { AcceptanceEvidence, ValidationEvidence } from "../manager/types";
 import type { GoalAcceptanceContext } from "../scheduler/types";
 import { excerptLineNumbers, excerptLines, gatherSourceEvidence, type LineRange, type SourceEvidencePorts } from "../executive/evidencePlan";
-import { normalizeConstraintVerdicts, normalizeGoalReview } from "./normalize";
+import { normalizeConstraintVerdicts, normalizeGoalReview, normalizeOwnerAnswer } from "./normalize";
 import type { CriterionReview, GoalReviewer, TrustedWorkspaceEvidence } from "./types";
 
 export const MAX_REVIEW_DIFF = 150_000;
@@ -116,6 +116,13 @@ export interface SemanticAcceptanceResult {
   citedFiles: string[];
   /** Semantic owner-constraint verdicts (only for constraints that were asked). */
   constraintVerdicts: { id: string; status: "satisfied" | "violated" | "unsupported"; evidence: string }[];
+  /**
+   * Read-only work whose goal criteria are all satisfied: the Manager's own
+   * answer for the owner, written in the same review call from the full
+   * Worker report plus the trusted evidence (null otherwise). Only output
+   * hygiene is applied; it is never re-verified and never the Worker's report.
+   */
+  ownerAnswer: string | null;
 }
 
 export async function semanticAcceptance(input: SemanticAcceptanceInput): Promise<SemanticAcceptanceResult> {
@@ -128,6 +135,7 @@ export async function semanticAcceptance(input: SemanticAcceptanceInput): Promis
   let citedPathList: string[] = [];
   const constraintIds = (input.goal.ownerConstraints ?? []).map((c) => c.id);
   let constraintVerdicts: SemanticAcceptanceResult["constraintVerdicts"] = [];
+  let ownerAnswer: string | null = null;
   if (goalCriteria.length > 0) {
     const unavailable = (reason: string): CriterionReview[] => goalCriteria.map((c) => ({ id: c.id, status: "unsupported", evidence: "", reason }));
     if (!input.reviewer) {
@@ -197,6 +205,12 @@ export async function semanticAcceptance(input: SemanticAcceptanceInput): Promis
         reviews = normalizeGoalReview(raw, goalCriteria);
         const verdicts = normalizeConstraintVerdicts(raw, constraintIds);
         constraintVerdicts = constraintIds.filter((id) => verdicts.has(id)).map((id) => ({ id, ...verdicts.get(id)! }));
+        if (input.goal.mode === "read_only" && reviews.every((r) => r.status === "satisfied")) {
+          // The Manager's answer is its own synthesis; a missing one is malformed Manager output
+          // (infrastructure, like an outage): no verdict, no Worker re-run, no repair cycle.
+          ownerAnswer = normalizeOwnerAnswer(raw);
+          if (!ownerAnswer) throw new Error("review output has no owner answer");
+        }
       } catch {
         reviews = unavailable("goal review failed or timed out");
         reviewUnavailable = true;
@@ -215,10 +229,11 @@ export async function semanticAcceptance(input: SemanticAcceptanceInput): Promis
       status: r.status === "not_satisfied" ? "failed" : "unknown",
       evidenceType: "manager_review",
       reference: null,
-      summary: `${c.id} (${c.text.slice(0, 120)}) ${r.status === "not_satisfied" ? "not met" : "not supported by evidence"}: ${r.reason || "no reason given"}`.slice(0, 300),
+      // The Manager's natural-language follow-up leads, so bounded renderings keep it intact.
+      summary: `${c.id} ${r.status === "not_satisfied" ? "not met" : "not supported by evidence"}: ${r.reason || "no reason given"} (criterion: ${c.text.slice(0, 120)})`.slice(0, 300),
     };
   });
-  return { acceptance, reviewUnavailable, reviewCalls, citedFiles: citedPathList, constraintVerdicts };
+  return { acceptance, reviewUnavailable, reviewCalls, citedFiles: citedPathList, constraintVerdicts, ownerAnswer };
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {

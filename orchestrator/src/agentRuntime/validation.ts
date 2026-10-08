@@ -112,6 +112,7 @@ export function createTrustedValidationEvidencePort(input: {
           managerReviewCalls: judged.reviewCalls,
           citedFiles: judged.citedFiles,
           constraintVerdicts: judged.constraintVerdicts,
+          ...(judged.ownerAnswer ? { managerAnswer: judged.ownerAnswer } : {}),
           ...(judged.reviewUnavailable ? { goalReviewUnavailable: true } : {}),
         };
       }

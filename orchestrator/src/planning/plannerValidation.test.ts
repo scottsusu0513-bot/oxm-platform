@@ -102,7 +102,7 @@ describe("audit_and_fix semantics", () => {
     expect(sim.workerCalls[0].objective).toMatch(/^Audit first, then fix\. .*ONLY to fix those reported, evidence-backed findings.*Do not make any unrelated change/);
     expect(r.calls[0].criteria.map((c) => c.text)).toEqual([
       "Session handling weaknesses in the login flow are fixed",
-      "Every requested audit area was inspected and each finding is reported with cited repository evidence",
+      "Every requested audit area was inspected, and each finding that drives a code change is reported with cited repository evidence",
       "Every code change corresponds to a reported, evidence-backed finding; no unrelated code is changed",
       "Each supported finding within the requested scope is fixed",
     ]);

@@ -39,14 +39,15 @@ const task = (intent: string, extra: Record<string, unknown> = {}) => () => ({
   ...extra,
 });
 
-/** Reviewer that approves every criterion with cited evidence. */
+const SYNTHESIS = "搜尋流程已依 repository 原始碼確認（Manager 摘要）。";
+/** Reviewer that approves every criterion with cited evidence and writes the owner synthesis. */
 function approvingReviewer(): GoalReviewer & { calls: GoalReviewInput[] } {
   const calls: GoalReviewInput[] = [];
   return {
     calls,
     async review(input) {
       calls.push(structuredClone(input));
-      return { criteria: input.criteria.map((c) => ({ id: c.id, status: "satisfied", evidence: `evidence for ${c.id}`, reason: "" })) };
+      return { criteria: input.criteria.map((c) => ({ id: c.id, status: "satisfied", evidence: `evidence for ${c.id}`, reason: "" })), ownerAnswer: SYNTHESIS };
     },
   };
 }
@@ -79,7 +80,9 @@ describe("natural-language intake (no /goal)", () => {
     await service.observe();
     const answer = transport.sent.find((s) => s.notice.kind === "milestone")!.notice as MilestoneNotice;
     expect(answer.milestone).toBe("answered");
-    expect(answer.detail).toContain("Search goes through server/n-task-1/index.ts");
+    // The owner gets the Manager synthesis, never the Worker's raw report.
+    expect(answer.detail).toContain(SYNTHESIS);
+    expect(answer.detail).not.toContain("caching not verified");
     expect(transport.sent.some((s) => s.notice.kind === "commit_publish_approval")).toBe(false);
     expect(planner.calls[0]).toMatchObject({ message: ASK, requireTask: false, contextTaskId: null });
   });

@@ -19,6 +19,7 @@ export type Intent<T> = ({ ok: true } & T) | { ok: false; reason: string };
 /** Constant process rules sent with every repair. Never task- or code-specific advice. */
 export const REPAIR_INSTRUCTIONS = [
   "Repair the root cause in the Manager diagnosis; you decide how to change the code.",
+  "Keep work that is already verified; close only the gap the diagnosis names instead of redoing the whole task.",
   "Stay on the assigned branch. Do not create, switch, rename, or reset branches.",
   "Change only paths within allowedScope.",
   "Rerun every validation in rerunValidations and report the results.",

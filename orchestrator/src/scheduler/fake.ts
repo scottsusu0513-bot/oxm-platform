@@ -591,7 +591,7 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
           changedPaths: result.filesChanged,
           validations,
           ...(judged?.reviewUnavailable ? { goalReviewUnavailable: true } : {}),
-          ...(judged ? { managerReviewCalls: judged.reviewCalls, citedFiles: judged.citedFiles, constraintVerdicts: judged.constraintVerdicts } : {}),
+          ...(judged ? { managerReviewCalls: judged.reviewCalls, citedFiles: judged.citedFiles, constraintVerdicts: judged.constraintVerdicts, ...(judged.ownerAnswer ? { managerAnswer: judged.ownerAnswer } : {}) } : {}),
           acceptance: judged
             ? judged.acceptance
             : contract.acceptanceCriteria.map((_, i) => ({

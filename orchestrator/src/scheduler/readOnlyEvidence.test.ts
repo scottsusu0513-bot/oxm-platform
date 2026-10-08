@@ -52,6 +52,7 @@ function evidenceReviewer(mode: "evidence" | "never"): GoalReviewer & { calls: G
           evidence: shown ? "client/src/pages/Home.tsx:6 placeholder" : "",
           reason: shown ? "" : "the homepage source was not provided",
         })),
+        ownerAnswer: shown ? "首頁搜尋框目前顯示「搜尋工廠、產品或製程」，來源 client/src/pages/Home.tsx:6。" : "",
       };
     },
   };

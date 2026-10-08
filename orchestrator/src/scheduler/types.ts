@@ -418,6 +418,8 @@ export interface TrustedRunRecord {
   citedFiles?: readonly string[];
   /** GPT reviewer verdicts on semantic owner-constraint checks, by check id. */
   constraintVerdicts?: readonly { id: string; status: "satisfied" | "violated" | "unsupported"; evidence: string }[];
+  /** Read-only work: the Manager's own owner answer from its review (never the Worker's report; never persisted). */
+  managerAnswer?: string | null;
   /** Per-constraint verification attached by the Manager Loop (trusted + semantic). */
   ownerConstraints?: readonly ConstraintVerdict[];
 }
