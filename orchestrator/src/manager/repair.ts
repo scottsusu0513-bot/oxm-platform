@@ -157,12 +157,14 @@ function renderDiagnosis(d: ManagerDiagnosis, compact: boolean): string[] {
 /** Deterministic, data-only rendering of a repair request (used as untrusted task data in the worker prompt). */
 export function renderRepairBlock(r: RepairRequest, compact = false, minimal = false): string {
   if (minimal) {
-    // Last resort for very long objectives: the plan, owner constraints, rerun and the fixed process rules.
+    // Last resort for very long objectives: the plan, owner constraints (incl. the validations the
+    // owner rejected), rerun and the fixed process rules.
     return [
       `Repair attempt ${r.attempt} of ${r.maxRepairAttempts} (Manager-guided repair cycle).`,
       ...renderManagerPlan(r.diagnosis, 2),
       ...(r.diagnosis.managerPlan ? [] : [`- requiredFix: ${r.diagnosis.requiredFix}`]),
       ...(r.diagnosis.ownerConstraints ?? []).map((c) => `- ownerConstraint: ${c}`),
+      ...(r.diagnosis.deferredValidations?.length ? [`- notRerun (owner rejected; not evidence): ${r.diagnosis.deferredValidations.join(", ")}`] : []),
       r.rerunValidations.length ? `Rerun: ${r.rerunValidations.join(", ")}.` : "Rerun: none (gather the required evidence instead).",
       ...r.instructions,
     ].join("\n");

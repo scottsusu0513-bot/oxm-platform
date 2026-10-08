@@ -356,7 +356,9 @@ describe("read-only no-change and uncertainty criteria (AC-4 / AC-7 wiring)", ()
         const qualified = /未(另外)?驗證|not verified/i.test(input.answer ?? "");
         const uncertainty = asserted && !qualified ? "not_satisfied" : "satisfied";
         const v = (id: string, status: string) => ({ id, status, evidence: status === "satisfied" ? `${id} evidence` : "", reason: status === "satisfied" ? "" : `${id} not shown` });
-        return { criteria: [v("AC-4", noChange), v("AC-7", uncertainty)] };
+        // Like the real REVIEW_SCHEMA: the Manager's owner answer, "" unless every criterion is satisfied.
+        const allSatisfied = noChange === "satisfied" && uncertainty === "satisfied";
+        return { criteria: [v("AC-4", noChange), v("AC-7", uncertainty)], ownerAnswer: allSatisfied ? "首頁搜尋框是「搜尋工廠」（client/src/pages/Home.tsx:1）；依 repository 原始碼，未驗證正式站。" : "" };
       },
     };
   };
@@ -384,6 +386,8 @@ describe("read-only no-change and uncertainty criteria (AC-4 / AC-7 wiring)", ()
     expect(r.calls[0].workspace).toEqual(UNCHANGED);
     expect(status(res.acceptance, "AC-4")).toBe("satisfied");
     expect(status(res.acceptance, "AC-7")).toBe("satisfied");
+    expect(res.reviewUnavailable).toBe(false);
+    expect(res.ownerAnswer).toContain("Home.tsx");
   });
 
   it("a Worker claiming 'git status clean / no files changed' without workspace evidence never passes", async () => {
@@ -455,6 +459,7 @@ describe("read-only no-change and uncertainty criteria (AC-4 / AC-7 wiring)", ()
     const res = await judge(overclaim, { workspace: UNCHANGED }).run;
     expect(status(res.acceptance, "AC-7")).toBe("failed");
     expect(status(res.acceptance, "AC-4")).toBe("satisfied");
+    expect(res.ownerAnswer).toBeNull(); // an unmet goal never yields an owner answer
   });
 
   it("an answer fully settled by source needs no invented disclaimer", async () => {
@@ -474,7 +479,7 @@ describe("read-only no-change and uncertainty criteria (AC-4 / AC-7 wiring)", ()
     expect(prompt).toMatch(/do not invent uncertainty or add boilerplate disclaimers/);
   });
 
-  it("the fixed investigate_or_answer criteria keep the uncertainty criterion", async () => {
+  it("the fixed investigate_or_answer criteria are the core ones only (no fixed uncertainty criterion)", async () => {
     const { validateAndNormalizeRequest } = await import("../intake/normalize");
     const r = validateAndNormalizeRequest({
       idempotencyKey: "k-ro-1",
@@ -486,7 +491,12 @@ describe("read-only no-change and uncertainty criteria (AC-4 / AC-7 wiring)", ()
     expect(r.ok).toBe(true);
     const texts = (r as unknown as { value?: { acceptanceCriteria: { text: string }[] }; acceptanceCriteria?: { text: string }[] });
     const criteria = (texts.value ?? texts).acceptanceCriteria!.map((c) => c.text);
-    expect(criteria).toContain(UNCERTAINTY);
-    expect(criteria).toContain("The answer is supported by cited repository evidence (file paths)");
+    expect(criteria).toContain("The owner's question is answered directly");
+    expect(criteria).toContain("The core answer is supported by trusted repository evidence (file paths)");
+    expect(criteria).not.toContain(UNCERTAINTY);
+    // The unverified boundary is still enforced, by the Manager's synthesis rules instead of a fixed AC.
+    const { REVIEWER_SYSTEM } = await import("./planners");
+    expect(REVIEWER_SYSTEM).toMatch(/never introduce an outside fact you did not see/);
+    expect(REVIEWER_SYSTEM).toMatch(/never as confirmed fact\. State an unverified boundary briefly when relevant/);
   });
 });

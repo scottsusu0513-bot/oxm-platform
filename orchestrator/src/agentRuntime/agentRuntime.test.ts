@@ -244,7 +244,9 @@ describe("trusted validation evidence", () => {
         async review(input) {
           calls.push(structuredClone(input));
           const ws = input.workspace;
-          return { criteria: [{ id: "AC-4", status: !ws ? "unsupported" : ws.workspaceUnchanged ? "satisfied" : "not_satisfied", evidence: ws ? "orchestrator workspace verdict" : "", reason: ws ? "" : "no workspace evidence" }] };
+          const status = !ws ? "unsupported" : ws.workspaceUnchanged ? "satisfied" : "not_satisfied";
+          // Like the real REVIEW_SCHEMA: the Manager's owner answer, "" unless the goal is met.
+          return { criteria: [{ id: "AC-4", status, evidence: ws ? "orchestrator workspace verdict" : "", reason: ws ? "" : "no workspace evidence" }], ownerAnswer: status === "satisfied" ? "Answer (repository source; workspace unchanged)." : "" };
         },
       };
       return { calls, reviewer };
@@ -255,6 +257,7 @@ describe("trusted validation evidence", () => {
       const record = await createTrustedValidationEvidencePort({ git: roGit(), runner: runner({}), repoRoot: "/w", timeoutMs: 1_000, reviewer }).record(roReq("Answer. git status clean."));
       expect(calls[0].workspace).toEqual({ branch: contract.branch, headSha: HEAD, changedPaths: [], changedPathCount: 0, workspaceUnchanged: true });
       expect(record.acceptance).toMatchObject([{ criterionId: "AC-4", status: "satisfied", evidenceType: "manager_review" }]);
+      expect(record.managerAnswer).toBe("Answer (repository source; workspace unchanged).");
     });
 
     it("a workspace with changed paths is reported as changed, never unchanged", async () => {
