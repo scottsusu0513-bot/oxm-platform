@@ -1,10 +1,12 @@
 import type { AcceptanceEvidence, ValidationEvidence } from "../manager/types";
 import { MAX_REVIEW_DIFF, semanticAcceptance } from "../planning/goalAcceptance";
-import type { GoalReviewer } from "../planning/types";
+import type { GoalReviewer, TrustedWorkspaceEvidence } from "../planning/types";
 import { createEvidencePort } from "../scheduler/adapters";
 import type { EvidencePort } from "../scheduler/types";
 import { VALIDATION_COMMANDS } from "../workers/prompt";
 import type { GitInspector, ProcessRunner, RequiredValidation } from "../workers/types";
+
+const MAX_WORKSPACE_PATHS = 20;
 
 /**
  * Trusted validation for general Agent tasks: after the existing git/result
@@ -74,6 +76,14 @@ export function createTrustedValidationEvidencePort(input: {
         JSON.stringify(identities) !== JSON.stringify(before.identities)
       )
         throw new Error("[agent-runtime] validation changed the workspace; refusing to judge it");
+      // Reached only after every check above passed (and base.record pinned HEAD to the start SHA).
+      const workspace: TrustedWorkspaceEvidence = {
+        branch: status.branch,
+        headSha: status.headSha,
+        changedPaths: before.changed.slice(0, MAX_WORKSPACE_PATHS),
+        changedPathCount: before.changed.length,
+        workspaceUnchanged: before.changed.length === 0 && status.headSha === req.contract.expectedHeadSha,
+      };
       if (req.goal) {
         let diffText = "";
         if (req.goal.mode !== "read_only" && record.changedPaths.length > 0 && input.diff) {
@@ -91,6 +101,7 @@ export function createTrustedValidationEvidencePort(input: {
           diff: { text: diffText.slice(0, MAX_REVIEW_DIFF), truncated: diffText.length > MAX_REVIEW_DIFF },
           answer: req.result.summary,
           fileContent: input.readFile ?? (() => null),
+          workspace,
           sourcePorts: { ...(input.listFiles ? { listFiles: input.listFiles } : {}), ...(input.searchContent ? { searchContent: input.searchContent } : {}) },
           timeoutMs: input.reviewTimeoutMs ?? 180_000,
         });

@@ -374,7 +374,7 @@ Current branch: ${c.branch}
 Expected starting HEAD: ${c.expectedHeadSha ?? "not supplied"}
 You must stay on branch "${c.branch}". ${
     c.mode === "read_only"
-      ? `READ-ONLY TASK: do not create, edit, delete, format or regenerate ANY file. Investigate by reading the repository and running the allowed read-only commands only. Put your complete answer in "summary": answer the question directly, cite the repository files (paths) that support it, and state any uncertainty or unverified assumption. Any file change fails the task.`
+      ? `READ-ONLY TASK: do not create, edit, delete, format or regenerate ANY file. Investigate by reading the repository and running the allowed read-only commands only. Put your complete answer in "summary": answer the question directly, cite the repository files (paths, with :line where possible) that support it, and state any uncertainty or unverified assumption. Present as confirmed fact only what the repository source you read shows. You have not checked the deployed/production site, the rendered UI on any device, locale or browser, runtime behaviour, external services or the deployed version unless you actually did: do not assert them; when your answer touches them, say briefly that it is based on the repository source and that part was not verified. When the source fully settles the question, say so plainly; do not invent uncertainty or add boilerplate disclaimers. Any file change fails the task.`
       : "Edit the working tree but do not stage or commit; the trusted orchestration layer will commit validated changes."
   } Do not push.
 

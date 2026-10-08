@@ -55,6 +55,23 @@ export type IntentDecision =
 
 export type ReviewStatus = "satisfied" | "not_satisfied" | "unsupported";
 
+/**
+ * Orchestrator-owned workspace verdict for read-only work. Built only after the
+ * trusted evidence layer itself re-verified branch, HEAD, Git metadata digest,
+ * changed paths and content identities (before and after validation) — never
+ * from anything the Worker reports. Absent means not verified (fail closed).
+ */
+export interface TrustedWorkspaceEvidence {
+  branch: string;
+  /** Verified HEAD; equal to the Worker start SHA (no commit was made). */
+  headSha: string;
+  /** Working-tree paths changed since the start SHA (bounded list). */
+  changedPaths: readonly string[];
+  changedPathCount: number;
+  /** True only when HEAD did not move and no path changed. */
+  workspaceUnchanged: boolean;
+}
+
 export interface GoalReviewInput {
   mode: TaskMode;
   intent: TaskCreatingIntent | null;
@@ -76,6 +93,8 @@ export interface GoalReviewInput {
   evidenceRequirements?: readonly string[];
   /** Durable owner constraints the reviewer must verify against the actual evidence (semantic checks). */
   ownerConstraints?: readonly { id: string; text: string }[];
+  /** Read-only work: the orchestrator's own Git workspace verdict (absent = not verified). */
+  workspace?: TrustedWorkspaceEvidence;
 }
 
 export interface GoalReviewer {

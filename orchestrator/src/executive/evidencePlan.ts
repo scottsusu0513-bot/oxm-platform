@@ -56,10 +56,12 @@ export function deriveEvidencePlan(input: {
   }
   const workspace = "The authoritative workspace stays unchanged (verified by the orchestrator, not reported by the Worker).";
   const secondary = "Validation runs such as typecheck are secondary and are never evidence for the answer.";
+  const scope =
+    "State as fact only what the repository source shows; briefly mark anything not actually verified (deployed site, rendered UI per device/locale, runtime, external services) as unverified, without inventing uncertainty the source settles.";
   if (input.intent === "audit_or_review") {
     return {
       kind: "audit",
-      requirements: ["Every requested area is inspected by reading its source files.", "Each finding cites the exact file path and a bounded excerpt.", workspace, secondary],
+      requirements: ["Every requested area is inspected by reading its source files.", "Each finding cites the exact file path and a bounded excerpt.", scope, workspace, secondary],
       targets,
       validationIsEvidence: false,
     };
@@ -71,6 +73,7 @@ export function deriveEvidencePlan(input: {
         "Identify the actual source file/component that defines the value; give its exact repository path.",
         "Quote the exact literal value as written in source, with a path:line reference and a short excerpt.",
         "Report conditional variants (device, locale, state, props) or state explicitly that none exist.",
+        scope,
         workspace,
         secondary,
       ],
@@ -80,7 +83,7 @@ export function deriveEvidencePlan(input: {
   }
   return {
     kind: "behaviour_explanation",
-    requirements: ["Explain the behaviour from the source files that implement it, citing exact paths and bounded excerpts.", "State uncertainty and unverified assumptions explicitly.", workspace, secondary],
+    requirements: ["Explain the behaviour from the source files that implement it, citing exact paths and bounded excerpts.", "State uncertainty and unverified assumptions explicitly.", scope, workspace, secondary],
     targets,
     validationIsEvidence: false,
   };

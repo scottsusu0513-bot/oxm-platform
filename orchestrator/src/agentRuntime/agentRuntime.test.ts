@@ -14,6 +14,7 @@ import { createAuditCheckpointRepository } from "../scheduler/persistence";
 import { createInMemoryApprovalRepository, createInMemoryAuditRepository, createInMemoryTaskRepository, createInMemoryTaskRunRepository } from "../store/memory";
 import type { AuditRepository } from "../store/repositories";
 import type { GitInspector, ProcessExit, ProcessRunner, WorkerTaskContract } from "../workers/types";
+import type { GoalReviewer, GoalReviewInput } from "../planning/types";
 import { createAgentRuntime, defaultTaskIdGenerator } from "./compose";
 import { AGENT_RUNTIME_CONFIRMATION, readAgentRuntimeConfig, type AgentRuntimeConfig } from "./config";
 import { reconcileRuntimeState } from "./reconcile";
@@ -212,6 +213,83 @@ describe("trusted validation evidence", () => {
 
   it("refuses to judge a workspace the validation run modified", async () => {
     await expect(createTrustedValidationEvidencePort({ git: git(true), runner: runner({}), repoRoot: "/w", timeoutMs: 1_000 }).record(req)).rejects.toThrow(/validation changed the workspace/);
+  });
+
+  describe("read-only workspace verdict reaches the goal reviewer", () => {
+    const roContract = { ...contract, requiredValidations: [], mode: "read_only" } as unknown as WorkerTaskContract;
+    const goal = {
+      mode: "read_only" as const,
+      title: "t",
+      objective: "o",
+      goal: { intent: "investigate_or_answer" as const, originalRequest: "q；不修改任何檔案", interpretedObjective: "o" },
+      criteria: [{ id: "AC-4", text: "不修改任何檔案", kind: "goal" as const }],
+    };
+    const roReq = (summary: string, headSha = HEAD) => ({ ...req, contract: roContract, goal, result: { headSha, summary, riskObserved: { level: "green" } } as never });
+    function roGit(o: { changed?: string[]; after?: Partial<{ branch: string; headSha: string; digest: string; changed: string[]; blob: string }> } = {}): GitInspector {
+      let statusCalls = 0;
+      let changedCalls = 0;
+      let digestCalls = 0;
+      let idCalls = 0;
+      const base = o.changed ?? [];
+      return {
+        status: async () => ((statusCalls++ > 0 && o.after) ? { branch: o.after.branch ?? contract.branch, headSha: o.after.headSha ?? HEAD, dirtyPaths: [] } : { branch: contract.branch, headSha: HEAD, dirtyPaths: [] }) as never,
+        changedPathsSince: async () => (changedCalls++ > 0 && o.after?.changed ? o.after.changed : base),
+        metadataDigest: async () => (digestCalls++ > 0 && o.after?.digest ? o.after.digest : "d".repeat(64)),
+        contentIdentities: async (paths) => paths.map((path) => ({ path, mode: "100644", blob: idCalls++ > 0 && o.after?.blob ? o.after.blob : "e".repeat(40) })),
+      };
+    }
+    const capture = () => {
+      const calls: GoalReviewInput[] = [];
+      const reviewer: GoalReviewer = {
+        async review(input) {
+          calls.push(structuredClone(input));
+          const ws = input.workspace;
+          return { criteria: [{ id: "AC-4", status: !ws ? "unsupported" : ws.workspaceUnchanged ? "satisfied" : "not_satisfied", evidence: ws ? "orchestrator workspace verdict" : "", reason: ws ? "" : "no workspace evidence" }] };
+        },
+      };
+      return { calls, reviewer };
+    };
+
+    it("verified, unchanged workspace -> trusted verdict in the review request and the no-change criterion is satisfied", async () => {
+      const { calls, reviewer } = capture();
+      const record = await createTrustedValidationEvidencePort({ git: roGit(), runner: runner({}), repoRoot: "/w", timeoutMs: 1_000, reviewer }).record(roReq("Answer. git status clean."));
+      expect(calls[0].workspace).toEqual({ branch: contract.branch, headSha: HEAD, changedPaths: [], changedPathCount: 0, workspaceUnchanged: true });
+      expect(record.acceptance).toMatchObject([{ criterionId: "AC-4", status: "satisfied", evidenceType: "manager_review" }]);
+    });
+
+    it("a workspace with changed paths is reported as changed, never unchanged", async () => {
+      const { calls, reviewer } = capture();
+      const record = await createTrustedValidationEvidencePort({ git: roGit({ changed: ["client/a.ts"] }), runner: runner({}), repoRoot: "/w", timeoutMs: 1_000, reviewer }).record(roReq("No files changed."));
+      expect(calls[0].workspace).toMatchObject({ changedPaths: ["client/a.ts"], changedPathCount: 1, workspaceUnchanged: false });
+      expect(record.acceptance[0].status).toBe("failed");
+    });
+
+    it("any Git inconsistency (HEAD, branch, metadata, changed paths, identities) fails closed before the reviewer runs", async () => {
+      const cases: Parameters<typeof roGit>[0][] = [
+        { after: { headSha: "2".repeat(40) } },
+        { after: { branch: "main" } },
+        { after: { digest: "0".repeat(64) } },
+        { after: { changed: ["client/new.ts"] } },
+        { changed: ["client/a.ts"], after: { blob: "f".repeat(40) } },
+      ];
+      for (const c of cases) {
+        const { calls, reviewer } = capture();
+        await expect(createTrustedValidationEvidencePort({ git: roGit(c), runner: runner({}), repoRoot: "/w", timeoutMs: 1_000, reviewer }).record(roReq("no change"))).rejects.toThrow();
+        expect(calls).toHaveLength(0);
+      }
+      // The Worker reporting a different HEAD is rejected by the base Git check as well.
+      const { calls, reviewer } = capture();
+      await expect(createTrustedValidationEvidencePort({ git: roGit(), runner: runner({}), repoRoot: "/w", timeoutMs: 1_000, reviewer }).record(roReq("no change", "3".repeat(40)))).rejects.toThrow(/trusted git state/);
+      expect(calls).toHaveLength(0);
+    });
+
+    it("change tasks keep their diff-based review without a workspace verdict", async () => {
+      const { calls, reviewer } = capture();
+      const changeGoal = { ...goal, mode: "change" as const, goal: { ...goal.goal, intent: "change_code" as const } };
+      await createTrustedValidationEvidencePort({ git: git(), runner: runner({}), repoRoot: "/w", timeoutMs: 1_000, reviewer, diff: async () => "+++ b/client/a.ts\n+x" }).record({ ...req, goal: changeGoal, result: { headSha: HEAD, summary: "done", riskObserved: { level: "green" } } as never });
+      expect(calls[0].workspace).toBeUndefined();
+      expect(calls[0].diff).toContain("client/a.ts");
+    });
   });
 });
 

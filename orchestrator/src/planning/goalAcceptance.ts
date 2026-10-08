@@ -2,7 +2,7 @@ import type { AcceptanceEvidence, ValidationEvidence } from "../manager/types";
 import type { GoalAcceptanceContext } from "../scheduler/types";
 import { excerptLineNumbers, excerptLines, gatherSourceEvidence, type LineRange, type SourceEvidencePorts } from "../executive/evidencePlan";
 import { normalizeConstraintVerdicts, normalizeGoalReview } from "./normalize";
-import type { CriterionReview, GoalReviewer } from "./types";
+import type { CriterionReview, GoalReviewer, TrustedWorkspaceEvidence } from "./types";
 
 export const MAX_REVIEW_DIFF = 150_000;
 const MAX_CITED_FILES = 8;
@@ -75,7 +75,22 @@ export interface SemanticAcceptanceInput {
   fileContent: (path: string) => string | null;
   /** Trusted repository listing/search used to gather the Manager's own source evidence (read-only work). */
   sourcePorts?: Omit<SourceEvidencePorts, "read">;
+  /**
+   * The orchestrator's own workspace verdict (read-only work), built only by
+   * the trusted evidence layer after its Git re-verification. Absent or
+   * internally inconsistent evidence is withheld, so "no change" criteria stay
+   * unsupported (fail closed). Never derived from the Worker's report.
+   */
+  workspace?: TrustedWorkspaceEvidence;
   timeoutMs: number;
+}
+
+/** Workspace evidence the reviewer may see: only a self-consistent verdict, otherwise none. */
+function consistentWorkspace(ws: TrustedWorkspaceEvidence | undefined): TrustedWorkspaceEvidence | undefined {
+  if (!ws || !Array.isArray(ws.changedPaths) || !Number.isInteger(ws.changedPathCount)) return undefined;
+  const none = ws.changedPathCount === 0;
+  if (ws.changedPathCount < ws.changedPaths.length || none !== (ws.changedPaths.length === 0) || ws.workspaceUnchanged !== none) return undefined;
+  return ws;
 }
 
 /**
@@ -147,6 +162,7 @@ export async function semanticAcceptance(input: SemanticAcceptanceInput): Promis
             })
           : [];
       citedPathList = citedFiles.map((f) => f.path);
+      const workspace = consistentWorkspace(input.workspace);
       if (plan && !plan.validationIsEvidence && citedFiles.length === 0 && sourceEvidence.length === 0) {
         // No repository source at all: passing validations can never answer the question.
         reviews = goalCriteria.map((c) => ({
@@ -173,6 +189,7 @@ export async function semanticAcceptance(input: SemanticAcceptanceInput): Promis
             ...(sourceEvidence.length ? { sourceEvidence } : {}),
             ...(plan && plan.kind !== "change" ? { evidenceRequirements: plan.requirements } : {}),
             ...(input.goal.ownerConstraints?.length ? { ownerConstraints: input.goal.ownerConstraints } : {}),
+            ...(input.goal.mode === "read_only" && workspace ? { workspace } : {}),
           }),
           input.timeoutMs,
         );
