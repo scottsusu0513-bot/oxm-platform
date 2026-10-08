@@ -44,13 +44,20 @@ function deps(runner: ProcessRunner, extra: Partial<PlanningBackendDeps> = {}): 
 afterEach(() => vi.unstubAllGlobals());
 
 describe("planner provider configuration", () => {
-  it("defaults to claude_cli and needs no ANTHROPIC_API_KEY", () => {
-    expect(readPlanningProviderConfig({})).toMatchObject({ ok: true, config: { provider: "claude_cli", model: "claude-opus-5-5", command: "claude" } });
+  it("defaults to the GPT Manager on codex_cli and needs no API key", () => {
+    expect(readPlanningProviderConfig({})).toMatchObject({ ok: true, config: { provider: "codex_cli", model: null, command: "codex" } });
+    expect(readPlanningProviderConfig({ OPENAI_API_KEY: "sk-test-not-used" })).toMatchObject({ ok: true, config: { provider: "codex_cli" } });
+  });
+
+  it("claude_cli stays selectable explicitly", () => {
+    expect(readPlanningProviderConfig({ OXM_AGENT_PLANNER_PROVIDER: "claude_cli" })).toMatchObject({ ok: true, config: { provider: "claude_cli", model: "claude-opus-5-5", command: "claude" } });
+    expect(readPlanningProviderConfig({ OXM_AGENT_MANAGER_PROVIDER: "claude_cli" })).toMatchObject({ ok: true, config: { provider: "claude_cli" } });
+    expect(readPlanningProviderConfig({ OXM_AGENT_MANAGER_PROVIDER: "codex_cli", OXM_AGENT_PLANNER_PROVIDER: "claude_cli" })).toMatchObject({ ok: false, code: "invalid_planner_provider" });
   });
 
   it("a present ANTHROPIC_API_KEY never switches the provider implicitly", () => {
     const r = readPlanningProviderConfig({ ANTHROPIC_API_KEY: KEY });
-    expect(r).toMatchObject({ ok: true, config: { provider: "claude_cli" } });
+    expect(r).toMatchObject({ ok: true, config: { provider: "codex_cli" } });
     expect(JSON.stringify(r)).not.toContain(KEY);
   });
 
@@ -78,11 +85,11 @@ describe("Agent runtime planning composition", () => {
     vi.stubGlobal("fetch", fetchSpy);
     const http = vi.fn();
     const cli = fakeCli();
-    const built = await createPlanningBackend({ PATH: "/usr/bin", HOME: "/home/owner" }, deps(cli, { createHttpTransport: http }));
+    const built = await createPlanningBackend({ OXM_AGENT_PLANNER_PROVIDER: "claude_cli", PATH: "/usr/bin", HOME: "/home/owner" }, deps(cli, { createHttpTransport: http }));
     expect(built).toMatchObject({ ok: true, provider: "claude_cli" });
     if (!built.ok || built.provider === "off") throw new Error("unreachable");
     expect(built.diagnostics.join("\n")).toMatch(/claude_cli .*no API key used/);
-    expect(built.diagnostics.join("\n")).toMatch(/natural-language intake \+ semantic goal review/);
+    expect(built.diagnostics.join("\n")).toMatch(/natural-language intake, semantic goal review, GPT repair diagnosis, guidance interpretation, combined review/);
     expect(built.diagnostics.join("\n")).not.toMatch(/unavailable|owner@example\.com/);
 
     const audit = createInMemoryAuditRepository(() => "2026-10-07T00:00:00.000Z");
@@ -101,7 +108,7 @@ describe("Agent runtime planning composition", () => {
   it("provider=claude_cli never invokes the Anthropic HTTP transport, even when a key is present", async () => {
     const http = vi.fn();
     const cli = fakeCli({ replies: [() => exit(result({ structured_output: { criteria: [] } }))] });
-    const built = await createPlanningBackend({ ANTHROPIC_API_KEY: KEY, PATH: "/usr/bin" }, deps(cli, { createHttpTransport: http }));
+    const built = await createPlanningBackend({ OXM_AGENT_PLANNER_PROVIDER: "claude_cli", ANTHROPIC_API_KEY: KEY, PATH: "/usr/bin" }, deps(cli, { createHttpTransport: http }));
     if (!built.ok || built.provider !== "claude_cli") throw new Error("expected claude_cli");
     await built.reviewer.review({ mode: "change", intent: "change_code", title: "t", originalRequest: "r", interpretedObjective: "o", criteria: [], validations: [], diff: "", diffTruncated: false, answer: null, citedFiles: [] });
     expect(http).not.toHaveBeenCalled();
@@ -130,7 +137,7 @@ describe("Agent runtime planning composition", () => {
     ["API-billed CLI login", { auth: exit(JSON.stringify({ loggedIn: true, authMethod: "api_key", apiProvider: "firstParty" })) }, "claude_cli_non_subscription_auth"],
   ])("an unavailable configured claude_cli fails closed (%s) — no fallback to the API", async (_label, cli, code) => {
     const http = vi.fn();
-    const built = await createPlanningBackend({ ANTHROPIC_API_KEY: KEY }, deps(fakeCli(cli), { createHttpTransport: http }));
+    const built = await createPlanningBackend({ OXM_AGENT_PLANNER_PROVIDER: "claude_cli", ANTHROPIC_API_KEY: KEY }, deps(fakeCli(cli), { createHttpTransport: http }));
     expect(built).toMatchObject({ ok: false, code });
     expect(http).not.toHaveBeenCalled();
   });
@@ -138,7 +145,7 @@ describe("Agent runtime planning composition", () => {
   it("missing Claude CLI executable is typed and its preflight directory is removed (real process runner)", async () => {
     const base = mkdtempSync(join(tmpdir(), "oxm-ws-base-"));
     try {
-      const built = await createPlanningBackend({ OXM_AGENT_PLANNER_CLAUDE_COMMAND: "/nonexistent/oxm/claude", PATH: "/usr/bin" }, { workspace: createTempPlanningWorkspace({ repoRoot: REPO, base }), repoRoot: REPO });
+      const built = await createPlanningBackend({ OXM_AGENT_PLANNER_PROVIDER: "claude_cli", OXM_AGENT_PLANNER_CLAUDE_COMMAND: "/nonexistent/oxm/claude", PATH: "/usr/bin" }, { workspace: createTempPlanningWorkspace({ repoRoot: REPO, base }), repoRoot: REPO });
       expect(built).toMatchObject({ ok: false, code: "claude_cli_executable_unavailable" });
       expect(readdirSync(base)).toEqual([]);
     } finally {
@@ -154,7 +161,7 @@ describe("Agent runtime planning composition", () => {
       mkdirSync(inRepo);
       writeFileSync(join(inRepo, "sentinel.txt"), "keep");
       const cli = fakeCli();
-      const built = await createPlanningBackend({}, deps(cli, { workspace: fixedPlanningWorkspace(inRepo), repoRoot: repo }));
+      const built = await createPlanningBackend({ OXM_AGENT_PLANNER_PROVIDER: "claude_cli" }, deps(cli, { workspace: fixedPlanningWorkspace(inRepo), repoRoot: repo }));
       expect(built).toMatchObject({ ok: false, code: "claude_cli_workspace_unavailable" });
       expect(cli.specs).toEqual([]);
       expect(createTempPlanningWorkspace({ repoRoot: repo, base: inRepo }).acquire).toThrow(expect.objectContaining({ kind: "workspace_unavailable" }));
@@ -222,7 +229,7 @@ describe("a transient Claude CLI reviewer failure never consumes a Manager-guide
         return exit(result({ structured_output: { criteria: ids.map((id) => ({ id, status: "satisfied", evidence: "diff", reason: "" })) } }));
       },
     ];
-    const built = await createPlanningBackend({}, deps(fakeCli({ replies })));
+    const built = await createPlanningBackend({ OXM_AGENT_PLANNER_PROVIDER: "claude_cli" }, deps(fakeCli({ replies })));
     if (!built.ok || built.provider !== "claude_cli") throw new Error("expected claude_cli");
     const audit = createInMemoryAuditRepository(() => "2026-10-07T00:00:00.000Z");
     const sim = createSimulation({ autoApproveCommits: false, goalReviewer: built.reviewer });
@@ -317,5 +324,44 @@ describe("temporary planner working directories are removed after every real CLI
     } finally {
       rmSync(outside, { recursive: true, force: true });
     }
+  });
+});
+
+describe("GPT Manager default: codex_cli composition", () => {
+  it("no API key: preflights the ChatGPT login, then runs the read-only Manager profile with schema/output files in a fresh dir outside the repo", async () => {
+    const base = mkdtempSync(join(tmpdir(), "oxm-mgr-base-"));
+    const seen: { args: readonly string[]; files: string[]; cwd: string; env: Readonly<Record<string, string>> | undefined }[] = [];
+    const runner: ProcessRunner = {
+      spawn(spec) {
+        const files = readdirSync(spec.cwd);
+        seen.push({ args: spec.args, files, cwd: spec.cwd, env: spec.env });
+        if (spec.args[0] === "login") return { exit: Promise.resolve(exit("Logged in using ChatGPT")), kill: () => {} };
+        // The CLI writes its final structured message to the -o file.
+        writeFileSync(join(spec.cwd, spec.args[spec.args.indexOf("-o") + 1]), JSON.stringify({ ...PLAN, workAreas: { programming: true, visual: false }, programmingObjective: "", visualObjective: "" }));
+        return { exit: Promise.resolve(exit("")), kill: () => {} };
+      },
+    };
+    try {
+      const built = await createPlanningBackend({ PATH: "/usr/bin", HOME: "/home/owner", OPENAI_API_KEY: "sk-not-forwarded" }, { runner, timer: neverFires, workspace: createTempPlanningWorkspace({ repoRoot: REPO, base }), repoRoot: REPO });
+      expect(built).toMatchObject({ ok: true, provider: "codex_cli" });
+      if (!built.ok || built.provider !== "codex_cli") throw new Error("expected codex_cli");
+      expect(built.diagnostics.join("\n")).toMatch(/GPT Manager provider: codex_cli .*read-only, tool-less Manager profile; no API key used/);
+      const raw = await built.planner.interpret({ message: MSG, contextTaskId: null, tasks: [], requireTask: false });
+      expect(raw).toMatchObject({ intent: "change_code", workAreas: { programming: true, visual: false } });
+      const call = seen[1];
+      expect(call.args).toEqual(expect.arrayContaining(["exec", "--sandbox", "read-only", "--output-schema", "manager-output-schema.json"]));
+      expect(call.files).toEqual(["manager-output-schema.json"]);
+      expect(call.cwd.startsWith(base)).toBe(true);
+      for (const s of seen) expect(s.env).not.toHaveProperty("OPENAI_API_KEY");
+      // Every per-call directory is removed afterwards.
+      expect(readdirSync(base)).toEqual([]);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it("an API-key Codex login is refused (fail closed, no silent API billing)", async () => {
+    const runner: ProcessRunner = { spawn: () => ({ exit: Promise.resolve(exit("Logged in using an API key - sk-proj-***")), kill: () => {} }) };
+    expect(await createPlanningBackend({}, deps(runner))).toMatchObject({ ok: false, code: "codex_cli_non_subscription_auth" });
   });
 });

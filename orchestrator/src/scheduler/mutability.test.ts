@@ -1,3 +1,4 @@
+import { findInternalJargon } from "../executive/communication";
 import { describe, expect, it } from "vitest";
 import { routeByMode } from "../agentRuntime/readOnlySnapshot";
 import { checkMutability, type WorkerKind } from "../domain/types";
@@ -70,7 +71,7 @@ function setup(opts: { observations?: Record<string, string[]>; audit?: AuditRep
     now: sim.ports.now,
   });
   const ports = { ...sim.ports, worker };
-  const loop = createManagerLoop(ports);
+  const loop = createManagerLoop(ports, { managerMode: "deterministic_fixture" });
   const h = createHumanInteractionHarness({ loop, approvals: sim.approvals, audit, now: sim.ports.now, planner: planner(opts.observations), idPrefix: "x" });
   const say = async (text: string, key = "tg.msg.1") => {
     const r = await h.service.handleReply({ kind: "reply", idempotencyKey: key, replyToDeliveryRef: null, text });
@@ -118,8 +119,9 @@ describe("mutability (intent) is independent of risk", () => {
     const notice = x.transport.sent.find((s) => s.notice.kind === "start_approval")!.notice as StartApprovalNotice;
     expect(notice.readOnly).toBe(true);
     const telegramText = formatStartApproval(notice);
-    expect(telegramText).toContain("Mode: READ-ONLY");
-    expect(telegramText).toContain("no file can change and there is no commit/publish path");
+    // Plain owner language: read-only, isolated copy, no file change (no internal mode names).
+    expect(telegramText).toContain("This is read-only: it runs in an isolated copy and changes no file.");
+    expect(findInternalJargon(telegramText)).toEqual([]);
     await x.approveStart();
     expect(x.runs.every((r) => r.mode === "read_only" && r.runtime === "snapshot")).toBe(true);
   });
@@ -173,7 +175,7 @@ describe("mutability (intent) is independent of risk", () => {
     const x = setup({ audit, persistence: true });
     await x.say(READ_RED);
     expect(x.loop.task("x-task-1")).toMatchObject({ mode: "read_only", risk: "red", status: "needs_human_approval" });
-    const loop2 = createManagerLoop(x.ports);
+    const loop2 = createManagerLoop(x.ports, { managerMode: "deterministic_fixture" });
     await loop2.resume();
     await loop2.settle();
     expect(loop2.task("x-task-1")).toMatchObject({ mode: "read_only", risk: "red", status: "needs_human_approval", approvalPhase: "pre_execution" });

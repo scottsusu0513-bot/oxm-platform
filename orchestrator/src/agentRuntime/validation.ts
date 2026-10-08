@@ -27,6 +27,9 @@ export function createTrustedValidationEvidencePort(input: {
   diff?: (fromSha: string, paths: readonly string[]) => Promise<string>;
   /** Trusted read of a repository file for cited-file evidence; null when absent. */
   readFile?: (path: string) => string | null;
+  /** Trusted read-only repository listing/search for the Manager's own source evidence (read-only tasks). */
+  listFiles?: () => Promise<readonly string[]>;
+  searchContent?: (keyword: string) => Promise<readonly string[]>;
 }): EvidencePort {
   const commands = input.commands ?? VALIDATION_COMMANDS;
   const base = createEvidencePort({ git: input.git, validations: () => [], acceptance: () => [] });
@@ -88,9 +91,18 @@ export function createTrustedValidationEvidencePort(input: {
           diff: { text: diffText.slice(0, MAX_REVIEW_DIFF), truncated: diffText.length > MAX_REVIEW_DIFF },
           answer: req.result.summary,
           fileContent: input.readFile ?? (() => null),
+          sourcePorts: { ...(input.listFiles ? { listFiles: input.listFiles } : {}), ...(input.searchContent ? { searchContent: input.searchContent } : {}) },
           timeoutMs: input.reviewTimeoutMs ?? 180_000,
         });
-        return { ...record, validations, acceptance: judged.acceptance, ...(judged.reviewUnavailable ? { goalReviewUnavailable: true } : {}) };
+        return {
+          ...record,
+          validations,
+          acceptance: judged.acceptance,
+          managerReviewCalls: judged.reviewCalls,
+          citedFiles: judged.citedFiles,
+          constraintVerdicts: judged.constraintVerdicts,
+          ...(judged.reviewUnavailable ? { goalReviewUnavailable: true } : {}),
+        };
       }
       const allPassed = validations.length > 0 && validations.every((v) => v.status === "passed");
       const reference = req.contract.requiredValidations[0] ?? null;

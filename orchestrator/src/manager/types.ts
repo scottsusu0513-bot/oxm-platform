@@ -14,6 +14,9 @@ import type { BranchDecisionKind } from "../branches/types";
 import type { RiskLevel, TaskState, WorkerKind } from "../domain/types";
 import type { CheckOutcome, PullRequestState } from "../github/types";
 import type { WorkerErrorType, WorkerResultStatus } from "../workers/types";
+import type { EvidencePlan } from "../executive/evidencePlan";
+import type { GuidanceConstraint } from "../executive/guidance";
+import type { ManagerRepairPlan } from "./managerPlan";
 
 // ---------------------------------------------------------------------------
 // Decisions
@@ -73,7 +76,11 @@ export type AcceptanceStatus = (typeof ACCEPTANCE_STATUSES)[number];
  * What backs an acceptance status. "worker_report" is self-reported prose and
  * is never sufficient on its own to satisfy a criterion.
  */
-export const ACCEPTANCE_EVIDENCE_TYPES = ["validation", "ci_check", "scope", "human", "worker_report", "manager_review"] as const;
+/**
+ * "constraint_check": a durable owner constraint verified mechanically from trusted runtime
+ * evidence (Git-observed paths, trusted run records) — never from the Worker saying it complied.
+ */
+export const ACCEPTANCE_EVIDENCE_TYPES = ["validation", "ci_check", "scope", "human", "worker_report", "manager_review", "constraint_check"] as const;
 export type AcceptanceEvidenceType = (typeof ACCEPTANCE_EVIDENCE_TYPES)[number];
 
 /** 4. One acceptance criterion's outcome. */
@@ -317,6 +324,31 @@ export interface ManagerDiagnosis {
   previous: PreviousRepairComparison | null;
   /** Human decision consumed as new evidence (first cycle of a resumed round only). */
   humanDecision: HumanDecisionEvidence | null;
+  /** Every accepted owner guidance of this task, restated: durable constraints on this and later repairs. */
+  ownerConstraints?: string[];
+  /** Direct evidence the repair must gather (Manager evidence plan + owner guidance). */
+  evidenceRequests?: string[];
+  /** Validations the owner rejected that this repair plan does NOT rerun (read-only). */
+  deferredValidations?: string[];
+  /** Explicit justification when a validation the owner rejected must still run (change tasks: safety gate). */
+  constraintJustification?: string | null;
+  /**
+   * The GPT Manager's validated structured repair plan (root cause, strategy, instructions, evidence,
+   * validation plan). The deterministic fields above remain the trusted failure facts it was given.
+   */
+  managerPlan?: ManagerRepairPlan;
+}
+
+/**
+ * What the Manager knows about the task's GOAL when it plans a repair:
+ * mutability, the durable owner guidance and the evidence plan. Repair
+ * planning reasons from this, so it requests missing evidence instead of
+ * blindly repeating generic validation.
+ */
+export interface RepairPlanningContext {
+  mode: "change" | "read_only";
+  constraints: readonly GuidanceConstraint[];
+  evidencePlan: EvidencePlan | null;
 }
 
 /** One completed (or in-flight) Manager-guided repair cycle. */
@@ -348,6 +380,10 @@ export interface HumanEscalationReport {
   currentComparison: PreviousRepairComparison | null;
   managerRecommendation: string;
   humanDecisionRequired: string;
+  /** The decision belongs to a decomposed request's combined repair (bound to its lead task, whose own work is complete). */
+  groupDecision?: true;
+  /** Options the GPT Manager offered the owner (when it asked for a decision); "option B" replies resolve against these. */
+  ownerDecision?: { question: string; options: { id: string; summary: string }[]; recommended: string | null } | null;
 }
 
 // ---------------------------------------------------------------------------

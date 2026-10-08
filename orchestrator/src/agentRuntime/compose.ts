@@ -32,7 +32,8 @@ import { createReadOnlySnapshotAdapter, routeByMode } from "./readOnlySnapshot";
 import { AGENT_RUNTIME_CONFIRMATION, type AgentRuntimeConfig } from "./config";
 import { describeIssues, reconcileRuntimeState } from "./reconcile";
 import { resolveRepoRoot } from "./repoRoot";
-import { createRepoFileReader, createWorkingTreeDiff } from "./reviewEvidence";
+import { createCommitRangeDiff, createRepoFileReader, createRepoSearch, createWorkingTreeDiff } from "./reviewEvidence";
+import { createManagerReasoningPort, type ManagerReasoningBackends } from "./managerPort";
 import type { GoalReviewer, IntentPlanner } from "../planning/types";
 import { createInMemoryInterpretationRepository } from "../gateway/fake";
 import { createTrustedValidationEvidencePort } from "./validation";
@@ -49,6 +50,8 @@ export interface AgentRuntimeOptions {
   /** Trusted planning layer (Claude-backed in production); null disables natural-language intake and goal review. */
   planner?: IntentPlanner | null;
   reviewer?: GoalReviewer | null;
+  /** GPT Manager reasoning backends (repair diagnosis, guidance interpretation, combined review). */
+  manager?: ManagerReasoningBackends | null;
 }
 
 export interface AgentRuntime {
@@ -233,16 +236,31 @@ export async function createAgentRuntime(config: AgentRuntimeConfig, options: Ag
       reviewer: options.reviewer ?? null,
       diff: createWorkingTreeDiff(runner, config.base.repoRoot),
       readFile: createRepoFileReader(config.base.repoRoot),
+      ...createRepoSearch(runner, config.base.repoRoot),
     }),
     qa: createQaPort(createGitHubReadClient(createGhReadTransport(runner, config.base.repoRoot)), repo, DEFAULT_REQUIRED_CHECKS),
     repo: createRepoStatePort(writeTransport, repo),
     approvals: createApprovalPort(approvals, now),
+    ...(options.manager
+      ? {
+          manager: createManagerReasoningPort(options.manager, {
+            timeoutMs: 300_000,
+            workingTreeDiff: createWorkingTreeDiff(runner, config.base.repoRoot),
+            commitRangeDiff: createCommitRangeDiff(runner, config.base.repoRoot),
+            readFile: createRepoFileReader(config.base.repoRoot),
+            ...createRepoSearch(runner, config.base.repoRoot),
+          }),
+        }
+      : {}),
     persistence: checkpoints,
     now,
     audit(event) {
       options.audit.append({ id: nextAuditId(), ...event });
     },
     lifecycle: { reconcile: (...args) => lifecycleController.reconcile(...args) },
+  }, {
+    // Production: semantic Manager work requires the configured GPT Manager; never a deterministic stand-in.
+    managerMode: "gpt_required",
   });
   const generate = options.nextTaskId ?? defaultTaskIdGenerator();
   const runtime = createAgentRuntimeService({

@@ -625,7 +625,7 @@ describe("Manager Loop — routing, intake, and events", () => {
       fakeIntake({
         taskId: "fallback1",
         category: "backend",
-        availability: { claude: "unavailable", codex: "available" },
+        availability: { claude: "quota_exhausted", codex: "available" },
       }),
     );
     expect(fallback.workerCalls).toHaveLength(1);
@@ -674,7 +674,7 @@ describe("Manager Loop — routing, intake, and events", () => {
         taskId: "fallback-red",
         category: "security",
         actions: [{ kind: "prod_deploy" }],
-        availability: { claude: "unavailable", codex: "available" },
+        availability: { claude: "quota_exhausted", codex: "available" },
       }),
     );
     expect(sim.loop.task("fallback-red")).toMatchObject({
@@ -698,7 +698,7 @@ describe("Manager Loop — routing, intake, and events", () => {
     await forbidden.create(
       fakeIntake({
         taskId: "forbid1",
-        availability: { claude: "unavailable", codex: "available" },
+        availability: { claude: "quota_exhausted", codex: "available" },
         allowClaudeToCodexFallback: false,
       }),
     );

@@ -18,7 +18,8 @@ export function dependencyState(dependsOn: readonly string[], statusOf: (taskId:
   if (missing.length > 0) return { state: "failed", on: missing, reason: `unknown dependency: ${missing.join(", ")}` };
   const failed = deps.filter((d) => statusOf(d) === "blocked");
   if (failed.length > 0) return { state: "failed", on: failed, reason: `dependency blocked: ${failed.join(", ")}` };
-  const waiting = deps.filter((d) => statusOf(d) !== "accepted");
+  // A held part of a decomposed request has finished its own work (its combined review is separate).
+  const waiting = deps.filter((d) => statusOf(d) !== "accepted" && statusOf(d) !== "waiting_group");
   if (waiting.length > 0) return { state: "waiting", on: waiting };
   return { state: "satisfied" };
 }

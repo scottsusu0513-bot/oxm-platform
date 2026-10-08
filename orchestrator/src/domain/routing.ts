@@ -5,8 +5,10 @@ import type { ClassificationResult, RoutingDecision, TaskCategory, WorkerAvailab
  *
  * - Claude: backend, business logic, DB, auth, security, bugs, architecture, general coding.
  * - Codex: UI, CSS, layout, visual polish, frontend styling.
- * - Codex may act as coding fallback when Claude is unavailable/quota-limited.
- *   The reverse fallback is not part of the policy, so Codex-primary tasks wait.
+ * - Codex may act as a TEMPORARY coding fallback only when Claude's usage
+ *   quota is exhausted (fixed OXM policy; see executive/workAssignment). Any
+ *   other Claude unavailability waits for Claude. The reverse fallback is not
+ *   part of the policy, so Codex-primary (site-visual) tasks wait for Codex.
  */
 
 const CODEX_PRIMARY: ReadonlySet<TaskCategory> = new Set<TaskCategory>(["ui", "css", "layout", "visual_polish", "frontend_styling"]);
@@ -29,7 +31,7 @@ export function routeTask(classification: ClassificationResult, availability: Wo
     };
   }
 
-  if (primary === "claude" && availability.codex === "available" && options.allowClaudeToCodexFallback !== false) {
+  if (primary === "claude" && availability.claude === "quota_exhausted" && availability.codex === "available" && options.allowClaudeToCodexFallback !== false) {
     return {
       worker: "codex",
       primary,
@@ -46,6 +48,9 @@ export function routeTask(classification: ClassificationResult, availability: Wo
     isFallback: false,
     fallbackFrom: null,
     reasonCode: primary === "claude" && availability.codex === "available" ? "fallback_forbidden" : "worker_unavailable",
-    reason: primary === "claude" && availability.codex === "available" ? `claude ${availability.claude}; codex fallback forbidden by policy` : `${primary} ${availability[primary]}; no eligible fallback available`,
+    reason:
+      primary === "claude" && availability.codex === "available"
+        ? `claude ${availability.claude}; codex may only cover a claude quota exhaustion`
+        : `${primary} ${availability[primary]}; no eligible fallback available`,
   };
 }

@@ -3,7 +3,7 @@ import type { TaskState, WorkerKind } from "../domain/types";
 import type { NewAuditEvent, NewTaskRun, TaskPatch } from "../store/types";
 import { managerAudit, type ManagerAuditMetadataInput } from "./intent";
 import { buildRepairRequest, type Intent } from "./repair";
-import type { ManagerDiagnosis, ManagerEvidence, ManagerValidation, RepairRequest } from "./types";
+import type { ManagerDiagnosis, ManagerEvidence, ManagerValidation, RepairPlanningContext, RepairRequest } from "./types";
 import { REPAIRABLE_STATES, validateEvidence } from "./validator";
 
 /**
@@ -53,6 +53,8 @@ export function managerStep(input: {
   previousDiagnosis?: { diagnosis: ManagerDiagnosis; repairOutcome: string } | null;
   /** Repair round (1 unless resumed by a human decision; that resume itself uses humanDecisionResumeStep). */
   round?: number;
+  /** GOAL context for repair planning (mode, durable owner guidance, evidence plan). */
+  planning?: RepairPlanningContext | null;
 }): Intent<ManagerStep> {
   const v = validateEvidence(input.evidence);
   const e = input.evidence;
@@ -104,7 +106,7 @@ export function managerStep(input: {
       audit.push(managerAudit("manager_human_approval_required", from, transition, meta));
       break;
     case "needs_repair": {
-      const built = buildRepairRequest(e, input.previousDiagnosis ?? null, { round: input.round ?? 1, human: null });
+      const built = buildRepairRequest(e, input.previousDiagnosis ?? null, { round: input.round ?? 1, human: null }, input.planning ?? null);
       if (!built.ok) return { ok: false, reason: built.reason };
       repairRequest = built.request;
       next = "dispatch_repair";

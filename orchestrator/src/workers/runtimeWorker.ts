@@ -1,4 +1,5 @@
 import type { RiskLevel, WorkerKind } from "../domain/types";
+import { classifyAvailabilityFailure, type AvailabilityFailure } from "../executive/availability";
 import { approvalAuthorizes } from "../store/repositories";
 import { createKillSwitch } from "./killSwitch";
 import { looksLikeInteractivePrompt, nonInteractiveViolation, WORKER_INTERACTIVE_PROMPTS_ALLOWED } from "./permissions";
@@ -42,7 +43,7 @@ export function createRuntimeWorkerAdapter(config: RuntimeWorkerConfig, deps: Cl
       let prompt: string | null = pre.ok ? buildWorkerPrompt(request.contract, pre.risk) : null;
       const promptHash = prompt === null ? null : sha256Hex(prompt);
       const result = pre.ok
-        ? execute(config, deps, request.contract, pre.risk, prompt as string, killSwitch).catch(() =>
+        ? execute(config, deps, request.contract, pre.risk, prompt as string, killSwitch, request.now).catch(() =>
             failure(request.contract, "process_error", "worker execution failed unexpectedly", pre.risk),
           )
         : Promise.resolve(failure(request.contract, pre.errorType, pre.reason, pre.risk));
@@ -110,6 +111,7 @@ async function execute(
   risk: RiskLevel,
   prompt: string,
   killSwitch: ReturnType<typeof createKillSwitch>,
+  now: string,
 ): Promise<WorkerResult> {
   const cancelled = () => terminal(c, "cancelled", risk, null);
   if (killSwitch.triggered) return cancelled();
@@ -203,7 +205,7 @@ async function execute(
   if (finalOutcome !== "cancelled" && exit && (finalOutcome === "timeout" || exit.exitCode !== 0) && looksLikeInteractivePrompt(`${exit.stdout}\n${exit.stderr}`))
     return failure(c, "runtime_misconfigured", "worker runtime waited on an interactive confirmation prompt (non-interactive configuration defect)", risk, { headSha: before.headSha });
   if (outcome !== "exited") return terminal(c, outcome, risk, before.headSha);
-  return interpret(config, c, deps, risk, before, exit as ProcessExit);
+  return interpret(config, c, deps, risk, before, exit as ProcessExit, now);
 }
 
 async function interpret(
@@ -213,11 +215,25 @@ async function interpret(
   risk: RiskLevel,
   before: GitStatus,
   exit: ProcessExit,
+  now: string,
 ): Promise<WorkerResult> {
   if (exit.truncated) return failure(c, "malformed_output", "worker output exceeded the size limit", risk);
-  if (exit.exitCode !== 0) return failure(c, "process_error", `worker exited with code ${exit.exitCode ?? "none"}`, risk, { fallbackRecommended: true });
+  if (exit.spawnError || exit.exitCode !== 0) {
+    // Availability is typed infrastructure state (never a goal failure, never a repair cycle).
+    const a = classifyAvailabilityFailure({ stdout: exit.stdout, stderr: exit.stderr, exitCode: exit.exitCode, spawnError: exit.spawnError ?? null, now });
+    const errorType = AVAILABILITY_ERROR[a.kind];
+    return failure(c, errorType, errorType === "process_error" ? `worker exited with code ${exit.exitCode ?? "none"}` : `worker runtime unavailable: ${a.kind}`, risk, {
+      fallbackRecommended: true,
+      headSha: before.headSha,
+      availability: { kind: a.kind, resetAt: a.resetAt },
+    });
+  }
   const parsed = config.parseOutput(exit.stdout);
   if (!parsed.ok) {
+    // A CLI may exit 0 with an error envelope; only a quota/auth signal is reclassified.
+    const a = classifyAvailabilityFailure({ stdout: exit.stdout, stderr: exit.stderr, exitCode: exit.exitCode, now });
+    if (a.kind === "quota_exhausted" || a.kind === "authentication_unavailable")
+      return failure(c, AVAILABILITY_ERROR[a.kind], `worker runtime unavailable: ${a.kind}`, risk, { fallbackRecommended: true, headSha: before.headSha, availability: { kind: a.kind, resetAt: a.resetAt } });
     const reportedError = parsed.reason.startsWith("worker reported ");
     return failure(c, reportedError ? "worker_error" : "malformed_output", parsed.reason, risk, { fallbackRecommended: reportedError });
   }
@@ -318,6 +334,16 @@ export function missingValidations(required: readonly RequiredValidation[], repo
           !report.testsRun.every((t) => t.outcome === "passed"),
   );
 }
+
+/** Typed availability failure -> Worker error type. Only process_failure keeps the generic process_error. */
+export const AVAILABILITY_ERROR: Readonly<Record<AvailabilityFailure, WorkerErrorType>> = {
+  quota_exhausted: "quota_exhausted",
+  rate_limited_transient: "rate_limited",
+  service_unavailable: "service_unavailable",
+  authentication_unavailable: "authentication_unavailable",
+  executable_unavailable: "executable_unavailable",
+  process_failure: "process_error",
+};
 
 function failure(c: WorkerTaskContract, errorType: WorkerErrorType, summary: string, risk: RiskLevel, over: Partial<WorkerResult> = {}): WorkerResult {
   return {

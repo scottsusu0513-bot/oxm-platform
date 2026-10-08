@@ -221,7 +221,7 @@ describe("human decision — cancel and restart", () => {
 
     // Process restart: the old loop is gone and its in-memory lease with it.
     sim.ports.leases.release(sim.ports.leases.current("ws-hd10")!);
-    const loop2 = createManagerLoop(sim.ports);
+    const loop2 = createManagerLoop(sim.ports, { managerMode: "deterministic_fixture" });
     await loop2.resume();
     await loop2.settle();
     const restored = loop2.task("hd10")!;
@@ -240,7 +240,7 @@ describe("human decision — cancel and restart", () => {
 
     // Consumed ids survive a restart too: a replay after another restart is a duplicate.
     sim.ports.leases.release(sim.ports.leases.current("ws-hd10")!);
-    const loop3 = createManagerLoop(sim.ports);
+    const loop3 = createManagerLoop(sim.ports, { managerMode: "deterministic_fixture" });
     await loop3.resume();
     loop3.post({ type: "human_decision_submitted", taskId: "hd10", decision: decisionFor(request) });
     await loop3.settle();

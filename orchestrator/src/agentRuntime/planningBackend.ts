@@ -1,4 +1,4 @@
-import { lstatSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { lstatSync, mkdtempSync, openSync, readSync, closeSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { createAnthropicPlanningBackend } from "../planning/anthropic";
@@ -12,7 +12,10 @@ import {
   type PlanningProcessPort,
   type PlanningWorkspace,
 } from "../planning/claudeCli";
+import { CodexManagerError, createCodexManagerBackend, MAX_CODEX_MANAGER_OUTPUT_BYTES, preflightCodexManager, type CodexManagerErrorKind } from "../planning/codexCli";
 import { createStructuredGoalReviewer, createStructuredIntentPlanner, type StructuredPlanningBackend } from "../planning/planners";
+import { createStructuredCombinedRepairDiagnoser, createStructuredCombinedReviewer, createStructuredGuidanceInterpreter, createStructuredRepairDiagnoser } from "../planning/managerReasoning";
+import type { ManagerReasoningBackends } from "./managerPort";
 import { readPlanningProviderConfig, type PlanningConfigErrorCode, type PlanningProviderConfig } from "../planning/provider";
 import type { GoalReviewer, IntentPlanner } from "../planning/types";
 import { createNodeProcessRunner, realTimer } from "../workers/processRunner";
@@ -26,11 +29,11 @@ import type { ProcessRunner, Timer } from "../workers/types";
  * (no silent fallback to another provider, never to API billing).
  */
 
-export type PlanningBackendErrorCode = PlanningConfigErrorCode | `claude_cli_${ClaudeCliErrorKind}` | "anthropic_api_configuration";
+export type PlanningBackendErrorCode = PlanningConfigErrorCode | `claude_cli_${ClaudeCliErrorKind}` | `codex_cli_${CodexManagerErrorKind}` | "anthropic_api_configuration";
 
 export type PlanningBackendResult =
-  | { ok: true; provider: "off"; planner: null; reviewer: null; diagnostics: string[] }
-  | { ok: true; provider: "claude_cli" | "anthropic_api"; planner: IntentPlanner; reviewer: GoalReviewer; diagnostics: string[] }
+  | { ok: true; provider: "off"; planner: null; reviewer: null; manager: null; diagnostics: string[] }
+  | { ok: true; provider: "codex_cli" | "claude_cli" | "anthropic_api"; planner: IntentPlanner; reviewer: GoalReviewer; manager: Required<ManagerReasoningBackends>; diagnostics: string[] }
   | { ok: false; code: PlanningBackendErrorCode; reason: string };
 
 export interface PlanningBackendDeps {
@@ -60,10 +63,47 @@ const CLI_REASONS: Record<ClaudeCliErrorKind, string> = {
   malformed_output: "Claude CLI auth status output was not understood",
 };
 
+const CODEX_REASONS: Record<CodexManagerErrorKind, string> = {
+  configuration: "GPT Manager (Codex CLI) configuration is invalid",
+  workspace_unavailable: "could not create the Manager's neutral working directory outside the repository",
+  executable_unavailable: "Codex CLI executable not found (install Codex or set OXM_AGENT_MANAGER_CODEX_COMMAND)",
+  launch_failed: "Codex CLI could not be started",
+  not_authenticated: "Codex CLI is not signed in (run `codex login` with your ChatGPT account in this environment)",
+  non_subscription_auth: "Codex CLI is not signed in with ChatGPT (API-key login refused: no silent API billing)",
+  timeout: "Codex CLI login preflight timed out",
+  quota_exhausted: "Codex usage quota is exhausted",
+  rate_limited: "Codex CLI reported a rate limit",
+  service_unavailable: "Codex service unavailable",
+  process_error: "Codex CLI login preflight failed",
+  output_too_large: "Codex CLI preflight output exceeded its bound",
+  malformed_output: "Codex CLI output was not understood",
+};
+
 /** Adapts the shared ProcessRunner to the planning port: bounded output, enforced timeout, no shell. */
 export function createNodePlanningProcessPort(runner: ProcessRunner, timer: Timer): PlanningProcessPort {
+  const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+  const readBounded = (path: string, max: number): string | null => {
+    let fd: number | null = null;
+    try {
+      const stat = lstatSync(path, { throwIfNoEntry: false });
+      if (!stat || !stat.isFile()) return null;
+      fd = openSync(path, "r");
+      const buf = Buffer.alloc(Math.min(stat.size, max));
+      const n = readSync(fd, buf, 0, buf.length, 0);
+      return buf.subarray(0, n).toString("utf8");
+    } catch {
+      return null;
+    } finally {
+      if (fd !== null) closeSync(fd);
+    }
+  };
   return {
     async run(spec) {
+      for (const [name, content] of Object.entries(spec.files ?? {})) {
+        if (!SAFE_NAME.test(name)) return { kind: "launch_failed", missing: false };
+        writeFileSync(join(spec.cwd, name), content, { mode: 0o600, flag: "wx" });
+      }
+      if (spec.readBack !== undefined && !SAFE_NAME.test(spec.readBack)) return { kind: "launch_failed", missing: false };
       const running = runner.spawn({ command: spec.command, args: spec.args, cwd: spec.cwd, env: spec.env, stdinText: spec.stdin ?? undefined });
       let timedOut = false;
       const cancel = timer.schedule(spec.timeoutMs, () => {
@@ -75,7 +115,8 @@ export function createNodePlanningProcessPort(runner: ProcessRunner, timer: Time
         if (timedOut) return { kind: "timeout" };
         if (exit.spawnError) return { kind: "launch_failed", missing: exit.spawnError === "ENOENT" };
         const bounded = exit.stdout.length + exit.stderr.length > spec.maxOutputBytes;
-        return { kind: "exited", exitCode: exit.exitCode, signal: exit.signal, stdout: exit.stdout, stderr: exit.stderr, truncated: exit.truncated || bounded };
+        const fileOutput = spec.readBack !== undefined ? readBounded(join(spec.cwd, spec.readBack), spec.maxOutputBytes) : undefined;
+        return { kind: "exited", exitCode: exit.exitCode, signal: exit.signal, stdout: exit.stdout, stderr: exit.stderr, truncated: exit.truncated || bounded, ...(fileOutput !== undefined ? { fileOutput } : {}) };
       } finally {
         cancel();
       }
@@ -164,7 +205,7 @@ export async function createPlanningBackendFromConfig(
   deps: PlanningBackendDeps,
 ): Promise<PlanningBackendResult> {
   if (config.provider === "off")
-    return { ok: true, provider: "off", planner: null, reviewer: null, diagnostics: ["Agent planner disabled (OXM_AGENT_PLANNER=off): natural-language intake disabled; goal criteria cannot be accepted automatically"] };
+    return { ok: true, provider: "off", planner: null, reviewer: null, manager: null, diagnostics: ["Agent planner disabled (OXM_AGENT_PLANNER=off): natural-language intake disabled; goal criteria cannot be accepted automatically"] };
 
   let backend: StructuredPlanningBackend;
   let diagnostics: string[];
@@ -176,6 +217,18 @@ export async function createPlanningBackendFromConfig(
       return { ok: false, code: "anthropic_api_configuration", reason: "Anthropic API planner transport could not be configured" };
     }
     diagnostics = [`Agent planner provider: anthropic_api (Anthropic API BILLING ACTIVE; model ${config.model})`];
+  } else if (config.provider === "codex_cli") {
+    const workspace = guardWorkspace(deps.workspace ?? createTempPlanningWorkspace({ repoRoot: deps.repoRoot }), deps.repoRoot);
+    const port = createNodePlanningProcessPort(deps.runner ?? createNodeProcessRunner({ maxOutputBytes: MAX_CODEX_MANAGER_OUTPUT_BYTES }), deps.timer ?? realTimer);
+    const preflight = await preflightCodexManager({ process: port, workspace, env, command: config.command });
+    if (!preflight.ok) return { ok: false, code: `codex_cli_${preflight.error.kind}`, reason: CODEX_REASONS[preflight.error.kind] };
+    try {
+      backend = createCodexManagerBackend({ process: port, workspace, env, model: config.model, command: config.command, timeoutMs: config.timeoutMs });
+    } catch (error) {
+      const kind = error instanceof CodexManagerError ? error.kind : "configuration";
+      return { ok: false, code: `codex_cli_${kind}`, reason: CODEX_REASONS[kind] };
+    }
+    diagnostics = [`GPT Manager provider: codex_cli (ChatGPT subscription session; read-only, tool-less Manager profile; no API key used; model ${config.model ?? "Codex default"})`];
   } else {
     const workspace = guardWorkspace(deps.workspace ?? createTempPlanningWorkspace({ repoRoot: deps.repoRoot }), deps.repoRoot);
     const port = createNodePlanningProcessPort(deps.runner ?? createNodeProcessRunner({ maxOutputBytes: MAX_CLI_OUTPUT_BYTES }), deps.timer ?? realTimer);
@@ -193,6 +246,12 @@ export async function createPlanningBackendFromConfig(
     provider: config.provider,
     planner: createStructuredIntentPlanner(backend),
     reviewer: createStructuredGoalReviewer(backend),
-    diagnostics: [...diagnostics, "Agent planner configured (natural-language intake + semantic goal review)"],
+    manager: {
+      diagnoser: createStructuredRepairDiagnoser(backend),
+      guidance: createStructuredGuidanceInterpreter(backend),
+      combined: createStructuredCombinedReviewer(backend),
+      combinedRepair: createStructuredCombinedRepairDiagnoser(backend),
+    },
+    diagnostics: [...diagnostics, "Agent planner configured (natural-language intake, semantic goal review, GPT repair diagnosis, guidance interpretation, combined review)"],
   };
 }

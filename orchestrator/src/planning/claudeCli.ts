@@ -80,10 +80,14 @@ export interface PlanningProcessSpec {
   stdin: string | null;
   timeoutMs: number;
   maxOutputBytes: number;
+  /** Files written into the invocation's private working directory before start (basename -> content). */
+  files?: Readonly<Record<string, string>>;
+  /** Basename of a file in the working directory read back after exit (bounded). */
+  readBack?: string;
 }
 
 export type PlanningProcessResult =
-  | { kind: "exited"; exitCode: number | null; signal: string | null; stdout: string; stderr: string; truncated: boolean }
+  | { kind: "exited"; exitCode: number | null; signal: string | null; stdout: string; stderr: string; truncated: boolean; fileOutput?: string | null }
   | { kind: "timeout" }
   /** The executable could not be started (ENOENT, EACCES, …). */
   | { kind: "launch_failed"; missing: boolean };

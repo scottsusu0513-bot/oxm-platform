@@ -52,7 +52,14 @@ export const REPAIRABLE_STATES: readonly TaskState[] = ["running", "pr_opened", 
  * Manager itself sees one (retries exhausted), it is an unrecoverable
  * infrastructure condition and blocks — it is never sent to repair.
  */
-export const TRANSIENT_WORKER_ERRORS: readonly WorkerErrorType[] = ["timeout", "process_error", "runtime_unavailable"];
+export const TRANSIENT_WORKER_ERRORS: readonly WorkerErrorType[] = ["timeout", "process_error", "runtime_unavailable", "rate_limited", "service_unavailable"];
+
+/**
+ * Worker availability failures that wait for the Worker (or an eligible
+ * substitute) instead of being retried immediately: the Manager Loop pauses
+ * or hands the SAME task over (executive/workAssignment) — never a repair.
+ */
+export const AVAILABILITY_WAIT_ERRORS: readonly WorkerErrorType[] = ["quota_exhausted"];
 
 /** Worker failures the same worker may repair; everything else is not repairable by retrying. */
 const WORKER_ERROR_POLICY: Record<WorkerErrorType, { severity: Finding["severity"]; trigger: EscalationTrigger }> = {
@@ -77,6 +84,11 @@ const WORKER_ERROR_POLICY: Record<WorkerErrorType, { severity: Finding["severity
   runtime_misconfigured: { severity: "blocked", trigger: "missing_trusted_evidence" },
   policy_error: { severity: "blocked", trigger: "missing_trusted_evidence" },
   process_error: { severity: "blocked", trigger: "infrastructure_failure" },
+  quota_exhausted: { severity: "blocked", trigger: "infrastructure_failure" },
+  rate_limited: { severity: "blocked", trigger: "infrastructure_failure" },
+  service_unavailable: { severity: "blocked", trigger: "infrastructure_failure" },
+  authentication_unavailable: { severity: "blocked", trigger: "infrastructure_failure" },
+  executable_unavailable: { severity: "blocked", trigger: "infrastructure_failure" },
 };
 
 const CI_OUTCOME_RANK: Record<CheckOutcome, number> = { success: 0, pending: 1, unknown: 2, missing: 3, failed: 4, blocked: 5 };
@@ -209,7 +221,9 @@ function collectFindings(e: ManagerEvidence, approvalRequired: boolean): { findi
       (a.evidenceType === "scope" && a.reference === "scope" && e.scope.allowedScope.length > 0 && violations.length === 0) ||
       (a.evidenceType === "human" && a.reference !== null) ||
       // Semantic goal acceptance: only the Manager's trusted reviewer can back a goal criterion.
-      (a.evidenceType === "manager_review" && a.reference !== null && a.reference.startsWith("review:"));
+      (a.evidenceType === "manager_review" && a.reference !== null && a.reference.startsWith("review:")) ||
+      // Owner constraints: trusted mechanical checks of runtime evidence.
+      (a.evidenceType === "constraint_check" && a.reference !== null && a.reference.startsWith("constraint:"));
     if (!backed) add(aid, "needs_repair", "acceptance_unverified", "acceptance_failure", a.summary);
   }
 

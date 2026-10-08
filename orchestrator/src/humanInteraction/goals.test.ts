@@ -1,3 +1,4 @@
+import { findInternalJargon } from "../executive/communication";
 import { describe, expect, it } from "vitest";
 import { isValidBranchTaskId } from "../branches/naming";
 import { createManagerLoop } from "../scheduler/loop";
@@ -30,8 +31,10 @@ describe("telegram goal intake — trusted task creation", () => {
     expect(r.outcome).toBe("submitted");
     expect(r.taskId).toBe("g-task-1");
     expect(isValidBranchTaskId(r.taskId)).toBe(true);
-    expect(r.message).toMatch(/^OXM Agent 已收到任務\nTask: g-task-1\n狀態：已交給 Manager\n風險：(green|yellow|red)/);
-    expect(r.message).toContain("只有需要你的決策或最終發布批准時才會通知你");
+    // Executive acknowledgement: plain Traditional Chinese, conclusion first, no internal state names.
+    expect(r.message).toMatch(/^收到，我會交給 (Claude|Codex) 處理(程式修改|畫面設計)，完成後我先檢查結果。\n任務：/);
+    expect(r.message).toContain("過程中只有需要你決定、或最後要發布時才會打擾你。");
+    expect(findInternalJargon(r.message)).toEqual([]);
     expect(r.message).not.toMatch(SHA);
     expect(r.message).not.toMatch(/agent\/task-|prompt/i);
     await sim.loop.settle();
@@ -159,7 +162,7 @@ describe("telegram goal intake — status views", () => {
     await sim.loop.settle();
     const list = await service.listTasks();
     expect(list.message).toContain(r.taskId!);
-    expect(list.message).toContain("waiting for an approval");
+    expect(list.message).toContain("等你批准");
     const st = await service.taskStatus(r.taskId!.slice(-6));
     expect(st.outcome).toBe("info");
     for (const text of [list.message, st.message]) {
@@ -167,8 +170,9 @@ describe("telegram goal intake — status views", () => {
       expect(text).not.toMatch(/[0-9a-f]{64}/);
       expect(text).not.toMatch(/commit-publish:|bindingTarget|approvalRequestId|prompt|stdout|stderr/i);
     }
-    expect(st.message).toMatch(/Manager status: needs_human_approval/);
-    expect(st.message).toMatch(/Worker: (claude|codex)/);
+    expect(st.message).toMatch(/目前進度：等你批准/);
+    expect(st.message).toMatch(/負責：(Claude|Codex)/);
+    for (const text of [list.message, st.message]) expect(findInternalJargon(text)).toEqual([]);
     expect((await service.taskStatus("zz")).outcome).toBe("invalid");
     expect((await service.taskStatus("../etc")).outcome).toBe("invalid");
   });
@@ -184,13 +188,13 @@ describe("telegram goal intake — restart", () => {
     const approval = first.transport.sent[0].notice;
 
     first.sim.ports.leases.release(first.sim.ports.leases.current("default"));
-    const loop2 = createManagerLoop(first.sim.ports);
+    const loop2 = createManagerLoop(first.sim.ports, { managerMode: "deterministic_fixture" });
     await loop2.resume();
     await loop2.settle();
     const t2 = createRecordingTransport(700);
     const second = createHumanInteractionHarness({ loop: loop2, approvals: first.sim.approvals, audit: first.audit, now: first.sim.ports.now, transport: t2, durableGateway: true, idPrefix: "g2" });
     expect(await second.service.observe()).toEqual({ delivered: 0 });
-    expect((await second.service.taskStatus(r.taskId!)).message).toContain("Manager status: needs_human_approval");
+    expect((await second.service.taskStatus(r.taskId!)).message).toContain("目前進度：等你批准");
     // The same Telegram goal update redelivered after restart does not create a second task.
     expect((await second.service.submitGoal(goal("tg.goal.60"))).outcome).toBe("duplicate");
     expect(loop2.tasks()).toHaveLength(1);

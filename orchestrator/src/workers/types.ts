@@ -98,6 +98,12 @@ export const WORKER_ERROR_TYPES = [
   "worker_failure",
   "cancelled",
   "timeout",
+  // Typed availability (infrastructure) failures: never a goal failure, never a repair cycle.
+  "quota_exhausted",
+  "rate_limited",
+  "service_unavailable",
+  "authentication_unavailable",
+  "executable_unavailable",
 ] as const;
 export type WorkerErrorType = (typeof WORKER_ERROR_TYPES)[number];
 
@@ -129,6 +135,8 @@ export interface WorkerResult {
   errorType: WorkerErrorType | null;
   /** Worker's own snake_case failure code, if it reported one. */
   workerErrorCode: string | null;
+  /** Typed availability classification of a failed CLI run (quota, rate limit, auth, …) with a trusted reset time when exposed. */
+  availability?: { kind: "quota_exhausted" | "rate_limited_transient" | "service_unavailable" | "authentication_unavailable" | "executable_unavailable" | "process_failure"; resetAt: string | null };
 }
 
 /** The JSON object the worker itself must return (validated by resultParser). */

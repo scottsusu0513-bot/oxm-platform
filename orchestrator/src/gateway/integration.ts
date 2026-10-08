@@ -42,7 +42,10 @@ export function createManagerHumanDecisionReader(
     current(taskId) {
       const snap = loop.task(taskId);
       const report = snap?.humanEscalation;
-      if (!snap || snap.status !== "needs_human_decision" || !snap.humanDecisionRequest || !report) return null;
+      const waitingForGuidanceManager =
+        snap?.status === "waiting_infrastructure" &&
+        snap.queueReason?.startsWith("GPT Manager guidance interpretation unavailable") === true;
+      if (!snap || (snap.status !== "needs_human_decision" && !waitingForGuidanceManager) || !snap.humanDecisionRequest || !report) return null;
       return {
         request: structuredClone(snap.humanDecisionRequest),
         requesterId: requesterOf(taskId),
@@ -57,7 +60,9 @@ export function createManagerHumanDecisionReader(
         inputRequested: report.humanDecisionRequired,
         cyclesCompleted: report.cyclesCompleted,
         fingerprintTrend: report.fingerprintTrend,
-        rootCause: report.diagnoses.at(-1)?.rootCause ?? "",
+        rootCause: report.diagnoses.at(-1)?.managerPlan?.rootCause ?? report.diagnoses.at(-1)?.rootCause ?? "",
+        ownerDecision: report.ownerDecision ?? null,
+        groupDecision: report.groupDecision === true,
         repairAttempts: report.repairOutcomes.map((o) => {
           const diagnosis = report.diagnoses.find((d) => d.cycle === o.cycle);
           return {

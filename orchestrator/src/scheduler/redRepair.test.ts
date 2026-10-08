@@ -139,7 +139,7 @@ describe("restart preserves both human waiting states", () => {
   const restart = (sim: Simulation, workspaceId: string) => {
     const lease = sim.ports.leases.current(workspaceId);
     if (lease) sim.ports.leases.release(lease);
-    return createManagerLoop(sim.ports);
+    return createManagerLoop(sim.ports, { managerMode: "deterministic_fixture" });
   };
 
   it("waiting-for-human-decision and waiting-for-red-repair-approval both survive a restart and resume", async () => {
@@ -241,7 +241,7 @@ describe("red-risk transient retry approval", () => {
     const waiting = sim.loop.task("rt5")!;
     const lease = sim.ports.leases.current("ws-rt5");
     if (lease) sim.ports.leases.release(lease);
-    const loop2 = createManagerLoop(sim.ports);
+    const loop2 = createManagerLoop(sim.ports, { managerMode: "deterministic_fixture" });
     await loop2.resume();
     await loop2.settle();
     const restored = loop2.task("rt5")!;

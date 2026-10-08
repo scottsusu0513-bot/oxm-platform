@@ -120,3 +120,16 @@ describe("audit_and_fix semantics", () => {
     expect(sim.commits).toHaveLength(0);
   });
 });
+
+describe("GPT Manager interpretation: work areas", () => {
+  const base = { intent: "change_code", taskId: null, title: "搜尋頁改版", interpretedObjective: "Redesign search and change the API.", criteria: ["Results load fast"], clarificationQuestion: "", riskObservations: [] };
+  it("keeps declared work areas and bounded part objectives", () => {
+    const d = normalizeIntentDecision({ ...base, workAreas: { programming: true, visual: true }, programmingObjective: "Change the API ranking", visualObjective: "Redesign the layout" }, { knownTaskIds: [], requireTask: false });
+    expect(d).toMatchObject({ kind: "task", workAreas: { programming: true, visual: true }, programmingObjective: "Change the API ranking", visualObjective: "Redesign the layout" });
+  });
+  it("malformed work areas are ignored (the deterministic policy decides), never trusted", () => {
+    const d = normalizeIntentDecision({ ...base, workAreas: ["visual"], programmingObjective: 42, visualObjective: "" }, { knownTaskIds: [], requireTask: false });
+    expect(d).toMatchObject({ kind: "task", programmingObjective: null, visualObjective: null });
+    expect(d).not.toHaveProperty("workAreas");
+  });
+});

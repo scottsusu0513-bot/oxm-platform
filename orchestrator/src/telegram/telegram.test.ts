@@ -1,3 +1,4 @@
+import { findInternalJargon } from "../executive/communication";
 import { describe, expect, it } from "vitest";
 import { createHumanInteractionHarness } from "../humanInteraction/fake";
 import { createAuditHumanInteractionLedger } from "../humanInteraction/ledger";
@@ -167,13 +168,18 @@ describe("telegram end to end — needs_human_decision", () => {
     expect(p.api.sent).toHaveLength(1);
     const notice = p.api.sent[0];
     expect(notice.chatId).toBe(OWNER);
-    expect(notice.text).toMatch(/^OXM Agent needs your decision/);
-    expect(notice.text).toContain("Reply directly to this message with your guidance.");
-    expect(notice.text).toContain("does NOT approve commit, publish, merge, or deploy");
-    expect(notice.text).toContain("tg2.hd.1");
+    // Executive decision request: conclusion, what was tried, blocker, recommendation, what to do.
+    expect(notice.text).toMatch(/^「tg2」改完之後，自動檢查還沒有通過。\n我已經讓工程師處理了 2 次/);
+    expect(notice.text).toContain("我建議");
+    expect(notice.text).toContain("直接傳訊息告訴我你的想法即可");
+    expect(notice.text).toContain("不代表批准發布");
+    // Internal ids, refs, fingerprints and enum names stay in audit logs.
+    expect(findInternalJargon(notice.text)).toEqual([]);
+    expect(notice.text).not.toContain("tg2.hd.1");
+    expect(notice.text).not.toMatch(/Ref: /);
     expect(notice.text).not.toContain(p.sim.loop.task("tg2")!.humanDecisionRequest!.expectedHeadSha);
     expect(notice.text).not.toContain(FAKE_TOKEN);
-    expect(JSON.stringify(notice.buttons)).toContain("Cancel task");
+    expect(JSON.stringify(notice.buttons)).toContain("取消任務");
     expect(p.api.calls.find((c) => c.method === "sendMessage")!.payload).not.toHaveProperty("parse_mode");
 
     p.api.updates.push(
@@ -209,16 +215,19 @@ describe("telegram end to end — needs_human_decision", () => {
     p.api.updates.push(textUpdate({ chatId: OWNER, text: "token ghp_abcdefghijklmnopqrstuvwxyz012345", messageId: 60, replyTo: notice.messageId }));
     await p.cp.pollOnce();
     expect(p.emitted).toHaveLength(0);
-    expect(p.api.sent.at(-1)!.text).toMatch(/credential or secret/);
+    // Plain-language reason (never the raw internal "looks like a credential" string).
+    expect(p.api.sent.at(-1)!.text).toMatch(/password or secret key|密碼或金鑰/);
+    expect(p.api.sent.at(-1)!.text).not.toMatch(/looks like a credential/);
     expect(p.api.sent.at(-1)!.text).not.toContain("ghp_");
 
     p.api.updates.push(textUpdate({ chatId: OWNER, text: "/cancel", messageId: 61, replyTo: notice.messageId }));
     await p.cp.pollOnce();
     expect(p.cancelCalls).toEqual([]); // confirmation first
     const confirm = p.api.sent.at(-1)!;
-    expect(confirm.text).toMatch(/^Cancel this task\?/);
+    expect(confirm.text).toMatch(/^確定要取消「tg3」嗎？/);
+    expect(findInternalJargon(confirm.text)).toEqual([]);
     const [[confirmBtn, keepBtn]] = confirm.buttons as { text: string; callback_data: string }[][];
-    expect([confirmBtn.text, keepBtn.text]).toEqual(["Confirm cancel", "Keep running"]);
+    expect([confirmBtn.text, keepBtn.text]).toEqual(["確認取消", "繼續執行"]);
     p.api.updates.push(callbackUpdate({ chatId: OWNER, data: confirmBtn.callback_data, messageId: confirm.messageId }));
     await p.cp.pollOnce();
     expect(p.cancelCalls).toEqual(["tg3"]);
@@ -232,12 +241,13 @@ describe("telegram end to end — commit/publish approval", () => {
     await p.service.observe();
     expect(p.api.sent).toHaveLength(1);
     const msg = p.api.sent[0];
-    expect(msg.text).toMatch(/^OXM Agent requests commit \+ publish approval/);
-    for (const line of ["commit = yes", "normal push = yes", "open/reuse PR = yes", "merge = no", "deploy = no", "Manager accepted: yes"])
+    expect(msg.text).toMatch(/^「tg4」已完成，也通過我的檢查，等待你批准發布。/);
+    for (const line of ["這次改了 1 個檔案", "自動檢查：全部通過。", "按「批准發布」後，我會建立一次 commit、推送到這個任務的工作分支並開 PR。不會合併，也不會部署。"])
       expect(msg.text).toContain(line);
+    expect(findInternalJargon(msg.text)).toEqual([]);
     const [[approve, reject]] = msg.buttons as { text: string; callback_data: string }[][];
-    expect(approve.text).toBe("Approve commit + publish");
-    expect(reject.text).toBe("Reject");
+    expect(approve.text).toBe("批准發布");
+    expect(reject.text).toBe("不要發布");
 
     p.api.updates.push(callbackUpdate({ chatId: OWNER, fromId: STRANGER, data: approve.callback_data, messageId: msg.messageId }));
     await p.cp.pollOnce();
@@ -249,7 +259,7 @@ describe("telegram end to end — commit/publish approval", () => {
     await p.sim.loop.settle();
     expect(p.approvalEvents).toEqual([{ taskId: "tg4", decision: "approved" }]);
     expect(p.sim.commits).toHaveLength(1);
-    expect(p.api.answered[0].text).toContain("Merge and deploy are NOT approved");
+    expect(p.api.answered[0].text).toContain("不會合併，也不會部署");
     expect(p.api.calls.some((c) => c.method === "editMessageReplyMarkup")).toBe(true);
 
     p.api.updates.push(callbackUpdate({ chatId: OWNER, data: approve.callback_data, messageId: msg.messageId, id: "cb-2" }));
@@ -290,7 +300,8 @@ describe("telegram end to end — /goal and status commands", () => {
     expect(p.sim.loop.tasks().map((t) => t.taskId)).toEqual(["boot1-task-1"]);
     const ack = p.api.sent.at(-1)!;
     expect(ack.replyTo).toBe(82);
-    expect(ack.text).toMatch(/^OXM Agent 已收到任務\nTask: boot1-task-1\n狀態：已交給 Manager\n風險：/);
+    expect(ack.text).toMatch(/^收到，我會交給 (Claude|Codex) 處理(程式修改|畫面設計)，完成後我先檢查結果。\n任務：/);
+    expect(findInternalJargon(ack.text)).toEqual([]);
     expect(ack.buttons).toBeNull();
 
     // Redelivery of the same update (offset lost) does not create a second task.
@@ -300,7 +311,7 @@ describe("telegram end to end — /goal and status commands", () => {
     expect(p.sim.loop.tasks()).toHaveLength(1);
   });
 
-  it("/goal without a body shows usage; plain text is not a goal and not guidance", async () => {
+  it("/goal without a body shows usage; with exactly one pending decision plain text is guidance for it (no Reply needed)", async () => {
     const p = await plane({ escalate: ["tg6"] });
     await p.service.observe();
     p.api.updates.push(textUpdate({ chatId: OWNER, text: "/goal", messageId: 90 }));
@@ -309,11 +320,13 @@ describe("telegram end to end — /goal and status commands", () => {
     await p.cp.pollOnce();
     await p.sim.loop.settle();
     const texts = p.api.sent.slice(1).map((m) => m.text);
-    expect(texts[0]).toMatch(/^Usage: \/goal/);
-    expect(texts[1]).toMatch(/^Usage: \/goal/);
-    expect(texts[2]).toMatch(/planner is unavailable/);
+    expect(texts[0]).toMatch(/^用法：\/goal/);
+    expect(texts[1]).toMatch(/^用法：\/goal/);
+    // Planner unavailable + exactly one open decision: the ordinary message is guidance for it.
+    expect(texts[2]).toMatch(/Guidance received/);
     expect(p.sim.loop.tasks().map((t) => t.taskId)).toEqual(["tg6"]);
-    expect(p.emitted).toHaveLength(0);
+    expect(p.emitted).toHaveLength(1);
+    expect(p.emitted[0].decision).toMatchObject({ taskId: "tg6", escalationId: "tg6.hd.1" });
   });
 
   it("a reply to an escalation that looks like a command-free goal stays guidance for that escalation", async () => {
@@ -332,9 +345,10 @@ describe("telegram end to end — /goal and status commands", () => {
     p.api.updates.push(textUpdate({ chatId: OWNER, text: "/tasks", messageId: 100 }), textUpdate({ chatId: OWNER, text: "/status tg8", messageId: 101 }), textUpdate({ chatId: OWNER, text: "/status", messageId: 102 }));
     await p.cp.pollOnce();
     const [tasks, status, usage] = p.api.sent.map((m) => m.text);
-    expect(tasks).toMatch(/^Active tasks \(1\):/);
-    expect(status).toMatch(/Task: tg8\nPhase: waiting for an approval/);
-    expect(usage).toMatch(/^Usage: \/status/);
+    expect(tasks).toMatch(/^目前進行中的任務（1）：/);
+    expect(status).toMatch(/任務：tg8\n目前進度：等你批准/);
+    expect(usage).toMatch(/^用法：\/status/);
+    for (const t of [tasks, status]) expect(findInternalJargon(t)).toEqual([]);
     for (const t of [tasks, status]) expect(t).not.toMatch(/\b[0-9a-f]{40}\b|commit-publish:|prompt/i);
   });
 });
@@ -364,7 +378,7 @@ describe("telegram end to end — natural language and red-risk approval", () =>
     expect(p.sim.loop.tasks()).toHaveLength(1);
     expect(p.sim.loop.tasks()[0].mode).toBe("read_only");
     expect(p.api.sent).toHaveLength(1);
-    expect(p.api.sent[0].text).toMatch(/^OXM Agent 已收到任務[\s\S]*唯讀調查/);
+    expect(p.api.sent[0].text).toMatch(/^收到，我會用唯讀方式檢查，不修改任何檔案。查完直接回你。/);
   });
 
   it("red-risk start approval buttons: owner approves once; a stranger's tap is ignored", async () => {
@@ -375,11 +389,11 @@ describe("telegram end to end — natural language and red-risk approval", () =>
     expect(p.sim.loop.tasks()[0]).toMatchObject({ risk: "red", approvalPhase: "pre_execution" });
     await p.service.observe();
     const msg = p.api.sent.at(-1)!;
-    expect(msg.text).toMatch(/^OXM Agent requests a RED-RISK execution approval/);
-    expect(msg.text).toContain("It does NOT authorize:");
-    expect(msg.text).toContain("merge = no, deploy = no, Worker Git permissions = no");
+    expect(msg.text).toMatch(/風險較高，開始執行前需要你批准。/);
+    expect(msg.text).toContain("批准只代表允許執行這一次；之後要發布時還會另外請你批准。不會合併，也不會部署。");
+    expect(findInternalJargon(msg.text)).toEqual([]);
     const [[approve, reject]] = msg.buttons as { text: string; callback_data: string }[][];
-    expect([approve.text, reject.text]).toEqual(["Approve this execution", "Reject"]);
+    expect([approve.text, reject.text]).toEqual(["批准執行", "拒絕"]);
     p.api.updates.push(callbackUpdate({ chatId: OWNER, fromId: STRANGER, data: approve.callback_data, messageId: msg.messageId }));
     await p.cp.pollOnce();
     expect(p.sim.workerCalls).toHaveLength(0);

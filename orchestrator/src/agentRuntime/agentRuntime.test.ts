@@ -249,3 +249,12 @@ describe("durable log compaction", () => {
     expect(compactAuditLog(path).compacted).toBe(false);
   });
 });
+
+describe("production composition requires the GPT Manager", () => {
+  it("the production loop is gpt_required (no deterministic stand-in) and accounts Manager calls", async () => {
+    const audit = createInMemoryAuditRepository(() => new Date().toISOString());
+    const r = await createAgentRuntime(config(), { audit, owner: owner(), runner: safetyRunner() });
+    if (!r.ok) throw new Error(r.reason);
+    expect(r.runtime.loop.policy.managerMode).toBe("gpt_required");
+  });
+});

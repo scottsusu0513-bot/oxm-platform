@@ -45,6 +45,10 @@ export type IntentDecision =
       criteria: string[];
       /** Typed risk observations (RiskSignalKind). They can only raise intake risk. */
       riskObservations: string[];
+      /** Work areas the Manager declared; the fixed assignment policy may add (never drop) areas. */
+      workAreas?: { programming: boolean; visual: boolean };
+      programmingObjective?: string | null;
+      visualObjective?: string | null;
     }
   | { kind: "status_query" | "task_follow_up" | "cancel_or_pause" | "human_decision"; intent: Exclude<AgentIntent, TaskCreatingIntent>; taskId: string | null }
   | { kind: "clarify"; question: string };
@@ -66,6 +70,12 @@ export interface GoalReviewInput {
   answer: string | null;
   /** Trusted contents of repository files the answer cites (bounded). */
   citedFiles: readonly { path: string; excerpt: string }[];
+  /** Trusted repository excerpts the Manager gathered itself from its evidence plan (read-only work). */
+  sourceEvidence?: readonly { path: string; excerpt: string }[];
+  /** What evidence answers the goal (Manager evidence plan); internal wording. */
+  evidenceRequirements?: readonly string[];
+  /** Durable owner constraints the reviewer must verify against the actual evidence (semantic checks). */
+  ownerConstraints?: readonly { id: string; text: string }[];
 }
 
 export interface GoalReviewer {

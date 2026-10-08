@@ -1,3 +1,5 @@
+import type { TaskTechnicalDetails } from "./types";
+import type { TaskSnapshot } from "../scheduler/types";
 import type {
   ApprovalRepository,
   AuditRepository,
@@ -65,6 +67,31 @@ export function buildTaskStatus(input: {
     waitReason: snap?.blockingReason ?? snap?.queueReason ?? null,
     mode: snap?.mode ?? "change",
     answer: snap?.answer ?? null,
+    ...(snap ? { details: technicalDetails(snap) } : {}),
+    ...(snap
+      ? {
+          workforce: {
+            workArea: snap.workArea,
+            primaryWorker: snap.primaryWorker,
+            temporaryCover: snap.temporaryCover,
+            handoffs: snap.handoffs.length,
+            availabilityPause: snap.availabilityPause
+              ? { waitingFor: [...snap.availabilityPause.waitingFor], resetAt: snap.availabilityPause.resetAt, exhausted: snap.availabilityPause.exhausted, cause: snap.availabilityPause.cause ?? "quota" }
+              : null,
+            combinedReview: snap.combinedReview
+              ? {
+                  status: snap.combinedReview.status,
+                  ownerSummary: snap.combinedReview.verdict?.ownerSummary ?? null,
+                  lead: snap.combinedReview.leadTaskId === snap.taskId,
+                  leadTaskId: snap.combinedReview.leadTaskId,
+                  round: snap.combinedReview.round ?? 1,
+                  cycle: snap.combinedReview.cycle ?? 0,
+                  repairTargets: snap.combinedReview.cycles?.at(-1)?.plan.targets.map((t) => t.area) ?? [],
+                }
+              : null,
+          },
+        }
+      : {}),
     approval: {
       required: approvalState || pending !== null,
       kind:
@@ -107,5 +134,33 @@ export function buildTaskStatus(input: {
     createdAt: task.createdAt,
     updatedAt:
       task.updatedAt > intake.updatedAt ? task.updatedAt : intake.updatedAt,
+  };
+}
+
+/** Structured technical facts of a task for an explicit owner request. No model reasoning, no bindings. */
+function technicalDetails(snap: TaskSnapshot): TaskTechnicalDetails {
+  const ev = snap.evidence;
+  const textOf = (id: string) => ev?.criteria.find((c) => c.id === id)?.text ?? id;
+  const lastPlan = snap.repairCycles.at(-1)?.diagnosis ?? null;
+  return {
+    worker: snap.worker,
+    workArea: snap.workArea ?? null,
+    temporaryCover: snap.temporaryCover === true,
+    risk: snap.risk,
+    approvalPhase: snap.approvalPhase,
+    validations: ev?.validations ?? [],
+    unmetCriteria: (ev?.acceptance ?? [])
+      .filter((a) => a.status !== "satisfied" && !a.criterionId.startsWith("OC-"))
+      .map((a) => ({ id: a.criterionId, text: textOf(a.criterionId), status: a.status, summary: a.summary ?? null })),
+    ownerConstraints: (ev?.ownerConstraints ?? []).map((c) => ({ id: c.checkId, kind: c.kind, status: c.status, evidence: c.evidence })),
+    managerRootCause: lastPlan ? (lastPlan.managerPlan?.rootCause ?? lastPlan.rootCause) : null,
+    repairAttempts: snap.repairCycles.map((c) => ({
+      round: c.round,
+      cycle: c.cycle,
+      strategy: c.diagnosis.managerPlan?.repairStrategy ?? null,
+      outcome: c.revalidation ? c.revalidation.decision : c.workerResult ? `worker ${c.workerResult.status}` : "running",
+    })),
+    changedPaths: ev?.changedPaths ?? [],
+    citedFiles: ev?.citedFiles ?? [],
   };
 }

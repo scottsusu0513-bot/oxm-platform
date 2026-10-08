@@ -98,6 +98,7 @@ const created = await createAgentRuntime((runtimeConfig as Extract<typeof runtim
   reconcile: args.has("--reconcile"),
   planner,
   reviewer,
+  manager: planned.manager,
 });
 if (!created.ok) {
   const f = created as Extract<typeof created, { ok: false }>;
@@ -118,6 +119,8 @@ const service = createHumanInteractionService({
   transport: createTelegramTransport(client, config.ownerChatId),
   now,
   log: (e) => say(`${e.event}: ${e.outcome}`),
+  // Production never downgrades from the GPT Manager to a deterministic intake.
+  managerRequired: true,
 });
 const controlPlane = createTelegramControlPlane({ config, client, service, ledger, log: say });
 
@@ -166,10 +169,20 @@ const qaTimer = setInterval(() => {
   }
 }, 5_000);
 
-// Goal-review retry driver: bounded by the Manager's maxReviewRetries; never re-runs a Worker.
+// Goal-review / GPT-diagnosis retry driver: bounded by the Manager's maxReviewRetries; never re-runs a Worker.
+// Also retries a combined review of a decomposed request whose GPT review was unavailable.
 const reviewTimer = setInterval(() => {
-  for (const task of runtime.loop.tasks()) if (task.status === "waiting_infrastructure") runtime.loop.post({ type: "review_retry", taskId: task.taskId });
+  for (const task of runtime.loop.tasks()) {
+    if (task.status === "waiting_infrastructure") runtime.loop.post({ type: "review_retry", taskId: task.taskId });
+    if (task.combinedReview?.status === "review_unavailable") runtime.loop.post({ type: "combined_review", groupId: task.combinedReview.groupId });
+  }
 }, 60_000);
+
+// Worker availability driver: resumes tasks paused on a Worker usage quota once a trusted reset time has
+// passed, and re-probes pauses without one hourly (a renewed quota error just pauses again). Never a repair.
+const availabilityTimer = setInterval(() => {
+  if (runtime.loop.tasks().some((task) => task.status === "waiting_worker_quota")) runtime.loop.post({ type: "availability_check", probeAfterMs: 60 * 60_000 });
+}, 5 * 60_000);
 
 let stopping = false;
 async function shutdown(signal: string) {
@@ -178,6 +191,7 @@ async function shutdown(signal: string) {
   say(`${signal} received; stopping`);
   clearInterval(qaTimer);
   clearInterval(reviewTimer);
+  clearInterval(availabilityTimer);
   await controlPlane.stop();
   audit!.close();
   process.exit(0);
@@ -191,6 +205,7 @@ try {
 } catch (error) {
   clearInterval(qaTimer);
   clearInterval(reviewTimer);
+  clearInterval(availabilityTimer);
   audit!.close();
   fail(error instanceof TelegramStartupError ? error.message : "control plane stopped unexpectedly");
 }

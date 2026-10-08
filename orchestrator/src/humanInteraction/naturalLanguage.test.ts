@@ -1,3 +1,4 @@
+import { findInternalJargon } from "../executive/communication";
 import { describe, expect, it } from "vitest";
 import type { IntentPlanner, IntentPlannerInput, GoalReviewer, GoalReviewInput } from "../planning/types";
 import { createSimulation, type WorkerScript } from "../scheduler/fake";
@@ -65,8 +66,8 @@ describe("natural-language intake (no /goal)", () => {
     const { sim, say, service, transport } = setup(planner, { answers: { "n-task-1": "Search goes through server/n-task-1/index.ts; uncertainty: caching not verified." } });
     const r = await say("tg.msg.1", ASK);
     expect(r.outcome).toBe("submitted");
-    expect(r.message).toContain("類型：唯讀調查");
-    expect(r.message).toContain("不會修改程式");
+    expect(r.message).toMatch(/^收到，我會用唯讀方式檢查，不修改任何檔案。查完直接回你。/);
+    expect(findInternalJargon(r.message)).toEqual([]);
     await sim.loop.settle();
     const snap = sim.loop.task("n-task-1")!;
     expect(snap.mode).toBe("read_only");
@@ -88,8 +89,10 @@ describe("natural-language intake (no /goal)", () => {
     const { sim, say, service, transport } = setup(planner);
     const r = await say("tg.msg.2", CHANGE);
     expect(r.outcome).toBe("submitted");
-    expect(r.message).toContain("類型：修改程式");
-    expect(r.message).toContain("Waiting state gives visible feedback immediately");
+    expect(r.message).toMatch(/^收到，我會交給 (Claude|Codex) 處理/);
+    // Acceptance criteria are internal Manager language; the owner sees the plan, not AC lists.
+    expect(r.message).not.toMatch(/AC-\d|驗收條件/);
+    expect(findInternalJargon(r.message)).toEqual([]);
     await sim.loop.settle();
     expect(sim.loop.task("n-task-1")).toMatchObject({ mode: "change", status: "needs_human_approval", approvalPhase: "commit_publish" });
     await service.observe();
@@ -132,7 +135,7 @@ describe("natural-language intake (no /goal)", () => {
     await sim.loop.settle();
     const r = await say("tg.msg.7", FOLLOW);
     expect(r.outcome).toBe("info");
-    expect(r.message).toContain("Task: n-task-1");
+    expect(r.message).toContain("編號：n-task-1");
     expect(sim.loop.tasks()).toHaveLength(1);
   });
 
@@ -195,7 +198,7 @@ describe("natural-language intake (no /goal)", () => {
       [STOP]: () => ({ intent: "clarify", taskId: null, title: "", interpretedObjective: "", criteria: [], clarificationQuestion: "要停止哪一個任務？" }),
     });
     const { sim, say } = setup(planner);
-    expect((await say("tg.msg.13", FOLLOW)).message).toMatch(/No active tasks/);
+    expect((await say("tg.msg.13", FOLLOW)).message).toMatch(/目前沒有進行中的任務/);
     const c = await say("tg.msg.14", STOP);
     expect(c.message).toContain("要停止哪一個任務？");
     expect(sim.loop.tasks()).toHaveLength(0);
@@ -236,7 +239,8 @@ describe("red-risk pre-execution approval via the human channel", () => {
 
     const ok = await service.handleAction({ kind: "action", idempotencyKey: `tg.cb.${start.ref}.approve`, ref: start.ref, action: "approve" });
     expect(ok.outcome).toBe("approved");
-    expect(ok.message).toContain("Commit/publish is a separate later approval");
+    expect(ok.message).toContain("之後要發布時會另外請你批准");
+    expect(ok.message).toContain("不會合併，也不會部署");
     await sim.loop.settle();
     expect(approvalEvents).toEqual([{ taskId: "n-task-1", decision: "approved" }]);
     expect(sim.workerCalls).toHaveLength(1);

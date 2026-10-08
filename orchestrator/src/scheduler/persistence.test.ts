@@ -3,8 +3,113 @@ import { createMemoryStore } from "../store/memory";
 import { createManagerLoop } from "./loop";
 import { createSimulation, fakeIntake } from "./fake";
 import { createAuditCheckpointRepository } from "./persistence";
+import type { GoalReviewer } from "../planning/types";
 
 describe("Manager Loop persistence and resume", () => {
+  it("persists Manager call counts and adds to them after restart instead of resetting", async () => {
+    const store = createMemoryStore(() => "2026-10-04T12:00:00.000Z");
+    let checkpointId = 0;
+    const persistence = createAuditCheckpointRepository({
+      audit: store.audit,
+      nextId: () => `manager-count-checkpoint-${++checkpointId}`,
+    });
+    let diagnosisCalls = 0;
+    const manager = {
+      async diagnose() {
+        diagnosisCalls++;
+        if (diagnosisCalls === 1) throw new Error("temporary Manager outage");
+        return {
+          rootCause: "The failing branch does not persist the record.",
+          whyPreviousAttemptFailed: "",
+          missingEvidence: [],
+          repairStrategy: "Persist before returning from the branch",
+          strategyChanged: false,
+          repairObjective: "Every successful branch persists once.",
+          repairInstructions: ["Move the write before the return."],
+          protectedAreas: ["Keep the public response shape unchanged."],
+          requiredEvidence: ["The focused test passes"],
+          validationPlan: ["tests", "typecheck"],
+          touchesPaths: ["server/counts/index.ts"],
+          restartFromScratch: false,
+          ownerDecisionNeeded: false,
+          ownerDecisionQuestion: "",
+          ownerOptions: [],
+          recommendedOption: "",
+          constraintCompliance: [],
+        };
+      },
+    };
+    const reviewer: GoalReviewer = {
+      async review(input) {
+        return { criteria: input.criteria.map((c) => ({ id: c.id, status: "satisfied", evidence: "trusted diff contains the persisted write", reason: "" })), constraints: [] };
+      },
+    };
+    const task = fakeIntake(
+      { taskId: "counts" },
+      {
+        goal: { intent: "change_code", originalRequest: "修正存檔", interpretedObjective: "Every successful save persists.", workArea: "programming" },
+        acceptanceCriteria: [{ id: "AC-1", text: "Every successful save persists", kind: "goal" }],
+      },
+    );
+    const sim = createSimulation({
+      persistence,
+      manager,
+      goalReviewer: reviewer,
+      worker: { counts: ["validation_failed", "success"] },
+      policy: { managerMode: "gpt_required" },
+      autoApproveCommits: false,
+    });
+    await sim.create(task);
+    expect(sim.loop.task("counts")).toMatchObject({
+      status: "waiting_infrastructure",
+      budget: { managerCalls: { interpretation: 1, semanticReview: 1, repairDiagnosis: 1 } },
+    });
+    expect(persistence.load()?.tasks[0].managerCalls).toMatchObject({ interpretation: 1, semanticReview: 1, repairDiagnosis: 1 });
+
+    // Seed the other independently exercised call kinds as prior durable history.
+    // This isolates the checkpoint round-trip from the workflow tests that prove
+    // each corresponding call increments its own field.
+    const saved = persistence.load()!;
+    saved.tasks[0].managerCalls = {
+      interpretation: 1,
+      semanticReview: 1,
+      repairDiagnosis: 1,
+      guidanceInterpretation: 3,
+      combinedReview: 4,
+      combinedDiagnosis: 5,
+    };
+    persistence.save(saved);
+
+    const oldLease = sim.ports.leases.current("ws-counts");
+    expect(oldLease).not.toBeNull();
+    sim.ports.leases.release(oldLease);
+    const resumed = createManagerLoop(sim.ports, { managerMode: "gpt_required" });
+    await resumed.resume();
+    await resumed.settle();
+
+    expect(resumed.task("counts")).toMatchObject({
+      budget: {
+        managerCalls: {
+          interpretation: 1,
+          semanticReview: 2,
+          repairDiagnosis: 2,
+          guidanceInterpretation: 3,
+          combinedReview: 4,
+          combinedDiagnosis: 5,
+        },
+      },
+    });
+    expect(diagnosisCalls).toBe(2);
+    expect(persistence.load()?.tasks[0].managerCalls).toEqual({
+      interpretation: 1,
+      semanticReview: 2,
+      repairDiagnosis: 2,
+      guidanceInterpretation: 3,
+      combinedReview: 4,
+      combinedDiagnosis: 5,
+    });
+  });
+
   it("stores a sanitized checkpoint in the existing audit repository and reloads it", () => {
     const store = createMemoryStore(() => "2026-10-04T12:00:00.000Z");
     let id = 0;
@@ -49,7 +154,7 @@ describe("Manager Loop persistence and resume", () => {
     expect(oldLease).not.toBeNull();
     sim.ports.leases.release(oldLease);
 
-    const resumed = createManagerLoop(sim.ports);
+    const resumed = createManagerLoop(sim.ports, { managerMode: "deterministic_fixture" });
     await resumed.resume();
     await resumed.settle();
     expect(resumed.task("resume1")!).toMatchObject({
@@ -82,7 +187,7 @@ describe("Manager Loop persistence and resume", () => {
     const lease = sim.ports.leases.current("ws-resume-ui");
     expect(lease).not.toBeNull();
     sim.ports.leases.release(lease);
-    const resumed = createManagerLoop(sim.ports);
+    const resumed = createManagerLoop(sim.ports, { managerMode: "deterministic_fixture" });
     await resumed.resume();
     await resumed.settle();
     expect(resumed.task("resume-ui")).toMatchObject({
@@ -135,7 +240,7 @@ describe("Manager Loop persistence and resume", () => {
     const before = await sim.loop.pendingApproval("resume-commit");
     expect(persistence.load()!.tasks[0].commitApprovalEvidence!.authorization).toBe("[REDACTED]");
     sim.ports.leases.release(sim.ports.leases.current("ws-resume-commit"));
-    const resumed = createManagerLoop(sim.ports);
+    const resumed = createManagerLoop(sim.ports, { managerMode: "deterministic_fixture" });
     await resumed.resume();
     await resumed.settle();
     const after = await resumed.pendingApproval("resume-commit");
