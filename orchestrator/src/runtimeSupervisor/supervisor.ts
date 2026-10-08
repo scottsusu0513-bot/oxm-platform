@@ -246,7 +246,7 @@ async function run(options: SupervisorOptions, instanceId: string): Promise<numb
   if (!resolved.ok) return failStartup(resolved.code, resolved.reason);
   const env = resolved.env;
   save({ codespaceName: env.CODESPACE_NAME });
-  log(`environment bound (repo ${env.OXM_AGENT_EXPECTED_REPO}, codespace ${env.OXM_AGENT_CODESPACE_NAME}, workers ${env.OXM_AGENT_WORKERS}, telegram secrets from ${resolved.telegramSource})`);
+  log(`environment bound (repo ${env.OXM_AGENT_EXPECTED_REPO}, codespace ${env.OXM_AGENT_CODESPACE_NAME}, workers ${env.OXM_AGENT_WORKERS}, telegram secrets from ${resolved.telegramSource}, update source ${env.OXM_AGENT_TELEGRAM_SOURCE?.trim() || "telegram"})`);
   const remote = spawnSync("git", ["remote", "get-url", "origin"], { cwd: options.repoRoot, encoding: "utf8", env });
   const actualRepo = remote.status === 0 ? repoFromRemoteUrl(remote.stdout) : null;
   if (!actualRepo || actualRepo.toLowerCase() !== env.OXM_AGENT_EXPECTED_REPO.toLowerCase())

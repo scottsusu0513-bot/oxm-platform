@@ -1,7 +1,7 @@
 import { accessSync, constants } from "node:fs";
 import { delimiter, isAbsolute, join } from "node:path";
 import { AGENT_RUNTIME_CONFIRMATION, readAgentRuntimeConfig } from "../agentRuntime/config";
-import { readTelegramConfig } from "../telegram/config";
+import { readTelegramConfig, readTelegramSourceConfig } from "../telegram/config";
 
 /**
  * Fixed, non-secret OXM Agent runtime binding. Mirrored by `containerEnv` in
@@ -19,7 +19,15 @@ export const FIXED_AGENT_ENV = Object.freeze({
 export const CODESPACES_SECRETS_FILE = "/workspaces/.codespaces/shared/.env-secrets";
 
 /** The only keys ever taken from the platform secrets file, and only when absent from the environment. */
-const PLATFORM_KEYS = ["TELEGRAM_BOT_TOKEN", "TELEGRAM_OWNER_CHAT_ID", "CODESPACE_NAME"] as const;
+const PLATFORM_KEYS = [
+  "TELEGRAM_BOT_TOKEN",
+  "TELEGRAM_OWNER_CHAT_ID",
+  "CODESPACE_NAME",
+  // Wake Gateway cutover / rollback is a Codespaces Secrets change; unset means direct Telegram polling.
+  "OXM_AGENT_TELEGRAM_SOURCE",
+  "OXM_WAKE_GATEWAY_URL",
+  "OXM_WAKE_GATEWAY_AGENT_TOKEN",
+] as const;
 /** These bindings guard safety; a different pre-set value is refused instead of overridden. */
 const STRICT_KEYS = ["OXM_AGENT_EXPECTED_REPO", "OXM_AGENT_CONFIRM"] as const;
 const SECRET_NAME = /TOKEN|SECRET|PASSWORD|PASSWD|_KEY|KEY_ID|PRIVATE|CREDENTIAL|CHAT_ID|AUTH|COOKIE|SESSION|DATABASE_URL/i;
@@ -95,6 +103,8 @@ export function resolveAgentEnv(
 
   const telegram = readTelegramConfig(out);
   if (!telegram.ok) return { ok: false, code: "missing_secret", reason: telegram.reason };
+  const source = readTelegramSourceConfig(out);
+  if (!source.ok) return { ok: false, code: "invalid_config", reason: source.reason };
   const runtime = readAgentRuntimeConfig(out, options.repoRoot);
   if (!runtime.ok) return { ok: false, code: "invalid_config", reason: runtime.reason };
 

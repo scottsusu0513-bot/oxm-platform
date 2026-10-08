@@ -104,6 +104,20 @@ describe("resolveAgentEnv", () => {
     expect(envWins).toMatchObject({ telegramSource: "environment" });
   });
 
+  it("takes the Wake Gateway source from Codespaces secrets, redacts the pull token, and fails closed on a bad source", () => {
+    const pull = `agt_${"D4".repeat(24)}`;
+    const file = [`OXM_AGENT_TELEGRAM_SOURCE=${b64("gateway")}`, `OXM_WAKE_GATEWAY_URL=${b64("https://gw.example")}`, `OXM_WAKE_GATEWAY_AGENT_TOKEN=${b64(pull)}`, `GITHUB_WAKE_TOKEN=${b64("github_pat_never_read_here")}`].join("\n");
+    const r = resolveAgentEnv(baseEnv, { repoRoot, readPlatformSecrets: () => file });
+    if (!r.ok) throw new Error(r.reason);
+    expect(r.env).toMatchObject({ OXM_AGENT_TELEGRAM_SOURCE: "gateway", OXM_WAKE_GATEWAY_URL: "https://gw.example", OXM_WAKE_GATEWAY_AGENT_TOKEN: pull });
+    expect(r.env.GITHUB_WAKE_TOKEN).toBeUndefined();
+    expect(r.secretValues).toContain(pull);
+    expect(resolveAgentEnv(baseEnv, { repoRoot, readPlatformSecrets: noFile })).toMatchObject({ ok: true }); // unset = direct polling
+    const missingToken = resolveAgentEnv({ ...baseEnv, OXM_AGENT_TELEGRAM_SOURCE: "gateway", OXM_WAKE_GATEWAY_URL: "https://gw.example" }, { repoRoot, readPlatformSecrets: noFile });
+    expect(missingToken).toMatchObject({ ok: false, code: "invalid_config" });
+    expect(resolveAgentEnv({ ...baseEnv, OXM_AGENT_TELEGRAM_SOURCE: "webhook" }, { repoRoot, readPlatformSecrets: noFile })).toMatchObject({ ok: false, code: "invalid_config" });
+  });
+
   it("parses GitHub remotes", () => {
     expect(repoFromRemoteUrl("https://github.com/scottsusu0513-bot/oxm-platform.git")).toBe("scottsusu0513-bot/oxm-platform");
     expect(repoFromRemoteUrl("git@github.com:scottsusu0513-bot/oxm-platform")).toBe("scottsusu0513-bot/oxm-platform");

@@ -25,6 +25,7 @@
     "orchestrator:telegram:start": "tsx scripts/orchestrator-telegram-supervisor.ts start",
     "orchestrator:telegram:stop": "tsx scripts/orchestrator-telegram-supervisor.ts stop",
     "orchestrator:telegram:status": "tsx scripts/orchestrator-telegram-supervisor.ts status",
+    "orchestrator:telegram:webhook": "tsx scripts/orchestrator-telegram-webhook.ts",
     "db:push": "drizzle-kit migrate",
     "cleanup:expired-chat-pdfs": "node dist/jobs/cleanupExpiredChatPdfAttachments.js",
     "reconcile:storage": "node dist/jobs/reconcileStorageObjects.js",

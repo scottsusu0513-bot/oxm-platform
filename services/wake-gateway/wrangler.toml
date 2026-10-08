@@ -1,0 +1,29 @@
+# OXM Wake Gateway (Cloudflare Worker + SQLite-backed Durable Object).
+# Phase 1: code + tests only. NOT deployed; no webhook is set.
+#
+# Never put a credential in this file. Deployment-time secrets (wrangler secret put):
+#   TELEGRAM_BOT_TOKEN        Telegram bot token (wake / failure notices only)
+#   TELEGRAM_WEBHOOK_SECRET   setWebhook secret_token, 32-256 chars [A-Za-z0-9_-]
+#   TELEGRAM_WEBHOOK_PATH     opaque webhook path segment, 24-128 chars [A-Za-z0-9_-]
+#   TELEGRAM_OWNER_CHAT_ID    owner's private chat id
+#   GITHUB_WAKE_TOKEN         fine-grained PAT (github_pat_...), one repo, Codespaces lifecycle only
+#   AGENT_TOKEN_SHA256        lowercase hex SHA-256 of the Agent pull token (the token itself lives
+#                             only in the Codespaces secret OXM_WAKE_GATEWAY_AGENT_TOKEN)
+# Non-secret binding, set at deploy time (left empty here so a missing value fails closed):
+#   CODESPACE_NAME, EXPECTED_REPO
+name = "oxm-wake-gateway"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+workers_dev = false
+
+[vars]
+CODESPACE_NAME = ""
+EXPECTED_REPO = "scottsusu0513-bot/oxm-platform"
+
+[[durable_objects.bindings]]
+name = "OWNER_QUEUE"
+class_name = "OwnerQueue"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["OwnerQueue"]
