@@ -1,6 +1,6 @@
 import type { AcceptanceEvidence, ValidationEvidence } from "../manager/types";
 import type { GoalAcceptanceContext } from "../scheduler/types";
-import { gatherSourceEvidence, type SourceEvidencePorts } from "../executive/evidencePlan";
+import { excerptLineNumbers, excerptLines, gatherSourceEvidence, type LineRange, type SourceEvidencePorts } from "../executive/evidencePlan";
 import { normalizeConstraintVerdicts, normalizeGoalReview } from "./normalize";
 import type { CriterionReview, GoalReviewer } from "./types";
 
@@ -8,16 +8,58 @@ export const MAX_REVIEW_DIFF = 150_000;
 const MAX_CITED_FILES = 8;
 const MAX_CITED_BYTES = 8_000;
 
-/** Repository paths an answer cites ("client/src/pages/Search.tsx", optionally with :line). */
-export function citedPaths(answer: string): string[] {
-  const out: string[] = [];
-  const re = /(?:^|[\s`'"(\[])((?:[A-Za-z0-9_.@-]+\/)+[A-Za-z0-9_.@-]+\.[A-Za-z0-9]{1,8})(?::\d+(?:-\d+)?)?/g;
-  for (let m = re.exec(answer); m && out.length < MAX_CITED_FILES; m = re.exec(answer)) {
+const MAX_CITED_RANGES = 4;
+const MAX_CITED_SPAN = 60;
+const CITED_CONTEXT_LINES = 8;
+
+export interface CitedLocation {
+  path: string;
+  /** Cited 1-based line ranges (empty when the path was cited without a line). */
+  ranges: LineRange[];
+}
+
+/**
+ * Repository paths an answer cites ("client/src/pages/Search.tsx", optionally
+ * with :line or :line-line), keeping the line references. Absolute and
+ * traversal paths are dropped; paths and ranges are bounded.
+ */
+export function citedLocations(answer: string): CitedLocation[] {
+  const out: CitedLocation[] = [];
+  const re = /(?:^|[\s`'"(\[])((?:[A-Za-z0-9_.@-]+\/)+[A-Za-z0-9_.@-]+\.[A-Za-z0-9]{1,8})(?::(\d{1,7})(?:-(\d{1,7}))?)?/g;
+  for (let m = re.exec(answer); m; m = re.exec(answer)) {
     const p = m[1];
-    if (p.startsWith("/") || p.split("/").some((seg: string) => seg === ".." || seg === ".") || out.includes(p)) continue;
-    out.push(p);
+    if (p.startsWith("/") || p.split("/").some((seg: string) => seg === ".." || seg === ".")) continue;
+    let loc = out.find((l) => l.path === p);
+    if (!loc) {
+      if (out.length >= MAX_CITED_FILES) continue;
+      loc = { path: p, ranges: [] };
+      out.push(loc);
+    }
+    if (!m[2] || loc.ranges.length >= MAX_CITED_RANGES) continue;
+    const a = Number(m[2]);
+    const b = m[3] ? Number(m[3]) : a;
+    const start = Math.max(1, Math.min(a, b));
+    const end = Math.min(Math.max(a, b), start + MAX_CITED_SPAN - 1);
+    if (!loc.ranges.some((r) => r.start === start && r.end === end)) loc.ranges.push({ start, end });
   }
   return out;
+}
+
+/** Repository paths an answer cites (see citedLocations). */
+export function citedPaths(answer: string): string[] {
+  return citedLocations(answer).map((l) => l.path);
+}
+
+/**
+ * Trusted excerpt of a cited file: the cited line ranges with context when
+ * they fall inside the file, otherwise the bounded file head.
+ */
+function citedExcerpt(content: string, ranges: readonly LineRange[]): { excerpt: string; lines: Set<number> } {
+  const ranged = ranges.length ? excerptLines(content, ranges, CITED_CONTEXT_LINES, MAX_CITED_BYTES) : null;
+  if (ranged) return ranged;
+  const head = content.slice(0, MAX_CITED_BYTES);
+  const complete = head.length === content.length ? head.split("\n").length : head.split("\n").length - 1;
+  return { excerpt: head, lines: new Set(Array.from({ length: complete }, (_, i) => i + 1)) };
 }
 
 export interface SemanticAcceptanceInput {
@@ -68,7 +110,7 @@ export async function semanticAcceptance(input: SemanticAcceptanceInput): Promis
   let reviews: CriterionReview[] = [];
   let reviewUnavailable = false;
   let reviewCalls = 0;
-  let cited: string[] = [];
+  let citedPathList: string[] = [];
   const constraintIds = (input.goal.ownerConstraints ?? []).map((c) => c.id);
   let constraintVerdicts: SemanticAcceptanceResult["constraintVerdicts"] = [];
   if (goalCriteria.length > 0) {
@@ -80,13 +122,15 @@ export async function semanticAcceptance(input: SemanticAcceptanceInput): Promis
     else {
       // Read-only answers and audit_and_fix audit reports are claims verified against the cited files.
       const reportMode = input.goal.mode === "read_only" || input.goal.goal?.intent === "audit_and_fix";
-      const citedFiles =
+      // Paths and line numbers come from the untrusted answer; the excerpt itself only from the trusted reader.
+      const cited =
         reportMode && input.answer
-          ? citedPaths(input.answer)
-              .map((path) => ({ path, content: input.fileContent(path) }))
-              .filter((f): f is { path: string; content: string } => f.content !== null)
-              .map((f) => ({ path: f.path, excerpt: f.content.slice(0, MAX_CITED_BYTES) }))
+          ? citedLocations(input.answer).flatMap((loc) => {
+              const content = input.fileContent(loc.path);
+              return content === null ? [] : [{ path: loc.path, ...citedExcerpt(content, loc.ranges) }];
+            })
           : [];
+      const citedFiles = cited.map((f) => ({ path: f.path, excerpt: f.excerpt }));
       // The Manager gathers source evidence from its own evidence plan, so a Worker that cites
       // nothing cannot leave the reviewer without the repository content the goal needs.
       const plan = input.goal.evidencePlan ?? null;
@@ -94,9 +138,15 @@ export async function semanticAcceptance(input: SemanticAcceptanceInput): Promis
         input.goal.mode === "read_only" && plan && plan.kind !== "change"
           ? (
               await gatherSourceEvidence({ plan, cited: [], ports: { read: input.fileContent, ...(input.sourcePorts ?? {}) } }).catch(() => [])
-            ).filter((f) => !citedFiles.some((c) => c.path === f.path))
+            ).filter((f) => {
+              // Same path as a cited file: keep it only when it shows lines the cited excerpt does not.
+              const c = cited.find((x) => x.path === f.path);
+              if (!c) return true;
+              const shown = excerptLineNumbers(f.excerpt);
+              return shown.size ? Array.from(shown).some((n) => !c.lines.has(n)) : !c.excerpt.includes(f.excerpt);
+            })
           : [];
-      cited = citedFiles.map((f) => f.path);
+      citedPathList = citedFiles.map((f) => f.path);
       if (plan && !plan.validationIsEvidence && citedFiles.length === 0 && sourceEvidence.length === 0) {
         // No repository source at all: passing validations can never answer the question.
         reviews = goalCriteria.map((c) => ({
@@ -151,7 +201,7 @@ export async function semanticAcceptance(input: SemanticAcceptanceInput): Promis
       summary: `${c.id} (${c.text.slice(0, 120)}) ${r.status === "not_satisfied" ? "not met" : "not supported by evidence"}: ${r.reason || "no reason given"}`.slice(0, 300),
     };
   });
-  return { acceptance, reviewUnavailable, reviewCalls, citedFiles: cited, constraintVerdicts };
+  return { acceptance, reviewUnavailable, reviewCalls, citedFiles: citedPathList, constraintVerdicts };
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {

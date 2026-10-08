@@ -140,6 +140,57 @@ export function excerptAround(content: string, keywords: readonly string[], max 
   return out.trimEnd();
 }
 
+export interface LineRange {
+  /** 1-based, inclusive. */
+  start: number;
+  end: number;
+}
+
+const MAX_LINE_CHARS = 400;
+
+/**
+ * Numbered excerpt of the given 1-based line ranges plus `context` lines
+ * around each, bounded by `max` characters. The cited lines themselves are
+ * kept before any context, so a large file or many ranges cannot crowd them
+ * out. Returns null when no range falls inside the file.
+ */
+export function excerptLines(content: string, ranges: readonly LineRange[], context: number, max: number): { excerpt: string; lines: Set<number> } | null {
+  const lines = content.split("\n");
+  const inFile = ranges
+    .map((r) => ({ start: Math.max(1, r.start), end: Math.min(lines.length, r.end) }))
+    .filter((r) => r.start <= r.end);
+  if (!inFile.length) return null;
+  const cost = (n: number) => `${n}: ${lines[n - 1].slice(0, MAX_LINE_CHARS)}\n`.length + 2; // + room for a "…" gap marker
+  const keep = new Set<number>();
+  let used = 0;
+  const tryAdd = (n: number) => {
+    if (n < 1 || n > lines.length || keep.has(n)) return;
+    const c = cost(n);
+    if (used + c > max) return;
+    keep.add(n);
+    used += c;
+  };
+  for (const r of inFile) for (let n = r.start; n <= r.end; n++) tryAdd(n);
+  for (let d = 1; d <= context; d++) for (const r of inFile) (tryAdd(r.start - d), tryAdd(r.end + d));
+  let out = "";
+  let prev = -2;
+  for (const n of Array.from(keep).sort((a, b) => a - b)) {
+    out += `${n !== prev + 1 && out ? "…\n" : ""}${n}: ${lines[n - 1].slice(0, MAX_LINE_CHARS)}\n`;
+    prev = n;
+  }
+  return { excerpt: out.trimEnd().slice(0, max), lines: keep };
+}
+
+/** 1-based line numbers present in a numbered excerpt ("12: …" lines, as produced above). */
+export function excerptLineNumbers(excerpt: string): Set<number> {
+  const out = new Set<number>();
+  for (const line of excerpt.split("\n")) {
+    const m = /^(\d{1,7}): /.exec(line);
+    if (m) out.add(Number(m[1]));
+  }
+  return out;
+}
+
 function rank(path: string, targets: readonly string[]): number {
   if (NOISE.test(path) || !CODE_EXT.test(path)) return -1;
   let score = 0;

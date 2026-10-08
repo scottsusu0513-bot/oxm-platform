@@ -6,7 +6,7 @@ import { fakeEvidence } from "../manager/fake";
 import { validateEvidence } from "../manager/validator";
 import { createAnthropicGoalReviewer, createAnthropicIntentPlanner } from "./anthropic";
 import { createAnthropicHttpTransport } from "./anthropicHttp";
-import { citedPaths, semanticAcceptance } from "./goalAcceptance";
+import { citedLocations, citedPaths, semanticAcceptance } from "./goalAcceptance";
 import { normalizeGoalReview, normalizeIntentDecision } from "./normalize";
 import type { GoalReviewer, GoalReviewInput, IntentPlanner } from "./types";
 
@@ -167,6 +167,103 @@ describe("read-only answers are judged against cited repository files", () => {
 
   it("citedPaths ignores absolute and traversal paths", () => {
     expect(citedPaths("see /etc/passwd and ../x/y.ts and client/a.ts and `server/b.ts:12`")).toEqual(["client/a.ts", "server/b.ts"]);
+  });
+
+  // A large Home.tsx whose placeholder sits far beyond the first 8 KB (as in the live E2E).
+  const HOME_PATH = "client/src/pages/Home.tsx";
+  const bigHome = Array.from({ length: 900 }, (_, i) => (i + 1 === 644 ? '      placeholder="搜尋工廠、產品或製程"' : `  const filler${i + 1} = "${"x".repeat(40)}";`)).join("\n");
+  const readOnly = (answer: string, read: (p: string) => string | null, extra: Partial<Parameters<typeof semanticAcceptance>[0]> = {}) => {
+    const r = reviewer(() => ({}));
+    return {
+      r,
+      run: () =>
+        semanticAcceptance({
+          goal: { mode: "read_only", title: "t", objective: "o", goal: { intent: "investigate_or_answer", originalRequest: "q", interpretedObjective: "o" }, criteria: [{ id: "AC-1", text: "answered", kind: "goal" }] },
+          validations: [],
+          reviewer: r,
+          reviewId: "run-1",
+          diff: { text: "", truncated: false },
+          answer,
+          fileContent: read,
+          timeoutMs: 1000,
+          ...extra,
+        }),
+    };
+  };
+
+  it("citedLocations keeps :line and :line-range references, bounded and normalized", () => {
+    expect(citedLocations("client/src/pages/Home.tsx:641-647, again `client/src/pages/Home.tsx:700` and server/b.ts and x/y.ts:9-3")).toEqual([
+      { path: "client/src/pages/Home.tsx", ranges: [{ start: 641, end: 647 }, { start: 700, end: 700 }] },
+      { path: "server/b.ts", ranges: [] },
+      { path: "x/y.ts", ranges: [{ start: 3, end: 9 }] },
+    ]);
+    expect(citedLocations("a/b.ts:1-999999")[0].ranges).toEqual([{ start: 1, end: 60 }]);
+    expect(citedLocations(Array.from({ length: 9 }, (_, i) => `a/b.ts:${i + 1}`).join(" "))[0].ranges).toHaveLength(4);
+    expect(citedLocations("../etc/passwd:1 /etc/x.ts:3 ./a/b.ts:4")).toEqual([]);
+  });
+
+  it("a path:line citation gives the reviewer the cited lines of a large file, not its first 8 KB", async () => {
+    const { r, run } = readOnly(`The placeholder is in ${HOME_PATH}:644.`, (p) => (p === HOME_PATH ? bigHome : null));
+    await run();
+    const [f] = r.calls[0].citedFiles;
+    expect(f.path).toBe(HOME_PATH);
+    expect(f.excerpt).toContain('644:       placeholder="搜尋工廠、產品或製程"');
+    expect(f.excerpt).toContain("636: ");
+    expect(f.excerpt).toContain("652: ");
+    expect(f.excerpt).not.toMatch(/^1: /m);
+    expect(f.excerpt.length).toBeLessThanOrEqual(8_000);
+  });
+
+  it("a path:line-range citation includes the whole range with context", async () => {
+    const { r, run } = readOnly(`See ${HOME_PATH}:641-647`, (p) => (p === HOME_PATH ? bigHome : null));
+    await run();
+    const ex = r.calls[0].citedFiles[0].excerpt;
+    for (let n = 633; n <= 655; n++) expect(ex).toContain(`${n}: `);
+    expect(ex).toContain("placeholder=");
+    expect(ex).not.toContain("632: ");
+  });
+
+  it("without a usable line reference the cited file falls back to the bounded head", async () => {
+    for (const answer of [`See ${HOME_PATH}.`, `See ${HOME_PATH}:5000`]) {
+      const { r, run } = readOnly(answer, (p) => (p === HOME_PATH ? bigHome : null));
+      await run();
+      const ex = r.calls[0].citedFiles[0].excerpt;
+      expect(ex).toBe(bigHome.slice(0, 8_000));
+      expect(ex).not.toContain("placeholder=");
+    }
+  });
+
+  it("cited excerpts stay bounded for huge lines and many ranges", async () => {
+    const huge = Array.from({ length: 400 }, (_, i) => `${i + 1}${"y".repeat(5_000)}`).join("\n");
+    const { r, run } = readOnly("a/huge.ts:10-70 a/huge.ts:100-160 a/huge.ts:200 a/huge.ts:300", (p) => (p === "a/huge.ts" ? huge : null));
+    await run();
+    const ex = r.calls[0].citedFiles[0].excerpt;
+    expect(ex.length).toBeLessThanOrEqual(8_000);
+    expect(ex).toMatch(/^10: /); // the first cited line is kept before any context
+  });
+
+  it("unsafe cited paths are never read, whatever line they carry", async () => {
+    const asked: string[] = [];
+    const { r, run } = readOnly("see ../secrets/key.ts:1 and /etc/passwd.txt:2 and client/../x.ts:3", (p) => (asked.push(p), "SECRET"));
+    await run();
+    expect(asked).toEqual([]);
+    expect(r.calls[0].citedFiles).toEqual([]);
+  });
+
+  it("Manager source evidence for a cited path is kept when it shows lines the cited excerpt lacks", async () => {
+    const plan = { kind: "factual_lookup" as const, requirements: ["r"], targets: ["Home", "placeholder"], validationIsEvidence: false };
+    const ports = { listFiles: async () => [HOME_PATH] };
+    const goal = { mode: "read_only" as const, title: "t", objective: "o", goal: { intent: "investigate_or_answer" as const, originalRequest: "q", interpretedObjective: "o" }, criteria: [{ id: "AC-1", text: "answered", kind: "goal" as const }], evidencePlan: plan };
+    // Cited without a line: the cited head misses line 644, the Manager's keyword excerpt has it.
+    const a = readOnly(`It is in ${HOME_PATH}.`, (p) => (p === HOME_PATH ? bigHome : null), { goal, sourcePorts: ports });
+    await a.run();
+    expect(a.r.calls[0].citedFiles[0].excerpt).not.toContain("placeholder=");
+    expect(a.r.calls[0].sourceEvidence?.find((f) => f.path === HOME_PATH)?.excerpt).toContain('644:       placeholder="搜尋工廠、產品或製程"');
+    // Cited at the exact lines: the Manager excerpt adds nothing new and is not duplicated.
+    const b = readOnly(`It is in ${HOME_PATH}:644.`, (p) => (p === HOME_PATH ? bigHome : null), { goal, sourcePorts: ports });
+    await b.run();
+    expect(b.r.calls[0].citedFiles[0].excerpt).toContain("644: ");
+    expect(b.r.calls[0].sourceEvidence ?? []).toEqual([]);
   });
 });
 
