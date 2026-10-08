@@ -9,15 +9,15 @@
 #   GITHUB_WAKE_TOKEN         fine-grained PAT (github_pat_...), one repo, Codespaces lifecycle only
 #   AGENT_TOKEN_SHA256        lowercase hex SHA-256 of the Agent pull token (the token itself lives
 #                             only in the Codespaces secret OXM_WAKE_GATEWAY_AGENT_TOKEN)
-# Non-secret binding, set at deploy time (left empty here so a missing value fails closed):
+# Non-secret binding (the one Codespace this Gateway may wake; requests can never override it):
 #   CODESPACE_NAME, EXPECTED_REPO
 name = "oxm-wake-gateway"
 main = "src/index.ts"
 compatibility_date = "2026-09-01"
-workers_dev = false
+workers_dev = true
 
 [vars]
-CODESPACE_NAME = ""
+CODESPACE_NAME = "orange-space-doodle-97pp7p5q6jpjfrxw"
 EXPECTED_REPO = "scottsusu0513-bot/oxm-platform"
 
 [[durable_objects.bindings]]
