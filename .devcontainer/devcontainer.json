@@ -1,0 +1,16 @@
+{
+  "name": "OXM Platform",
+  // Same image the Codespace already uses without a devcontainer.json (default Codespaces image).
+  "image": "mcr.microsoft.com/vscode/devcontainers/universal:latest",
+  // Fixed, NON-secret OXM Agent binding (kept in sync with FIXED_AGENT_ENV by a test).
+  // Never add secrets here: TELEGRAM_* and credentials come from Codespaces Secrets.
+  // OXM_AGENT_CODESPACE_NAME is bound at runtime from CODESPACE_NAME by the supervisor.
+  "containerEnv": {
+    "OXM_AGENT_EXPECTED_REPO": "scottsusu0513-bot/oxm-platform",
+    "OXM_AGENT_CONFIRM": "run-oxm-agent-tasks-without-merge-or-deploy",
+    "OXM_AGENT_WORKERS": "claude,codex",
+    "OXM_AGENT_CLAUDE_MODEL": "opus"
+  },
+  // Runs on every container start: create, restart and resume from idle stop.
+  "postStartCommand": "bash scripts/codespace-post-start.sh"
+}
