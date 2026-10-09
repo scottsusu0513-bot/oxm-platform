@@ -24,7 +24,8 @@ import { createInMemoryApprovalRepository } from "../store/memory";
 import type { Approval, ApprovalKind } from "../store/types";
 import { createManagerLoop, type ManagerLoop } from "./loop";
 import { APPROVAL_ACTIONS } from "./loop";
-import { createApprovalPort } from "./adapters";
+import { createApprovalPort, createRepoStatePort } from "./adapters";
+import type { CommitRelation } from "../branches/taskBase";
 import type { OrchestrationPolicy, OrchestrationPorts, TaskIntake, TrustedRunRecord } from "./types";
 import type { OrchestrationPersistencePort } from "./types";
 
@@ -80,7 +81,7 @@ export interface SimulationOptions {
   worker?: Record<string, readonly WorkerScript[]>;
   /** CI outcome per pushed head of a task (the last entry repeats). Default: pass. */
   ci?: Record<string, readonly CiScript[]>;
-  /** Values returned by repo.mainHeadSha() in order (the last repeats). Default: the remote main. */
+  /** Values returned by repo.taskBaseSha() in order (the last repeats). Default: the remote main. */
   mainHeads?: readonly string[];
   /** Actual main on the fake remote. */
   remoteMain?: string;
@@ -115,6 +116,13 @@ export interface SimulationOptions {
   workerCommands?: Record<string, readonly (readonly string[])[]>;
   /** GPT Manager reasoning port (scripted in tests); absent = deterministic-only Manager. */
   manager?: OrchestrationPorts["manager"];
+  /**
+   * Runtime baseline (production task-base resolver): new branches start from it
+   * when the compare of main → baseline is "ahead" (default). Replaces mainHeads.
+   */
+  runtimeBaseline?: { branch: string; sha: string; relation?: CommitRelation | null };
+  /** Idle return-to-runtime-branch port (production: githubWrite/workspace.restoreRuntimeWorkspace). */
+  runtimeWorkspace?: OrchestrationPorts["runtimeWorkspace"];
 }
 
 export interface WorkerCall {
@@ -167,7 +175,16 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
     for (let cur: string | undefined = s; cur; cur = parents.get(cur)) if (cur === anc) return true;
     return false;
   };
+  const baseline = opts.runtimeBaseline;
+  const baselineRepo = baseline
+    ? createRepoStatePort(
+        { getBranchHead: (repo, branch) => remote.getBranchHead(repo, branch), compareCommits: async () => (baseline.relation === undefined ? "ahead" : baseline.relation) },
+        FAKE_REPO,
+        { branch: baseline.branch, sha: baseline.sha },
+      )
+    : null;
   const github = createGitHubWriteClient(FAKE_REPO, {
+    ...(baselineRepo ? { taskBaseSha: () => baselineRepo.taskBaseSha() } : {}),
     transport: remote,
     push: {
       async pushBranch(branch, localSha) {
@@ -420,8 +437,9 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
     github,
     leases,
     audit: (e) => audit.push(structuredClone(e)),
-    repo: {
-      async mainHeadSha() {
+    ...(opts.runtimeWorkspace ? { runtimeWorkspace: opts.runtimeWorkspace } : {}),
+    repo: baselineRepo ?? {
+      async taskBaseSha() {
         const seq = opts.mainHeads ?? [];
         const v = seq.length ? seq[Math.min(mainReads, seq.length - 1)] : (remote.refs.get("main") as string);
         mainReads++;

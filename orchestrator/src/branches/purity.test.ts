@@ -21,7 +21,7 @@ const FORBIDDEN = [
 
 describe("branch planner purity", () => {
   it("covers the branch modules", () => {
-    expect(sources.sort()).toEqual(["intent.ts", "naming.ts", "overlap.ts", "planner.ts", "types.ts"]);
+    expect(sources.sort()).toEqual(["intent.ts", "naming.ts", "overlap.ts", "planner.ts", "taskBase.ts", "types.ts"]);
   });
 
   it.each(sources)("%s has no I/O, env, network, DB, or nondeterminism", (file) => {

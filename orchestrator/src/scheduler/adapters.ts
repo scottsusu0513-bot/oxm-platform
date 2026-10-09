@@ -2,6 +2,7 @@ import type { RepoRef, RequiredCheck, GitHubReadClient } from "../github/types";
 import { inspectPullRequestQa } from "../github/client";
 import { DEFAULT_REQUIRED_CHECKS } from "../github/types";
 import { BASE_BRANCH } from "../branches/types";
+import { resolveTaskBaseSha, type CommitRelation, type RuntimeBaseline } from "../branches/taskBase";
 import { prepareAssignedWorkspace, checkWorkerPreconditions, commitValidatedChanges, observeCommitState, type WorkspaceDeps } from "../githubWrite/workspace";
 import type { ApprovalRepository } from "../store/repositories";
 import { approvalAuthorizes } from "../store/repositories";
@@ -66,18 +67,26 @@ export function createQaPort(client: GitHubReadClient, repo: RepoRef, required: 
   };
 }
 
-/** Minimal read bridge for the branch planner's current main SHA. */
+/**
+ * Read bridge for the branch planner's task base: the main head, or the runtime
+ * baseline when the read-only compare shows it strictly ahead of main.
+ */
 export function createRepoStatePort(
   reader: {
     getBranchHead(repo: RepoRef, branch: string): Promise<string | null>;
+    compareCommits?(repo: RepoRef, baseSha: string, headSha: string): Promise<CommitRelation | null>;
   },
   repo: RepoRef,
+  baseline: RuntimeBaseline | null = null,
 ): RepoStatePort {
   return {
-    async mainHeadSha() {
-      const sha = await reader.getBranchHead(repo, BASE_BRANCH);
-      if (!sha) throw new Error("[scheduler] main head is unavailable");
-      return sha;
+    async taskBaseSha() {
+      const mainSha = await reader.getBranchHead(repo, BASE_BRANCH);
+      if (!mainSha) throw new Error("[scheduler] main head is unavailable");
+      const needsCompare = baseline !== null && baseline.sha !== mainSha;
+      if (needsCompare && !reader.compareCommits) throw new Error("[scheduler] runtime baseline cannot be compared with main");
+      const relation = needsCompare ? await reader.compareCommits!(repo, mainSha, baseline.sha) : null;
+      return resolveTaskBaseSha({ mainSha, baseline, relation });
     },
   };
 }

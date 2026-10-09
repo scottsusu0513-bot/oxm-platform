@@ -487,8 +487,8 @@ export async function createLiveSmokeEnvironment(
       },
     },
     repo: {
-      async mainHeadSha() {
-        baseSha = await repoPort.mainHeadSha();
+      async taskBaseSha() {
+        baseSha = await repoPort.taskBaseSha();
         return baseSha;
       },
     },

@@ -129,6 +129,8 @@ if (!created.ok) {
 }
 const runtime = (created as Extract<typeof created, { ok: true }>).runtime;
 for (const line of runtime.reconciled) say(`reconciled ${line}`);
+say(`runtime baseline ${runtime.runtimeBaseline.branch}@${runtime.runtimeBaseline.sha.slice(0, 12)}`);
+if (runtime.workspaceRestored) say(runtime.workspaceRestored);
 say(runtime.checkpointRestored ? `Manager checkpoint restored (${runtime.restoredTaskIds.length} task(s), ${runtime.activeTaskIds().length} active)` : "no Manager checkpoint; starting fresh");
 
 let hiSequence = 0;

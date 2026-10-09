@@ -185,6 +185,6 @@ describe("scheduler production adapters", () => {
       },
       { owner: "oxm", repo: "platform" },
     );
-    await expect(repo.mainHeadSha()).resolves.toBe(sha(9));
+    await expect(repo.taskBaseSha()).resolves.toBe(sha(9));
   });
 });

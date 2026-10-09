@@ -452,8 +452,17 @@ export interface QaPort {
 }
 
 export interface RepoStatePort {
-  /** Current main HEAD SHA (read-only). */
-  mainHeadSha(): Promise<string>;
+  /**
+   * The commit new task branches start from (read-only): main, or the runtime
+   * baseline when it is strictly ahead of main (see branches/taskBase).
+   */
+  taskBaseSha(): Promise<string>;
+}
+
+/** Returns the idle workspace to the runtime branch (githubWrite/workspace.restoreRuntimeWorkspace). */
+export interface RuntimeWorkspacePort {
+  /** Called only when no task is active; the port re-checks Git and never forces. */
+  restoreIfIdle(): Promise<void>;
 }
 
 export interface ApprovalCheck {
@@ -636,6 +645,8 @@ export interface OrchestrationPorts {
   audit: (event: Omit<NewAuditEvent, "id">) => void;
   /** GPT Manager reasoning (diagnosis, guidance, combined review). Absent: deterministic-only Manager (simulation/legacy). */
   manager?: ManagerReasoningPort;
+  /** Configured deployments provide it; absent in isolated simulations (the workspace is never moved back). */
+  runtimeWorkspace?: RuntimeWorkspacePort;
   /** Optional only for backwards-compatible local simulations; configured deployments provide it. */
   lifecycle?: {
     reconcile(work: LifecycleWorkload, now: IsoTimestamp): Promise<LifecycleOutcome>;

@@ -22,6 +22,7 @@ const ALLOWED_RUNTIME = new Set([
   "../branches/naming",
   "../branches/overlap",
   "../branches/planner",
+  "../branches/taskBase",
   "../branches/types",
   "../domain/taskState",
   "../domain/types",

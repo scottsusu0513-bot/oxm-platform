@@ -12,6 +12,9 @@ import { createGitHubReadClient } from "../github/client";
 import { DEFAULT_REQUIRED_CHECKS } from "../github/types";
 import { createGitHubWriteClient } from "../githubWrite/client";
 import { createWorkspaceLeaseRegistry } from "../githubWrite/lease";
+import { restoreRuntimeWorkspace } from "../githubWrite/workspace";
+import { establishRuntimeBaseline, type RuntimeBaseline } from "../branches/taskBase";
+import { loadRecordedBaseline, recordBaseline, RUNTIME_BASELINE_AUDIT_TASK } from "./runtimeBaseline";
 import { createGhCliWriteTransport, createGitPushTransport } from "../githubWrite/transport";
 import type { HumanOwnerSession } from "../humanInteraction/auth";
 import { createInMemoryIntakeRepository } from "../intake/fake";
@@ -61,6 +64,10 @@ export interface AgentRuntime {
   restoredTaskIds: string[];
   /** Human-readable descriptions of recoveries applied by --reconcile. */
   reconciled: string[];
+  /** Branch + SHA the runtime runs from; new task branches never start older than it. */
+  runtimeBaseline: RuntimeBaseline;
+  /** Startup return of a finished task-branch checkout to the runtime branch, when it happened. */
+  workspaceRestored: string | null;
   activeTaskIds(): string[];
   allTaskIds(): string[];
 }
@@ -114,6 +121,34 @@ export async function createAgentRuntime(config: AgentRuntimeConfig, options: Ag
     return fail(safety.failureCode, failed?.reason ?? "live safety gate failed");
   }
 
+  // Runtime baseline: the runtime branch/HEAD this process runs from, durable across restarts on a task branch.
+  const git = createGitInspector(runner, config.base.repoRoot);
+  let started: Awaited<ReturnType<typeof git.status>>;
+  try {
+    started = await git.status();
+  } catch {
+    return fail("runtime_baseline_unavailable", "workspace branch/HEAD could not be read; refusing to start");
+  }
+  const established = establishRuntimeBaseline(started, loadRecordedBaseline(options.audit));
+  if (!established.ok) return fail(established.code, established.reason);
+  const baseline = established.baseline;
+  if (established.record) recordBaseline(options.audit, nextAuditId(), baseline);
+  // Started on a finished task branch (stopped before the idle restore, or a legacy checkout):
+  // return to the runtime branch now so the next cold start boots the runtime.
+  const restoreWorkspace = async (taskActive: boolean): Promise<boolean> => {
+    const result = await restoreRuntimeWorkspace({ baseline, taskActive }, { runner, git, repoRoot: config.base.repoRoot });
+    if (result.ok && result.decision.action !== "return") return false;
+    options.audit.append({
+      id: nextAuditId(),
+      taskId: RUNTIME_BASELINE_AUDIT_TASK,
+      actor: "system",
+      event: result.ok ? "runtime_workspace_restored" : "runtime_workspace_restore_failed",
+      metadata: result.ok ? { branch: baseline.branch, sha: baseline.sha } : { error: result.error },
+    });
+    return result.ok;
+  };
+  const workspaceRestored = (await restoreWorkspace(active.some((t) => t.plan !== null))) ? `workspace returned from ${started.branch} to runtime branch ${baseline.branch}` : null;
+
   // Durable runtime / Gateway repositories (journaled into the audit log) and replay.
   const journal = createRepositoryJournal({ audit: options.audit, nextId: nextAuditId, now });
   const clock = journal.clock;
@@ -161,9 +196,14 @@ export async function createAgentRuntime(config: AgentRuntimeConfig, options: Ag
 
   const repo = config.base.expectedRepository;
   const writeTransport = createGhCliWriteTransport(runner, config.base.repoRoot);
-  const github = createGitHubWriteClient(repo, { transport: writeTransport, push: createGitPushTransport(runner, config.base.repoRoot) });
+  // One task-base resolver for the planner and the branch creator's stale-base check.
+  const repoState = createRepoStatePort(writeTransport, repo, baseline);
+  const github = createGitHubWriteClient(repo, {
+    transport: writeTransport,
+    push: createGitPushTransport(runner, config.base.repoRoot),
+    taskBaseSha: () => repoState.taskBaseSha(),
+  });
   const leases = createWorkspaceLeaseRegistry();
-  const git = createGitInspector(runner, config.base.repoRoot);
   const identity = {
     codespaceName: config.base.codespaceName,
     repository: { owner: repo.owner, repository: repo.repo },
@@ -239,7 +279,12 @@ export async function createAgentRuntime(config: AgentRuntimeConfig, options: Ag
       ...createRepoSearch(runner, config.base.repoRoot),
     }),
     qa: createQaPort(createGitHubReadClient(createGhReadTransport(runner, config.base.repoRoot)), repo, DEFAULT_REQUIRED_CHECKS),
-    repo: createRepoStatePort(writeTransport, repo),
+    repo: repoState,
+    runtimeWorkspace: {
+      async restoreIfIdle() {
+        await restoreWorkspace(false);
+      },
+    },
     approvals: createApprovalPort(approvals, now),
     ...(options.manager
       ? {
@@ -321,6 +366,8 @@ export async function createAgentRuntime(config: AgentRuntimeConfig, options: Ag
       checkpointRestored: checkpoint !== null,
       restoredTaskIds: loop.tasks().map((t) => t.taskId),
       reconciled,
+      runtimeBaseline: baseline,
+      workspaceRestored,
       activeTaskIds: () => loop.tasks().filter((t) => isActive(t.status)).map((t) => t.taskId),
       allTaskIds: () => loop.tasks().map((t) => t.taskId),
     },

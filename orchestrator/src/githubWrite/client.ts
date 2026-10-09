@@ -53,11 +53,20 @@ function verifyPr(raw: RawWritePullRequest, branch: string, headSha: string): st
 
 export function createGitHubWriteClient(
   repo: RepoRef,
-  deps: { transport: GitHubWriteTransport; push: GitPushTransport },
+  deps: {
+    transport: GitHubWriteTransport;
+    push: GitPushTransport;
+    /**
+     * The current base for new task branches (the same resolver the planner used).
+     * Default: the main head. A different value than the plan's base means re-plan.
+     */
+    taskBaseSha?: () => Promise<string>;
+  },
 ): GitHubWriteClient {
   if (!isValidRepo(repo)) throw new Error("invalid repository reference");
   const { transport, push } = deps;
   const target: RepoRef = Object.freeze({ owner: repo.owner, repo: repo.repo });
+  const currentTaskBase = deps.taskBaseSha ?? (() => transport.getBranchHead(target, PR_BASE_BRANCH));
 
   const client: GitHubWriteClient = {
     async createTaskBranch(plan: unknown) {
@@ -65,9 +74,9 @@ export function createGitHubWriteClient(
       if (!check.ok) return fail("policy_violation", check.reason);
       const p = check.plan;
       try {
-        const baseHead = await transport.getBranchHead(target, PR_BASE_BRANCH);
+        const baseHead = await currentTaskBase();
         if (baseHead !== p.baseSha) {
-          return fail("replan_required", `${PR_BASE_BRANCH} moved from planned ${p.baseSha} to ${baseHead ?? "(missing)"}`);
+          return fail("replan_required", `task base moved from planned ${p.baseSha} to ${baseHead ?? "(missing)"}`);
         }
         const existing = await transport.getBranchHead(target, p.branch);
         if (existing !== null) {

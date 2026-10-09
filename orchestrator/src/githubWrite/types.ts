@@ -11,6 +11,7 @@
  * force pushing, pushing main/master, bypassing checks, or changing branch
  * protection / admin settings — neither on the client nor on the transports.
  */
+import type { CommitRelation } from "../branches/taskBase";
 import type { RepoRef } from "../github/types";
 
 export type { RepoRef };
@@ -44,6 +45,11 @@ export interface NewPullRequestInput {
 export interface PullRequestTextInput {
   title: string;
   body: string;
+}
+
+/** Read-only GitHub compare of two exact commits (null: either commit is unknown to the remote). */
+export interface CommitComparer {
+  compareCommits(repo: RepoRef, baseSha: string, headSha: string): Promise<CommitRelation | null>;
 }
 
 /**

@@ -11,6 +11,7 @@ import type { WorkspaceLease } from "../githubWrite/lease";
 import type { PushReceipt, TrustedPullRequest } from "../githubWrite/types";
 import { DEFAULT_MAX_REPAIR_ATTEMPTS, managerBudget } from "../manager/budget";
 import { managerStep, type ManagerStep } from "../manager/lifecycle";
+import { TaskBaseError } from "../branches/taskBase";
 import { buildHumanEscalationReport, failureFingerprint, PROTECTED_AREAS, primaryFailureCode, repairOutcomeSummary } from "../manager/diagnosis";
 import { checkHumanDecisionBinding, humanDecisionResumeStep, normalizeHumanDecision } from "../manager/humanDecision";
 import { advanceRepairCounters, repairWorkerContract } from "../manager/repair";
@@ -842,6 +843,23 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
           break;
       }
     }
+    await restoreRuntimeWorkspaceIfIdle();
+  }
+
+  /**
+   * A finished task must not leave the fixed workspace on its task branch: a later
+   * Codespace cold start boots whatever is checked out. Only when no task owns a
+   * branch, lease, worker or side effect; the port re-checks Git and fails closed.
+   */
+  async function restoreRuntimeWorkspaceIfIdle() {
+    if (!ports.runtimeWorkspace) return;
+    const busy = Array.from(recs.values()).some((t) => !isTerminalStatus(t.status) && (t.plan !== null || t.lease !== null || t.workerRunning || t.pendingSideEffect !== null));
+    if (busy) return;
+    try {
+      await ports.runtimeWorkspace.restoreIfIdle();
+    } catch {
+      // Never blocks orchestration: the task branch already contains the runtime baseline.
+    }
   }
 
   function replan(t: TaskRecord, reason: string) {
@@ -868,7 +886,15 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
   async function dispatch(t: TaskRecord) {
     const task = t.intake;
     t.capabilities.add("branch_planner");
-    const baseSha = await ports.repo.mainHeadSha();
+    let baseSha: string;
+    try {
+      baseSha = await ports.repo.taskBaseSha();
+    } catch (err) {
+      // No branch from an unknown, diverged or unpublished base: the task would lose runtime or main commits.
+      const kind = err instanceof TaskBaseError ? err.code : "base_unavailable";
+      block(t, `task base could not be resolved (${kind}); no branch was created`, { terminal: true, trigger: "stale_base" });
+      return;
+    }
     const plan = planBranch(
       {
         taskId: task.taskId,

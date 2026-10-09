@@ -1,4 +1,5 @@
 import { checkTaskBranchName, isValidSha } from "../branches/naming";
+import { decideRuntimeRestore, isRuntimeBranch, type RuntimeBaseline, type RuntimeRestoreDecision } from "../branches/taskBase";
 import { isPlannerApproved } from "../branches/planner";
 import type { AssignedBranchPlan } from "../branches/types";
 import type { GitInspector, GitStatus, ProcessRunner, WorkerTaskContract } from "../workers/types";
@@ -22,6 +23,10 @@ import type { BranchCreation } from "./types";
  *   local branch absent: create it at the expected SHA / present: must already
  *   be at the expected SHA → switch (never with --force/--discard-changes) →
  *   verify branch + HEAD → PreparedWorkspace (frozen, registered).
+ *
+ * Once no task is active, restoreRuntimeWorkspace returns a clean finished
+ * task-branch checkout to the exact recorded runtime baseline, so a later
+ * Codespace cold start boots the runtime rather than a task branch.
  *
  * Git is invoked only through the injected ProcessRunner with fixed argv
  * arrays and the subcommands in WORKSPACE_GIT_SUBCOMMANDS. There is no
@@ -101,6 +106,21 @@ export function buildSwitchArgs(branch: string): string[] {
   return ["switch", "--no-guess", branch];
 }
 
+function assertRuntimeBranch(branch: string): void {
+  if (!isRuntimeBranch(branch)) throw new Error("refusing workspace git op: not a runtime branch");
+}
+
+export function buildResolveRuntimeArgs(branch: string): string[] {
+  assertRuntimeBranch(branch);
+  return ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}^{commit}`];
+}
+
+/** Returns an idle workspace to the runtime branch; refuses (git default) if local changes would be lost. */
+export function buildRuntimeSwitchArgs(branch: string): string[] {
+  assertRuntimeBranch(branch);
+  return ["switch", "--no-guess", branch];
+}
+
 export interface WorkspaceDeps {
   runner: ProcessRunner;
   git: GitInspector;
@@ -125,6 +145,20 @@ export function dirtyViolations(status: GitStatus, allowed: readonly string[]): 
   return status.dirtyPaths.filter((p) => !ok.has(p));
 }
 
+/** Runs one WORKSPACE_GIT_SUBCOMMANDS command; `allowMissing` maps an empty exit-1 (rev-parse --quiet) to null. */
+function workspaceGit(deps: Pick<WorkspaceDeps, "runner" | "repoRoot">) {
+  return async (args: string[], allowMissing = false): Promise<string | null> => {
+    if (!(WORKSPACE_GIT_SUBCOMMANDS as readonly string[]).includes(args[0])) throw new Error("git subcommand not allowed");
+    const res = await deps.runner.spawn({ command: "git", args, cwd: deps.repoRoot }).exit;
+    if (res.truncated) throw new Error("git output truncated");
+    if (res.exitCode !== 0) {
+      if (allowMissing && res.exitCode === 1 && res.stdout.trim() === "") return null;
+      throw new Error(`git ${args[0]} failed`);
+    }
+    return res.stdout.trim();
+  };
+}
+
 export async function prepareAssignedWorkspace(input: PrepareInput, deps: WorkspaceDeps): Promise<PrepareResult> {
   // --- policy (pure)
   const plan = input?.plan;
@@ -145,16 +179,7 @@ export async function prepareAssignedWorkspace(input: PrepareInput, deps: Worksp
   const expected = expectedRemoteHead(plan);
   const allowedDirty = [...(input.allowedDirtyPaths ?? [])];
 
-  const git = async (args: string[], allowMissing = false): Promise<string | null> => {
-    if (!(WORKSPACE_GIT_SUBCOMMANDS as readonly string[]).includes(args[0])) throw new Error("git subcommand not allowed");
-    const res = await deps.runner.spawn({ command: "git", args, cwd: deps.repoRoot }).exit;
-    if (res.truncated) throw new Error("git output truncated");
-    if (res.exitCode !== 0) {
-      if (allowMissing && res.exitCode === 1 && res.stdout.trim() === "") return null;
-      throw new Error(`git ${args[0]} failed`);
-    }
-    return res.stdout.trim();
-  };
+  const git = workspaceGit(deps);
 
   try {
     // --- working tree preflight
@@ -399,4 +424,36 @@ export function checkWorkerPreconditions(input: {
     return { ok: false, reason: "contract expects a different Git metadata baseline" };
   }
   return { ok: true, contract: { ...contract, expectedHeadSha: p.headSha, gitMetadataDigest: p.gitMetadataDigest } };
+}
+
+export type RuntimeRestoreResult =
+  | { ok: true; decision: RuntimeRestoreDecision }
+  | { ok: false; error: "verification_failed" | "git_error"; reason: string };
+
+/**
+ * Moves an idle, clean task-branch checkout back onto the runtime baseline
+ * branch (only when it is exactly at the recorded baseline SHA). The caller
+ * states whether any task is active; this re-reads Git and never forces.
+ */
+export async function restoreRuntimeWorkspace(
+  input: { baseline: RuntimeBaseline | null; taskActive: boolean },
+  deps: Pick<WorkspaceDeps, "runner" | "git" | "repoRoot">,
+): Promise<RuntimeRestoreResult> {
+  const git = workspaceGit(deps);
+  try {
+    const status = await deps.git.status();
+    const baseline = input.baseline;
+    const localBaselineSha = baseline && isRuntimeBranch(baseline.branch) ? await git(buildResolveRuntimeArgs(baseline.branch), true) : null;
+    const decision = decideRuntimeRestore({ status, baseline, taskActive: input.taskActive, localBaselineSha });
+    if (decision.action !== "return") return { ok: true, decision };
+    await git(buildRuntimeSwitchArgs(decision.branch));
+    const after = await deps.git.status();
+    if (after.branch !== decision.branch || after.headSha !== decision.sha || after.dirtyPaths.length !== 0) {
+      return { ok: false, error: "verification_failed", reason: "workspace is not on the clean runtime baseline after restore" };
+    }
+    return { ok: true, decision };
+  } catch (err) {
+    const kind = err instanceof Error ? err.name : "non-Error";
+    return { ok: false, error: "git_error", reason: `runtime restore git operation failed (${kind}); workspace left as is` };
+  }
 }
