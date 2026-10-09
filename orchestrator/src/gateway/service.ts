@@ -9,7 +9,7 @@ import type { IsoTimestamp } from "../store/types";
 import { normalizeIntentDecision } from "../planning/normalize";
 import { decomposeWork, rawWorkAreas, resolveWorkAreas, workShape } from "../executive/workAssignment";
 import { deriveEvidencePlan, renderEvidenceInstruction } from "../executive/evidencePlan";
-import type { IntentPlanner } from "../planning/types";
+import { TRANSPORT_STATUS_CONTEXT, type IntentPlanner, type OwnerNoticeComposer, type TransportStatusContext, type TrustedTaskState } from "../planning/types";
 import type { ReadOnlyInspector } from "../planning/ownerQuestion";
 import { normalizeOwnerAnswer } from "../planning/normalize";
 import type { StartApprovalEvidence } from "../scheduler/types";
@@ -25,7 +25,7 @@ import {
   validateApprovalDecisionRequest,
 } from "./approval";
 import { GatewayError } from "./errors";
-import { assessRetry, type RetryAssessment } from "./retry";
+import { assessRetry, outcomeOf, retryFact, stopReasonFact, terminalClass, type RetryAssessment } from "./retry";
 import type {
   AgentGatewayService,
   ApprovalDecisionRequest,
@@ -83,6 +83,8 @@ export interface GatewayDependencies {
   humanDecisionSubmissions?: GatewayHumanDecisionRepository;
   /** Trusted planning layer; without it natural-language interpretation is unavailable (fail closed). */
   intentPlanner?: IntentPlanner;
+  /** Manager's proactive owner message for a terminal task state; without it the caller uses its fallback. */
+  ownerNoticeComposer?: OwnerNoticeComposer;
   interpretations?: GatewayInterpretationRepository;
   /** Trusted list of known tasks (newest first) given to the planner as context. */
   taskDirectory?: () => readonly TaskDirectoryEntry[];
@@ -268,6 +270,7 @@ function externalStatus(status: NonNullable<ReturnType<AgentRuntimeService["getT
     waitReason: sanitizeSummary(status.waitReason),
     mode: status.mode === "read_only" ? "read_only" : "change",
     answer: sanitizeAnswer(status.answer),
+    resultSummary: sanitizeAnswer(status.resultSummary),
     ...(status.workforce ? { workforce: sanitizeWorkforce(status.workforce) } : {}),
     ...(status.details ? { details: sanitizeDetails(status.details) } : {}),
     approvalRequired: status.approval.required,
@@ -503,6 +506,55 @@ export function createAgentGatewayService(deps: GatewayDependencies): AgentGatew
   /** Re-runs created by this process whose task may not be in the Manager's lineage view yet. */
   const recentRetries = new Map<string, string>();
   const retriesInFlight = new Set<string>();
+
+  /**
+   * Trusted facts about one task for the Manager's own owner reply (interpretation turn / terminal notice).
+   * Only orchestrator state: status, trusted stop class, deterministic re-run verdict, the Manager's own
+   * earlier result text, lineage. Never Worker prose.
+   */
+  function trustedTaskState(taskId: string, title: string, retryOf: string | null): TrustedTaskState | null {
+    let s: GatewayTaskStatus;
+    try {
+      s = readStatus(taskId);
+    } catch {
+      return null;
+    }
+    let a: RetryAssessment | null = null;
+    try {
+      a = assessRetryOf(taskId);
+    } catch {
+      a = null;
+    }
+    const outcome = outcomeOf(s);
+    const cls = outcome === "failed" || outcome === "cancelled" ? terminalClass(s.waitReason) : null;
+    return {
+      taskId,
+      title: sanitizeSummary(title)?.slice(0, 120) ?? "",
+      status: s.status,
+      mode: s.mode,
+      outcome,
+      stopReason: cls,
+      stopReasonFact: stopReasonFact(cls),
+      retry: a ? { kind: a.eligibility.kind, detail: retryFact(a.eligibility) } : null,
+      worker: s.assignedWorker,
+      prNumber: s.prNumber,
+      managerResult: (s.mode === "read_only" ? s.answer : s.resultSummary)?.slice(0, 1_200) ?? null,
+      retryOf,
+      openDecision: openDecisionOf(taskId),
+    };
+  }
+
+  function openDecisionOf(taskId: string): TrustedTaskState["openDecision"] {
+    let current: ReturnType<HumanDecisionRequirementReader["current"]> | null = null;
+    try {
+      current = deps.humanDecisionRequirements?.current(taskId) ?? null;
+    } catch {
+      return null;
+    }
+    if (!current || current.request.taskId !== taskId) return null;
+    const v = pendingView(current);
+    return { failingCheck: v.currentBlocker.failingCheck, rootCause: v.rootCause, recommendation: v.managerRecommendation, attempts: v.cyclesCompleted, stagnated: v.fingerprintTrend === "stagnated" };
+  }
 
   /** Deterministic re-run assessment from trusted state only (status, lineage, availability). */
   function assessRetryOf(taskId: string): RetryAssessment {
@@ -939,13 +991,37 @@ export function createAgentGatewayService(deps: GatewayDependencies): AgentGatew
       }
       const directory = (deps.taskDirectory?.() ?? []).slice(0, 30).map((t) => ({ ...t, title: sanitizeSummary(t.title)?.slice(0, 120) ?? "" }));
       if (request.contextTaskId !== null && !directory.some((t) => t.taskId === request.contextTaskId)) invalid("contextTaskId is unknown");
+      // Trusted state of the context task and the newest tasks (bounded): what a Manager follow-up reply may use.
+      const stateIds = Array.from(new Set([request.contextTaskId, ...directory.map((t) => t.taskId)].filter((id): id is string => id !== null))).slice(0, 5);
+      const taskStates = stateIds
+        .map((id) => {
+          const entry = directory.find((t) => t.taskId === id);
+          return entry ? trustedTaskState(id, entry.title, entry.retryOf ?? null) : null;
+        })
+        .filter((s): s is TrustedTaskState => s !== null);
       let raw: unknown;
       try {
-        raw = await withTimeout(planner.interpret({ message: request.text, contextTaskId: request.contextTaskId, tasks: directory, requireTask: request.requireTask }), deps.plannerTimeoutMs ?? 120_000);
+        raw = await withTimeout(
+          planner.interpret({
+            message: request.text,
+            contextTaskId: request.contextTaskId,
+            tasks: directory,
+            requireTask: request.requireTask,
+            taskStates,
+            ...(request.transportContext?.length ? { transportContext: request.transportContext } : {}),
+          }),
+          deps.plannerTimeoutMs ?? 120_000,
+        );
       } catch {
         throw new GatewayError("unavailable", "the Agent planner could not interpret the message", 503);
       }
       const decision = normalizeIntentDecision(raw, { knownTaskIds: directory.map((t) => t.taskId), requireTask: request.requireTask });
+      if (decision.kind === "task_follow_up" || decision.kind === "retry_task") {
+        // A Manager reply is only kept when it was grounded in that task's trusted state; the basis is recorded.
+        const st = taskStates.find((t) => t.taskId === decision.taskId);
+        if (!st || !decision.ownerReply) delete decision.ownerReply;
+        else decision.replyBasis = { taskId: st.taskId, status: st.status, retryKind: st.retry?.kind ?? null };
+      }
       try {
         repo.create({ interpretationId: request.idempotencyKey, fingerprint, principalId: auth.principalId, originalRequest: request.text, priority: request.priority ?? null, decision, createdAt: deps.now() });
       } catch {
@@ -979,6 +1055,31 @@ export function createAgentGatewayService(deps: GatewayDependencies): AgentGatew
       if (!answer) throw new GatewayError("unavailable", "read-only inspection returned no answer", 503);
       deps.audit.record({ event: "owner_question_answered", principalId: auth.principalId, requestId: auth.requestId, action: "answer_owner_question", outcome: "answered" });
       return { answer };
+    },
+
+    async composeOwnerNotice(call) {
+      const auth = await principal(call, "task:read", "task_read", "compose_owner_notice");
+      const input = strictObject(call.request, ["taskId", "label", "lang"]);
+      const taskId = String(input.taskId ?? "");
+      if (!SAFE_KEY.test(taskId)) invalid("taskId is malformed");
+      if (typeof input.label !== "string" || input.label.length > 120) invalid("label is malformed");
+      if (input.lang !== "zh" && input.lang !== "en") invalid("lang is malformed");
+      const composer = deps.ownerNoticeComposer;
+      if (!composer) throw new GatewayError("unavailable", "the Manager notice composer is unavailable", 503);
+      const entry = (deps.taskDirectory?.() ?? []).find((t) => t.taskId === taskId);
+      const state = trustedTaskState(taskId, input.label, entry?.retryOf ?? null);
+      if (!state) throw new GatewayError("not_found", "task not found", 404);
+      let raw: unknown;
+      try {
+        raw = await withTimeout(composer.compose({ lang: input.lang, label: input.label, state }), deps.plannerTimeoutMs ?? 120_000);
+      } catch {
+        throw new GatewayError("unavailable", "the Manager could not compose the notice", 503);
+      }
+      const reply = raw && typeof raw === "object" ? (raw as { ownerReply?: unknown }).ownerReply : undefined;
+      const text = typeof reply === "string" ? sanitizeAnswer(reply.slice(0, 1_200)) : null;
+      if (!text || text === REDACTED) throw new GatewayError("unavailable", "the Manager returned no usable notice", 503);
+      deps.audit.record({ event: "task_status_read", principalId: auth.principalId, taskId, requestId: auth.requestId, action: "compose_owner_notice", outcome: state.outcome });
+      return { text, basis: { taskId, status: state.status, retryKind: state.retry?.kind ?? null } };
     },
 
     async getRetryEligibility(call) {
@@ -1119,7 +1220,7 @@ const AUDIT_AND_FIX_POLICY =
   "Audit first, then fix. Inspect every requested area and put the audit report in your summary: each finding with cited repository file paths. Then change code ONLY to fix those reported, evidence-backed findings within the requested scope. Do not make any unrelated change; an audit is not permission to refactor or improve other code.";
 
 function interpretRequest(value: unknown): InterpretOwnerMessageRequest {
-  const input = strictObject(value, ["idempotencyKey", "text", "contextTaskId", "requireTask", "priority"]);
+  const input = strictObject(value, ["idempotencyKey", "text", "contextTaskId", "requireTask", "priority", "transportContext"]);
   if (!SAFE_KEY.test(String(input.idempotencyKey ?? ""))) invalid("idempotencyKey is malformed");
   if (typeof input.text !== "string") invalid("text is malformed");
   const text = (input.text as string).replace(/\r\n?/g, "\n").replace(/[\u0000-\u0009\u000b-\u001f\u007f]+/g, " ").trim();
@@ -1130,7 +1231,19 @@ function interpretRequest(value: unknown): InterpretOwnerMessageRequest {
   if (typeof input.requireTask !== "boolean") invalid("requireTask is malformed");
   const priority = input.priority;
   if (priority !== undefined && priority !== "critical" && priority !== "high" && priority !== "normal" && priority !== "low") invalid("priority is unsupported");
-  return { idempotencyKey: String(input.idempotencyKey), text, contextTaskId, requireTask: input.requireTask as boolean, ...(priority ? { priority: priority as InterpretOwnerMessageRequest["priority"] } : {}) };
+  // Context only (what the transport already told the owner); allowlisted, never authority.
+  const tc = input.transportContext;
+  if (tc !== undefined && (!Array.isArray(tc) || tc.length > TRANSPORT_STATUS_CONTEXT.length || tc.some((s) => !(TRANSPORT_STATUS_CONTEXT as readonly unknown[]).includes(s))))
+    invalid("transportContext is malformed");
+  const transportContext = tc ? Array.from(new Set(tc as TransportStatusContext[])) : [];
+  return {
+    idempotencyKey: String(input.idempotencyKey),
+    text,
+    contextTaskId,
+    requireTask: input.requireTask as boolean,
+    ...(priority ? { priority: priority as InterpretOwnerMessageRequest["priority"] } : {}),
+    ...(transportContext.length ? { transportContext } : {}),
+  };
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {

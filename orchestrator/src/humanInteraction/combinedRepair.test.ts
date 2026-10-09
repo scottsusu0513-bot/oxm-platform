@@ -124,8 +124,8 @@ describe("combined-review failure enters cross-part repair", () => {
     expect(lead.budget.managerCalls).toMatchObject({ combinedReview: 2, combinedDiagnosis: 1, interpretation: 1 });
     expect(x.diagnoseCalls[0]).toMatchObject({ round: 1, cycle: 1, stagnated: false, conflicts: ["UI reads isVerified, API returns verified"] });
     await x.service.observe();
-    const repairing = x.milestones().find((m) => m.milestone === "combined_repairing")!;
-    expect(repairing.detail).toContain("我已經安排 Codex 修正畫面部分，修好後會再整體檢查一次。");
+    // The automatic cross-part repair is internal: audited, not a separate owner message; the result is.
+    expect(x.milestones().some((m) => m.milestone === "combined_repairing" || m.milestone === "part_completed")).toBe(false);
     expect(x.milestones().filter((m) => m.milestone === "combined_accepted")).toHaveLength(1);
     for (const m of x.milestones()) expect(findInternalJargon(formatNotice(m))).toEqual([]);
   });

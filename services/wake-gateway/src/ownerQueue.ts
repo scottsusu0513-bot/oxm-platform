@@ -1,6 +1,6 @@
 import { consoleLog, DEFAULT_POLICY, loadGatewayConfig, type GatewayPolicy } from "./config";
 import { createCodespaceWakeClient, type CodespaceWakeClient, type GitHubFailureKind, type GitHubResult } from "./github";
-import { createOwnerNotifier, noticeText, projectUpdate, type OwnerNotifier, type WakeFailureReason } from "./telegram";
+import { createOwnerNotifier, ONLINE_TRANSPORT_STATUS, projectUpdate, transportStatus, type OwnerNotifier, type TransportStatus, type WakeFailureReason } from "./telegram";
 import type { DurableObjectStateLike, FetchFn, GatewayEnv, GatewayLog, ProjectedKind, ProjectedUpdate, SqlStorageLike } from "./types";
 
 /**
@@ -102,6 +102,9 @@ export function createOwnerQueueCore(ports: OwnerQueuePorts): OwnerQueueCore {
   sql.exec("CREATE TABLE IF NOT EXISTS seen (telegram_update_id INTEGER PRIMARY KEY, seen_at INTEGER NOT NULL)");
   sql.exec("CREATE INDEX IF NOT EXISTS seen_seen_at ON seen (seen_at)");
   sql.exec("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
+  // Which transport_status the owner already received while this update waited: served with the update
+  // as context for the Manager (never content, never a reply).
+  sql.exec("CREATE TABLE IF NOT EXISTS transport_context (seq INTEGER NOT NULL, status TEXT NOT NULL, PRIMARY KEY (seq, status))");
 
   const getMeta = (key: string): string | null => {
     const row = sql.exec("SELECT value FROM meta WHERE key = ?", key).toArray()[0];
@@ -130,18 +133,35 @@ export function createOwnerQueueCore(ports: OwnerQueuePorts): OwnerQueueCore {
     }
   };
   const saveWake = (s: WakeState) => setMeta("wake", JSON.stringify(s));
-  const notify = async (text: string) => {
+  /**
+   * Transport status only, and never while the Agent is online (then the Manager is the only voice),
+   * except an allowlisted online status (queue_full). Every queued update the status was about is tagged,
+   * so the Manager knows what the owner was already told.
+   */
+  const notify = async (status: TransportStatus): Promise<boolean> => {
+    if (isOnline(ports.now()) && !ONLINE_TRANSPORT_STATUS.has(status.status)) {
+      ports.log("transport_status_suppressed_online", { status: status.status });
+      return false;
+    }
+    let sent = false;
     try {
-      await ports.notifier.send(text);
+      sent = await ports.notifier.send(status);
     } catch {
       ports.log("notice_failed");
     }
+    if (sent) {
+      ports.log("transport_status_sent", { status: status.status, voice: "system_status" });
+      if (status.status !== "queue_full" && status.status !== "expired") sql.exec("INSERT OR IGNORE INTO transport_context (seq, status) SELECT seq, ? FROM updates", status.status);
+    }
+    return sent;
   };
+  const pruneContext = () => sql.exec("DELETE FROM transport_context WHERE seq NOT IN (SELECT seq FROM updates)");
 
   function expire(now: number) {
     const n = Number(scalar("SELECT COUNT(*) AS n FROM updates WHERE expires_at <= ?", now)?.n ?? 0);
     if (n === 0) return;
     sql.exec("DELETE FROM updates WHERE expires_at <= ?", now);
+    pruneContext();
     setMeta("expired_unnotified", (num("expired_unnotified") ?? 0) + n);
     ports.log("expired", { count: n });
   }
@@ -184,8 +204,8 @@ export function createOwnerQueueCore(ports: OwnerQueuePorts): OwnerQueueCore {
       saveWake(s); // at most one failure notice per cycle, even across a crash
       await notify(
         reason === "agent_offline"
-          ? noticeText("agent_offline", { minutes: Math.round(policy.agentTimeoutMs / 60_000) })
-          : noticeText("wake_failed", { reason, blocked: block }),
+          ? transportStatus("agent_offline", { minutes: Math.round(policy.agentTimeoutMs / 60_000) })
+          : transportStatus("wake_failed", { reason, blocked: block }),
       );
     }
     return s;
@@ -236,18 +256,20 @@ export function createOwnerQueueCore(ports: OwnerQueuePorts): OwnerQueueCore {
   }
 
   async function opsNotices(now: number) {
-    const expired = num("expired_unnotified") ?? 0;
+    // Expiry is reported only while the Agent is offline; an online Agent's Manager is the only voice.
+    const expired = isOnline(now) ? 0 : (num("expired_unnotified") ?? 0);
     const rejected = num("rejected_unnotified") ?? 0;
     if (expired === 0 && rejected === 0) return;
     const last = num("ops_notice_at");
     if (last !== null && now - last < policy.noticeIntervalMs) return;
     ports.storage.transactionSync(() => {
       setMeta("ops_notice_at", now);
-      setMeta("expired_unnotified", 0);
+      if (expired > 0) setMeta("expired_unnotified", 0);
       setMeta("rejected_unnotified", 0);
     });
-    if (rejected > 0) await notify(noticeText("queue_full"));
-    if (expired > 0) await notify(noticeText("expired", { pending: expired }));
+    // queue_full: once per overflow episode; the next accepted message carries it as Manager context.
+    if (rejected > 0 && (await notify(transportStatus("queue_full")))) setMeta("queue_full_context_pending", 1);
+    if (expired > 0) await notify(transportStatus("expired", { pending: expired }));
   }
 
   async function tickOnce(): Promise<{ nextAlarmAt: number | null }> {
@@ -278,7 +300,7 @@ export function createOwnerQueueCore(ports: OwnerQueuePorts): OwnerQueueCore {
       s = { ...toIdle(s), phase: "waking", cycle: s.cycle + 1, deadlineAt: now + policy.agentTimeoutMs };
       saveWake(s);
       ports.log("wake_cycle_started", { cycle: s.cycle, pending });
-      await notify(noticeText("waking", { pending }));
+      await notify(transportStatus("waking", { pending }));
     }
     if (s.nextActionAt !== null && now < s.nextActionAt) return done(); // same cycle: no extra GitHub calls
     s = await step(s, now);
@@ -296,7 +318,11 @@ export function createOwnerQueueCore(ports: OwnerQueuePorts): OwnerQueueCore {
         sql.exec("DELETE FROM seen WHERE seen_at <= ?", now - policy.seenRetentionMs);
         if (sql.exec("SELECT telegram_update_id FROM seen WHERE telegram_update_id = ?", telegramId).toArray().length > 0) return "duplicate";
         if (count() >= policy.queueCap) {
-          setMeta("rejected_unnotified", (num("rejected_unnotified") ?? 0) + 1);
+          // One notice per overflow episode (until a message is accepted again), never one per dropped message.
+          if (!num("queue_full_episode")) {
+            setMeta("queue_full_episode", 1);
+            setMeta("rejected_unnotified", 1);
+          }
           return "queue_full";
         }
         seq = Math.max((num("last_seq") ?? 0) + 1, telegramId);
@@ -312,6 +338,11 @@ export function createOwnerQueueCore(ports: OwnerQueuePorts): OwnerQueueCore {
         sql.exec("INSERT INTO seen (telegram_update_id, seen_at) VALUES (?, ?)", telegramId, now);
         setMeta("last_seq", seq);
         setMeta("last_enqueue_at", now);
+        if (num("queue_full_episode")) setMeta("queue_full_episode", 0);
+        if (num("queue_full_context_pending")) {
+          sql.exec("INSERT OR IGNORE INTO transport_context (seq, status) VALUES (?, 'queue_full')", seq);
+          setMeta("queue_full_context_pending", 0);
+        }
         return "enqueued";
       });
       ports.log(`webhook_${status}`, { update_id: telegramId, kind, ...(status === "enqueued" && seq !== telegramId ? { rebased_seq: seq } : {}) });
@@ -328,6 +359,7 @@ export function createOwnerQueueCore(ports: OwnerQueuePorts): OwnerQueueCore {
           const next = Math.max(acked(), maxDelivered === null ? 0 : Math.min(offset, maxDelivered + 1));
           if (next > acked()) {
             sql.exec("DELETE FROM updates WHERE seq < ?", next);
+            pruneContext();
             setMeta("acked_cursor", next);
             ports.log("acked", { cursor: next });
           }
@@ -346,7 +378,11 @@ export function createOwnerQueueCore(ports: OwnerQueuePorts): OwnerQueueCore {
         return selected;
       });
       ports.log("pulled", { count: rows.length });
-      return rows.map((r) => JSON.parse(String(r.payload)) as ProjectedUpdate);
+      return rows.map((r) => {
+        const update = JSON.parse(String(r.payload)) as ProjectedUpdate;
+        const told = sql.exec("SELECT status FROM transport_context WHERE seq = ? ORDER BY status", Number(r.seq)).toArray().map((c) => String(c.status));
+        return told.length ? { ...update, oxm_transport_status: told } : update;
+      });
     },
     heartbeat() {
       setMeta("last_agent_seen_at", ports.now());

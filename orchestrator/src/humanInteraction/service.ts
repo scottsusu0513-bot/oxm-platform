@@ -16,6 +16,9 @@ import {
   decisionContent,
   inputRejection,
   managerDecisionContent,
+  managerTaskReceivedMessage,
+  stoppedTaskFacts,
+  usableManagerText,
   ownerLanguage,
   progressMessage,
   taskReceivedMessage,
@@ -24,9 +27,10 @@ import {
 } from "../executive/communication";
 import { isDangerousValue } from "../store/sanitize";
 import type { AuditHumanInteractionLedger } from "./ledger";
-import { composeFollowUp, isPureStatusQuestion, retryRefusedMessage } from "./followUp";
+import { composeFollowUp, eligibilityVerdict, isPureStatusQuestion, retryRefusedMessage } from "./followUp";
 import { parseTaskCommand, TASK_PREFIX_USAGE } from "./taskPrefix";
-import type { FollowUpTopic } from "../planning/types";
+import { decideTaskNotification, type EventCandidate } from "./notificationPolicy";
+import type { FollowUpTopic, ReplyBasis } from "../planning/types";
 import type {
   CancelConfirmationNotice,
   CommitApprovalNotice,
@@ -43,6 +47,7 @@ import type {
   Milestone,
   MilestoneNotice,
   NoticeRecord,
+  OwnerVoice,
   StartApprovalNotice,
 } from "./types";
 
@@ -53,6 +58,7 @@ export type HumanInteractionGateway = Pick<
   | "submitInterpretedTask"
   | "answerOwnerQuestion"
   | "getRetryEligibility"
+  | "composeOwnerNotice"
   | "retryTask"
   | "getTaskStatus"
   | "getHumanDecision"
@@ -96,6 +102,10 @@ const NOT_APPROVAL_ZH = "這只是方向指示，不代表批准 commit、發布
 /** Owner-language pick (Traditional Chinese when the owner writes Chinese). */
 const L = (lang: OwnerLanguage, zh: string, en: string) => (lang === "zh" ? zh : en);
 const TERMINAL = new Set(["accepted", "blocked"]);
+/** The Manager's reply from its interpretation turn and the trusted state it was grounded in. */
+type Managed = { reply: string | null; basis: ReplyBasis | null } | null;
+/** Milestones whose meaning (result / blocker) must come from the Manager; anything else is operational status. */
+const SEMANTIC_MILESTONES = new Set<Milestone>(["completed", "answered", "blocked", "combined_accepted", "combined_not_accepted"]);
 
 export function noticeRef(noticeId: string): string {
   return createHash("sha256").update(noticeId).digest("hex").slice(0, 16);
@@ -150,6 +160,8 @@ export function decisionNotice(view: PendingHumanDecisionView, label?: string, c
     taskId: view.taskId,
     lang,
     ownerLabel: owner,
+    // The Manager's own question when its diagnosis asked the owner; otherwise the deterministic fallback.
+    voice: view.ownerDecision ? "manager" : "fallback",
     plain: view.ownerDecision
       ? managerDecisionContent({ lang, label: owner, question: view.ownerDecision.question, options: view.ownerDecision.options, recommended: view.ownerDecision.recommended })
       : decisionContent({ lang, label: owner, mode: context.mode ?? "change", failureCode: b.failureCode, attempts: view.cyclesCompleted, stagnated: view.fingerprintTrend === "stagnated" }),
@@ -170,7 +182,7 @@ export function decisionNotice(view: PendingHumanDecisionView, label?: string, c
 
 const RISK_ORDER = ["green", "yellow", "red"] as const;
 
-export function approvalNotice(approval: PendingApprovalRequirement, label?: string): CommitApprovalNotice | null {
+export function approvalNotice(approval: PendingApprovalRequirement, label?: string, managerSummary?: string | null): CommitApprovalNotice | null {
   const e = approval.commitEvidence;
   if (approval.kind !== "commit_publish" || approval.phase !== "commit_publish" || !e) return null;
   const a = e.authorization;
@@ -178,6 +190,7 @@ export function approvalNotice(approval: PendingApprovalRequirement, label?: str
   if (!(a.commit === true && a.normalPush === true && a.openOrReusePr === true && a.merge === false && a.deploy === false) || e.managerDecision !== "accepted")
     return null;
   const noticeId = `ap:${approval.approvalRequestId}`;
+  const summary = usableManagerText(managerSummary, ownerLanguage(label), 600);
   const risk = RISK_ORDER[Math.max(RISK_ORDER.indexOf(approval.risk), RISK_ORDER.indexOf(e.observedRisk))] ?? "red";
   return {
     kind: "commit_publish_approval",
@@ -188,6 +201,9 @@ export function approvalNotice(approval: PendingApprovalRequirement, label?: str
     ownerLabel: ownerLabelOf(approval.taskId, label),
     approvalRequestId: approval.approvalRequestId,
     taskLabel: taskLabel(approval.taskId, label),
+    // The explanation is the Manager's; the approval scope below stays a deterministic binding.
+    voice: summary ? "manager" : "fallback",
+    ...(summary ? { managerSummary: summary } : {}),
     branch: oneLine(e.branch, 240),
     filesChanged: e.changedPaths.slice(0, 30).map((p) => oneLine(p, 200)),
     validationsPassed: e.validations.filter((v) => v.status === "passed" && v.executed && v.trusted).map((v) => oneLine(v.name, 60)),
@@ -209,6 +225,7 @@ export function startApprovalNotice(approval: PendingApprovalRequirement, label?
     noticeId,
     ref: noticeRef(noticeId),
     taskId: approval.taskId,
+    voice: "safety_binding",
     lang: ownerLanguage(label),
     ownerLabel: ownerLabelOf(approval.taskId, label),
     approvalRequestId: approval.approvalRequestId,
@@ -350,7 +367,9 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
     inFlight.add(notice.noticeId);
     try {
       // Intent first: a crash after the send but before recordDelivered is then visible on restart.
-      if (!existing) deps.ledger.recordIntent({ noticeId: notice.noticeId, kind: notice.kind, ref: notice.ref, taskId: notice.taskId, targetId, createdAt: deps.now() });
+      if (!existing)
+        deps.ledger.recordIntent({ noticeId: notice.noticeId, kind: notice.kind, ref: notice.ref, taskId: notice.taskId, targetId, createdAt: deps.now(), ...(notice.voice ? { voice: notice.voice } : {}) });
+      if (notice.voice === "fallback") log({ event: "owner_voice_fallback", outcome: notice.kind });
       const { deliveryRef } = await deps.transport.deliver(existing ? { ...notice, possibleDuplicate: true } : notice);
       deps.ledger.recordDelivered(notice.noticeId, deliveryRef);
       // What the owner was last told about is what "it" means in their next message.
@@ -373,14 +392,14 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
     deps.ledger.recordDelivered(noticeId, `inline:${noticeId}`);
   }
 
-  function milestone(taskId: string, key: string, kind: Milestone, detail: string, label?: string): MilestoneNotice {
+  function milestone(taskId: string, key: string, kind: Milestone, detail: string, label: string | undefined, voice: OwnerVoice): MilestoneNotice {
     const noticeId = `ms:${taskId}:${key}`;
     // An answer keeps its line breaks (bounded); every other milestone is short plain text.
     const text =
       kind === "answered"
         ? detail.replace(/\b[0-9a-f]{40,64}\b/gi, "[sha]").replace(/[\u0000-\u0009\u000b-\u001f\u007f]+/g, " ").slice(0, 3_000)
         : detail.replace(/\b[0-9a-f]{40,64}\b/gi, "[sha]").replace(/[\u0000-\u0009\u000b-\u001f\u007f]+/g, " ").slice(0, 600);
-    return { kind: "milestone", noticeId, ref: noticeRef(noticeId), taskId, milestone: kind, taskLabel: taskLabel(taskId, label), detail: text, lang: ownerLanguage(label), ownerLabel: ownerLabelOf(taskId, label) };
+    return { kind: "milestone", noticeId, ref: noticeRef(noticeId), taskId, milestone: kind, taskLabel: taskLabel(taskId, label), detail: text, lang: ownerLanguage(label), ownerLabel: ownerLabelOf(taskId, label), voice };
   }
 
   const status = (taskId: string) => deps.gateway.getTaskStatus(call({ taskId }));
@@ -425,73 +444,146 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
     return { ok: false, result: { outcome: "needs_selection", message: L(lang, `有 ${matches.length} 個任務符合：${matches.slice(0, 5).join(", ")}。請給我更完整的編號。`, `That reference matches ${matches.length} tasks: ${matches.slice(0, 5).join(", ")}. Use a longer reference.`) } };
   }
 
-  async function progress(taskId: string, key: string, kind: Milestone, event: ProgressEvent, label: string | undefined, extra: Omit<Parameters<typeof progressMessage>[1], "lang">): Promise<number> {
-    const n = milestone(taskId, key, kind, progressMessage(event, { lang: ownerLanguage(label), ...extra }), label);
-    return (await notify(n, n.noticeId)) ? 1 : 0;
+  type Candidate = EventCandidate & { kind: Milestone; voice: OwnerVoice };
+  /** One merged update is only as Manager-authored as its weakest part. */
+  const mergedVoice = (parts: Candidate[]): OwnerVoice =>
+    parts.some((c) => c.voice === "fallback") ? "fallback" : parts.some((c) => c.voice === "manager") ? "manager" : "system_status";
+
+  /**
+   * Manager notification decision for one task's new internal events: the policy keeps only what the
+   * Owner needs (action required / real result), merges those into ONE update, and records every
+   * other event as suppressed in the audit stream. Replaying the same events sends nothing again.
+   */
+  async function decideAndNotify(taskId: string, label: string | undefined, candidates: Candidate[]): Promise<number> {
+    const fresh = candidates.filter((c) => {
+      const id = `ms:${taskId}:${c.key}`;
+      const prior = deps.ledger.byNotice(id);
+      return !deps.ledger.suppressed(id) && !(prior && prior.deliveryRef !== null);
+    });
+    if (fresh.length === 0) return 0;
+    const decision = decideTaskNotification(fresh);
+    const suppress = (c: Candidate, reason: string) =>
+      deps.ledger.recordSuppressed({ noticeId: `ms:${taskId}:${c.key}`, taskId, event: c.kind, reason, createdAt: deps.now() });
+    for (const { candidate, reason } of decision.suppressed) if (!reason.startsWith("merged_into:")) suppress(candidate, reason);
+    if (!decision.deliver) {
+      if (decision.suppressed.length) log({ event: "human_notice_suppressed", outcome: decision.suppressed.map((x) => x.candidate.kind).join(",") });
+      return 0;
+    }
+    const { lead, merged, detail } = decision.deliver;
+    const n = milestone(taskId, lead.key, lead.kind, detail, label, mergedVoice([lead, ...merged]));
+    if (!(await notify(n, n.noticeId))) return 0;
+    // Merged events are only marked once the combined update actually reached the Owner.
+    for (const c of merged) suppress(c, `merged_into:${lead.key}`);
+    return 1;
   }
 
   async function observeMilestones(taskId: string, label: string | undefined): Promise<number> {
-    let sent = 0;
-    if (deps.ledger.byNotice(`ms:${taskId}:terminal`)) return 0;
+    // Done only once the final notice was delivered (or decided silent): an unconfirmed send is retried.
+    const terminal = deps.ledger.byNotice(`ms:${taskId}:terminal`);
+    if ((terminal && terminal.deliveryRef !== null) || deps.ledger.suppressed(`ms:${taskId}:terminal`)) return 0;
+    const candidates: Candidate[] = [];
+    const lang = ownerLanguage(label);
+    /** Owner-relevant meaning (result / blocker) must be the Manager's; operational status may be fixed text. */
+    const progress = (key: string, kind: Milestone, event: ProgressEvent, extra: Omit<Parameters<typeof progressMessage>[1], "lang">, voice: OwnerVoice = SEMANTIC_MILESTONES.has(kind) ? "fallback" : "system_status") =>
+      void candidates.push({ key, kind, voice, detail: progressMessage(event, { lang, ...extra }) });
     const s = await status(taskId);
     // Outcome of the latest human decision, so the owner never sees only "submitted".
     const hd = await deps.gateway.getHumanDecision(call({ taskId })).catch(() => null);
     const last = hd?.lastOutcome;
     if (last?.decisionId && (last.outcome === "accepted" || last.outcome === "rejected" || last.outcome === "stale")) {
       const accepted = last.outcome === "accepted";
-      sent += await progress(taskId, `hd:${last.decisionId}`, accepted ? "guidance_accepted" : "guidance_rejected", accepted ? "guidance_accepted" : "guidance_rejected", label, { reason: last.reason });
+      progress(`hd:${last.decisionId}`, accepted ? "guidance_accepted" : "guidance_rejected", accepted ? "guidance_accepted" : "guidance_rejected", { reason: last.reason });
     }
     const wf = s.workforce;
-    // Lifecycle progress: only meaningful milestones, each at most once.
+    // Lifecycle events are only candidates: the notification policy decides what the owner hears (each at most once).
     if (s.mode !== "read_only" && (s.status === "running" || s.status === "repair_requested") && s.assignedWorker && !wf?.temporaryCover)
-      sent += await progress(taskId, `worker:${s.assignedWorker}`, "worker_assigned", "worker_assigned", label, { worker: s.assignedWorker, area: wf?.workArea ?? "programming" });
+      progress(`worker:${s.assignedWorker}`, "worker_assigned", "worker_assigned", { worker: s.assignedWorker, area: wf?.workArea ?? "programming" });
     if (s.status === "repair_requested" && s.repairAttempt > 0)
-      sent += await progress(taskId, `repair:${s.repairAttempt}`, "repairing", "repairing", label, { attempt: s.repairAttempt });
+      progress(`repair:${s.repairAttempt}`, "repairing", "repairing", { attempt: s.repairAttempt });
     if (wf?.temporaryCover && s.assignedWorker === "codex" && wf.primaryWorker === "claude")
-      sent += await progress(taskId, `cover:${wf.handoffs}`, "quota_takeover", "quota_takeover", label, {});
+      progress(`cover:${wf.handoffs}`, "quota_takeover", "quota_takeover", {});
     if (wf && !wf.temporaryCover && wf.handoffs > 0 && wf.primaryWorker === "claude" && s.assignedWorker === "claude")
-      sent += await progress(taskId, `handback:${wf.handoffs}`, "quota_handback", "quota_handback", label, {});
+      progress(`handback:${wf.handoffs}`, "quota_handback", "quota_handback", {});
     if (s.status === "waiting_worker_quota" && wf?.availabilityPause) {
       const p = wf.availabilityPause;
-      sent += await progress(taskId, `quota:${p.exhausted}:${p.waitingFor.join("+")}:${wf.handoffs}`, "quota_paused", "quota_paused", label, { area: wf.workArea, waitingFor: p.waitingFor, resetAt: p.resetAt });
+      progress(`quota:${p.exhausted}:${p.waitingFor.join("+")}:${wf.handoffs}`, "quota_paused", "quota_paused", { area: wf.workArea, waitingFor: p.waitingFor, resetAt: p.resetAt });
     }
     if (s.status === "waiting_worker_availability" && wf?.availabilityPause) {
       const p = wf.availabilityPause;
-      sent += await progress(taskId, `avail:${p.cause}:${p.exhausted}:${wf.handoffs}`, "availability_paused", "availability_paused", label, { worker: p.exhausted, cause: p.cause });
+      progress(`avail:${p.cause}:${p.exhausted}:${wf.handoffs}`, "availability_paused", "availability_paused", { worker: p.exhausted, cause: p.cause });
     }
     if (s.status === "waiting_infrastructure")
-      sent += await progress(taskId, `infra:${s.repairAttempt}`, "infrastructure_waiting", "reviewing_infrastructure_wait", label, {});
-    if (s.status === "qa_pending" && s.prNumber) sent += await progress(taskId, `pr:${s.prNumber}`, "pr_opened", "pr_opened", label, { prNumber: s.prNumber });
+      progress(`infra:${s.repairAttempt}`, "infrastructure_waiting", "reviewing_infrastructure_wait", {});
+    if (s.status === "qa_pending" && s.prNumber) progress(`pr:${s.prNumber}`, "pr_opened", "pr_opened", { prNumber: s.prNumber });
     if (s.status === "needs_human_approval") {
       const approval = await currentApproval(taskId).catch(() => null);
       // Only approval kinds this transport cannot decide (e.g. post-QA) become an informational milestone.
-      if (approval && approval.phase === "post_qa") sent += await progress(taskId, `approval:${approval.approvalRequestId}`, "awaiting_other_approval", "awaiting_other_approval", label, {});
+      if (approval && approval.phase === "post_qa") progress(`approval:${approval.approvalRequestId}`, "awaiting_other_approval", "awaiting_other_approval", {});
     }
     // A part of a decomposed request: its own completion is not the end; the combined review decides.
     if ((s.status === "accepted" || s.status === "waiting_group" || s.status === "needs_human_decision") && wf?.combinedReview) {
       const c = wf.combinedReview;
       // A cross-part repair task is not a new "part done" moment for the owner.
-      if (c.leadTaskId === taskId || !/-g\d+c\d+$/.test(taskId)) sent += await progress(taskId, "part_completed", "part_completed", "part_completed", label, {});
+      if (c.leadTaskId === taskId || !/-g\d+c\d+$/.test(taskId)) progress("part_completed", "part_completed", "part_completed", {});
       if (c.lead) {
-        if (c.status === "accepted") sent += await progress(taskId, "combined:accepted", "combined_accepted", "combined_accepted", label, { summary: c.ownerSummary });
-        else if (c.status === "repairing") sent += await progress(taskId, `combined:repairing:${c.round}.${c.cycle}`, "combined_repairing" as Milestone, "combined_repairing", label, { summary: c.ownerSummary, targets: c.repairTargets });
-        else if (c.status === "review_unavailable" || c.status === "diagnosis_unavailable") sent += await progress(taskId, `combined:waiting:${c.round}.${c.cycle}`, "combined_review_waiting", "combined_review_waiting", label, {});
+        const summary = usableManagerText(c.ownerSummary, lang, 400);
+        if (c.status === "accepted") progress("combined:accepted", "combined_accepted", "combined_accepted", { summary }, summary ? "manager" : "fallback");
+        else if (c.status === "repairing") progress(`combined:repairing:${c.round}.${c.cycle}`, "combined_repairing" as Milestone, "combined_repairing", { summary: c.ownerSummary, targets: c.repairTargets });
+        else if (c.status === "review_unavailable" || c.status === "diagnosis_unavailable") progress(`combined:waiting:${c.round}.${c.cycle}`, "combined_review_waiting", "combined_review_waiting", {});
       }
+      const sent = await decideAndNotify(taskId, label, candidates);
       if (c.status === "accepted") markInline(taskId, "terminal");
       return sent;
     }
     if (TERMINAL.has(s.status)) {
       const answered = s.status === "accepted" && s.mode === "read_only";
       const kind: Milestone = answered ? "answered" : s.status === "accepted" ? "completed" : s.taskState === "cancelled" ? "cancelled" : "blocked";
-      sent += await progress(taskId, "terminal", kind, kind as ProgressEvent, label, { answer: s.answer ?? null, prNumber: s.prNumber, ...(kind === "blocked" && s.taskState !== "failed" ? { paused: true } : {}) });
+      // The answer / result summary is the Manager reviewer's own text; the template only frames trusted facts.
+      const summary = kind === "completed" ? usableManagerText(s.resultSummary, lang, 600) : null;
+      const voice: OwnerVoice | undefined = kind === "answered" ? (s.answer ? "manager" : "fallback") : kind === "completed" ? (summary ? "manager" : "fallback") : undefined;
+      const paused = kind === "blocked" && s.taskState !== "failed";
+      const stopped = kind === "blocked" ? await managerNoticeText(`ms:${taskId}:terminal`, taskId, label, lang, s.status) : null;
+      if (stopped) candidates.push({ key: "terminal", kind, voice: "manager", detail: `${stopped}\n${stoppedTaskFacts(lang, paused)}` });
+      else progress("terminal", kind, kind as ProgressEvent, { answer: s.answer ?? null, prNumber: s.prNumber, summary, ...(paused ? { paused: true } : {}) }, voice);
     }
-    return sent;
+    return decideAndNotify(taskId, label, candidates);
   }
 
-  /** Task-received acknowledgement in the owner's language, conclusion first. */
-  function ack(s: GatewayTaskStatus, label: string, intent: string | null, related: { taskId: string; area: "programming" | "visual" }[] | null, lang: OwnerLanguage): string {
+  /**
+   * The Manager's own message for a stopped task: composed once per terminal transition from trusted
+   * state and stored durably, so a failed send, a replay or a restart never asks again or degrades to a
+   * template. Null (Manager unavailable / unusable output): the caller's declared fallback is used.
+   */
+  async function managerNoticeText(noticeId: string, taskId: string, label: string | undefined, lang: OwnerLanguage, status: string): Promise<string | null> {
+    const stored = deps.ledger.managerText(noticeId);
+    if (stored) return stored.text;
+    try {
+      const r = await deps.gateway.composeOwnerNotice(call({ taskId, label: ownerLabelOf(taskId, label), lang }));
+      const text = r.basis.status === status ? usableManagerText(r.text, lang, 1_200) : null;
+      if (!text) return null;
+      deps.ledger.recordManagerText({ noticeId, text, status });
+      return text;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Task-received acknowledgement: the GPT Manager's own reply from its interpretation turn plus trusted
+   * facts; the deterministic template only when the Manager wrote nothing usable (or is unavailable).
+   */
+  function ack(
+    s: GatewayTaskStatus,
+    label: string,
+    intent: string | null,
+    related: { taskId: string; area: "programming" | "visual" }[] | null,
+    lang: OwnerLanguage,
+    managerReply: string | null = null,
+    alreadyQueued = false,
+  ): { message: string; voice: OwnerVoice } {
     const workers: WorkerKind[] = related ? related.map((p) => (p.area === "visual" ? "codex" : "claude")) : s.assignedWorker ? [s.assignedWorker] : [];
-    return taskReceivedMessage({
+    const input = {
+      alreadyQueued,
       lang,
       label,
       mode: s.mode,
@@ -499,7 +591,11 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
       workers,
       mixed: Boolean(related && related.length > 1),
       needsStartApproval: s.status === "needs_human_approval",
-    });
+    };
+    const reply = usableManagerText(managerReply, lang, 600);
+    if (reply) return { message: managerTaskReceivedMessage(reply, input), voice: "manager" };
+    log({ event: "owner_voice_fallback", outcome: "task_acknowledgement" });
+    return { message: taskReceivedMessage(input), voice: "fallback" };
   }
 
   /** Submits owner guidance to one open escalation (server-side binding re-read; replay-safe by idempotency key). */
@@ -615,9 +711,12 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
    * finish) gets ONE integrated answer composed from trusted state — no separate status card.
    * Read-only: never creates or changes a task.
    */
-  async function followUp(taskId: string, lang: OwnerLanguage, topics: readonly FollowUpTopic[] | undefined): Promise<InboundResult> {
+  async function followUp(taskId: string, lang: OwnerLanguage, topics: readonly FollowUpTopic[] | undefined, managed: Managed = null): Promise<InboundResult> {
     deps.ledger.setFocus(taskId);
-    if (isPureStatusQuestion(topics) && topics !== undefined) return service.taskStatus(taskId);
+    const answer = await managerFollowUp(taskId, lang, topics, managed);
+    if (answer) return answer;
+    log({ event: "owner_voice_fallback", outcome: "task_follow_up" });
+    if (isPureStatusQuestion(topics) && topics !== undefined) return { ...(await service.taskStatus(taskId)), voice: "fallback" };
     let s: GatewayTaskStatus;
     try {
       s = await status(taskId);
@@ -627,7 +726,7 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
     const label = ownerLabelOf(taskId, labels().get(taskId));
     // Interpretations stored before topics existed: the earlier behaviour (a finished task leads with its outcome).
     const asked: readonly FollowUpTopic[] = topics ?? (s.status === "accepted" || s.status === "blocked" ? ["result", "reason"] : ["status"]);
-    if (isPureStatusQuestion(asked)) return service.taskStatus(taskId);
+    if (isPureStatusQuestion(asked)) return { ...(await service.taskStatus(taskId)), voice: "fallback" };
     const needsAssessment = asked.includes("remediation") || asked.includes("retry_eligibility");
     const assessment = needsAssessment ? await deps.gateway.getRetryEligibility(call({ taskId })).catch(() => null) : null;
     const message = composeFollowUp({
@@ -640,7 +739,31 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
       lang,
     });
     log({ event: "human_task_follow_up_answered", outcome: asked.join("+") });
-    return { outcome: "info", taskId, message };
+    return { outcome: "info", taskId, message, voice: "fallback", ...(assessment && asked.includes("retry_eligibility") ? { retryEligibility: assessment.eligibility } : {}) };
+  }
+
+  /**
+   * The GPT Manager's own answer from its interpretation turn, grounded in the trusted state it was
+   * given. Used only while that state still holds (same status / re-run verdict); deterministic code
+   * adds just the structured re-run verdict as a trusted fact. Null: the caller uses its fallback.
+   */
+  async function managerFollowUp(taskId: string, lang: OwnerLanguage, topics: readonly FollowUpTopic[] | undefined, managed: Managed): Promise<InboundResult | null> {
+    const reply = managed && managed.basis?.taskId === taskId ? usableManagerText(managed.reply, lang, 1_200) : null;
+    if (!reply || !managed?.basis) return null;
+    const s = await status(taskId).catch(() => null);
+    if (!s || s.status !== managed.basis.status) return null;
+    const asksRetry = Boolean(topics?.includes("retry_eligibility") || topics?.includes("remediation"));
+    const assessment = asksRetry ? await deps.gateway.getRetryEligibility(call({ taskId })).catch(() => null) : null;
+    if (asksRetry && (!assessment || assessment.eligibility.kind !== managed.basis.retryKind)) return null;
+    const verdict = assessment && topics?.includes("retry_eligibility") ? L(lang, `（系統判定：${eligibilityVerdict(assessment, lang)}）`, `(System verdict: ${eligibilityVerdict(assessment, lang)})`) : null;
+    log({ event: "human_task_follow_up_answered", outcome: `manager:${(topics ?? []).join("+") || "status"}` });
+    return {
+      outcome: "info",
+      taskId,
+      voice: "manager",
+      message: [reply, verdict].filter(Boolean).join("\n"),
+      ...(assessment && topics?.includes("retry_eligibility") ? { retryEligibility: assessment.eligibility } : {}),
+    };
   }
 
   /**
@@ -648,8 +771,10 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
    * eligibility deterministically and, when allowed, creates a NEW task with the original goal and
    * lineage; the stopped task never changes. A refusal creates nothing and says why.
    */
-  async function retry(key: string, interpretationId: string, taskId: string, lang: OwnerLanguage): Promise<InboundResult> {
+  async function retry(key: string, interpretationId: string, taskId: string, lang: OwnerLanguage, managed: Managed = null): Promise<InboundResult> {
     const label = ownerLabelOf(taskId, labels().get(taskId));
+    // The Manager's reply stands only when the gate decided on the same verdict the Manager was shown.
+    const reply = managed?.basis?.taskId === taskId ? usableManagerText(managed.reply, lang, 1_200) : null;
     try {
       const r = await deps.gateway.retryTask(call({ interpretationId }));
       if (r.result === "refused") {
@@ -657,7 +782,12 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
         const e = r.assessment.eligibility;
         deps.ledger.setFocus(e.kind === "retry_in_progress" ? e.retryTaskId : taskId);
         log({ event: "human_retry_refused", outcome: e.kind });
+        if (reply && managed?.basis?.retryKind === e.kind)
+          return { outcome: "info", taskId, voice: "manager", retryEligibility: e, message: `${reply}\n${L(lang, "（這次沒有建立任何新任務。）", "(No new task was created.)")}` };
+        log({ event: "owner_voice_fallback", outcome: "retry_refused" });
         return {
+          voice: "fallback",
+          retryEligibility: e,
           outcome: "info",
           taskId,
           message: retryRefusedMessage(r.assessment, {
@@ -674,9 +804,18 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
       deps.ledger.setFocus(r.taskId);
       if (r.duplicate) return remember(key, { outcome: "duplicate", taskId: r.taskId, message: L(lang, "這個重新執行的要求已經處理過了，不會重複建立任務。", "This re-run was already started; no duplicate task was created.") });
       log({ event: "human_retry_created", outcome: r.status.status });
+      if (reply && managed?.basis?.retryKind === "allowed")
+        return remember(key, {
+          outcome: "submitted",
+          taskId: r.taskId,
+          voice: "manager",
+          message: `${reply}\n${L(lang, `新任務：「${label}」（沿用原本的需求，從最新程式版本開始，一樣會經過檢查與批准）\n目前進度：${plainPhase(r.status, lang)}`, `New task: "${label}" (original request, latest code, same checks and approvals)\nNow: ${plainPhase(r.status, lang)}`)}`,
+        });
+      log({ event: "owner_voice_fallback", outcome: "retry_created" });
       return remember(key, {
         outcome: "submitted",
         taskId: r.taskId,
+        voice: "fallback",
         message: L(
           lang,
           `好，已依照原本的需求重新建立一筆新任務：「${label}」。原本停止的那筆不會恢復；新任務沿用原本的目標、驗收條件和範圍，從目前最新的程式版本開始，一樣會經過檢查與批准流程。\n目前進度：${plainPhase(r.status, lang)}`,
@@ -704,7 +843,8 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
     const lang = ownerLanguage(text);
     let view: Awaited<ReturnType<HumanInteractionGateway["interpretOwnerMessage"]>>;
     try {
-      view = await deps.gateway.interpretOwnerMessage(call({ idempotencyKey: key, text, contextTaskId, requireTask, ...(priority ? { priority } : {}) }));
+      const told = deps.ledger.transportContext(key);
+      view = await deps.gateway.interpretOwnerMessage(call({ idempotencyKey: key, text, contextTaskId, requireTask, ...(priority ? { priority } : {}), ...(told.length ? { transportContext: told } : {}) }));
     } catch (error) {
       if (error instanceof GatewayError && error.code === "unavailable") return null;
       return remember(key, gatewayOutcome(error, lang));
@@ -738,7 +878,7 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
             for (const p of parts) deps.ledger.track({ taskId: p.taskId, label: oneLine(`${d.title}${p.area === "visual" ? L(lang, "（畫面）", " (visual)") : L(lang, "（程式）", " (programming)")}`, 60) });
           else deps.ledger.track({ taskId: result.taskId, label: oneLine(d.title, 60) });
           if (result.duplicate) return remember(key, { outcome: "duplicate", taskId: result.taskId, message: L(lang, "這個需求已經交辦過了，不會重複建立任務。", `This request was already submitted as task ${result.taskId}.`) });
-          return remember(key, { outcome: "submitted", taskId: result.taskId, message: ack(result.status, oneLine(d.title, 60), d.intent, parts, lang) });
+          return remember(key, { outcome: "submitted", taskId: result.taskId, ...ack(result.status, oneLine(d.title, 60), d.intent, parts, lang, d.ownerReply ?? null, deps.ledger.transportContext(key).length > 0) });
         } catch (error) {
           if (error instanceof GatewayError && error.code === "invalid_request")
             return remember(key, {
@@ -756,11 +896,11 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
       case "status_query":
         return service.listTasks();
       case "task_follow_up":
-        return d.taskId ? followUp(d.taskId, lang, d.topics) : service.listTasks();
+        return d.taskId ? followUp(d.taskId, lang, d.topics, { reply: d.ownerReply ?? null, basis: d.replyBasis ?? null }) : service.listTasks();
       case "retry_task":
         if (!d.taskId)
           return { outcome: "needs_selection", message: L(lang, "你要重新執行哪一筆任務？可以回覆那筆任務的訊息，或直接說是哪個需求。沒有做任何變更。", "Which task should be re-run? Reply to its message or tell me which request. Nothing was changed.") };
-        return retry(key, view.interpretationId, d.taskId, lang);
+        return retry(key, view.interpretationId, d.taskId, lang, { reply: d.ownerReply ?? null, basis: d.replyBasis ?? null });
       case "cancel_or_pause":
         if (!d.taskId) return { outcome: "needs_selection", message: L(lang, "要停止哪一個任務？請回覆該任務的訊息並輸入 /cancel，或傳 /cancel <任務編號>。沒有做任何變更。", "Which task should stop? Reply /cancel to its message or send /cancel <task>. Nothing was changed.") };
         return service.requestCancel({ kind: "cancel_request", idempotencyKey: key, target: { taskReference: d.taskId } });
@@ -785,8 +925,17 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
         try {
           const pending = await openEscalation(taskId);
           if (pending) {
-            const mode = await status(taskId).then((s) => s.mode).catch(() => "change" as const);
-            if (await notify(decisionNotice(pending, names.get(taskId), { mode }), pending.escalationId)) {
+            const s = await status(taskId).catch(() => null);
+            const notice = decisionNotice(pending, names.get(taskId), { mode: s?.mode ?? "change" });
+            // No Manager question in the diagnosis: the Manager's own escalation text (composed once, durable).
+            if (!pending.ownerDecision && s && !deps.ledger.byNotice(notice.noticeId)?.deliveryRef) {
+              const text = await managerNoticeText(notice.noticeId, taskId, names.get(taskId), notice.lang ?? "zh", s.status);
+              if (text) {
+                notice.plain = { ...notice.plain, headline: text, tried: "", blocker: "", recommendation: "" };
+                notice.voice = "manager";
+              }
+            }
+            if (await notify(notice, pending.escalationId)) {
               delivered++;
               deps.ledger.track({ taskId, label: names.get(taskId) ?? "" });
             }
@@ -796,7 +945,8 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
         }
         try {
           const approval = await currentApproval(taskId);
-          const notice = approval ? (approvalNotice(approval, names.get(taskId)) ?? startApprovalNotice(approval, names.get(taskId))) : null;
+          const summary = approval?.kind === "commit_publish" ? await status(taskId).then((s) => s.resultSummary ?? null).catch(() => null) : null;
+          const notice = approval ? (approvalNotice(approval, names.get(taskId), summary) ?? startApprovalNotice(approval, names.get(taskId))) : null;
           if (approval && notice && (await notify(notice, approval.approvalRequestId))) {
             delivered++;
             deps.ledger.track({ taskId, label: names.get(taskId) ?? "" });
@@ -821,6 +971,8 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
       const lang = ownerLanguage(goal.text);
       const dup = duplicateOf(goal.idempotencyKey, lang);
       if (dup) return dup;
+      // What the transport already told the owner becomes durable Manager context for this message.
+      if (goal.transportContext?.length) deps.ledger.recordTransportContext({ idempotencyKey: goal.idempotencyKey, statuses: goal.transportContext });
       const normalized = normalizeGoal(goal.text);
       if (!normalized.ok) {
         log({ event: "human_goal_rejected", outcome: normalized.code });
@@ -841,7 +993,8 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
         return remember(goal.idempotencyKey, {
           outcome: "submitted",
           taskId: result.taskId,
-          message: `${ack(result.status, oneLine(normalized.goal, 60), null, null, lang)}\n${L(lang, "（我的理解服務目前無法使用，這個任務只會以自動檢查結果驗收。）", "(The Manager's interpretation service is unavailable; this task is accepted on automatic checks only.)")}`,
+          voice: "fallback",
+          message: `${ack(result.status, oneLine(normalized.goal, 60), null, null, lang, null, deps.ledger.transportContext(goal.idempotencyKey).length > 0).message}\n${L(lang, "（我的理解服務目前無法使用，這個任務只會以自動檢查結果驗收。）", "(The Manager's interpretation service is unavailable; this task is accepted on automatic checks only.)")}`,
         });
       } catch (error) {
         if (error instanceof GatewayError && error.code === "invalid_request" && /clarification/.test(error.message))
@@ -854,6 +1007,7 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
       const lang = ownerLanguage(reply.text);
       const dup = duplicateOf(reply.idempotencyKey, lang);
       if (dup) return dup;
+      if (reply.transportContext?.length) deps.ledger.recordTransportContext({ idempotencyKey: reply.idempotencyKey, statuses: reply.transportContext });
       // 「任務：」/「任務:」 is the only free-text way to create a formal task; the prefix is removed first.
       const command = parseTaskCommand(reply.text);
       if (command.kind === "empty") return remember(reply.idempotencyKey, { outcome: "invalid", message: TASK_PREFIX_USAGE });
@@ -882,8 +1036,10 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
       if (routed) return routed;
       if (pending.length === 1) return submitGuidance(reply.idempotencyKey, pending[0], screened.goal, lang);
       if (pending.length > 1) return whichDecision(pending, lang);
+      log({ event: "owner_voice_fallback", outcome: "manager_unavailable" });
       return {
         outcome: "info",
+        voice: "fallback",
         message: L(
           lang,
           "我的理解服務暫時無法使用，所以現在沒辦法解讀一般文字，沒有做任何變更。可以用「任務：…」下達正式任務，或用 /tasks、/status <任務>。",
@@ -921,6 +1077,7 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
         noticeId,
         ref: noticeRef(noticeId),
         taskId,
+        voice: "safety_binding",
         taskLabel: taskLabel(taskId, label),
         lang,
         ownerLabel: ownerLabelOf(taskId, label),

@@ -8,7 +8,18 @@
  * HEAD, approval binding and authority are always resolved server-side.
  */
 import type { RiskLevel } from "../domain/types";
+import type { RetryEligibility } from "../gateway/retry";
+import type { TransportStatusContext } from "../planning/types";
 import type { OwnerLanguage, PlainDecision } from "../executive/communication";
+
+/**
+ * Who authored the Owner-visible wording (single human-facing voice):
+ * - manager: the GPT Manager's own text from an existing reasoning turn (semantic content);
+ * - system_status: fixed operational status (quota/availability/service waits, PR opened, cancelled);
+ * - safety_binding: deterministic approval/cancel contract text (authority must never be paraphrased);
+ * - fallback: deterministic template used ONLY because the Manager produced no usable text.
+ */
+export type OwnerVoice = "manager" | "system_status" | "safety_binding" | "fallback";
 
 interface NoticeBase {
   /** Stable dedupe identity (one notice per escalation / approval request / milestone). */
@@ -22,6 +33,8 @@ interface NoticeBase {
   lang?: OwnerLanguage;
   /** Plain task name for the owner (their own goal words); never ids or bindings. */
   ownerLabel?: string;
+  /** Author of the wording (audited with the send intent). */
+  voice?: OwnerVoice;
 }
 
 export interface HumanDecisionNotice extends NoticeBase {
@@ -47,6 +60,8 @@ export interface CommitApprovalNotice extends NoticeBase {
   kind: "commit_publish_approval";
   approvalRequestId: string;
   taskLabel: string;
+  /** The Manager reviewer's own explanation of the result (absent: fallback wording only). */
+  managerSummary?: string;
   branch: string;
   filesChanged: string[];
   validationsPassed: string[];
@@ -135,6 +150,7 @@ export interface NoticeRecord {
   targetId: string;
   deliveryRef: string | null;
   createdAt: string;
+  voice?: OwnerVoice;
 }
 
 /** Durable dedupe/correlation state. Implementations must survive restart. */
@@ -167,6 +183,8 @@ export interface InboundReply {
   /** Fallback correlation: the "Ref:" of one of our own notices (resolved through the ledger). */
   replyToNoticeRef?: string | null;
   text: string;
+  /** Transport statuses the owner already received for this message (Manager context only). */
+  transportContext?: TransportStatusContext[];
 }
 
 /** New task goal. Only user intent: text and an optional requested priority. */
@@ -175,6 +193,8 @@ export interface InboundGoal {
   idempotencyKey: string;
   text: string;
   priority?: "critical" | "high" | "normal" | "low";
+  /** Transport statuses the owner already received for this message (Manager context only). */
+  transportContext?: TransportStatusContext[];
 }
 
 export type ActionKind = "approve" | "reject" | "cancel_request" | "cancel_confirm" | "cancel_keep";
@@ -215,4 +235,8 @@ export interface InboundResult {
   /** Safe, human-readable status for the transport to show; empty when a notice already answered. */
   message: string;
   taskId?: string;
+  /** Author of the wording; absent for plain system replies (help, usage, lists). */
+  voice?: OwnerVoice;
+  /** Deterministic re-run verdict when the owner asked about re-running (structured; never from the model). */
+  retryEligibility?: RetryEligibility;
 }

@@ -125,3 +125,40 @@ export function assessRetry(input: {
   const caution = failureClass === null ? "unknown_cause" : failureClass === "scope" || failureClass === "budget" ? "may_repeat" : "none";
   return { ...base, eligibility: { kind: "allowed", rerun: false, caution } };
 }
+
+/** Fixed plain-English fact per trusted stop class (input to the Manager; never shown raw to the owner). */
+const STOP_FACT: Record<FailureClass, string> = {
+  git_safety: "the system detected an unexpected Git state change while the engineer was working and stopped automatically for safety; the engineer's changes were not accepted",
+  workspace_safety: "the workspace's Git state did not meet the safety requirements, so the system stopped and accepted no changes",
+  scope: "the engineer's changes went beyond what this task allowed, so the system stopped and accepted no changes",
+  quota: "the engineer ran out of usage quota and could not continue",
+  auth: "the engineer's sign-in was no longer valid, so it could not continue",
+  runtime: "the engineer's work environment was unavailable, so the task could not continue",
+  timeout: "the engineer ran past the time limit without finishing",
+  worker_error: "the engineer hit an error and produced no result that could be trusted",
+  budget: "the allowed attempts were used up without an acceptable result",
+  cancelled: "the task was cancelled",
+  approval_rejected: "an approval request was rejected",
+  publish: "the change was made, but submitting or publishing it to GitHub failed",
+  persistence: "the system failed to save the task state and stopped for safety",
+};
+
+export function stopReasonFact(cls: FailureClass | null): string | null {
+  return cls ? STOP_FACT[cls] : null;
+}
+
+/** Plain-English description of the deterministic re-run verdict (input to the Manager). */
+export function retryFact(e: RetryEligibility): string {
+  switch (e.kind) {
+    case "allowed":
+      return `a re-run is allowed now: it would create a NEW task from the original request, starting from the latest code${e.rerun ? " (the original had completed)" : ""}${e.caution === "may_repeat" ? "; the same approach may fail again unless the owner gives a direction" : e.caution === "recovery_unverified" ? "; the system cannot confirm the cause is fixed" : e.caution === "unknown_cause" ? "; the cause is unknown, so it may happen again" : ""}`;
+    case "in_progress":
+      return `no re-run is needed: the task has not ended and is waiting for ${e.waiting === "decision" ? "the owner's direction" : e.waiting === "approval" ? "the owner's approval" : e.waiting === "availability" ? "the engineer to become available again" : "the engineer to finish"}`;
+    case "retry_in_progress":
+      return "a re-run of this task is already in progress; no second one will be started";
+    case "wait_recovery":
+      return `a re-run is not possible yet: the engineer's ${e.cause === "quota" ? "usage quota" : e.cause === "auth" ? "sign-in" : "work environment"} has not recovered${e.resetAt ? ` (recorded reset time ${e.resetAt})` : ""}`;
+    case "not_supported":
+      return "this task is one part of a split request and cannot be re-run alone; the whole request would have to be sent again";
+  }
+}

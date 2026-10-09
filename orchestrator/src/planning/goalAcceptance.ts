@@ -210,6 +210,9 @@ export async function semanticAcceptance(input: SemanticAcceptanceInput): Promis
           // (infrastructure, like an outage): no verdict, no Worker re-run, no repair cycle.
           ownerAnswer = normalizeOwnerAnswer(raw);
           if (!ownerAnswer) throw new Error("review output has no owner answer");
+        } else if (input.goal.mode !== "read_only" && reviews.every((r) => r.status === "satisfied")) {
+          // Change work: the Manager's result summary for the owner (optional; a template is the fallback).
+          ownerAnswer = normalizeOwnerAnswer(raw);
         }
       } catch {
         reviews = unavailable("goal review failed or timed out");

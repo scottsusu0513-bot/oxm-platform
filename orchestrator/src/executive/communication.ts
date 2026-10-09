@@ -39,7 +39,9 @@ export function formatResetTime(resetAt: string | null, lang: OwnerLanguage): st
 // ---------------------------------------------------------------------------
 // Task received
 
-export function taskReceivedMessage(input: {
+export interface TaskReceivedInput {
+  /** The transport already told the owner this message was queued (recorded context): no second receipt. */
+  alreadyQueued?: boolean;
   lang: OwnerLanguage;
   label: string;
   mode: TaskMode;
@@ -47,7 +49,10 @@ export function taskReceivedMessage(input: {
   workers: readonly WorkerKind[];
   mixed: boolean;
   needsStartApproval: boolean;
-}): string {
+}
+
+/** Deterministic fallback acknowledgement (Manager unavailable or its reply unusable). */
+export function taskReceivedMessage(input: TaskReceivedInput): string {
   const zh = input.lang === "zh";
   const lines: string[] = [];
   if (input.mode === "read_only") {
@@ -63,11 +68,68 @@ export function taskReceivedMessage(input: {
     const what = input.workers[0] === "codex" ? (zh ? "畫面設計" : "the visual design") : zh ? "程式修改" : "the code change";
     lines.push(zh ? `收到，我會交給 ${who} 處理${what}，完成後我先檢查結果。` : `Got it. ${who} will handle ${what}; I will check the result first.`);
   }
+  if (input.alreadyQueued) lines[0] = lines[0].replace(/^收到[，。]\s*/, "").replace(/^Got it\.\s*/, "");
   if (input.label) lines.push(zh ? `任務：${input.label}` : `Task: ${input.label}`);
-  if (input.needsStartApproval) lines.push(zh ? "這個任務風險較高，開始執行前我會先請你批准。" : "This task is high-risk, so I will ask for your approval before starting.");
-  else if (input.mode !== "read_only")
-    lines.push(zh ? "過程中只有需要你決定、或最後要發布時才會打擾你。" : "I will only interrupt you for a decision or the final publish approval.");
+  lines.push(...policyLines(input));
   return lines.join("\n");
+}
+
+/** Trusted facts appended to the Manager's own message about a stopped task (never Manager-authored). */
+export function stoppedTaskFacts(lang: OwnerLanguage, paused: boolean): string {
+  return lang === "zh"
+    ? paused
+      ? "（任務已暫停，沒有再做任何修改或發布。）"
+      : "（沒有再做任何修改或發布。）"
+    : paused
+      ? "(The task is paused; nothing further was changed or published.)"
+      : "(Nothing further was changed or published.)";
+}
+
+/** Trusted policy facts (approval gate / interruption policy); never written by the Manager. */
+function policyLines(input: TaskReceivedInput): string[] {
+  const zh = input.lang === "zh";
+  if (input.needsStartApproval) return [zh ? "這個任務風險較高，開始執行前我會先請你批准。" : "This task is high-risk, so I will ask for your approval before starting."];
+  if (input.mode !== "read_only") return [zh ? "過程中只有需要你決定、或最後要發布時才會打擾你。" : "I will only interrupt you for a decision or the final publish approval."];
+  return [];
+}
+
+/**
+ * Manager-voiced acknowledgement: the GPT Manager's own reply (semantic content) followed only by
+ * trusted facts the system knows for certain (task name, assigned engineers, read-only, approval gate).
+ */
+export function managerTaskReceivedMessage(reply: string, input: TaskReceivedInput): string {
+  const zh = input.lang === "zh";
+  const lines = [reply];
+  if (input.label) lines.push(zh ? `任務：${input.label}` : `Task: ${input.label}`);
+  if (input.mode === "read_only") lines.push(zh ? "（唯讀：不會修改任何檔案）" : "(Read-only: no file will be changed.)");
+  else if (input.mixed) lines.push(zh ? "負責：Claude（程式）、Codex（畫面設計）" : "Assigned: Claude (programming), Codex (visual design)");
+  else if (input.workers[0]) {
+    const w = input.workers[0];
+    lines.push(zh ? `負責：${WORKER_NAME[w]}（${w === "codex" ? "畫面設計" : "程式"}）` : `Assigned: ${WORKER_NAME[w]} (${w === "codex" ? "visual design" : "programming"})`);
+  }
+  lines.push(...policyLines(input));
+  return lines.join("\n");
+}
+
+/**
+ * Manager-written owner text, or null when it cannot be shown as-is: missing, not in the owner's
+ * language, or carrying internal jargon. Null means the deterministic fallback is used instead.
+ */
+const BARE_RECEIPT = /^(?:收到了?|好的|了解|沒問題|got it|received|ok(?:ay)?)\s*[，,。.!！:：]\s*(?=\S)/i;
+
+export function usableManagerText(text: string | null | undefined, lang: OwnerLanguage, max = 1_200): string | null {
+  if (typeof text !== "string") return null;
+  // A bare receipt adds nothing (the owner may already have a transport "queued" status): start with the substance.
+  const t = text
+    .replace(/\r\n?/g, "\n")
+    .replace(/[\u0000-\u0009\u000b-\u001f\u007f]+/g, " ")
+    .trim()
+    .replace(BARE_RECEIPT, "")
+    .trim();
+  if (!t || t.length > max) return null;
+  if (lang === "zh" && !/[\u3400-\u9fff]/.test(t)) return null;
+  if (findInternalJargon(t).length > 0) return null;
+  return t;
 }
 
 // ---------------------------------------------------------------------------
@@ -160,7 +222,8 @@ export function decisionContent(input: { lang: OwnerLanguage; label: string; mod
 }
 
 export function decisionMessage(d: PlainDecision): string {
-  return [d.headline, d.tried, d.blocker, d.recommendation, "", d.ask].join("\n");
+  // The ask (how to answer; guidance is not approval) is the fixed binding; empty parts are left out.
+  return [...[d.headline, d.tried, d.blocker, d.recommendation].filter((part) => part !== ""), "", d.ask].join("\n");
 }
 
 /**
@@ -426,6 +489,11 @@ export function progressMessage(
         ? `查到了。\n\n${input.answer ?? "（沒有記錄到答案）"}\n\n這次沒有修改任何檔案，答案已對照實際程式碼確認。`
         : `Here is the answer.\n\n${input.answer ?? "(no answer recorded)"}\n\nNo file was changed; I checked the answer against the actual source.`;
     case "completed":
+      // Manager summary first; then only trusted facts (PR checks, merge/deploy stay with the owner).
+      if (input.summary)
+        return zh
+          ? `${input.summary}\n${input.prNumber ? `PR #${input.prNumber} 已通過自動檢查。` : ""}要不要合併、部署由你決定。`
+          : `${input.summary}\n${input.prNumber ? `PR #${input.prNumber} passed the checks. ` : ""}Merging and deploying are up to you.`;
       return zh
         ? `已完成${input.prNumber ? `，PR #${input.prNumber} 已通過自動檢查` : ""}。要不要合併、部署由你決定。`
         : `Done${input.prNumber ? `; PR #${input.prNumber} passed the checks` : ""}. Merging and deploying are up to you.`;

@@ -162,7 +162,7 @@ describe("Telegram webhook intake", () => {
     await g.elapse(120_000);
     expect(g.store.rows()).toEqual([]);
     const expired = g.notices.filter((n) => n.includes("超過 7 天"));
-    expect(expired).toEqual(["⚠️ 有 1 則訊息排隊超過 7 天仍未被 OXM Agent 處理，已丟棄。"]);
+    expect(expired).toEqual(["［連線狀態］有 1 則訊息排隊超過 7 天未被處理，已丟棄。"]);
     expect(g.notices.join("\n")).not.toContain("SECRET-CONTENT");
   });
 });

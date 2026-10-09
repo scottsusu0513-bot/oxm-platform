@@ -44,6 +44,7 @@ export function normalizeIntentDecision(raw: unknown, input: { knownTaskIds: rea
       ...(areas ? { workAreas: { programming: areas.programming === true, visual: areas.visual === true } } : {}),
       programmingObjective: part(r.programmingObjective),
       visualObjective: part(r.visualObjective),
+      ownerReply: text(r.ownerReply, 600),
     };
   }
   if (input.requireTask) return { kind: "clarify", question: "「任務：」/goal creates a new task, but this reads like a question about an existing task. Send it without 「任務：」 or /goal." };
@@ -52,12 +53,17 @@ export function normalizeIntentDecision(raw: unknown, input: { knownTaskIds: rea
   if (kind === "task_follow_up") {
     // Only the fixed topic set survives; order and duplicates are normalized. Unknown topics are dropped.
     // Missing field (older planner output): topics stay unknown and the answer falls back to the task's outcome.
-    if (!Array.isArray(r.followUpTopics)) return { kind, intent: kind, taskId };
+    const reply = text(r.ownerReply, 1_200);
+    const ownerReply = reply ? { ownerReply: reply } : {};
+    if (!Array.isArray(r.followUpTopics)) return { kind, intent: kind, taskId, ...ownerReply };
     const raw = r.followUpTopics as unknown[];
     const topics = FOLLOW_UP_TOPICS.filter((t) => raw.includes(t)) as FollowUpTopic[];
-    return { kind, intent: kind, taskId, topics };
+    return { kind, intent: kind, taskId, topics, ...ownerReply };
   }
-  if (kind === "retry_task") return { kind, intent: kind, taskId };
+  if (kind === "retry_task") {
+    const reply = text(r.ownerReply, 1_200);
+    return { kind, intent: kind, taskId, ...(reply ? { ownerReply: reply } : {}) };
+  }
   return { kind, intent: kind, taskId };
 }
 

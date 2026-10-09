@@ -106,14 +106,14 @@ describe("GPT Manager worker routing through intake", () => {
 });
 
 describe("Executive Telegram progress and quota messages", () => {
-  it("lifecycle milestone: handed to Claude (once, no spam)", async () => {
+  it("lifecycle: the acknowledgement names the engineer; the worker start itself is silent (audited, not sent)", async () => {
     const x = setup(plannerFor({ programming: true, visual: false }, {}, ["Only permitted users get access"], CODE, "登入權限"), { holdWorkers: true });
-    await x.say("tg.msg.10", "修正登入權限檢查的 bug");
+    const r = await x.say("tg.msg.10", "修正登入權限檢查的 bug");
+    expect(r.message).toContain("Claude");
     await x.service.observe();
     await x.service.observe();
-    const assigned = x.milestones().filter((m) => m.milestone === "worker_assigned");
-    expect(assigned).toHaveLength(1);
-    expect(formatNotice(assigned[0])).toBe("【登入權限】\n已交給 Claude 處理程式部分。");
+    expect(x.milestones()).toEqual([]);
+    expect(x.ledger.suppressed("ms:x-task-1:worker:claude")).toMatchObject({ event: "worker_assigned", reason: "no_owner_value:worker_assigned" });
     x.sim.releaseWorker("x-task-1");
     await x.sim.loop.settle();
   });

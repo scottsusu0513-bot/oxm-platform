@@ -67,8 +67,23 @@ export function projectUpdate(raw: unknown, ownerChatId: number): Projection {
   return { kind: "accepted", updateId, updateKind: "message", update: message };
 }
 
-/** Fixed operational notices; none carries owner content or any Manager answer. */
-export type NoticeKind = "waking" | "wake_failed" | "agent_offline" | "queue_full" | "expired";
+/**
+ * The Gateway is a transport, not a second Agent. The ONLY Owner-visible text it may send is one of
+ * these allowlisted transport_status messages: link/queue state while the Agent is offline. They never
+ * explain or judge a task, never give advice, never contain owner content, and are not a Manager answer
+ * (all task semantics come from the Manager once it is online).
+ */
+export const TRANSPORT_STATUS_KINDS = ["waking", "wake_failed", "agent_offline", "queue_full", "expired"] as const;
+export type TransportStatusKind = (typeof TRANSPORT_STATUS_KINDS)[number];
+/** May be sent while the Agent is online: the overflowing message never reached the Agent, so only the transport knows. */
+export const ONLINE_TRANSPORT_STATUS: ReadonlySet<TransportStatusKind> = new Set<TransportStatusKind>(["queue_full"]);
+
+export interface TransportStatus {
+  kind: "transport_status";
+  status: TransportStatusKind;
+  text: string;
+}
+
 export type WakeFailureReason =
   | "credential"
   | "billing"
@@ -88,7 +103,7 @@ const FAILURE_TEXT: Record<WakeFailureReason, string> = {
   not_found: "找不到指定的 Codespace（可能已被刪除）",
   repo_mismatch: "Codespace 綁定的 repo 與設定不符",
   terminal_state: "Codespace 目前的狀態無法啟動",
-  rejected: "GitHub 拒絕了啟動請求",
+  rejected: "GitHub 拒絕啟動 Codespace",
   malformed: "GitHub 回應格式異常",
   github_unavailable: "GitHub 暫時無法連線",
   start_timeout: "Codespace 啟動逾時",
@@ -96,33 +111,40 @@ const FAILURE_TEXT: Record<WakeFailureReason, string> = {
   daily_cap: "今天的自動喚醒次數已達上限",
 };
 
-export function noticeText(kind: NoticeKind, detail: { pending?: number; reason?: WakeFailureReason; blocked?: boolean; minutes?: number } = {}): string {
-  switch (kind) {
-    case "waking":
-      return `🔄 OXM Agent 目前離線，正在喚醒 Codespace（排隊中 ${detail.pending ?? 0} 則訊息）。上線後會依序處理，請稍候。`;
-    case "wake_failed":
-      return [
-        `⚠️ 無法喚醒 OXM Agent：${FAILURE_TEXT[detail.reason ?? "rejected"]}。`,
-        "你的訊息仍保留在佇列中。",
-        detail.blocked ? "需要人工檢查設定；在此之前不會再自動嘗試喚醒。" : "稍後再傳一則訊息即可重新嘗試喚醒。",
-      ].join("\n");
-    case "agent_offline":
-      return `⚠️ Codespace 已啟動，但 OXM Agent 在 ${detail.minutes ?? 0} 分鐘內沒有上線。你的訊息仍保留在佇列中；請檢查 Agent 狀態（pnpm orchestrator:telegram:status）。`;
-    case "queue_full":
-      return "⚠️ 待處理佇列已滿，最近的訊息沒有收件。請等 OXM Agent 上線處理後再傳。";
-    case "expired":
-      return `⚠️ 有 ${detail.pending ?? 0} 則訊息排隊超過 7 天仍未被 OXM Agent 處理，已丟棄。`;
-  }
+const PREFIX = "［連線狀態］";
+
+export function transportStatus(status: TransportStatusKind, detail: { pending?: number; reason?: WakeFailureReason; blocked?: boolean; minutes?: number } = {}): TransportStatus {
+  const text = ((): string => {
+    switch (status) {
+      case "waking":
+        return `OXM Agent 目前離線，正在喚醒。訊息已排隊（${detail.pending ?? 0} 則），Agent 上線後會處理。`;
+      case "wake_failed":
+        return `OXM Agent 目前無法喚醒：${FAILURE_TEXT[detail.reason ?? "rejected"]}。訊息仍在佇列中。${detail.blocked ? "自動喚醒已停止。" : ""}`;
+      case "agent_offline":
+        return `Codespace 已啟動，但 OXM Agent 在 ${detail.minutes ?? 0} 分鐘內沒有上線。訊息仍在佇列中。`;
+      case "queue_full":
+        return "訊息佇列已滿，最近的訊息沒有收件。";
+      case "expired":
+        return `有 ${detail.pending ?? 0} 則訊息排隊超過 7 天未被處理，已丟棄。`;
+    }
+  })();
+  return { kind: "transport_status", status, text: `${PREFIX}${text}` };
 }
 
 export interface OwnerNotifier {
-  send(text: string): Promise<boolean>;
+  /** Sends one allowlisted transport_status; anything else is refused. */
+  send(status: TransportStatus): Promise<boolean>;
 }
 
 /** Plain-text sendMessage to the owner only. Errors never carry the token (it is part of the URL). */
 export function createOwnerNotifier(input: { botToken: string; ownerChatId: number; fetch: FetchFn; log: GatewayLog; timeoutMs?: number }): OwnerNotifier {
   return {
-    async send(text) {
+    async send(status) {
+      if (status?.kind !== "transport_status" || !(TRANSPORT_STATUS_KINDS as readonly string[]).includes(status.status)) {
+        input.log("notice_refused");
+        return false;
+      }
+      const text = status.text;
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), input.timeoutMs ?? 10_000);
       try {

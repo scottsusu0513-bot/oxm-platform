@@ -239,6 +239,8 @@ export interface AgentTaskStatus {
   mode: TaskMode;
   /** Manager-accepted answer of a read_only task. */
   answer: string | null;
+  /** Change work: the Manager's result summary for the owner. */
+  resultSummary?: string | null;
   /** Executive view of the Worker assignment (presentation only). */
   workforce?: TaskWorkforceStatus;
   /** Structured technical facts for an explicit owner request (presentation only). */

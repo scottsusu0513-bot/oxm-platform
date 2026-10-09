@@ -134,8 +134,12 @@ describe("Executive presentation boundary (Traditional Chinese owner)", () => {
     const r = await x.say("tg.msg.5", "先不要改 UI，只修 API", false);
     expect(r.outcome).toBe("resumed");
     await x.service.observe();
-    const rejected = x.milestones().find((m) => m.milestone === "guidance_rejected")!;
-    expect(rejected.detail).toBe("我現在暫時無法理解這段指示（理解服務暫時無法使用）。任務會繼續等你決定，請稍後再傳一次。");
+    // The guidance outcome leads the ONE update (the infrastructure wait seen in the same round is merged into it).
+    const after = x.milestones().filter((m) => m.taskId === "y-task-1");
+    expect(after).toHaveLength(1);
+    const rejected = after[0];
+    expect(rejected.milestone).toBe("guidance_rejected");
+    expect(rejected.detail.split("\n")[0]).toBe("我現在暫時無法理解這段指示（理解服務暫時無法使用）。任務會繼續等你決定，請稍後再傳一次。");
     expect(x.sim.audit.some((e) => e.event === "human_decision_rejected" && /manager_unavailable/.test(JSON.stringify(e.metadata)))).toBe(true);
     expect(x.sim.loop.task("y-task-1")!.status).toBe("waiting_infrastructure");
   });

@@ -139,6 +139,7 @@ const created = await createAgentRuntime((runtimeConfig as Extract<typeof runtim
   reviewer,
   manager: planned.manager,
   questionAnswerer: planned.questionAnswerer,
+  noticeComposer: planned.noticeComposer,
   // Operator acknowledgement of specific historical conflicting journal records (comma-separated event ids).
   supersededJournalEvents: (process.env.OXM_AGENT_JOURNAL_SUPERSEDE ?? "").split(",").map((s) => s.trim()).filter(Boolean),
 });

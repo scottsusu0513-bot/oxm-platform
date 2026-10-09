@@ -57,7 +57,11 @@ export interface ProjectedChat {
   id: number;
   type: string;
 }
-export interface ProjectedMessageUpdate {
+/** Transport statuses the owner already received while this update was queued (context for the Manager only). */
+interface TransportContext {
+  oxm_transport_status?: string[];
+}
+export interface ProjectedMessageUpdate extends TransportContext {
   update_id: number;
   message: {
     message_id: number;
@@ -67,7 +71,7 @@ export interface ProjectedMessageUpdate {
     reply_to_message?: { message_id?: number; chat?: Partial<ProjectedChat>; from?: Partial<ProjectedUser>; text?: string };
   };
 }
-export interface ProjectedCallbackUpdate {
+export interface ProjectedCallbackUpdate extends TransportContext {
   update_id: number;
   callback_query: {
     id: string;

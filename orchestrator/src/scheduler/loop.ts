@@ -271,11 +271,13 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
   const groups = new Map<string, GroupReview>();
 
   function persistedRecord(t: TaskRecord): PersistedTaskRecord {
-    // Prose (answers, summaries) is never persisted.
-    const { managerAnswer: _answer, ...trusted } = t.record ?? {};
+    // Worker prose (answers, summaries) is never persisted. The Manager's own owner-facing text is: it is
+    // what the owner is told after a restart, so a restart never degrades the Manager's voice to a template.
+    const { managerAnswer, ...trusted } = t.record ?? {};
     const record = t.record
       ? {
           ...(trusted as TrustedRunRecord),
+          ...(typeof managerAnswer === "string" && managerAnswer ? { managerAnswer: managerAnswer.slice(0, 4_000) } : {}),
           validations: t.record.validations.map(({ summary: _summary, ...v }) => v),
           acceptance: t.record.acceptance.map(({ summary: _summary, ...a }) => a),
         }
@@ -465,6 +467,7 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       mode: modeOf(t),
       // Only the Manager's evidence-filtered synthesis reaches the owner; the Worker's raw report never does.
       answer: modeOf(t) === "read_only" && t.status === "accepted" ? (t.record?.managerAnswer || null) : null,
+      resultSummary: modeOf(t) !== "read_only" ? (t.record?.managerAnswer || null) : null,
       risk: t.risk,
       priority: t.priority,
       state: t.state,

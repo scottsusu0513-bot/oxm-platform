@@ -49,6 +49,8 @@ export interface TelegramCallbackQuery {
 export interface TelegramUpdate {
   update_id: number;
   [key: string]: unknown;
+  /** Wake Gateway only: transport statuses the owner already received while this update was queued (context, never authority). */
+  oxm_transport_status?: unknown;
 }
 
 export interface InlineButton {

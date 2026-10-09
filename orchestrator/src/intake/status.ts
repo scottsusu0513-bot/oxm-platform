@@ -67,6 +67,7 @@ export function buildTaskStatus(input: {
     waitReason: snap?.blockingReason ?? snap?.queueReason ?? null,
     mode: snap?.mode ?? "change",
     answer: snap?.answer ?? null,
+    resultSummary: snap?.resultSummary ?? null,
     ...(snap ? { details: technicalDetails(snap) } : {}),
     ...(snap
       ? {

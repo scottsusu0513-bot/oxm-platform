@@ -131,7 +131,7 @@ function remediation(a: RetryAssessment, lang: OwnerLanguage, w: string, retryPh
   }
 }
 
-function eligibilityVerdict(a: RetryAssessment, lang: OwnerLanguage): string {
+export function eligibilityVerdict(a: RetryAssessment, lang: OwnerLanguage): string {
   const e = a.eligibility;
   switch (e.kind) {
     case "allowed":

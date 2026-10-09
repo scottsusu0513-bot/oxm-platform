@@ -1,19 +1,36 @@
 import type { AuditHumanInteractionLedger, ResponseRecord } from "../humanInteraction/ledger";
 import type { HumanInteractionService } from "../humanInteraction/service";
 import type { HumanInteractionTransport, InboundResult } from "../humanInteraction/types";
-import { TelegramApiError, type TelegramBotClient, type TelegramUpdate } from "./client";
+import { TelegramApiError, type InlineButton, type TelegramBotClient, type TelegramUpdate } from "./client";
 import type { TelegramConfig } from "./config";
 import { formatNotice, GOAL_USAGE, HELP_TEXT, noticeButtons } from "./format";
 import { parseUpdate, type ParsedUpdate } from "./updates";
 
 export const TELEGRAM_CURSOR = "telegram";
 
-/** Outbound Telegram transport: every notice goes to the owner's private chat only. */
+/**
+ * The ONE human-facing exit: every Owner-visible Telegram message (Manager replies and Manager
+ * notices alike) is sent here, and only to the owner's private chat. Nothing else in the
+ * orchestrator calls sendMessage; internal subsystems only produce state for the Manager layer.
+ */
+export interface OwnerDeliveryChannel {
+  send(message: { text: string; replyTo?: number | null; buttons?: InlineButton[][] }, signal?: AbortSignal): Promise<{ messageId: number }>;
+}
+
+export function createOwnerDeliveryChannel(client: TelegramBotClient, ownerChatId: number): OwnerDeliveryChannel {
+  return {
+    send: ({ text, replyTo, buttons }, signal) =>
+      client.sendMessage({ chatId: ownerChatId, text, ...(replyTo != null ? { replyToMessageId: replyTo } : {}), ...(buttons ? { buttons } : {}) }, signal),
+  };
+}
+
+/** Outbound notice transport (Manager notification decisions) over the single Owner channel. */
 export function createTelegramTransport(client: TelegramBotClient, ownerChatId: number): HumanInteractionTransport {
+  const channel = createOwnerDeliveryChannel(client, ownerChatId);
   return {
     async deliver(notice) {
       const buttons = noticeButtons(notice);
-      const sent = await client.sendMessage({ chatId: ownerChatId, text: formatNotice(notice), ...(buttons ? { buttons } : {}) });
+      const sent = await channel.send({ text: formatNotice(notice), ...(buttons ? { buttons } : {}) });
       return { deliveryRef: String(sent.messageId) };
     },
   };
@@ -75,6 +92,7 @@ export function createTelegramControlPlane(deps: TelegramControlPlaneDeps): Tele
   const observeIntervalMs = deps.observeIntervalMs ?? 5_000;
   const backoff = deps.backoff ?? { initialMs: 1_000, maxMs: 60_000 };
   const owner = deps.config.ownerChatId;
+  const channel = createOwnerDeliveryChannel(deps.client, owner);
   const controller = new AbortController();
   let started = false;
   let botId: number | null = null;
@@ -102,7 +120,7 @@ export function createTelegramControlPlane(deps: TelegramControlPlaneDeps): Tele
   /** Sends one recorded response whose delivery is not confirmed yet; durable outcome either way. */
   async function sendRecorded(r: ResponseRecord): Promise<void> {
     try {
-      const sent = await deps.client.sendMessage({ chatId: r.chatId, text: r.text, ...(r.replyTo !== null ? { replyToMessageId: r.replyTo } : {}) }, controller.signal);
+      const sent = await channel.send({ text: r.text, replyTo: r.replyTo }, controller.signal);
       deps.ledger.recordResponseDelivered(r.responseId, String(sent.messageId));
     } catch {
       deps.ledger.recordResponseFailed(r.responseId);
@@ -118,7 +136,7 @@ export function createTelegramControlPlane(deps: TelegramControlPlaneDeps): Tele
   async function respond(responseId: string | null, chatId: number, replyTo: number | null, result: InboundResult) {
     const text = result.message ?? "";
     if (responseId === null) {
-      if (text) await quiet(() => deps.client.sendMessage({ chatId, text, ...(replyTo !== null ? { replyToMessageId: replyTo } : {}) }, controller.signal));
+      if (text) await quiet(() => channel.send({ text, replyTo }, controller.signal));
       return;
     }
     deps.ledger.recordResponseIntent({ responseId, text, chatId, replyTo, createdAt: now() });

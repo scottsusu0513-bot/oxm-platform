@@ -420,7 +420,7 @@ export interface TrustedRunRecord {
   citedFiles?: readonly string[];
   /** GPT reviewer verdicts on semantic owner-constraint checks, by check id. */
   constraintVerdicts?: readonly { id: string; status: "satisfied" | "violated" | "unsupported"; evidence: string }[];
-  /** Read-only work: the Manager's own owner answer from its review (never the Worker's report; never persisted). */
+  /** The Manager reviewer's own owner text (read-only answer / change-task result summary); never the Worker's report. Persisted in the checkpoint. */
   managerAnswer?: string | null;
   /** Per-constraint verification attached by the Manager Loop (trusted + semantic). */
   ownerConstraints?: readonly ConstraintVerdict[];
@@ -668,6 +668,8 @@ export interface TaskSnapshot {
   mode: TaskMode;
   /** Accepted answer of a read_only task (Worker report judged by the Manager's reviewer); null otherwise. */
   answer: string | null;
+  /** Change work: the Manager reviewer's own result summary for the owner (in memory only; absent after restart). */
+  resultSummary?: string | null;
   /** A finished run is waiting for the goal reviewer (infrastructure), with this many retries used. */
   pendingReview: boolean;
   reviewRetries: number;

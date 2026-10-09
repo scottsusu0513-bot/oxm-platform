@@ -12,7 +12,7 @@ describe("Codespace wake", () => {
     expect(g.store.alarm()).toBe(g.now()); // wake is scheduled, not done inside the webhook response
     await g.runDueAlarms();
     expect(g.gh.calls.map((c) => `${c.method} ${c.path}`)).toEqual([`GET ${STATUS_PATH}`, `POST ${START_PATH}`]);
-    expect(g.notices).toEqual(["🔄 OXM Agent 目前離線，正在喚醒 Codespace（排隊中 1 則訊息）。上線後會依序處理，請稍候。"]);
+    expect(g.notices).toEqual(["［連線狀態］OXM Agent 目前離線，正在喚醒。訊息已排隊（1 則），Agent 上線後會處理。"]);
     expect(g.queue).toBeDefined();
     // Codespace boots, the Agent comes online and confirms the update: the cycle ends quietly.
     g.gh.state = "Available";
@@ -136,7 +136,7 @@ describe("Codespace wake", () => {
     await g.elapse(60_000, 1_000);
     expect(g.gh.starts()).toBe(0);
     expect(g.notices.at(-1)).toContain("GitHub 暫時無法連線");
-    expect(g.notices.at(-1)).toContain("稍後再傳一則訊息");
+    expect(g.notices.at(-1)).not.toContain("自動喚醒已停止"); // not blocked
     await g.elapse(11 * 60_000);
     await g.webhook(ownerText("/goal y", { updateId: 61 }));
     await g.runDueAlarms();
@@ -155,7 +155,7 @@ describe("Codespace wake", () => {
       await g.elapse(30 * 60_000);
       expect(g.gh.starts()).toBe(0);
       expect(g.notices.at(-1)).toContain(text);
-      expect(g.notices.at(-1)).toContain("需要人工檢查設定");
+      expect(g.notices.at(-1)).toContain("自動喚醒已停止");
     }
   });
 

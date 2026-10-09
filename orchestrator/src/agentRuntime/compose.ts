@@ -37,7 +37,7 @@ import { describeIssues, reconcileRuntimeState } from "./reconcile";
 import { resolveRepoRoot } from "./repoRoot";
 import { createCommitRangeDiff, createRepoFileReader, createRepoSearch, createWorkingTreeDiff } from "./reviewEvidence";
 import { createManagerReasoningPort, type ManagerReasoningBackends } from "./managerPort";
-import type { GoalReviewer, IntentPlanner } from "../planning/types";
+import type { GoalReviewer, IntentPlanner, OwnerNoticeComposer } from "../planning/types";
 import { createReadOnlyInspector, type OwnerQuestionAnswerer } from "../planning/ownerQuestion";
 import { createInMemoryInterpretationRepository, INTERPRETATION_REPLAY_DUPLICATE_POLICY } from "../gateway/fake";
 import { createTrustedValidationEvidencePort } from "./validation";
@@ -58,6 +58,8 @@ export interface AgentRuntimeOptions {
   manager?: ManagerReasoningBackends | null;
   /** Manager answers to owner questions without a task (read-only repository evidence only). */
   questionAnswerer?: OwnerQuestionAnswerer | null;
+  /** Manager's proactive owner message for a terminal task state that had no Manager turn. */
+  noticeComposer?: OwnerNoticeComposer | null;
   /**
    * Operator-acknowledged journal event ids to skip on replay (historical conflicting duplicates
    * from a past concurrent runtime). Validated by the journal; once accepted they are recorded in
@@ -371,6 +373,7 @@ export async function createAgentRuntime(config: AgentRuntimeConfig, options: Ag
     humanDecisionRequirements: createManagerHumanDecisionReader(loop, (id) => tasks.get(id)?.requesterId ?? null),
     humanDecisionSubmissions,
     ...(options.planner ? { intentPlanner: options.planner } : {}),
+    ...(options.noticeComposer ? { ownerNoticeComposer: options.noticeComposer } : {}),
     ...(options.questionAnswerer
       ? { readOnlyInspector: createReadOnlyInspector(options.questionAnswerer, { read: createRepoFileReader(config.base.repoRoot), ...createRepoSearch(runner, config.base.repoRoot) }) }
       : {}),

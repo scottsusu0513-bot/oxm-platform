@@ -296,9 +296,18 @@ describe("semanticAcceptance: one Manager call judges and answers", () => {
     expect(r.ownerAnswer).toBeNull();
   });
 
-  it("change tasks never get an owner synthesis", async () => {
-    const r = await semanticAcceptance({ ...base, goal: { ...goal, mode: "change" as const }, reviewer: { review: async () => ({ ...satisfied, ownerAnswer: SYNTHESIS }) } });
+  it("change tasks get the Manager's own result summary (owner wording only) from the same review call", async () => {
+    let calls = 0;
+    const r = await semanticAcceptance({ ...base, goal: { ...goal, mode: "change" as const }, reviewer: { review: async () => (calls++, { ...satisfied, ownerAnswer: SYNTHESIS }) } });
     expect(r.acceptance[0].status).toBe("satisfied");
+    expect(r.ownerAnswer).toBe(SYNTHESIS);
+    expect(calls).toBe(1);
+  });
+
+  it("a change task without a usable summary still passes (the summary is optional; a template is the fallback)", async () => {
+    const r = await semanticAcceptance({ ...base, goal: { ...goal, mode: "change" as const }, reviewer: { review: async () => ({ ...satisfied, ownerAnswer: "" }) } });
+    expect(r.acceptance[0].status).toBe("satisfied");
+    expect(r.reviewUnavailable).toBe(false);
     expect(r.ownerAnswer).toBeNull();
   });
 });
@@ -312,7 +321,7 @@ describe("Manager ports and intake: natural-language collaboration, few core cri
     // Safety contract kept: Worker prose is never evidence.
     expect(REVIEWER_SYSTEM).toContain("The Worker's answer/summary is a CLAIM to verify, never evidence by itself.");
     expect(seen).toHaveLength(1);
-    expect(REVIEWER_SYSTEM).toMatch(/ownerAnswer \(read-only tasks/);
+    expect(REVIEWER_SYSTEM).toMatch(/ownerAnswer: for read-only tasks/);
     expect(REVIEWER_SYSTEM).toMatch(/never introduce an outside fact/);
     expect(REVIEWER_SYSTEM).toMatch(/unsupported ancillary claim is NEVER by itself a reason/);
   });

@@ -101,6 +101,8 @@ export interface GatewayTaskStatus {
   mode: TaskMode;
   /** Manager-accepted answer of a completed read_only task (sanitized). */
   answer: string | null;
+  /** Manager's result summary of change work (sanitized); null when the Manager wrote none. */
+  resultSummary?: string | null;
   /** Structured technical facts, shown only when the owner explicitly asks (sanitized; no SHAs, secrets or model reasoning). */
   details?: import("../intake/types").TaskTechnicalDetails;
   /** Worker assignment state (area, temporary cover, availability pause); presentation only, never authority. */
@@ -155,6 +157,8 @@ export interface InterpretOwnerMessageRequest {
   /** Explicit /goal: only task-creating intents are acceptable. */
   requireTask: boolean;
   priority?: "critical" | "high" | "normal" | "low";
+  /** Transport statuses the owner already received for this message (context only; not part of the fingerprint). */
+  transportContext?: import("../planning/types").TransportStatusContext[];
 }
 
 export interface InterpretationView {
@@ -459,6 +463,11 @@ export interface AgentGatewayService {
    * Never creates a task, branch, Worker run, file change, commit or push.
    */
   answerOwnerQuestion(call: GatewayCall<unknown>): Promise<{ answer: string }>;
+  /**
+   * The Manager's proactive owner message for a task's terminal state, from trusted state only.
+   * Throws "unavailable" when the Manager cannot compose it (the caller then uses its declared fallback).
+   */
+  composeOwnerNotice(call: GatewayCall<unknown>): Promise<{ text: string; basis: { taskId: string; status: string; retryKind: string | null } }>;
   /** Read-only: whether the task's original goal could be re-run now (deterministic policy, trusted state). */
   getRetryEligibility(call: GatewayCall<unknown>): Promise<import("./retry").RetryAssessment>;
   /**

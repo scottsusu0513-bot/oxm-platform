@@ -11,7 +11,23 @@ export const HUMAN_RESPONSE_INTENT_EVENT = "human_response_intent";
 export const HUMAN_RESPONSE_DELIVERED_EVENT = "human_response_delivered";
 export const HUMAN_RESPONSE_FAILED_EVENT = "human_response_failed";
 export const HUMAN_RESPONSE_ABANDONED_EVENT = "human_response_abandoned";
+export const HUMAN_NOTICE_SUPPRESSED_EVENT = "human_notice_suppressed";
+/** Transport statuses the owner already received for one inbound message (durable Manager context; voice=system_status). */
+export const HUMAN_TRANSPORT_CONTEXT_EVENT = "human_transport_context";
+/** The Manager's own owner-facing text for one notice (durable, so a retry / restart never re-asks or degrades). */
+export const HUMAN_MANAGER_TEXT_EVENT = "human_manager_text";
 export const HUMAN_INTERACTION_STREAM = "human-interaction";
+
+/** An internal event the notification policy decided NOT to send on its own (audit only; never a delivery). */
+export interface SuppressedNotice {
+  noticeId: string;
+  taskId: string;
+  /** Internal event kind (e.g. worker_assigned). */
+  event: string;
+  /** `no_owner_value:<kind>` or `merged_into:<key>`. */
+  reason: string;
+  createdAt: string;
+}
 
 /**
  * One logical human-facing response to one inbound transport event (e.g. the answer to one
@@ -60,6 +76,14 @@ export interface AuditHumanInteractionLedger extends HumanInteractionLedger {
   recordResponseAbandoned(responseId: string): void;
   /** Responses whose delivery is not confirmed and not abandoned (oldest first). */
   pendingResponses(): ResponseRecord[];
+  /** Policy decision that an internal event is not sent separately (null when never decided). */
+  suppressed(noticeId: string): SuppressedNotice | null;
+  recordSuppressed(entry: SuppressedNotice): void;
+  /** What the transport already told the owner about one inbound message (empty when nothing). */
+  transportContext(idempotencyKey: string): string[];
+  recordTransportContext(entry: { idempotencyKey: string; statuses: string[] }): void;
+  managerText(noticeId: string): { text: string; status: string } | null;
+  recordManagerText(entry: { noticeId: string; text: string; status: string }): void;
 }
 
 const NOTICE_KINDS = new Set<NoticeKind>(["human_decision", "commit_publish_approval", "start_approval", "milestone", "cancel_confirmation"]);
@@ -89,6 +113,9 @@ export function createAuditHumanInteractionLedger(input: {
   const handled = new Map<string, HandledInbound>();
   const tracked = new Map<string, TrackedTask>();
   const responses = new Map<string, ResponseRecord>();
+  const suppressed = new Map<string, SuppressedNotice>();
+  const transport = new Map<string, string[]>();
+  const managerTexts = new Map<string, { text: string; status: string }>();
   let focus: string | null = null;
 
   for (const e of input.audit.list({ taskId: stream })) {
@@ -126,6 +153,16 @@ export function createAuditHumanInteractionLedger(input: {
         r.deliveryRef = m.deliveryRef as string;
       } else if (e.event === HUMAN_RESPONSE_FAILED_EVENT) r.failures++;
       else r.abandoned = true;
+    } else if (e.event === HUMAN_NOTICE_SUPPRESSED_EVENT) {
+      if (!["noticeId", "taskId", "event", "reason", "createdAt"].every((k) => str(m[k]))) throw new Error("[human-interaction] malformed suppressed-notice record; refusing to load");
+      if (!suppressed.has(m.noticeId as string))
+        suppressed.set(m.noticeId as string, { noticeId: m.noticeId as string, taskId: m.taskId as string, event: m.event as string, reason: m.reason as string, createdAt: m.createdAt as string });
+    } else if (e.event === HUMAN_TRANSPORT_CONTEXT_EVENT) {
+      if (!str(m.idempotencyKey) || !str(m.statuses)) throw new Error("[human-interaction] malformed transport-context record; refusing to load");
+      if (!transport.has(m.idempotencyKey as string)) transport.set(m.idempotencyKey as string, (m.statuses as string).split(","));
+    } else if (e.event === HUMAN_MANAGER_TEXT_EVENT) {
+      if (!str(m.noticeId) || !str(m.text) || !str(m.status)) throw new Error("[human-interaction] malformed manager-text record; refusing to load");
+      if (!managerTexts.has(m.noticeId as string)) managerTexts.set(m.noticeId as string, { text: m.text as string, status: m.status as string });
     } else if (e.event === HUMAN_TASK_TRACKED_EVENT) {
       if (!str(m.taskId) || typeof m.label !== "string") throw new Error("[human-interaction] malformed tracked-task record; refusing to load");
       tracked.set(m.taskId as string, { taskId: m.taskId as string, label: m.label });
@@ -201,6 +238,24 @@ export function createAuditHumanInteractionLedger(input: {
       r.abandoned = true;
     },
     pendingResponses: () => Array.from(responses.values(), (r) => ({ ...r })).filter((r) => r.deliveryRef === null && !r.abandoned),
+    suppressed: (id) => (suppressed.has(id) ? { ...suppressed.get(id)! } : null),
+    recordSuppressed(entry) {
+      if (suppressed.has(entry.noticeId) || notices.has(entry.noticeId)) return;
+      append(HUMAN_NOTICE_SUPPRESSED_EVENT, { ...entry });
+      suppressed.set(entry.noticeId, { ...entry });
+    },
+    transportContext: (key) => [...(transport.get(key) ?? [])],
+    recordTransportContext({ idempotencyKey, statuses }) {
+      if (transport.has(idempotencyKey) || statuses.length === 0) return;
+      append(HUMAN_TRANSPORT_CONTEXT_EVENT, { idempotencyKey, statuses: statuses.join(","), voice: "system_status" });
+      transport.set(idempotencyKey, [...statuses]);
+    },
+    managerText: (id) => (managerTexts.has(id) ? { ...managerTexts.get(id)! } : null),
+    recordManagerText({ noticeId, text, status }) {
+      if (managerTexts.has(noticeId)) return;
+      append(HUMAN_MANAGER_TEXT_EVENT, { noticeId, text, status, voice: "manager" });
+      managerTexts.set(noticeId, { text, status });
+    },
     tracked: () => Array.from(tracked.values(), (t) => ({ ...t })),
     track(task) {
       if (tracked.has(task.taskId)) return;
