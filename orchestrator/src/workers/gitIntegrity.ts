@@ -145,17 +145,27 @@ function referencedPaths(config: string): { key: string; value: string }[] {
   return out;
 }
 
-const VSCODE_BRANCH_HEADER_RE = /^\[branch "[A-Za-z0-9._/-]+"\]$/;
-const VSCODE_MERGE_BASE_RE = /^\tvscode-merge-base = [A-Za-z0-9._/-]+$/;
+const BENIGN_BRANCH_HEADER_RE = /^\[branch "[A-Za-z0-9._/-]+"\]$/;
+/**
+ * Exact `git config`-written lines of editor-integration caches Git never reads:
+ * - VS Code's Git extension: `vscode-merge-base = <ref>` (unquoted; the ref charset needs no quoting).
+ * - GitHub Pull Requests extension: `github-pr-base-branch = "<owner>#<repo>#<branch>"`. `#` starts a
+ *   comment in Git config, so `git config` always quotes this value; the unquoted spelling is not the
+ *   integration's shape and stays hashed.
+ */
+const BENIGN_BRANCH_KEY_RES = [
+  /^\tvscode-merge-base = [A-Za-z0-9._/-]+$/,
+  /^\tgithub-pr-base-branch = "[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})#[A-Za-z0-9._-]+#[A-Za-z0-9._/-]+"$/,
+];
 
 /**
- * VS Code's Git extension asynchronously caches `branch.<name>.vscode-merge-base`
- * in the repository config (via `git config --local`) shortly after it sees a
- * new branch. Git never reads that key, so exactly the `git config`-written
- * shape is dropped before hashing: the key line inside a strict `[branch "…"]`
- * section, plus that header when the section holds nothing else. Any other
- * spelling (CRLF, quotes, comments, line continuation, other sections or keys)
- * is still hashed byte-for-byte and fails closed.
+ * VS Code's Git extension and the GitHub Pull Requests extension (Codespaces) asynchronously cache
+ * `branch.<name>.vscode-merge-base` / `branch.<name>.github-pr-base-branch` in the repository config
+ * (via `git config --local`) shortly after they see a branch. Git never reads those keys, so exactly
+ * the `git config`-written shapes are dropped before hashing: the key line inside a strict
+ * `[branch "…"]` section, plus that header when the section holds nothing else. Any other spelling
+ * (CRLF, other quoting, comments, line continuation, other sections or keys) is still hashed
+ * byte-for-byte and fails closed.
  */
 export function normalizeRepoConfig(bytes: Buffer): Buffer {
   const lines = bytes.toString("latin1").split("\n");
@@ -164,9 +174,9 @@ export function normalizeRepoConfig(bytes: Buffer): Buffer {
   let header = -1;
   let branchSection = false;
   let sectionKeys: number[] = [];
-  let sectionOnlyMergeBase = false;
+  let sectionOnlyBenign = false;
   const closeSection = () => {
-    if (branchSection && header >= 0 && sectionOnlyMergeBase && sectionKeys.length > 0) drop.add(header);
+    if (branchSection && header >= 0 && sectionOnlyBenign && sectionKeys.length > 0) drop.add(header);
   };
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -174,15 +184,15 @@ export function normalizeRepoConfig(bytes: Buffer): Buffer {
     if (!continued(i) && /^\s*\[/.test(line)) {
       closeSection();
       header = i;
-      branchSection = VSCODE_BRANCH_HEADER_RE.test(line);
+      branchSection = BENIGN_BRANCH_HEADER_RE.test(line);
       sectionKeys = [];
-      sectionOnlyMergeBase = true;
+      sectionOnlyBenign = true;
       continue;
     }
-    if (branchSection && !continued(i) && VSCODE_MERGE_BASE_RE.test(line)) {
+    if (branchSection && !continued(i) && BENIGN_BRANCH_KEY_RES.some((re) => re.test(line))) {
       drop.add(i);
       sectionKeys.push(i);
-    } else sectionOnlyMergeBase = false;
+    } else sectionOnlyBenign = false;
   }
   closeSection();
   if (drop.size === 0) return bytes;

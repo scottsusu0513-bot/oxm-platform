@@ -3,12 +3,12 @@ import type { GatewayTaskStatus } from "../gateway/types";
 import type { OwnerQuestionInput, ReadOnlyInspector } from "../planning/ownerQuestion";
 import { createReadOnlyInspector } from "../planning/ownerQuestion";
 import type { IntentPlanner, IntentPlannerInput } from "../planning/types";
-import { createSimulation, type WorkerScript } from "../scheduler/fake";
+import { createSimulation, driveQa, type WorkerScript } from "../scheduler/fake";
 import { createInMemoryAuditRepository } from "../store/memory";
 import { parseUpdate } from "../telegram/updates";
 import { progressMessage } from "../executive/communication";
 import { createHumanInteractionHarness } from "./fake";
-import { plainPhase } from "./service";
+import { plainPhase, terminalFollowUp, terminalReason } from "./service";
 import { parseTaskCommand } from "./taskPrefix";
 import type { StartApprovalNotice } from "./types";
 
@@ -325,5 +325,91 @@ describe("human-facing task state wording", () => {
     expect(progressMessage("blocked", { lang: "zh" })).toMatch(/^任務執行失敗/);
     expect(progressMessage("blocked", { lang: "zh", paused: true })).toMatch(/^任務暫停，正在等待你的決定/);
     expect(progressMessage("cancelled", { lang: "zh" })).toMatch(/^任務已取消/);
+  });
+});
+
+describe("follow-up about a finished task answers why it stopped (trusted reason only)", () => {
+  const RAW = /git_metadata_changed|worker failure|blockingReason|errorType|[a-z]+_[a-z]+_[a-z]+/;
+  const failedTask = async (questions: string[]) => {
+    const script: Record<string, (input: IntentPlannerInput) => unknown> = { 修改柱狀圖人數: change("修改柱狀圖人數") };
+    for (const q of questions) script[q] = other("task_follow_up", "p-task-1");
+    const planner = scriptedPlanner(script);
+    const h = setup(planner, { worker: { "p-task-1": ["git_metadata_changed"] } });
+    await h.say("tg.msg.1", "任務：修改柱狀圖人數");
+    expect(h.sim.loop.task("p-task-1")).toMatchObject({ state: "failed", blockingReason: "worker failure: git_metadata_changed" });
+    return { h, planner };
+  };
+
+  it("1/5/6. failed task + 「為何已停止」 explains the Git-safety stop in plain words; no new task, no raw code", async () => {
+    const { h, planner } = await failedTask(["為何已停止", "為什麼已停止"]);
+    const tasks = h.sim.loop.tasks().length;
+    const runs = h.sim.workerCalls.length;
+    for (const [i, q] of ["為何已停止", "為什麼已停止"].entries()) {
+      const r = await h.say(`tg.msg.${i + 2}`, q);
+      expect(r).toMatchObject({ outcome: "info", taskId: "p-task-1" });
+      const [lead] = r.message.split("\n\n");
+      expect(lead).toBe("這筆任務沒有完成。原因：系統偵測到 Git 狀態在 Claude 執行期間發生異常變更，為安全起見自動停止，沒有接受 Claude 的修改結果。");
+      expect(lead).not.toMatch(RAW);
+      expect(r.message).not.toMatch(/git_metadata_changed|worker failure/);
+      expect(r.message).toContain("目前進度：任務執行失敗"); // the status card still follows
+    }
+    expect(h.sim.loop.tasks()).toHaveLength(tasks);
+    expect(h.sim.workerCalls).toHaveLength(runs);
+    expect(planner.calls.slice(1).every((c) => c.requireTask === false)).toBe(true);
+  });
+
+  it("2. failed task + 「請問有修改完成嗎」 says clearly it was not completed, with the reason", async () => {
+    const { h } = await failedTask(["請問有修改完成嗎"]);
+    const r = await h.say("tg.msg.2", "請問有修改完成嗎");
+    expect(r.message).toMatch(/^這筆任務沒有完成。原因：系統偵測到 Git 狀態/);
+    expect(r.message).not.toMatch(/已完成/);
+    expect(h.sim.loop.tasks()).toHaveLength(1);
+  });
+
+  it("3. successful task + 「有完成嗎」 answers completed", async () => {
+    const planner = scriptedPlanner({ 修改首頁: change("修改首頁"), 有完成嗎: other("task_follow_up", "p-task-1") });
+    const h = setup(planner);
+    await h.say("tg.msg.1", "任務：修改首頁");
+    await driveQa(h.sim, "p-task-1");
+    await h.sim.loop.settle();
+    expect(h.sim.loop.task("p-task-1")?.state).toBe("complete");
+    const r = await h.say("tg.msg.2", "有完成嗎");
+    expect(r.message).toMatch(/^這筆任務已完成。\n\n/);
+    expect(r.message).not.toMatch(/沒有完成|原因/);
+    expect(h.sim.loop.tasks()).toHaveLength(1);
+  });
+
+  it("a task still in progress keeps the plain status card (no invented outcome)", async () => {
+    const planner = scriptedPlanner({ 修改首頁: change("修改首頁"), 做完了嗎: other("task_follow_up", "p-task-1") });
+    const h = setup(planner);
+    await h.say("tg.msg.1", "任務：修改首頁");
+    const r = await h.say("tg.msg.2", "做完了嗎");
+    expect(r.message).toMatch(/^任務：修改首頁\n目前進度：任務暫停，正在等待你的決定/);
+    expect(r.message).not.toMatch(/已完成|沒有完成/);
+  });
+
+  it("4. no trusted terminal reason: says the record is insufficient and never guesses", () => {
+    const base = { status: "blocked", taskState: "failed", assignedWorker: "codex" } as unknown as GatewayTaskStatus;
+    for (const waitReason of [null, "", "[REDACTED]", "something entirely new happened", "worker failure: git_metadata_changed; extra", "manager: unclear"]) {
+      const s = { ...base, waitReason };
+      expect(terminalReason(s, "zh")).toBeNull();
+      const text = terminalFollowUp(s, "zh")!;
+      expect(text).toBe("這筆任務沒有完成，已停止執行。目前的紀錄不足以說明確切的停止原因，我不會用猜測回答。");
+      expect(text).not.toMatch(/Git|額度|登入|環境/);
+    }
+  });
+
+  it("infrastructure / quota / auth reasons are translated, never shown raw", () => {
+    const s = (waitReason: string) => ({ status: "blocked", taskState: "failed", assignedWorker: "codex", waitReason }) as unknown as GatewayTaskStatus;
+    expect(terminalReason(s("worker failure: quota_exhausted"), "zh")).toBe("Codex 的使用額度用完，無法繼續執行");
+    expect(terminalReason(s("worker failure: authentication_unavailable"), "zh")).toBe("Codex 的登入授權失效，無法繼續執行");
+    expect(terminalReason(s("worker failure: service_unavailable"), "zh")).toBe("Codex 的執行環境無法使用，任務無法繼續");
+    expect(terminalReason(s("codespace stopped unexpectedly while worker was running"), "zh")).toBe("Codex 的執行環境無法使用，任務無法繼續");
+    expect(terminalReason(s("worker failure: git_metadata_changed"), "en")).toMatch(/^the system detected an unexpected Git state change while Codex/);
+    for (const r of ["worker failure: quota_exhausted", "worker failure: authentication_unavailable", "worker failure: git_metadata_changed", "push failed: x", "orchestration persistence failed"])
+      expect(terminalFollowUp(s(r), "zh")).not.toMatch(RAW);
+    // not terminal: no follow-up lead
+    expect(terminalFollowUp({ ...s("x"), status: "running", taskState: "running" } as GatewayTaskStatus, "zh")).toBeNull();
+    expect(terminalFollowUp({ ...s("needs_human_decision: x"), taskState: "awaiting_approval" } as GatewayTaskStatus, "zh")).toBeNull();
   });
 });

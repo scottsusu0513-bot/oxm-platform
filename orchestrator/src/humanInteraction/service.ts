@@ -318,6 +318,106 @@ export function phaseOf(s: GatewayTaskStatus): string {
   }
 }
 
+/**
+ * Trusted terminal reasons (the scheduler's blockingReason, surfaced as waitReason) translated to
+ * plain language. Only these anchored shapes are explained; anything else returns null so the owner
+ * is told the record is insufficient instead of a guess. Raw codes are never part of the text.
+ */
+const TERMINAL_REASONS: { re: RegExp; zh: (w: string) => string; en: (w: string) => string }[] = [
+  {
+    re: /^worker failure: (?:git_metadata_changed|branch_changed|branch_mismatch)$/,
+    zh: (w) => `系統偵測到 Git 狀態在 ${w} 執行期間發生異常變更，為安全起見自動停止，沒有接受 ${w} 的修改結果`,
+    en: (w) => `the system detected an unexpected Git state change while ${w} was working, so for safety it stopped automatically and did not accept ${w}'s changes`,
+  },
+  {
+    re: /^worker failure: (?:dirty_worktree|git_error)$|^workspace is not at the (?:retry|checkpoint|repair) head$|^workspace preparation failed: |^branch creation failed: /,
+    zh: () => "工作環境的 Git 狀態不符合安全要求，系統為安全起見停止，沒有接受這次的修改",
+    en: () => "the workspace's Git state did not meet the safety requirements, so the system stopped and accepted no changes",
+  },
+  {
+    re: /^worker failure: scope_violation$|^read-only task modified the workspace$|^mutability invariant violated: /,
+    zh: (w) => `${w} 的修改超出了這個任務允許的範圍，系統為安全起見停止，沒有接受這次的修改`,
+    en: (w) => `${w}'s changes went beyond what this task allowed, so the system stopped and accepted no changes`,
+  },
+  {
+    re: /^worker failure: (?:quota_exhausted|rate_limited)$/,
+    zh: (w) => `${w} 的使用額度用完，無法繼續執行`,
+    en: (w) => `${w} ran out of usage quota and could not continue`,
+  },
+  {
+    re: /^worker failure: authentication_unavailable$/,
+    zh: (w) => `${w} 的登入授權失效，無法繼續執行`,
+    en: (w) => `${w}'s sign-in was no longer valid, so it could not continue`,
+  },
+  {
+    re: /^worker failure: (?:service_unavailable|executable_unavailable|runtime_unavailable|runtime_misconfigured)$|^codespace stopped unexpectedly while worker was running$|^worker \w+ is not executable$/,
+    zh: (w) => `${w} 的執行環境無法使用，任務無法繼續`,
+    en: (w) => `${w}'s work environment was unavailable, so the task could not continue`,
+  },
+  {
+    re: /^worker failure: timeout$/,
+    zh: (w) => `${w} 執行超過時間上限，沒有完成`,
+    en: (w) => `${w} ran past the time limit without finishing`,
+  },
+  {
+    re: /^worker failure: (?:malformed_output|process_error|worker_error|worker_failure|result_mismatch|validation_incomplete|temp_file_error|invalid_contract|policy_error)$|^worker run produced no trusted result$/,
+    zh: (w) => `${w} 執行過程出錯，沒有產生可以信任的結果`,
+    en: (w) => `${w} hit an error and produced no result that could be trusted`,
+  },
+  {
+    re: /^worker execution budget exhausted$|^replan budget exhausted /,
+    zh: () => "已經用完允許的嘗試次數，仍沒有得到可接受的結果",
+    en: () => "it used up the allowed attempts without an acceptable result",
+  },
+  {
+    re: /^cancelled by operator$/,
+    zh: () => "任務被取消",
+    en: () => "the task was cancelled",
+  },
+  {
+    re: /^(?:pre_execution|commit|push|publish|pre_push|post_qa) approval rejected$/,
+    zh: () => "批准請求被拒絕",
+    en: () => "the approval request was rejected",
+  },
+  {
+    re: /^(?:trusted commit failed|push failed|PR creation failed): /,
+    zh: () => "把結果提交或發布到 GitHub 時失敗",
+    en: () => "submitting or publishing the result to GitHub failed",
+  },
+  {
+    re: /^orchestration persistence failed$/,
+    zh: () => "系統內部儲存任務狀態失敗，為安全起見停止",
+    en: () => "the system failed to save the task state, so it stopped for safety",
+  },
+];
+
+/** Plain-language reason a terminal task stopped, or null when no trusted reason is known. */
+export function terminalReason(s: Pick<GatewayTaskStatus, "waitReason" | "assignedWorker">, lang: OwnerLanguage): string | null {
+  const reason = s.waitReason?.trim();
+  if (!reason) return null;
+  const rule = TERMINAL_REASONS.find((r) => r.re.test(reason));
+  if (!rule) return null;
+  const w = s.assignedWorker === "claude" ? "Claude" : s.assignedWorker === "codex" ? "Codex" : lang === "zh" ? "工程師" : "the engineer";
+  return lang === "zh" ? rule.zh(w) : rule.en(w);
+}
+
+/**
+ * Follow-up answer for a finished task ("為什麼停止？", "有完成嗎？"): states plainly whether it was
+ * completed and, when it was not, the trusted reason. null for tasks that are still in progress.
+ */
+export function terminalFollowUp(s: GatewayTaskStatus, lang: OwnerLanguage): string | null {
+  if (s.status === "accepted") return L(lang, "這筆任務已完成。", "This task is complete.");
+  if (s.status !== "blocked" || (s.taskState !== "failed" && s.taskState !== "cancelled")) return null;
+  const reason = terminalReason(s, lang);
+  if (s.taskState === "cancelled")
+    return reason && !/取消|cancelled/.test(reason)
+      ? L(lang, `這筆任務沒有完成，已被取消：${reason}。`, `This task was not completed; it was cancelled: ${reason}.`)
+      : L(lang, "這筆任務沒有完成，已被取消。", "This task was not completed; it was cancelled.");
+  return reason
+    ? L(lang, `這筆任務沒有完成。原因：${reason}。`, `This task was not completed. Reason: ${reason}.`)
+    : L(lang, "這筆任務沒有完成，已停止執行。目前的紀錄不足以說明確切的停止原因，我不會用猜測回答。", "This task was not completed and has stopped. The current record is not enough to state the exact reason, so I will not guess.");
+}
+
 function gatewayOutcome(error: unknown, lang: OwnerLanguage = "zh"): InboundResult {
   if (error instanceof GatewayError) {
     if (["stale_binding", "conflict", "approval_not_required", "approval_expired", "not_found"].includes(error.code))
@@ -593,6 +693,20 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
   }
 
   /**
+   * Follow-up about a known task. A finished task leads with a plain answer (completed or not, and
+   * the trusted reason it stopped) before the status card; a task still in progress gets the card.
+   * Read-only: never creates or changes a task.
+   */
+  async function followUp(taskId: string, lang: OwnerLanguage): Promise<InboundResult> {
+    const card = await service.taskStatus(taskId);
+    if (!card.taskId) return card;
+    const s = await status(card.taskId).catch(() => null);
+    const lead = s ? terminalFollowUp(s, lang) : null;
+    if (lead) log({ event: "human_task_follow_up_answered", outcome: s?.taskState ?? "unknown" });
+    return lead ? { ...card, message: `${lead}\n\n${card.message}` } : card;
+  }
+
+  /**
    * Natural-language routing. Intent understanding happens in the trusted
    * planning layer behind the Gateway; this service only executes the
    * resulting decision through existing Gateway operations. Returns null when
@@ -656,7 +770,7 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
       case "status_query":
         return service.listTasks();
       case "task_follow_up":
-        return d.taskId ? service.taskStatus(d.taskId) : service.listTasks();
+        return d.taskId ? followUp(d.taskId, lang) : service.listTasks();
       case "cancel_or_pause":
         if (!d.taskId) return { outcome: "needs_selection", message: L(lang, "要停止哪一個任務？請回覆該任務的訊息並輸入 /cancel，或傳 /cancel <任務編號>。沒有做任何變更。", "Which task should stop? Reply /cancel to its message or send /cancel <task>. Nothing was changed.") };
         return service.requestCancel({ kind: "cancel_request", idempotencyKey: key, target: { taskReference: d.taskId } });
