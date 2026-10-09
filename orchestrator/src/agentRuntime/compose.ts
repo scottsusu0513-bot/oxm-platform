@@ -20,7 +20,7 @@ import type { HumanOwnerSession } from "../humanInteraction/auth";
 import { createInMemoryIntakeRepository } from "../intake/fake";
 import { createManagerLoopRuntimePort } from "../intake/runtime";
 import { createAgentRuntimeService } from "../intake/service";
-import { createRepositoryJournal, REPOSITORY_JOURNAL_EVENT } from "../persistence/journal";
+import { createRepositoryJournal, describeJournalReplayDetail, JournalReplayError, REPOSITORY_JOURNAL_EVENT } from "../persistence/journal";
 import { createApprovalPort, createQaPort, createRepoStatePort, createWorkerPort, createWorkspacePort } from "../scheduler/adapters";
 import { createManagerLoop, type ManagerLoop } from "../scheduler/loop";
 import { createAuditCheckpointRepository } from "../scheduler/persistence";
@@ -39,7 +39,7 @@ import { createCommitRangeDiff, createRepoFileReader, createRepoSearch, createWo
 import { createManagerReasoningPort, type ManagerReasoningBackends } from "./managerPort";
 import type { GoalReviewer, IntentPlanner } from "../planning/types";
 import { createReadOnlyInspector, type OwnerQuestionAnswerer } from "../planning/ownerQuestion";
-import { createInMemoryInterpretationRepository } from "../gateway/fake";
+import { createInMemoryInterpretationRepository, INTERPRETATION_REPLAY_DUPLICATE_POLICY } from "../gateway/fake";
 import { createTrustedValidationEvidencePort } from "./validation";
 
 export interface AgentRuntimeOptions {
@@ -58,7 +58,17 @@ export interface AgentRuntimeOptions {
   manager?: ManagerReasoningBackends | null;
   /** Manager answers to owner questions without a task (read-only repository evidence only). */
   questionAnswerer?: OwnerQuestionAnswerer | null;
+  /**
+   * Operator-acknowledged journal event ids to skip on replay (historical conflicting duplicates
+   * from a past concurrent runtime). Validated by the journal; once accepted they are recorded in
+   * the replay audit stream and honoured on later starts without being passed again.
+   */
+  supersededJournalEvents?: readonly string[];
 }
+
+/** Startup replay diagnostics; deliberately not the repository journal stream it describes. */
+export const JOURNAL_REPLAY_AUDIT_TASK = "runtime-journal-replay";
+const REPLAY_SKIP_EVENTS = { identical_historical_duplicate: "journal_duplicate_replay_ignored", operator_superseded: "journal_replay_record_superseded" } as const;
 
 export interface AgentRuntime {
   loop: ManagerLoop;
@@ -153,7 +163,12 @@ export async function createAgentRuntime(config: AgentRuntimeConfig, options: Ag
   const workspaceRestored = (await restoreWorkspace(active.some((t) => t.plan !== null))) ? `workspace returned from ${started.branch} to runtime branch ${baseline.branch}` : null;
 
   // Durable runtime / Gateway repositories (journaled into the audit log) and replay.
-  const journal = createRepositoryJournal({ audit: options.audit, nextId: nextAuditId, now });
+  const replayAudit = options.audit.list({ taskId: JOURNAL_REPLAY_AUDIT_TASK });
+  const acceptedOverrides = replayAudit
+    .filter((e) => e.event === REPLAY_SKIP_EVENTS.operator_superseded && typeof e.metadata.journalEventId === "string")
+    .map((e) => e.metadata.journalEventId as string);
+  const superseded = Array.from(new Set([...acceptedOverrides, ...(options.supersededJournalEvents ?? [])]));
+  const journal = createRepositoryJournal({ audit: options.audit, nextId: nextAuditId, now, superseded });
   const clock = journal.clock;
   const tasks = journal.wrap("tasks", createInMemoryTaskRepository(clock), ["create", "update", "transition"]);
   const runs = journal.wrap("runs", createInMemoryTaskRunRepository(clock), ["create", "update"]);
@@ -162,11 +177,28 @@ export async function createAgentRuntime(config: AgentRuntimeConfig, options: Ag
   const gatewayDecisions = journal.wrap("gatewayDecisions", createInMemoryGatewayDecisionRepository(), ["create", "markEventEmitted"]);
   const humanDecisionSubmissions = journal.wrap("humanDecisionSubmissions", createInMemoryHumanDecisionRepository(), ["create", "markEventEmitted"]);
   // Stored interpretations make a redelivered owner message deterministic (the planner is never asked twice).
-  const interpretations = journal.wrap("interpretations", createInMemoryInterpretationRepository(), ["create"]);
+  const interpretations = journal.wrap("interpretations", createInMemoryInterpretationRepository(), ["create"], {
+    replayDuplicate: INTERPRETATION_REPLAY_DUPLICATE_POLICY,
+  });
   try {
     journal.replay();
-  } catch {
-    return fail("journal_replay_failed", "durable runtime journal could not be replayed; refusing to start");
+  } catch (error) {
+    // Only the journal's safe identifiers are reported: never record payloads or repository error text.
+    const diagnostics = error instanceof JournalReplayError ? [describeJournalReplayDetail(error.detail)] : ["category=unexpected_replay_error"];
+    return fail("journal_replay_failed", "durable runtime journal could not be replayed; refusing to start", diagnostics);
+  }
+  // Recovered historical duplicates are audited once each, outside the replayed journal stream.
+  const audited = new Set(replayAudit.map((e) => `${e.event}:${String(e.metadata.journalEventId)}`));
+  for (const skip of journal.replaySkips()) {
+    const event = REPLAY_SKIP_EVENTS[skip.reason];
+    if (audited.has(`${event}:${skip.eventId}`)) continue;
+    options.audit.append({
+      id: nextAuditId(),
+      taskId: JOURNAL_REPLAY_AUDIT_TASK,
+      actor: "system",
+      event,
+      metadata: { journalEventId: skip.eventId, repository: skip.repository, method: skip.method, recordId: skip.key, reason: skip.reason },
+    });
   }
 
   // Startup consistency between the journal and the Manager checkpoint.

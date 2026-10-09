@@ -9,13 +9,13 @@ import { createInMemoryIntakeRepository } from "../intake/fake";
 import { createAgentRuntimeService } from "../intake/service";
 import { compactAuditLog } from "../persistence/compact";
 import { createFileAuditRepository } from "../persistence/fileAudit";
-import { createRepositoryJournal } from "../persistence/journal";
+import { createRepositoryJournal, REPOSITORY_JOURNAL_EVENT } from "../persistence/journal";
 import { createAuditCheckpointRepository } from "../scheduler/persistence";
 import { createInMemoryApprovalRepository, createInMemoryAuditRepository, createInMemoryTaskRepository, createInMemoryTaskRunRepository } from "../store/memory";
 import type { AuditRepository } from "../store/repositories";
 import type { GitInspector, ProcessExit, ProcessRunner, WorkerTaskContract } from "../workers/types";
 import type { GoalReviewer, GoalReviewInput } from "../planning/types";
-import { createAgentRuntime, defaultTaskIdGenerator } from "./compose";
+import { createAgentRuntime, defaultTaskIdGenerator, JOURNAL_REPLAY_AUDIT_TASK } from "./compose";
 import { AGENT_RUNTIME_CONFIRMATION, readAgentRuntimeConfig, type AgentRuntimeConfig } from "./config";
 import { reconcileRuntimeState } from "./reconcile";
 import { createTrustedValidationEvidencePort } from "./validation";
@@ -337,5 +337,63 @@ describe("production composition requires the GPT Manager", () => {
     const r = await createAgentRuntime(config(), { audit, owner: owner(), runner: safetyRunner() });
     if (!r.ok) throw new Error(r.reason);
     expect(r.runtime.loop.policy.managerMode).toBe("gpt_required");
+  });
+});
+
+describe("agent runtime startup over a historically duplicated journal", () => {
+  const BODY = "老闆私密訊息 PRIVATE-BODY-MARKER";
+  const interp = (id: string, createdAt: string, decision: unknown = { kind: "status_query", taskId: null }) => ({
+    interpretationId: id,
+    fingerprint: `fp-${id}`,
+    principalId: "telegram-owner",
+    originalRequest: BODY,
+    priority: null,
+    decision,
+    createdAt,
+  });
+  const put = (audit: AuditRepository, id: string, record: unknown) =>
+    audit.append({ id, taskId: "repository-journal", actor: "system", event: REPOSITORY_JOURNAL_EVENT, metadata: { repository: "interpretations", method: "create", at: "2026-10-09T08:00:00.000Z", args: [record] as never } });
+  const start = (audit: AuditRepository, supersededJournalEvents?: string[]) => createAgentRuntime(config(), { audit, owner: owner(), runner: safetyRunner(), supersededJournalEvents });
+  const replayEvents = (audit: AuditRepository) => audit.list({ taskId: JOURNAL_REPLAY_AUDIT_TASK }).map((e) => [e.event, e.metadata]);
+
+  it("starts over identical historical duplicates and audits each recovery once, outside the journal", async () => {
+    const audit = createInMemoryAuditRepository(() => "t");
+    put(audit, "agent-a-105", interp("tg.msg.79", "2026-10-09T07:58:56.876Z"));
+    put(audit, "agent-b-4", interp("tg.msg.79", "2026-10-09T07:58:59.194Z"));
+    put(audit, "agent-a-106", interp("tg.msg.82", "2026-10-09T07:59:30.829Z"));
+    const journalBefore = audit.list({ taskId: "repository-journal" }).length;
+    const r = await start(audit);
+    expect(r.ok).toBe(true);
+    const expected = [["journal_duplicate_replay_ignored", { journalEventId: "agent-b-4", repository: "interpretations", method: "create", recordId: "tg.msg.79", reason: "identical_historical_duplicate" }]];
+    expect(replayEvents(audit)).toEqual(expected);
+    expect(audit.list({ taskId: "repository-journal" })).toHaveLength(journalBefore);
+    // Restarting again is deterministic and does not re-audit.
+    expect((await start(audit)).ok).toBe(true);
+    expect(replayEvents(audit)).toEqual(expected);
+  });
+
+  it("fails closed on a conflicting duplicate with safe, specific diagnostics", async () => {
+    const audit = createInMemoryAuditRepository(() => "t");
+    put(audit, "agent-b-8", interp("tg.msg.94", "2026-10-09T08:01:48.742Z", { kind: "task", title: "stray" }));
+    put(audit, "agent-a-109", interp("tg.msg.94", "2026-10-09T08:01:48.832Z", { kind: "task", title: "real" }));
+    const r = await start(audit);
+    expect(r).toMatchObject({ ok: false, code: "journal_replay_failed" });
+    if (r.ok) return;
+    expect(r.diagnostics).toEqual(["category=duplicate_conflict index=1 event=agent-a-109 repository=interpretations method=create key=tg.msg.94"]);
+    expect(JSON.stringify(r)).not.toContain("PRIVATE-BODY-MARKER");
+    expect(replayEvents(audit)).toEqual([]);
+  });
+
+  it("an operator override of the stray record is validated, audited, and honoured on later starts", async () => {
+    const audit = createInMemoryAuditRepository(() => "t");
+    put(audit, "agent-b-9", interp("tg.msg.96", "2026-10-09T08:02:08.604Z", { kind: "cancel_or_pause", taskId: "t-stray" }));
+    put(audit, "agent-a-127", interp("tg.msg.96", "2026-10-09T08:02:09.642Z", { kind: "cancel_or_pause", taskId: "t-real" }));
+    expect(await start(audit, ["agent-a-1"])).toMatchObject({ ok: false, code: "journal_replay_failed", diagnostics: ["category=invalid_override event=agent-a-1"] });
+    expect((await start(audit, ["agent-b-9"])).ok).toBe(true);
+    const expected = [["journal_replay_record_superseded", { journalEventId: "agent-b-9", repository: "interpretations", method: "create", recordId: "tg.msg.96", reason: "operator_superseded" }]];
+    expect(replayEvents(audit)).toEqual(expected);
+    // The accepted override is durable: no need to keep passing it.
+    expect((await start(audit)).ok).toBe(true);
+    expect(replayEvents(audit)).toEqual(expected);
   });
 });

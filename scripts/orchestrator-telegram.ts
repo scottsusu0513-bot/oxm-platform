@@ -139,6 +139,8 @@ const created = await createAgentRuntime((runtimeConfig as Extract<typeof runtim
   reviewer,
   manager: planned.manager,
   questionAnswerer: planned.questionAnswerer,
+  // Operator acknowledgement of specific historical conflicting journal records (comma-separated event ids).
+  supersededJournalEvents: (process.env.OXM_AGENT_JOURNAL_SUPERSEDE ?? "").split(",").map((s) => s.trim()).filter(Boolean),
 });
 if (!created.ok) {
   const f = created as Extract<typeof created, { ok: false }>;
