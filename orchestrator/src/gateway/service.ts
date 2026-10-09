@@ -10,6 +10,8 @@ import { normalizeIntentDecision } from "../planning/normalize";
 import { decomposeWork, rawWorkAreas, resolveWorkAreas, workShape } from "../executive/workAssignment";
 import { deriveEvidencePlan, renderEvidenceInstruction } from "../executive/evidencePlan";
 import type { IntentPlanner } from "../planning/types";
+import type { ReadOnlyInspector } from "../planning/ownerQuestion";
+import { normalizeOwnerAnswer } from "../planning/normalize";
 import type { StartApprovalEvidence } from "../scheduler/types";
 import { COMMIT_PUBLISH_ACTION, normalizeCommitApprovalEvidence, type CommitApprovalEvidence } from "../workers/prompt";
 import { authenticateAndAuthorize } from "./auth";
@@ -83,6 +85,8 @@ export interface GatewayDependencies {
   taskDirectory?: () => readonly TaskDirectoryEntry[];
   /** Bound for one planner call (default 120s). */
   plannerTimeoutMs?: number;
+  /** Manager read-only inspection (no task); without it answerOwnerQuestion is unavailable (fail closed). */
+  readOnlyInspector?: ReadOnlyInspector;
 }
 
 const ESCALATION_ID = /^([A-Za-z0-9][A-Za-z0-9._:-]{0,63})\.hd\.([1-9][0-9]{0,3})$/;
@@ -915,6 +919,30 @@ export function createAgentGatewayService(deps: GatewayDependencies): AgentGatew
       }
       deps.audit.record({ event: "task_submit_requested", principalId: auth.principalId, requestId: auth.requestId, action: "interpret_owner_message", outcome: decision.kind });
       return { interpretationId: request.idempotencyKey, decision, duplicate: false };
+    },
+
+    async answerOwnerQuestion(call) {
+      const auth = await principal(call, "task:interpret", "task_interpret", "answer_owner_question");
+      const input = strictObject(call.request, ["interpretationId"]);
+      if (!SAFE_KEY.test(String(input.interpretationId ?? ""))) invalid("interpretationId is malformed");
+      const stored = deps.interpretations?.get(String(input.interpretationId));
+      if (!stored || stored.principalId !== auth.principalId) throw new GatewayError("not_found", "interpretation not found", 404);
+      const d = stored.decision;
+      // Only a read-only reading may be answered without a task; a change request never runs here.
+      if (d.kind !== "task" || d.mode !== "read_only") throw new GatewayError("conflict", "interpretation is not a read-only question", 409);
+      const inspector = deps.readOnlyInspector;
+      if (!inspector) throw new GatewayError("unavailable", "read-only inspection is unavailable", 503);
+      const tasks = (deps.taskDirectory?.() ?? []).slice(0, 30).map((t) => ({ ...t, title: sanitizeSummary(t.title)?.slice(0, 120) ?? "" }));
+      let raw: unknown;
+      try {
+        raw = await withTimeout(inspector.inspect({ question: stored.originalRequest, intent: d.intent, interpretedObjective: d.interpretedObjective, tasks }), deps.plannerTimeoutMs ?? 120_000);
+      } catch {
+        throw new GatewayError("unavailable", "read-only inspection could not answer", 503);
+      }
+      const answer = normalizeOwnerAnswer(raw);
+      if (!answer) throw new GatewayError("unavailable", "read-only inspection returned no answer", 503);
+      deps.audit.record({ event: "owner_question_answered", principalId: auth.principalId, requestId: auth.requestId, action: "answer_owner_question", outcome: "answered" });
+      return { answer };
     },
 
     async submitInterpretedTask(call) {

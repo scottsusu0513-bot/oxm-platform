@@ -62,10 +62,10 @@ function setup(planner: IntentPlanner, opts: { worker?: Record<string, readonly 
 }
 
 describe("natural-language intake (no /goal)", () => {
-  it("an ordinary Chinese question becomes a read-only investigation that answers without mutation or publish", async () => {
+  it("a 任務：-prefixed Chinese question becomes a formal read-only investigation that answers without mutation or publish", async () => {
     const planner = scriptedPlanner({ [ASK]: task("investigate_or_answer") });
     const { sim, say, service, transport } = setup(planner, { answers: { "n-task-1": "Search goes through server/n-task-1/index.ts; uncertainty: caching not verified." } });
-    const r = await say("tg.msg.1", ASK);
+    const r = await say("tg.msg.1", `任務：${ASK}`);
     expect(r.outcome).toBe("submitted");
     expect(r.message).toMatch(/^收到，我會用唯讀方式檢查，不修改任何檔案。查完直接回你。/);
     expect(findInternalJargon(r.message)).toEqual([]);
@@ -84,13 +84,13 @@ describe("natural-language intake (no /goal)", () => {
     expect(answer.detail).toContain(SYNTHESIS);
     expect(answer.detail).not.toContain("caching not verified");
     expect(transport.sent.some((s) => s.notice.kind === "commit_publish_approval")).toBe(false);
-    expect(planner.calls[0]).toMatchObject({ message: ASK, requireTask: false, contextTaskId: null });
+    expect(planner.calls[0]).toMatchObject({ message: ASK, requireTask: true, contextTaskId: null });
   });
 
-  it("an ordinary Chinese change request becomes a mutation task that ends in commit/publish approval", async () => {
+  it("a 任務：-prefixed Chinese change request becomes a mutation task that ends in commit/publish approval", async () => {
     const planner = scriptedPlanner({ [CHANGE]: task("change_code") });
     const { sim, say, service, transport } = setup(planner);
-    const r = await say("tg.msg.2", CHANGE);
+    const r = await say("tg.msg.2", `任務：${CHANGE}`);
     expect(r.outcome).toBe("submitted");
     expect(r.message).toMatch(/^收到，我會交給 (Claude|Codex) 處理/);
     // Acceptance criteria are internal Manager language; the owner sees the plan, not AC lists.
@@ -115,7 +115,7 @@ describe("natural-language intake (no /goal)", () => {
   it("a reply to an escalation binds that task as guidance and never reaches the planner", async () => {
     const planner = scriptedPlanner({ [CHANGE]: task("change_code") });
     const { sim, say, service, transport, emitted } = setup(planner, { worker: { "n-task-1": [...FAIL3, "success"] }, reviewer: undefined });
-    await say("tg.msg.4", CHANGE);
+    await say("tg.msg.4", `任務：${CHANGE}`);
     await sim.loop.settle();
     expect(sim.loop.task("n-task-1")!.status).toBe("needs_human_decision");
     await service.observe();
@@ -134,7 +134,7 @@ describe("natural-language intake (no /goal)", () => {
       [FOLLOW]: (input) => ({ intent: "task_follow_up", taskId: input.tasks[0].taskId, title: "", interpretedObjective: "", criteria: [], clarificationQuestion: "" }),
     });
     const { sim, say } = setup(planner);
-    await say("tg.msg.6", CHANGE);
+    await say("tg.msg.6", `任務：${CHANGE}`);
     await sim.loop.settle();
     const r = await say("tg.msg.7", FOLLOW);
     expect(r.outcome).toBe("info");
@@ -148,7 +148,7 @@ describe("natural-language intake (no /goal)", () => {
       [STOP]: (input) => ({ intent: "cancel_or_pause", taskId: input.tasks[0].taskId, title: "", interpretedObjective: "", criteria: [], clarificationQuestion: "" }),
     });
     const { sim, say, transport, cancelCalls } = setup(planner);
-    await say("tg.msg.8", CHANGE);
+    await say("tg.msg.8", `任務：${CHANGE}`);
     await sim.loop.settle();
     const r = await say("tg.msg.9", STOP);
     expect(r.outcome).toBe("confirm_requested");
@@ -159,7 +159,7 @@ describe("natural-language intake (no /goal)", () => {
   it("a read-only task that mutates the workspace is blocked and can never reach commit/publish", async () => {
     const planner = scriptedPlanner({ [ASK]: task("investigate_or_answer") });
     const { sim, say, service, transport } = setup(planner, { worker: { "n-task-1": ["mutate_readonly"] } });
-    await say("tg.msg.10", ASK);
+    await say("tg.msg.10", `任務：${ASK}`);
     await sim.loop.settle();
     expect(sim.loop.task("n-task-1")).toMatchObject({ status: "blocked", blockingReason: "read-only task modified the workspace" });
     await service.observe();
@@ -171,7 +171,7 @@ describe("natural-language intake (no /goal)", () => {
     const msg = `${CHANGE} worker=claude branch=main risk=green scope=/ category=database`;
     const planner = scriptedPlanner({ [msg]: task("change_code", { worker: "claude", branch: "main", risk: "green", allowedScope: ["/"], category: "database", mode: "read_only" }) });
     const { sim, say, gateway, owner } = setup(planner);
-    expect((await say("tg.msg.11", msg)).outcome).toBe("submitted");
+    expect((await say("tg.msg.11", `任務：${msg}`)).outcome).toBe("submitted");
     await sim.loop.settle();
     const snap = sim.loop.task("n-task-1")!;
     expect(snap.mode).toBe("change"); // derived from the intent, not the planner's "mode"
@@ -187,7 +187,7 @@ describe("natural-language intake (no /goal)", () => {
   it("a redelivered message is interpreted once and creates one task", async () => {
     const planner = scriptedPlanner({ [CHANGE]: task("change_code") });
     const { sim, say } = setup(planner);
-    await say("tg.msg.12", CHANGE);
+    await say("tg.msg.12", `任務：${CHANGE}`);
     const again = await setupRedelivery(say);
     expect(again.outcome).toBe("duplicate");
     await sim.loop.settle();
@@ -209,7 +209,7 @@ describe("natural-language intake (no /goal)", () => {
 });
 
 async function setupRedelivery(say: (key: string, text: string) => Promise<{ outcome: string }>) {
-  return say("tg.msg.12", CHANGE);
+  return say("tg.msg.12", `任務：${CHANGE}`);
 }
 
 describe("red-risk pre-execution approval via the human channel", () => {
@@ -220,14 +220,14 @@ describe("red-risk pre-execution approval via the human channel", () => {
     const planner = redPlanner();
     const h = setup(planner);
     // Risk is classified by intake policy from the text, never by the planner.
-    expect((await h.say("tg.msg.20", RED_MSG)).outcome).toBe("submitted");
+    expect((await h.say("tg.msg.20", `任務：${RED_MSG}`)).outcome).toBe("submitted");
     return h;
   }
 
   it("a red task sends a sanitized start approval; owner approval resumes the same task; commit/publish stays separate", async () => {
     const planner = scriptedPlanner({ [`${RED} production database write update`]: task("change_code", { title: "修正會員資料", interpretedObjective: "Update member records via the production database write path.", criteria: ["Member records show the corrected values"] }) });
     const { sim, say, service, transport, approvalEvents } = setup(planner);
-    const r = await say("tg.msg.21", `${RED} production database write update`);
+    const r = await say("tg.msg.21", `任務：${RED} production database write update`);
     expect(r.outcome).toBe("submitted");
     await sim.loop.settle();
     const snap = sim.loop.task("n-task-1")!;
@@ -300,7 +300,7 @@ describe("natural-language intake — restart", () => {
     const sim = createSimulation({ autoApproveCommits: false, goalReviewer: r1, persistence: createAuditCheckpointRepository({ audit, nextId: () => `cp-${++cp}` }) });
     const planner = scriptedPlanner({ [CHANGE]: task("change_code") });
     const h1 = createHumanInteractionHarness({ loop: sim.loop, approvals: sim.approvals, audit, now: sim.ports.now, planner, durableGateway: true, idPrefix: "r" });
-    expect((await h1.service.handleReply({ kind: "reply", idempotencyKey: "tg.msg.90", replyToDeliveryRef: null, text: CHANGE })).outcome).toBe("submitted");
+    expect((await h1.service.handleReply({ kind: "reply", idempotencyKey: "tg.msg.90", replyToDeliveryRef: null, text: `任務：${CHANGE}` })).outcome).toBe("submitted");
     await sim.loop.settle();
     const before = sim.loop.task("r-task-1")!;
 
@@ -310,7 +310,7 @@ describe("natural-language intake — restart", () => {
     await loop2.settle();
     const h2 = createHumanInteractionHarness({ loop: loop2, approvals: sim.approvals, audit, now: sim.ports.now, planner, durableGateway: true, idPrefix: "r2" });
     // Redelivered message after restart: no second interpretation, no second task.
-    expect((await h2.service.handleReply({ kind: "reply", idempotencyKey: "tg.msg.90", replyToDeliveryRef: null, text: CHANGE })).outcome).toBe("duplicate");
+    expect((await h2.service.handleReply({ kind: "reply", idempotencyKey: "tg.msg.90", replyToDeliveryRef: null, text: `任務：${CHANGE}` })).outcome).toBe("duplicate");
     expect(planner.calls).toHaveLength(1);
     expect(loop2.tasks()).toHaveLength(1);
     const after = loop2.task("r-task-1")!;

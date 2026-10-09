@@ -37,8 +37,9 @@ function setup(p: IntentPlanner, opts: SimulationOptions = {}) {
   const audit = createInMemoryAuditRepository(() => "2026-10-07T00:00:00.000Z");
   const sim = createSimulation({ autoApproveCommits: false, ...opts });
   const h = createHumanInteractionHarness({ loop: sim.loop, approvals: sim.approvals, audit, now: sim.ports.now, planner: p, idPrefix: "y" });
-  const say = async (key: string, text: string) => {
-    const r = await h.service.handleReply({ kind: "reply", idempotencyKey: key, replyToDeliveryRef: null, text });
+  // formal=true: a new 「任務：」 request; false: ordinary owner text (e.g. guidance on a pending decision).
+  const say = async (key: string, text: string, formal = true) => {
+    const r = await h.service.handleReply({ kind: "reply", idempotencyKey: key, replyToDeliveryRef: null, text: formal ? `任務：${text}` : text });
     await sim.loop.settle();
     return r;
   };
@@ -130,7 +131,7 @@ describe("Executive presentation boundary (Traditional Chinese owner)", () => {
     await x.say("tg.msg.4", "使用者存檔之後資料有時候會不見");
     await x.service.observe();
     expect(x.sim.loop.task("y-task-1")!.status).toBe("needs_human_decision");
-    const r = await x.say("tg.msg.5", "先不要改 UI，只修 API");
+    const r = await x.say("tg.msg.5", "先不要改 UI，只修 API", false);
     expect(r.outcome).toBe("resumed");
     await x.service.observe();
     const rejected = x.milestones().find((m) => m.milestone === "guidance_rejected")!;

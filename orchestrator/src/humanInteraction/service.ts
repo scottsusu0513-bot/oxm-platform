@@ -24,6 +24,7 @@ import {
 } from "../executive/communication";
 import { isDangerousValue } from "../store/sanitize";
 import type { AuditHumanInteractionLedger } from "./ledger";
+import { parseTaskCommand, TASK_PREFIX_USAGE } from "./taskPrefix";
 import type {
   CancelConfirmationNotice,
   CommitApprovalNotice,
@@ -48,6 +49,7 @@ export type HumanInteractionGateway = Pick<
   | "submitTask"
   | "interpretOwnerMessage"
   | "submitInterpretedTask"
+  | "answerOwnerQuestion"
   | "getTaskStatus"
   | "getHumanDecision"
   | "submitHumanDecision"
@@ -244,17 +246,20 @@ export function plainPhase(s: GatewayTaskStatus, lang: OwnerLanguage): string {
       return zh ? "等前一個相關任務完成" : "waiting for a related task to finish";
     case "waiting_workspace":
     case "waiting_branch_conflict":
-      return zh ? "等其他任務用完工作區（一次處理一個）" : "waiting for the workspace (one task at a time)";
+      return zh ? "任務已排隊，前一個任務完成後會開始處理" : "queued; it starts when the previous task finishes";
     case "running":
+      // Also covers "Worker finished, Manager still validating": never presented as stopped.
       return zh ? `${w} 正在處理，完成後我會檢查` : `${w} is working; I will review when done`;
-    case "repair_requested":
-      return zh ? `檢查發現問題，${w} 正在修正` : `${w} is fixing a problem my review found`;
+    case "repair_requested": {
+      const round = s.repairAttempt > 1 ? (zh ? `第 ${s.repairAttempt} 輪` : `round ${s.repairAttempt}`) : zh ? "第一輪" : "the first round";
+      return zh ? `${round}結果尚未通過，${w} 正在修正` : `${round} did not pass yet; ${w} is fixing it`;
+    }
     case "qa_pending":
       return zh ? `PR${s.prNumber ? ` #${s.prNumber}` : ""} 已開，等自動檢查` : `PR${s.prNumber ? ` #${s.prNumber}` : ""} open, waiting for checks`;
     case "needs_human_approval":
-      return zh ? "等你批准" : "waiting for your approval";
+      return zh ? "任務暫停，正在等待你的決定（請按批准或拒絕）" : "paused, waiting for your decision (approve or reject)";
     case "needs_human_decision":
-      return zh ? "等你決定下一步（直接傳訊息給我即可）" : "waiting for your decision (just message me)";
+      return zh ? "任務暫停，正在等待你的決定（直接傳訊息給我即可）" : "paused, waiting for your decision (just message me)";
     case "waiting_infrastructure":
       return zh ? "工程師已完成，等我的檢查服務恢復（不消耗修正次數）" : "done; waiting for my review service (no fix attempt used)";
     case "waiting_worker_quota":
@@ -264,9 +269,11 @@ export function plainPhase(s: GatewayTaskStatus, lang: OwnerLanguage): string {
     case "waiting_group":
       return zh ? "這部分已完成，等整個需求合在一起檢查" : "this part is done; waiting for the combined review";
     case "accepted":
-      return zh ? (s.prNumber ? `已完成（PR #${s.prNumber} 通過檢查，未合併）` : "已完成") : s.prNumber ? `done (PR #${s.prNumber} passed checks; not merged)` : "done";
+      return zh ? (s.prNumber ? `任務已完成（PR #${s.prNumber} 通過檢查，未合併）` : "任務已完成") : s.prNumber ? `completed (PR #${s.prNumber} passed checks; not merged)` : "completed";
     case "blocked":
-      return s.taskState === "cancelled" ? (zh ? "已取消" : "cancelled") : zh ? "已停止" : "stopped";
+      if (s.taskState === "cancelled") return zh ? "任務已取消" : "cancelled";
+      if (s.taskState === "failed") return zh ? "任務執行失敗" : "failed";
+      return zh ? "任務暫停，正在等待你的決定" : "paused, waiting for your decision";
     default:
       return zh ? "處理中" : "in progress";
   }
@@ -305,7 +312,7 @@ export function phaseOf(s: GatewayTaskStatus): string {
     case "accepted":
       return s.prNumber ? `complete (PR #${s.prNumber} passed CI; not merged by the agent)` : "complete";
     case "blocked":
-      return s.taskState === "cancelled" ? "cancelled" : "blocked";
+      return s.taskState === "cancelled" ? "cancelled" : s.taskState === "failed" ? "failed" : "paused: waiting for an owner decision";
     default:
       return "unknown";
   }
@@ -466,7 +473,7 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
     if (TERMINAL.has(s.status)) {
       const answered = s.status === "accepted" && s.mode === "read_only";
       const kind: Milestone = answered ? "answered" : s.status === "accepted" ? "completed" : s.taskState === "cancelled" ? "cancelled" : "blocked";
-      sent += await progress(taskId, "terminal", kind, kind as ProgressEvent, label, { answer: s.answer ?? null, prNumber: s.prNumber });
+      sent += await progress(taskId, "terminal", kind, kind as ProgressEvent, label, { answer: s.answer ?? null, prNumber: s.prNumber, ...(kind === "blocked" && s.taskState !== "failed" ? { paused: true } : {}) });
     }
     return sent;
   }
@@ -563,6 +570,28 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
     };
   }
 
+  /** Manager conversation / read-only lookup: answered directly, no task, branch, Worker or file change. */
+  async function answerQuestion(key: string, interpretationId: string, lang: OwnerLanguage): Promise<InboundResult> {
+    try {
+      const { answer } = await deps.gateway.answerOwnerQuestion(call({ interpretationId }));
+      return remember(key, {
+        outcome: "info",
+        message: `${answer}\n\n${L(lang, "（唯讀查詢：沒有建立任務，也沒有修改任何檔案。如果要修正，請用「任務：…」下達。）", "(Read-only answer: no task was created and no file was changed. To fix something, send 「任務：…」.)")}`,
+      });
+    } catch (error) {
+      if (error instanceof GatewayError && error.code === "unavailable")
+        return {
+          outcome: "info",
+          message: L(
+            lang,
+            "我現在沒辦法完成這個唯讀查詢（查詢服務暫時無法使用），沒有建立任務，也沒有修改任何檔案。請稍後再問一次；如果要讓工程師正式調查，可以用「任務：…」下達。",
+            "I cannot complete this read-only lookup right now (service unavailable). No task was created and no file was changed. Ask again shortly, or send 「任務：…」 for a formal investigation.",
+          ),
+        };
+      return remember(key, gatewayOutcome(error, lang));
+    }
+  }
+
   /**
    * Natural-language routing. Intent understanding happens in the trusted
    * planning layer behind the Gateway; this service only executes the
@@ -588,6 +617,20 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
     if (pending.length > 1 && d.kind === "human_decision") return whichDecision(pending, lang);
     switch (d.kind) {
       case "task": {
+        // Only a formal 「任務：」 message (or /goal) may create a task. Anything else is Manager conversation:
+        // a read-only question is answered without a task; a change request is never executed.
+        if (!requireTask) {
+          if (d.mode === "read_only") return answerQuestion(key, view.interpretationId, lang);
+          log({ event: "human_change_without_task_prefix", outcome: "not_executed" });
+          return remember(key, {
+            outcome: "info",
+            message: L(
+              lang,
+              `我理解你想要：「${oneLine(d.title, 60)}」。\n這句話沒有用「任務：」開頭，所以我沒有建立任務，也沒有修改任何檔案。如果要正式執行，請用「任務：…」下達，例如：任務：${oneLine(d.title, 60)}`,
+              `I read this as: "${oneLine(d.title, 60)}".\nIt did not start with 「任務：」, so no task was created and no file was changed. To run it formally, send it as 「任務：…」.`,
+            ),
+          });
+        }
         try {
           const result = await deps.gateway.submitInterpretedTask(call({ interpretationId: view.interpretationId }));
           const parts = result.parts ?? null;
@@ -707,6 +750,10 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
       const lang = ownerLanguage(reply.text);
       const dup = duplicateOf(reply.idempotencyKey, lang);
       if (dup) return dup;
+      // 「任務：」/「任務:」 is the only free-text way to create a formal task; the prefix is removed first.
+      const command = parseTaskCommand(reply.text);
+      if (command.kind === "empty") return remember(reply.idempotencyKey, { outcome: "invalid", message: TASK_PREFIX_USAGE });
+      if (command.kind === "task") return service.submitGoal({ kind: "goal", idempotencyKey: reply.idempotencyKey, text: command.body });
       let notice: NoticeRecord | null = null;
       if (reply.replyToDeliveryRef !== null) notice = deps.ledger.byDeliveryRef(reply.replyToDeliveryRef);
       if (!notice && reply.replyToNoticeRef) notice = deps.ledger.byRef(reply.replyToNoticeRef);
@@ -733,8 +780,8 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
         outcome: "info",
         message: L(
           lang,
-          "我的理解服務暫時無法使用，所以現在沒辦法解讀一般文字，沒有做任何變更。可以用 /goal <目標>、/tasks、/status <任務>。",
-          "My interpretation service is unavailable right now, so I cannot read free text. Nothing was changed. Use /goal <goal>, /tasks or /status <task>, or reply directly to a decision message.",
+          "我的理解服務暫時無法使用，所以現在沒辦法解讀一般文字，沒有做任何變更。可以用「任務：…」下達正式任務，或用 /tasks、/status <任務>。",
+          "My interpretation service is unavailable right now, so I cannot read free text. Nothing was changed. Send 「任務：…」 for a formal task, use /tasks or /status <task>, or reply directly to a decision message.",
         ),
       };
     },

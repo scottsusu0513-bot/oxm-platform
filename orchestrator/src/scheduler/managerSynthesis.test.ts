@@ -105,7 +105,7 @@ async function start(reviewer: GoalReviewer, answer: string, extra: { repo?: Rec
     ...(extra.worker ? { worker: extra.worker } : {}),
   });
   const h = createHumanInteractionHarness({ loop: sim.loop, approvals: sim.approvals, audit, now: sim.ports.now, planner, idPrefix: "m" });
-  await h.service.handleReply({ kind: "reply", idempotencyKey: "tg.msg.1", replyToDeliveryRef: null, text: ASK });
+  await h.service.handleReply({ kind: "reply", idempotencyKey: "tg.msg.1", replyToDeliveryRef: null, text: `任務：${ASK}` });
   await sim.loop.settle();
   await h.service.observe();
   const answered = h.transport.sent.find((s) => s.notice.kind === "milestone" && /^查到了/.test((s.notice as { detail?: string }).detail ?? ""));

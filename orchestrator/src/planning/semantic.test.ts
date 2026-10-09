@@ -47,7 +47,7 @@ function reviewer(script: (call: number, input: GoalReviewInput) => Record<strin
 async function goalTask(r: GoalReviewer, worker?: readonly WorkerScript[]) {
   const sim = createSimulation({ autoApproveCommits: false, goalReviewer: r, ...(worker ? { worker: { "s-task-1": worker } } : {}) });
   const h = createHumanInteractionHarness({ loop: sim.loop, approvals: sim.approvals, audit: createInMemoryAuditRepository(() => "t"), now: sim.ports.now, planner, idPrefix: "s" });
-  const res = await h.service.handleReply({ kind: "reply", idempotencyKey: "tg.msg.1", replyToDeliveryRef: null, text: MSG });
+  const res = await h.service.handleReply({ kind: "reply", idempotencyKey: "tg.msg.1", replyToDeliveryRef: null, text: `任務：${MSG}` });
   expect(res.outcome).toBe("submitted");
   await sim.loop.settle();
   return { sim, ...h };

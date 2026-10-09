@@ -327,6 +327,8 @@ export function progressMessage(
     cause?: "quota" | "authentication" | "executable" | "service";
     summary?: string | null;
     targets?: readonly ("programming" | "visual")[];
+    /** blocked without a failure (non-terminal stop): paused for the owner, not failed. */
+    paused?: boolean;
   },
 ): string {
   const zh = input.lang === "zh";
@@ -428,11 +430,15 @@ export function progressMessage(
         ? `已完成${input.prNumber ? `，PR #${input.prNumber} 已通過自動檢查` : ""}。要不要合併、部署由你決定。`
         : `Done${input.prNumber ? `; PR #${input.prNumber} passed the checks` : ""}. Merging and deploying are up to you.`;
     case "blocked":
+      if (input.paused)
+        return zh
+          ? "任務暫停，正在等待你的決定。我沒有再做任何修改或發布；可以用 /status 看細節。"
+          : "The task is paused, waiting for your decision. I made no further change or publication; use /status for details.";
       return zh
-        ? "這個任務已停止，我沒有再做任何修改或發布。需要的話可以重新交代，或用 /status 看細節。"
-        : "This task has stopped; I made no further change or publication. You can restate it, or use /status for details.";
+        ? "任務執行失敗，我沒有再做任何修改或發布。需要的話可以用「任務：…」重新交代，或用 /status 看細節。"
+        : "The task failed; I made no further change or publication. You can restate it as 「任務：…」, or use /status for details.";
     case "cancelled":
-      return zh ? "已取消。不會再有任何修改、commit 或發布。" : "Cancelled. There will be no further change, commit or publication.";
+      return zh ? "任務已取消。不會再有任何修改、commit 或發布。" : "The task was cancelled. There will be no further change, commit or publication.";
     case "awaiting_other_approval":
       return zh
         ? "這個任務需要另一種批准（發布後的高風險確認），要在管理後台處理，Telegram 這裡無法批准。"
@@ -466,7 +472,7 @@ export interface TechnicalDetailsView {
 }
 
 const STATUS_ZH: Record<string, string> = { passed: "通過", failed: "失敗", skipped: "略過", missing: "沒有執行", unknown: "無法確認", satisfied: "已遵守", violated: "未遵守", unsupported: "無法確認" };
-const OUTCOME_ZH: Record<string, string> = { accepted: "通過", needs_repair: "仍需修正", needs_human_decision: "需要你決定", blocked: "停止", needs_human_approval: "等待批准", running: "進行中" };
+const OUTCOME_ZH: Record<string, string> = { accepted: "通過", needs_repair: "仍需修正", needs_human_decision: "需要你決定", blocked: "失敗", needs_human_approval: "等待批准", running: "進行中" };
 
 /** Readable technical view: structured facts only (no model reasoning, secrets or hashes). */
 export function technicalDetailsMessage(v: TechnicalDetailsView, lang: OwnerLanguage): string {

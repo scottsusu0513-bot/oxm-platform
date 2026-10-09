@@ -368,6 +368,7 @@ export interface GatewayAuditEvent {
     | "human_decision_viewed"
     | "human_decision_submitted"
     | "human_decision_rejected"
+    | "owner_question_answered"
     | "gateway_rate_limited";
   principalId?: string;
   taskId?: string;
@@ -412,4 +413,9 @@ export interface AgentGatewayService {
   /** Creates the task described by a stored task interpretation through normal intake. */
   /** A mixed programming+visual request returns the programming task first and the visual part in relatedTaskIds. */
   submitInterpretedTask(call: GatewayCall<unknown>): Promise<{ taskId: string; status: GatewayTaskStatus; duplicate: boolean; relatedTaskIds?: string[]; parts?: { taskId: string; area: "programming" | "visual" }[] }>;
+  /**
+   * Answers a stored read-only interpretation directly (Manager conversation / read-only lookup).
+   * Never creates a task, branch, Worker run, file change, commit or push.
+   */
+  answerOwnerQuestion(call: GatewayCall<unknown>): Promise<{ answer: string }>;
 }

@@ -38,6 +38,7 @@ import { resolveRepoRoot } from "./repoRoot";
 import { createCommitRangeDiff, createRepoFileReader, createRepoSearch, createWorkingTreeDiff } from "./reviewEvidence";
 import { createManagerReasoningPort, type ManagerReasoningBackends } from "./managerPort";
 import type { GoalReviewer, IntentPlanner } from "../planning/types";
+import { createReadOnlyInspector, type OwnerQuestionAnswerer } from "../planning/ownerQuestion";
 import { createInMemoryInterpretationRepository } from "../gateway/fake";
 import { createTrustedValidationEvidencePort } from "./validation";
 
@@ -55,6 +56,8 @@ export interface AgentRuntimeOptions {
   reviewer?: GoalReviewer | null;
   /** GPT Manager reasoning backends (repair diagnosis, guidance interpretation, combined review). */
   manager?: ManagerReasoningBackends | null;
+  /** Manager answers to owner questions without a task (read-only repository evidence only). */
+  questionAnswerer?: OwnerQuestionAnswerer | null;
 }
 
 export interface AgentRuntime {
@@ -336,6 +339,9 @@ export async function createAgentRuntime(config: AgentRuntimeConfig, options: Ag
     humanDecisionRequirements: createManagerHumanDecisionReader(loop, (id) => tasks.get(id)?.requesterId ?? null),
     humanDecisionSubmissions,
     ...(options.planner ? { intentPlanner: options.planner } : {}),
+    ...(options.questionAnswerer
+      ? { readOnlyInspector: createReadOnlyInspector(options.questionAnswerer, { read: createRepoFileReader(config.base.repoRoot), ...createRepoSearch(runner, config.base.repoRoot) }) }
+      : {}),
     interpretations,
     taskDirectory: () =>
       loop

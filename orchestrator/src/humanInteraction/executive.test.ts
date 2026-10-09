@@ -48,7 +48,7 @@ function setup(planner: IntentPlanner, opts: SimulationOptions = {}) {
   const sim = createSimulation({ autoApproveCommits: false, ...opts });
   const h = createHumanInteractionHarness({ loop: sim.loop, approvals: sim.approvals, audit, now: sim.ports.now, planner, idPrefix: "x" });
   const say = async (key: string, text: string) => {
-    const r = await h.service.handleReply({ kind: "reply", idempotencyKey: key, replyToDeliveryRef: null, text });
+    const r = await h.service.handleReply({ kind: "reply", idempotencyKey: key, replyToDeliveryRef: null, text: `任務：${text}` });
     await sim.loop.settle();
     return r;
   };

@@ -1,5 +1,6 @@
 import { createFakeGatewayAudit, createFakeRateLimiter, createInMemoryGatewayDecisionRepository, createInMemoryHumanDecisionRepository, createInMemoryInterpretationRepository } from "../gateway/fake";
 import type { IntentPlanner } from "../planning/types";
+import type { ReadOnlyInspector } from "../planning/ownerQuestion";
 import { createManagerApprovalRequirementReader, createManagerHumanDecisionReader, createManagerLoopGatewayEvents } from "../gateway/integration";
 import { createAgentGatewayService } from "../gateway/service";
 import type { AgentGatewayService, GatewayControlEventPort } from "../gateway/types";
@@ -57,6 +58,8 @@ export function createHumanInteractionHarness(input: {
   nextTaskId?: () => string;
   /** Trusted planning layer for natural-language intake (absent = planner unavailable). */
   planner?: IntentPlanner;
+  /** Manager read-only inspection for owner questions without 「任務：」 (absent = unavailable). */
+  inspector?: ReadOnlyInspector;
   /** Production behavior: never fall back to legacy non-GPT intake. */
   managerRequired?: boolean;
   idPrefix?: string;
@@ -158,6 +161,7 @@ export function createHumanInteractionHarness(input: {
     humanDecisionRequirements: createManagerHumanDecisionReader(input.loop, () => null),
     humanDecisionSubmissions: submissions,
     ...(input.planner ? { intentPlanner: input.planner } : {}),
+    ...(input.inspector ? { readOnlyInspector: input.inspector } : {}),
     interpretations,
     taskDirectory: () =>
       input.loop

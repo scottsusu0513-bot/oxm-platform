@@ -95,7 +95,7 @@ describe("Agent runtime planning composition", () => {
     const audit = createInMemoryAuditRepository(() => "2026-10-07T00:00:00.000Z");
     const sim = createSimulation({ autoApproveCommits: false });
     const h = createHumanInteractionHarness({ loop: sim.loop, approvals: sim.approvals, audit, now: sim.ports.now, planner: built.planner, idPrefix: "o" });
-    await h.service.handleReply({ kind: "reply", idempotencyKey: "tg.msg.1", replyToDeliveryRef: null, text: MSG });
+    await h.service.handleReply({ kind: "reply", idempotencyKey: "tg.msg.1", replyToDeliveryRef: null, text: `任務：${MSG}` });
     await sim.loop.settle();
     expect(sim.loop.task("o-task-1")).toBeTruthy();
     // Preflight + one planning call, both through the CLI; never HTTP.
@@ -235,7 +235,7 @@ describe("a transient Claude CLI reviewer failure never consumes a Manager-guide
     const sim = createSimulation({ autoApproveCommits: false, goalReviewer: built.reviewer });
     const planner = { interpret: async () => PLAN };
     const h = createHumanInteractionHarness({ loop: sim.loop, approvals: sim.approvals, audit, now: sim.ports.now, planner, idPrefix: "o" });
-    await h.service.handleReply({ kind: "reply", idempotencyKey: "tg.msg.1", replyToDeliveryRef: null, text: MSG });
+    await h.service.handleReply({ kind: "reply", idempotencyKey: "tg.msg.1", replyToDeliveryRef: null, text: `任務：${MSG}` });
     await sim.loop.settle();
     const t = sim.loop.task("o-task-1")!;
     expect(t).toMatchObject({ status: "waiting_infrastructure", pendingReview: true, repair: { attempt: 0 } });

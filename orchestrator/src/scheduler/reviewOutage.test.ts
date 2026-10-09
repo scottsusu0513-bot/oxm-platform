@@ -33,7 +33,7 @@ async function start(reviewer: GoalReviewer, persistence = false) {
   let cp = 0;
   const sim = createSimulation({ autoApproveCommits: false, goalReviewer: reviewer, ...(persistence ? { persistence: createAuditCheckpointRepository({ audit, nextId: () => `cp-${++cp}` }) } : {}) });
   const h = createHumanInteractionHarness({ loop: sim.loop, approvals: sim.approvals, audit, now: sim.ports.now, planner, idPrefix: "o" });
-  await h.service.handleReply({ kind: "reply", idempotencyKey: "tg.msg.1", replyToDeliveryRef: null, text: MSG });
+  await h.service.handleReply({ kind: "reply", idempotencyKey: "tg.msg.1", replyToDeliveryRef: null, text: `任務：${MSG}` });
   await sim.loop.settle();
   return { sim, audit, ...h };
 }

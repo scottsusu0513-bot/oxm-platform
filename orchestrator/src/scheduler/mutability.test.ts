@@ -74,7 +74,7 @@ function setup(opts: { observations?: Record<string, string[]>; audit?: AuditRep
   const loop = createManagerLoop(ports, { managerMode: "deterministic_fixture" });
   const h = createHumanInteractionHarness({ loop, approvals: sim.approvals, audit, now: sim.ports.now, planner: planner(opts.observations), idPrefix: "x" });
   const say = async (text: string, key = "tg.msg.1") => {
-    const r = await h.service.handleReply({ kind: "reply", idempotencyKey: key, replyToDeliveryRef: null, text });
+    const r = await h.service.handleReply({ kind: "reply", idempotencyKey: key, replyToDeliveryRef: null, text: `任務：${text}` });
     await loop.settle();
     return r;
   };

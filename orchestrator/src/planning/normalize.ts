@@ -46,7 +46,7 @@ export function normalizeIntentDecision(raw: unknown, input: { knownTaskIds: rea
       visualObjective: part(r.visualObjective),
     };
   }
-  if (input.requireTask) return { kind: "clarify", question: "/goal creates a new task, but this reads like a question about an existing task. Send it without /goal." };
+  if (input.requireTask) return { kind: "clarify", question: "「任務：」/goal creates a new task, but this reads like a question about an existing task. Send it without 「任務：」 or /goal." };
   const taskId = typeof r.taskId === "string" && input.knownTaskIds.includes(r.taskId) ? r.taskId : null;
   const kind = intent as Exclude<AgentIntent, TaskCreatingIntent>;
   return { kind, intent: kind, taskId };

@@ -122,6 +122,7 @@ const created = await createAgentRuntime((runtimeConfig as Extract<typeof runtim
   planner,
   reviewer,
   manager: planned.manager,
+  questionAnswerer: planned.questionAnswerer,
 });
 if (!created.ok) {
   const f = created as Extract<typeof created, { ok: false }>;
