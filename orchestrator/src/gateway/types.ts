@@ -183,7 +183,48 @@ export interface TaskDirectoryEntry {
   title: string;
   status: string;
   mode: TaskMode;
+  /** Trusted lineage: this task re-runs that earlier task's original goal. */
+  retryOf?: string | null;
 }
+
+/**
+ * Trusted original contract of a task, read from the Manager's own record (never from a caller).
+ * A re-run is built ONLY from this: same goal, criteria, scope, validations and priority.
+ */
+export interface RetrySource {
+  taskId: string;
+  title: string;
+  /** The exact intake instruction of the original task (objective + server policy + verbatim request). */
+  objective: string;
+  mode: TaskMode;
+  goal: import("../domain/types").TaskGoal | null;
+  /** The planner's semantic goal criteria (the fixed per-intent criteria are re-added by intake). */
+  goalCriteria: string[];
+  /** Planner risk observations of the original (they can only raise risk). */
+  riskObservations: string[];
+  /** Plain acceptance criteria of a task created without an interpreted goal. */
+  acceptanceCriteria: string[];
+  expectedScope: string[];
+  requiredValidations: string[];
+  requestedPriority: "critical" | "high" | "normal" | "low" | null;
+  /** One part of a decomposed request (or a cross-part repair): never re-run alone. */
+  decomposed: boolean;
+  retryOf: string | null;
+}
+
+export interface RetrySourcePort {
+  source(taskId: string): RetrySource | null;
+  /** Task created by an intake idempotency key, if any (a redelivered re-run request is a duplicate). */
+  createdBy(idempotencyKey: string): string | null;
+  /** Every known task with its lineage and whether it is still active. */
+  lineage(): readonly { taskId: string; retryOf: string | null; active: boolean }[];
+  /** Scheduler's trusted Worker availability. */
+  availability(): Partial<Record<WorkerKind, import("../executive/workAssignment").WorkerAvailabilityState>>;
+}
+
+export type RetryTaskResponse =
+  | { result: "created"; taskId: string; retryOf: string; status: GatewayTaskStatus; duplicate: boolean }
+  | { result: "refused"; taskId: string; assessment: import("./retry").RetryAssessment };
 
 export type PendingApprovalResponse =
   | { result: "pending"; approval: PendingApprovalRequirement }
@@ -418,4 +459,12 @@ export interface AgentGatewayService {
    * Never creates a task, branch, Worker run, file change, commit or push.
    */
   answerOwnerQuestion(call: GatewayCall<unknown>): Promise<{ answer: string }>;
+  /** Read-only: whether the task's original goal could be re-run now (deterministic policy, trusted state). */
+  getRetryEligibility(call: GatewayCall<unknown>): Promise<import("./retry").RetryAssessment>;
+  /**
+   * Re-runs the task named by a stored retry_task interpretation: a NEW task through normal intake with
+   * the original trusted goal and lineage (routing, risk, validation and approvals all apply again).
+   * The stopped task itself never changes state. Refused (nothing created) unless the policy allows it.
+   */
+  retryTask(call: GatewayCall<unknown>): Promise<RetryTaskResponse>;
 }

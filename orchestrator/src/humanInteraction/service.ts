@@ -24,7 +24,9 @@ import {
 } from "../executive/communication";
 import { isDangerousValue } from "../store/sanitize";
 import type { AuditHumanInteractionLedger } from "./ledger";
+import { composeFollowUp, isPureStatusQuestion, retryRefusedMessage } from "./followUp";
 import { parseTaskCommand, TASK_PREFIX_USAGE } from "./taskPrefix";
+import type { FollowUpTopic } from "../planning/types";
 import type {
   CancelConfirmationNotice,
   CommitApprovalNotice,
@@ -50,6 +52,8 @@ export type HumanInteractionGateway = Pick<
   | "interpretOwnerMessage"
   | "submitInterpretedTask"
   | "answerOwnerQuestion"
+  | "getRetryEligibility"
+  | "retryTask"
   | "getTaskStatus"
   | "getHumanDecision"
   | "submitHumanDecision"
@@ -318,105 +322,7 @@ export function phaseOf(s: GatewayTaskStatus): string {
   }
 }
 
-/**
- * Trusted terminal reasons (the scheduler's blockingReason, surfaced as waitReason) translated to
- * plain language. Only these anchored shapes are explained; anything else returns null so the owner
- * is told the record is insufficient instead of a guess. Raw codes are never part of the text.
- */
-const TERMINAL_REASONS: { re: RegExp; zh: (w: string) => string; en: (w: string) => string }[] = [
-  {
-    re: /^worker failure: (?:git_metadata_changed|branch_changed|branch_mismatch)$/,
-    zh: (w) => `系統偵測到 Git 狀態在 ${w} 執行期間發生異常變更，為安全起見自動停止，沒有接受 ${w} 的修改結果`,
-    en: (w) => `the system detected an unexpected Git state change while ${w} was working, so for safety it stopped automatically and did not accept ${w}'s changes`,
-  },
-  {
-    re: /^worker failure: (?:dirty_worktree|git_error)$|^workspace is not at the (?:retry|checkpoint|repair) head$|^workspace preparation failed: |^branch creation failed: /,
-    zh: () => "工作環境的 Git 狀態不符合安全要求，系統為安全起見停止，沒有接受這次的修改",
-    en: () => "the workspace's Git state did not meet the safety requirements, so the system stopped and accepted no changes",
-  },
-  {
-    re: /^worker failure: scope_violation$|^read-only task modified the workspace$|^mutability invariant violated: /,
-    zh: (w) => `${w} 的修改超出了這個任務允許的範圍，系統為安全起見停止，沒有接受這次的修改`,
-    en: (w) => `${w}'s changes went beyond what this task allowed, so the system stopped and accepted no changes`,
-  },
-  {
-    re: /^worker failure: (?:quota_exhausted|rate_limited)$/,
-    zh: (w) => `${w} 的使用額度用完，無法繼續執行`,
-    en: (w) => `${w} ran out of usage quota and could not continue`,
-  },
-  {
-    re: /^worker failure: authentication_unavailable$/,
-    zh: (w) => `${w} 的登入授權失效，無法繼續執行`,
-    en: (w) => `${w}'s sign-in was no longer valid, so it could not continue`,
-  },
-  {
-    re: /^worker failure: (?:service_unavailable|executable_unavailable|runtime_unavailable|runtime_misconfigured)$|^codespace stopped unexpectedly while worker was running$|^worker \w+ is not executable$/,
-    zh: (w) => `${w} 的執行環境無法使用，任務無法繼續`,
-    en: (w) => `${w}'s work environment was unavailable, so the task could not continue`,
-  },
-  {
-    re: /^worker failure: timeout$/,
-    zh: (w) => `${w} 執行超過時間上限，沒有完成`,
-    en: (w) => `${w} ran past the time limit without finishing`,
-  },
-  {
-    re: /^worker failure: (?:malformed_output|process_error|worker_error|worker_failure|result_mismatch|validation_incomplete|temp_file_error|invalid_contract|policy_error)$|^worker run produced no trusted result$/,
-    zh: (w) => `${w} 執行過程出錯，沒有產生可以信任的結果`,
-    en: (w) => `${w} hit an error and produced no result that could be trusted`,
-  },
-  {
-    re: /^worker execution budget exhausted$|^replan budget exhausted /,
-    zh: () => "已經用完允許的嘗試次數，仍沒有得到可接受的結果",
-    en: () => "it used up the allowed attempts without an acceptable result",
-  },
-  {
-    re: /^cancelled by operator$/,
-    zh: () => "任務被取消",
-    en: () => "the task was cancelled",
-  },
-  {
-    re: /^(?:pre_execution|commit|push|publish|pre_push|post_qa) approval rejected$/,
-    zh: () => "批准請求被拒絕",
-    en: () => "the approval request was rejected",
-  },
-  {
-    re: /^(?:trusted commit failed|push failed|PR creation failed): /,
-    zh: () => "把結果提交或發布到 GitHub 時失敗",
-    en: () => "submitting or publishing the result to GitHub failed",
-  },
-  {
-    re: /^orchestration persistence failed$/,
-    zh: () => "系統內部儲存任務狀態失敗，為安全起見停止",
-    en: () => "the system failed to save the task state, so it stopped for safety",
-  },
-];
-
-/** Plain-language reason a terminal task stopped, or null when no trusted reason is known. */
-export function terminalReason(s: Pick<GatewayTaskStatus, "waitReason" | "assignedWorker">, lang: OwnerLanguage): string | null {
-  const reason = s.waitReason?.trim();
-  if (!reason) return null;
-  const rule = TERMINAL_REASONS.find((r) => r.re.test(reason));
-  if (!rule) return null;
-  const w = s.assignedWorker === "claude" ? "Claude" : s.assignedWorker === "codex" ? "Codex" : lang === "zh" ? "工程師" : "the engineer";
-  return lang === "zh" ? rule.zh(w) : rule.en(w);
-}
-
-/**
- * Follow-up answer for a finished task ("為什麼停止？", "有完成嗎？"): states plainly whether it was
- * completed and, when it was not, the trusted reason. null for tasks that are still in progress.
- */
-export function terminalFollowUp(s: GatewayTaskStatus, lang: OwnerLanguage): string | null {
-  if (s.status === "accepted") return L(lang, "這筆任務已完成。", "This task is complete.");
-  if (s.status !== "blocked" || (s.taskState !== "failed" && s.taskState !== "cancelled")) return null;
-  const reason = terminalReason(s, lang);
-  if (s.taskState === "cancelled")
-    return reason && !/取消|cancelled/.test(reason)
-      ? L(lang, `這筆任務沒有完成，已被取消：${reason}。`, `This task was not completed; it was cancelled: ${reason}.`)
-      : L(lang, "這筆任務沒有完成，已被取消。", "This task was not completed; it was cancelled.");
-  return reason
-    ? L(lang, `這筆任務沒有完成。原因：${reason}。`, `This task was not completed. Reason: ${reason}.`)
-    : L(lang, "這筆任務沒有完成，已停止執行。目前的紀錄不足以說明確切的停止原因，我不會用猜測回答。", "This task was not completed and has stopped. The current record is not enough to state the exact reason, so I will not guess.");
-}
+export { terminalFollowUp, terminalReason } from "./followUp";
 
 function gatewayOutcome(error: unknown, lang: OwnerLanguage = "zh"): InboundResult {
   if (error instanceof GatewayError) {
@@ -447,6 +353,8 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
       if (!existing) deps.ledger.recordIntent({ noticeId: notice.noticeId, kind: notice.kind, ref: notice.ref, taskId: notice.taskId, targetId, createdAt: deps.now() });
       const { deliveryRef } = await deps.transport.deliver(existing ? { ...notice, possibleDuplicate: true } : notice);
       deps.ledger.recordDelivered(notice.noticeId, deliveryRef);
+      // What the owner was last told about is what "it" means in their next message.
+      if (notice.kind !== "cancel_confirmation") deps.ledger.setFocus(notice.taskId);
       log({ event: "human_notice_delivered", outcome: notice.kind });
       return true;
     } catch {
@@ -494,6 +402,8 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
   }
 
   function remember(key: string, result: InboundResult): InboundResult {
+    // A task the owner just created or acted on becomes the subject of the conversation.
+    if (result.taskId && (result.outcome === "submitted" || result.outcome === "resumed" || result.outcome === "duplicate")) deps.ledger.setFocus(result.taskId);
     // Only terminal outcomes are remembered; a transient failure may be retried by a new message.
     if (result.outcome !== "failed" && result.outcome !== "info") deps.ledger.recordHandled({ idempotencyKey: key, outcome: result.outcome });
     log({ event: "human_inbound_handled", outcome: result.outcome });
@@ -692,18 +602,92 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
     }
   }
 
+  /** Newest still-active re-run of a task (trusted lineage through the directory), for its phase. */
+  async function retryPhase(taskId: string, lang: OwnerLanguage, retryTaskId: string | null): Promise<string | null> {
+    if (!retryTaskId) return null;
+    const s = await status(retryTaskId).catch(() => null);
+    return s ? plainPhase(s, lang) : null;
+  }
+
   /**
-   * Follow-up about a known task. A finished task leads with a plain answer (completed or not, and
-   * the trusted reason it stopped) before the status card; a task still in progress gets the card.
+   * Follow-up about a known task. WHAT is asked comes from the Manager's semantic topics: a pure
+   * "where is it" gets the status card; anything else (why / what now / can it be re-run / did it
+   * finish) gets ONE integrated answer composed from trusted state — no separate status card.
    * Read-only: never creates or changes a task.
    */
-  async function followUp(taskId: string, lang: OwnerLanguage): Promise<InboundResult> {
-    const card = await service.taskStatus(taskId);
-    if (!card.taskId) return card;
-    const s = await status(card.taskId).catch(() => null);
-    const lead = s ? terminalFollowUp(s, lang) : null;
-    if (lead) log({ event: "human_task_follow_up_answered", outcome: s?.taskState ?? "unknown" });
-    return lead ? { ...card, message: `${lead}\n\n${card.message}` } : card;
+  async function followUp(taskId: string, lang: OwnerLanguage, topics: readonly FollowUpTopic[] | undefined): Promise<InboundResult> {
+    deps.ledger.setFocus(taskId);
+    if (isPureStatusQuestion(topics) && topics !== undefined) return service.taskStatus(taskId);
+    let s: GatewayTaskStatus;
+    try {
+      s = await status(taskId);
+    } catch (error) {
+      return gatewayOutcome(error, lang);
+    }
+    const label = ownerLabelOf(taskId, labels().get(taskId));
+    // Interpretations stored before topics existed: the earlier behaviour (a finished task leads with its outcome).
+    const asked: readonly FollowUpTopic[] = topics ?? (s.status === "accepted" || s.status === "blocked" ? ["result", "reason"] : ["status"]);
+    if (isPureStatusQuestion(asked)) return service.taskStatus(taskId);
+    const needsAssessment = asked.includes("remediation") || asked.includes("retry_eligibility");
+    const assessment = needsAssessment ? await deps.gateway.getRetryEligibility(call({ taskId })).catch(() => null) : null;
+    const message = composeFollowUp({
+      status: s,
+      topics: asked,
+      assessment,
+      label,
+      phase: plainPhase(s, lang),
+      retryPhase: await retryPhase(taskId, lang, assessment?.eligibility.kind === "retry_in_progress" ? assessment.eligibility.retryTaskId : null),
+      lang,
+    });
+    log({ event: "human_task_follow_up_answered", outcome: asked.join("+") });
+    return { outcome: "info", taskId, message };
+  }
+
+  /**
+   * Explicit re-run request (structured retry_task action from the Manager). The Gateway decides
+   * eligibility deterministically and, when allowed, creates a NEW task with the original goal and
+   * lineage; the stopped task never changes. A refusal creates nothing and says why.
+   */
+  async function retry(key: string, interpretationId: string, taskId: string, lang: OwnerLanguage): Promise<InboundResult> {
+    const label = ownerLabelOf(taskId, labels().get(taskId));
+    try {
+      const r = await deps.gateway.retryTask(call({ interpretationId }));
+      if (r.result === "refused") {
+        const s = await status(taskId).catch(() => null);
+        const e = r.assessment.eligibility;
+        deps.ledger.setFocus(e.kind === "retry_in_progress" ? e.retryTaskId : taskId);
+        log({ event: "human_retry_refused", outcome: e.kind });
+        return {
+          outcome: "info",
+          taskId,
+          message: retryRefusedMessage(r.assessment, {
+            label,
+            phase: s ? plainPhase(s, lang) : "",
+            retryPhase: await retryPhase(taskId, lang, e.kind === "retry_in_progress" ? e.retryTaskId : null),
+            worker: r.assessment.worker,
+            lang,
+          }),
+        };
+      }
+      // The re-run carries the owner's own name for the work; follow-ups now continue on it.
+      deps.ledger.track({ taskId: r.taskId, label: labels().get(taskId) ?? oneLine(label, 60) });
+      deps.ledger.setFocus(r.taskId);
+      if (r.duplicate) return remember(key, { outcome: "duplicate", taskId: r.taskId, message: L(lang, "這個重新執行的要求已經處理過了，不會重複建立任務。", "This re-run was already started; no duplicate task was created.") });
+      log({ event: "human_retry_created", outcome: r.status.status });
+      return remember(key, {
+        outcome: "submitted",
+        taskId: r.taskId,
+        message: L(
+          lang,
+          `好，已依照原本的需求重新建立一筆新任務：「${label}」。原本停止的那筆不會恢復；新任務沿用原本的目標、驗收條件和範圍，從目前最新的程式版本開始，一樣會經過檢查與批准流程。\n目前進度：${plainPhase(r.status, lang)}`,
+          `OK — I created a new task with the original request: "${label}". The stopped task is not resumed; the new one keeps the original goal, acceptance criteria and scope, starts from the latest code, and goes through the same checks and approvals.\nNow: ${plainPhase(r.status, lang)}`,
+        ),
+      });
+    } catch (error) {
+      if (error instanceof GatewayError && error.code === "unavailable")
+        return { outcome: "info", message: L(lang, "重新執行的功能現在無法使用，沒有建立任何任務。請稍後再說一次。", "Re-running is unavailable right now; no task was created. Please ask again shortly.") };
+      return remember(key, gatewayOutcome(error, lang));
+    }
   }
 
   /**
@@ -726,7 +710,9 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
       return remember(key, gatewayOutcome(error, lang));
     }
     const d = view.decision;
-    const guidanceLike = d.kind === "human_decision" || d.kind === "clarify" || (d.kind === "task_follow_up" && (d.taskId === null || pending.some((p) => p.taskId === d.taskId)));
+    // A follow-up that asks something specific (why / what now / can it be re-run) is a question, never guidance.
+    const question = d.kind === "task_follow_up" && !isPureStatusQuestion(d.topics) && d.taskId !== null;
+    const guidanceLike = d.kind === "human_decision" || d.kind === "clarify" || (d.kind === "task_follow_up" && !question && (d.taskId === null || pending.some((p) => p.taskId === d.taskId)));
     if (pending.length === 1 && guidanceLike) return submitGuidance(key, pending[0], text, lang);
     if (pending.length > 1 && d.kind === "human_decision") return whichDecision(pending, lang);
     switch (d.kind) {
@@ -770,7 +756,11 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
       case "status_query":
         return service.listTasks();
       case "task_follow_up":
-        return d.taskId ? followUp(d.taskId, lang) : service.listTasks();
+        return d.taskId ? followUp(d.taskId, lang, d.topics) : service.listTasks();
+      case "retry_task":
+        if (!d.taskId)
+          return { outcome: "needs_selection", message: L(lang, "你要重新執行哪一筆任務？可以回覆那筆任務的訊息，或直接說是哪個需求。沒有做任何變更。", "Which task should be re-run? Reply to its message or tell me which request. Nothing was changed.") };
+        return retry(key, view.interpretationId, d.taskId, lang);
       case "cancel_or_pause":
         if (!d.taskId) return { outcome: "needs_selection", message: L(lang, "要停止哪一個任務？請回覆該任務的訊息並輸入 /cancel，或傳 /cancel <任務編號>。沒有做任何變更。", "Which task should stop? Reply /cancel to its message or send /cancel <task>. Nothing was changed.") };
         return service.requestCancel({ kind: "cancel_request", idempotencyKey: key, target: { taskReference: d.taskId } });
@@ -885,7 +875,9 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
       }
       // Only an ordinary (not explicitly correlated) message may bind to an open decision implicitly.
       const pending = notice ? [] : await openDecisions();
-      const context = notice?.taskId ?? (pending.length === 1 ? pending[0].taskId : null);
+      // Conversation context: the replied-to task, else the one open decision, else the task discussed last.
+      const focus = deps.ledger.focus();
+      const context = notice?.taskId ?? (pending.length === 1 ? pending[0].taskId : focus && deps.directory.allTaskIds().includes(focus) ? focus : null);
       const routed = await routeMessage(reply.idempotencyKey, screened.goal, context, false, undefined, pending);
       if (routed) return routed;
       if (pending.length === 1) return submitGuidance(reply.idempotencyKey, pending[0], screened.goal, lang);

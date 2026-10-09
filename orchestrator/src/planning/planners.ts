@@ -1,5 +1,5 @@
 import { RISK_SIGNAL_KINDS } from "../intake/riskSignals";
-import type { GoalReviewer, GoalReviewInput, IntentPlanner, IntentPlannerInput, TrustedWorkspaceEvidence } from "./types";
+import { FOLLOW_UP_TOPICS, type GoalReviewer, type GoalReviewInput, type IntentPlanner, type IntentPlannerInput, type TrustedWorkspaceEvidence } from "./types";
 
 /**
  * Provider-agnostic intent planner and goal reviewer. The prompts and JSON
@@ -25,13 +25,14 @@ export interface StructuredPlanningBackend {
 export const INTENT_SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["intent", "taskId", "title", "interpretedObjective", "criteria", "clarificationQuestion", "riskObservations", "workAreas", "programmingObjective", "visualObjective"],
+  required: ["intent", "taskId", "followUpTopics", "title", "interpretedObjective", "criteria", "clarificationQuestion", "riskObservations", "workAreas", "programmingObjective", "visualObjective"],
   properties: {
     intent: {
       type: "string",
-      enum: ["investigate_or_answer", "change_code", "audit_or_review", "audit_and_fix", "task_follow_up", "human_decision", "status_query", "cancel_or_pause", "clarify"],
+      enum: ["investigate_or_answer", "change_code", "audit_or_review", "audit_and_fix", "task_follow_up", "retry_task", "human_decision", "status_query", "cancel_or_pause", "clarify"],
     },
     taskId: { type: ["string", "null"] },
+    followUpTopics: { type: "array", items: { type: "string", enum: [...FOLLOW_UP_TOPICS] } },
     title: { type: "string" },
     interpretedObjective: { type: "string" },
     criteria: { type: "array", items: { type: "string" } },
@@ -56,12 +57,19 @@ Choose exactly one intent:
 - audit_or_review: the owner asks to inspect/review an area and report findings, without asking for fixes. Read-only.
 - change_code: the owner asks for a change, fix, or improvement to the product.
 - audit_and_fix: the owner asks to inspect an area and fix the problems found within that area.
-- task_follow_up: the owner asks about progress or results of an existing task ("做到哪了"). Set taskId to that task when identifiable.
-- status_query: the owner asks for an overview of tasks.
+- task_follow_up: the owner asks ABOUT one existing task (its progress, outcome, why it stopped, what to do about it, or whether it could be run again) without asking you to act. Set taskId, and set followUpTopics to EVERY aspect the message asks about:
+  - status: where the task is now / its progress
+  - result: whether it finished or succeeded
+  - reason: why it stopped, failed or was blocked
+  - remediation: what can be done about it / how to handle it / what happens next
+  - retry_eligibility: whether it could be run again (a question, not a request)
+  One message may ask several (e.g. "how do I handle it, can it be re-run?" = remediation + retry_eligibility). Judge by meaning, never by particular words.
+- retry_task: the owner clearly ASKS YOU TO run an existing, finished task again now (including a short confirmation such as "ok, do it" right after you said it could be re-run). Set taskId to the task to re-run. A question whether it is possible is task_follow_up with retry_eligibility, not retry_task. Whether a re-run is actually allowed is decided by the system, not by you.
+- status_query: the owner asks for an overview of tasks (not one specific task).
 - cancel_or_pause: the owner wants an existing task stopped. Set taskId when identifiable.
 - human_decision: the owner is answering an Agent question/escalation about an existing task.
 - clarify: genuinely ambiguous between materially different actions; put one short question in clarificationQuestion.
-Never invent a taskId; only use ids from the TASKS list. When the message replied to a task (CONTEXT TASK), prefer that task for follow-ups, cancellations and decisions.
+Never invent a taskId; only use ids from the TASKS list. CONTEXT TASK is the task the message replied to or, otherwise, the task most recently discussed in this conversation: when the message does not name another task, a follow-up, re-run, cancellation or decision refers to it. A task marked "retry of X" re-runs X's original goal; questions about "the re-run" refer to it. followUpTopics is empty for every intent except task_follow_up.
 
 For the four task-creating intents, also write:
 - title: a short task title (max 100 chars) in the owner's language.
@@ -79,7 +87,7 @@ When the owner's message is guidance on a task that is waiting for their decisio
 export function createStructuredIntentPlanner(backend: StructuredPlanningBackend): IntentPlanner {
   return {
     interpret(req: IntentPlannerInput) {
-      const tasks = req.tasks.map((t) => `- ${t.taskId} [${t.status}, ${t.mode}] ${t.title}`).join("\n") || "(none)";
+      const tasks = req.tasks.map((t) => `- ${t.taskId} [${t.status}, ${t.mode}] ${t.title}${t.retryOf ? ` (retry of ${t.retryOf})` : ""}`).join("\n") || "(none)";
       const user = [
         `TASKS (newest first):\n${tasks}`,
         `CONTEXT TASK: ${req.contextTaskId ?? "none"}`,

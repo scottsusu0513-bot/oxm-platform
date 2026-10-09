@@ -16,7 +16,7 @@
  * environment and never prints secret values. Durable state lives outside the
  * repository (OXM_ORCHESTRATOR_STATE_DIR, default ~/.oxm-orchestrator).
  */
-import { existsSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { createAgentRuntime } from "../orchestrator/src/agentRuntime/compose";
@@ -27,6 +27,7 @@ import { createHumanOwnerSession } from "../orchestrator/src/humanInteraction/au
 import { createAuditHumanInteractionLedger } from "../orchestrator/src/humanInteraction/ledger";
 import { createHumanInteractionService } from "../orchestrator/src/humanInteraction/service";
 import { compactAuditLog } from "../orchestrator/src/persistence/compact";
+import { acquireInstanceLock } from "../orchestrator/src/runtimeSupervisor/instanceLock";
 import { createFileAuditRepository, type FileAuditRepository } from "../orchestrator/src/persistence/fileAudit";
 import { createTelegramBotClient, TelegramApiError } from "../orchestrator/src/telegram/client";
 import { readTelegramConfig, readTelegramSourceConfig } from "../orchestrator/src/telegram/config";
@@ -81,6 +82,21 @@ const stateDir = resolve(process.env.OXM_ORCHESTRATOR_STATE_DIR || join(homedir(
 const rel = relative(process.cwd(), stateDir);
 if (!rel.startsWith("..") && !isAbsolute(rel)) fail("OXM_ORCHESTRATOR_STATE_DIR must be outside the repository");
 const logPath = join(stateDir, "control-plane-audit.jsonl");
+
+// Exactly one runtime per state directory, however it was started: a second one would consume the same
+// owner update queue, answer every message again and append to the same durable log.
+try {
+  mkdirSync(stateDir, { recursive: true });
+} catch {
+  fail("durable state directory could not be created; refusing to start");
+}
+const instanceLock = await acquireInstanceLock(join(stateDir, "runtime-instance.lock"));
+if (!instanceLock.ok)
+  fail(
+    instanceLock.code === "held"
+      ? "another Agent runtime already owns this state directory; refusing to start a second one (it would answer every owner message twice)"
+      : "the runtime instance lock is unavailable (flock); refusing to start without single-instance protection",
+  );
 
 // Bounded log growth: superseded checkpoints/cursors are compacted offline, before the log is opened.
 const compactBytes = Number(process.env.OXM_ORCHESTRATOR_COMPACT_BYTES ?? 64 * 1024 * 1024);

@@ -358,6 +358,8 @@ export interface TaskIntake {
   goal?: TaskGoal;
   /** Set on a cross-part repair task: the group part (same lineage branch) it continues. */
   groupRepairOf?: string;
+  /** Re-run lineage: the earlier (finished) task whose original goal this NEW task runs again. */
+  retryOf?: string;
   /** Typed, auditable risk signals that raised this task's risk at intake (never lowered). */
   riskSignals?: readonly { kind: string; level: "red" | "yellow"; rule: string; evidence: readonly string[]; source: string }[];
 }
@@ -660,6 +662,8 @@ export interface TaskSnapshot {
   taskId: string;
   seq: number;
   title: string;
+  /** Re-run lineage (null for an original task). */
+  retryOf: string | null;
   category: TaskCategory;
   mode: TaskMode;
   /** Accepted answer of a read_only task (Worker report judged by the Manager's reviewer); null otherwise. */

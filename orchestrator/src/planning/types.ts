@@ -16,12 +16,24 @@ export interface PlannerTaskContext {
   title: string;
   status: string;
   mode: TaskMode;
+  /** Trusted lineage: this task re-runs that earlier task's original goal. */
+  retryOf?: string | null;
 }
+
+/**
+ * What a follow-up about a known task asks (semantic, from the GPT Manager).
+ * The answer itself is composed from trusted task state only.
+ */
+export const FOLLOW_UP_TOPICS = ["status", "result", "reason", "remediation", "retry_eligibility"] as const;
+export type FollowUpTopic = (typeof FOLLOW_UP_TOPICS)[number];
 
 export interface IntentPlannerInput {
   /** The owner's message (already screened for credentials). */
   message: string;
-  /** Task the message replied to, resolved from the trusted correlation ledger. */
+  /**
+   * Task the message replied to (trusted correlation ledger), else the one open decision, else the
+   * task most recently discussed in this conversation.
+   */
   contextTaskId: string | null;
   /** Known tasks (trusted runtime state), newest first, bounded. */
   tasks: readonly PlannerTaskContext[];
@@ -50,7 +62,11 @@ export type IntentDecision =
       programmingObjective?: string | null;
       visualObjective?: string | null;
     }
-  | { kind: "status_query" | "task_follow_up" | "cancel_or_pause" | "human_decision"; intent: Exclude<AgentIntent, TaskCreatingIntent>; taskId: string | null }
+  | { kind: "status_query" | "cancel_or_pause" | "human_decision"; intent: Exclude<AgentIntent, TaskCreatingIntent>; taskId: string | null }
+  /** Question about a known task. topics: what is asked (absent in interpretations stored before topics existed). */
+  | { kind: "task_follow_up"; intent: "task_follow_up"; taskId: string | null; topics?: FollowUpTopic[] }
+  /** Explicit request to run a finished task's original goal again. Eligibility is decided deterministically. */
+  | { kind: "retry_task"; intent: "retry_task"; taskId: string | null }
   | { kind: "clarify"; question: string };
 
 export type ReviewStatus = "satisfied" | "not_satisfied" | "unsupported";

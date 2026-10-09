@@ -5,7 +5,7 @@ import { createLifecycleLeaseRegistry } from "../codespace/lease";
 import { createMemoryLifecycleStateRepository } from "../codespace/state";
 import { checkLiveSafety, createGhReadTransport, readCodespaceObservation } from "../e2e/liveAdapters";
 import { createFakeGatewayAudit, createFakeRateLimiter, createInMemoryGatewayDecisionRepository, createInMemoryHumanDecisionRepository } from "../gateway/fake";
-import { createManagerApprovalRequirementReader, createManagerHumanDecisionReader, createManagerLoopGatewayEvents } from "../gateway/integration";
+import { createManagerApprovalRequirementReader, createManagerHumanDecisionReader, createManagerLoopGatewayEvents, createManagerRetrySourcePort } from "../gateway/integration";
 import { createAgentGatewayService } from "../gateway/service";
 import type { AgentGatewayService } from "../gateway/types";
 import { createGitHubReadClient } from "../github/client";
@@ -343,11 +343,12 @@ export async function createAgentRuntime(config: AgentRuntimeConfig, options: Ag
       ? { readOnlyInspector: createReadOnlyInspector(options.questionAnswerer, { read: createRepoFileReader(config.base.repoRoot), ...createRepoSearch(runner, config.base.repoRoot) }) }
       : {}),
     interpretations,
+    retrySources: createManagerRetrySourcePort(loop, (key) => intakeRecords.getByKey(key)?.taskId ?? null),
     taskDirectory: () =>
       loop
         .tasks()
         .reverse()
-        .map((t) => ({ taskId: t.taskId, title: t.title, status: t.status, mode: t.mode })),
+        .map((t) => ({ taskId: t.taskId, title: t.title, status: t.status, mode: t.mode, retryOf: t.retryOf })),
     rateLimiter: createFakeRateLimiter(),
     audit: createFakeGatewayAudit(),
     now,

@@ -1,7 +1,7 @@
 import { createFakeGatewayAudit, createFakeRateLimiter, createInMemoryGatewayDecisionRepository, createInMemoryHumanDecisionRepository, createInMemoryInterpretationRepository } from "../gateway/fake";
 import type { IntentPlanner } from "../planning/types";
 import type { ReadOnlyInspector } from "../planning/ownerQuestion";
-import { createManagerApprovalRequirementReader, createManagerHumanDecisionReader, createManagerLoopGatewayEvents } from "../gateway/integration";
+import { createManagerApprovalRequirementReader, createManagerHumanDecisionReader, createManagerLoopGatewayEvents, createManagerRetrySourcePort } from "../gateway/integration";
 import { createAgentGatewayService } from "../gateway/service";
 import type { AgentGatewayService, GatewayControlEventPort } from "../gateway/types";
 import type { AgentRuntimeService, AgentTaskStatus } from "../intake/types";
@@ -122,13 +122,14 @@ export function createHumanInteractionHarness(input: {
   const decisions = durable("decisions", createInMemoryGatewayDecisionRepository(), ["create", "markEventEmitted"]);
   const submissions = durable("submissions", createInMemoryHumanDecisionRepository(), ["create", "markEventEmitted"]);
   const interpretations = durable("interpretations", createInMemoryInterpretationRepository(), ["create"]);
+  const intakeRecords = durable("intakeRecords", createInMemoryIntakeRepository(), ["create", "update"]);
   // The real Task Intake runtime service: goals become normal intake tasks with trusted ids.
   const intakeService = createAgentRuntimeService({
     tasks: durable("tasks", createInMemoryTaskRepository(clock), ["create", "update", "transition"]),
     runs: durable("runs", createInMemoryTaskRunRepository(clock), ["create", "update"]),
     approvals: input.approvals,
     audit: input.audit,
-    intakeRecords: durable("intakeRecords", createInMemoryIntakeRepository(), ["create", "update"]),
+    intakeRecords,
     scheduler: createManagerLoopRuntimePort(input.loop),
     workerAvailability: () => ({ claude: "available", codex: "available" }),
     nextTaskId: input.nextTaskId ?? (() => `${prefix}-task-${++taskSeq}`),
@@ -163,11 +164,12 @@ export function createHumanInteractionHarness(input: {
     ...(input.planner ? { intentPlanner: input.planner } : {}),
     ...(input.inspector ? { readOnlyInspector: input.inspector } : {}),
     interpretations,
+    retrySources: createManagerRetrySourcePort(input.loop, (key) => intakeRecords.getByKey(key)?.taskId ?? null),
     taskDirectory: () =>
       input.loop
         .tasks()
         .reverse()
-        .map((t) => ({ taskId: t.taskId, title: t.title, status: t.status, mode: t.mode })),
+        .map((t) => ({ taskId: t.taskId, title: t.title, status: t.status, mode: t.mode, retryOf: t.retryOf })),
   });
   const ledger = createAuditHumanInteractionLedger({ audit: input.audit, nextId, now: input.now });
   const service = createHumanInteractionService({

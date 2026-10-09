@@ -29,6 +29,7 @@ export const AGENT_INTENTS = [
   "human_decision",
   "status_query",
   "cancel_or_pause",
+  "retry_task",
 ] as const;
 export type AgentIntent = (typeof AGENT_INTENTS)[number];
 export const TASK_CREATING_INTENTS = ["investigate_or_answer", "change_code", "audit_or_review", "audit_and_fix"] as const;

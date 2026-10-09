@@ -208,6 +208,10 @@ export interface ManagerLoop {
   tasks(): TaskSnapshot[];
   lastSchedule(): ScheduleDecision[];
   rejectedIntakes(): { taskId: string; reason: string }[];
+  /** Read-only copy of a task's original trusted intake (goal, criteria, scope) — the source of a re-run. */
+  intakeOf(taskId: string): TaskIntake | null;
+  /** Read-only copy of the scheduler's trusted Worker availability. */
+  workerAvailability(): Record<WorkerKind, WorkerAvailabilityState>;
   /** Loads the latest checkpoint once and deterministically resumes safe pending work. */
   resume(): Promise<void>;
   /** Stops future dispatch only; an already-running worker is not interrupted. */
@@ -456,6 +460,7 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       taskId: t.intake.taskId,
       seq: t.seq,
       title: t.intake.title,
+      retryOf: t.intake.retryOf ?? null,
       category: t.intake.category,
       mode: modeOf(t),
       // Only the Manager's evidence-filtered synthesis reaches the owner; the Worker's raw report never does.
@@ -2971,6 +2976,11 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
         .map(snapshot),
     lastSchedule: () => structuredClone(last),
     rejectedIntakes: () => structuredClone(rejected),
+    intakeOf: (taskId) => {
+      const t = recs.get(taskId);
+      return t ? structuredClone(t.intake) : null;
+    },
+    workerAvailability: () => structuredClone(availability),
     resume,
     pause(taskId) {
       const t = recs.get(taskId);

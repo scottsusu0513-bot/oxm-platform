@@ -25,6 +25,7 @@ import {
   validateApprovalDecisionRequest,
 } from "./approval";
 import { GatewayError } from "./errors";
+import { assessRetry, type RetryAssessment } from "./retry";
 import type {
   AgentGatewayService,
   ApprovalDecisionRequest,
@@ -37,6 +38,8 @@ import type {
   GatewayInterpretationRepository,
   InterpretOwnerMessageRequest,
   TaskDirectoryEntry,
+  RetrySourcePort,
+  RetryTaskResponse,
   GatewayControlEventPort,
   GatewayDecisionRepository,
   GatewayExpiryPolicy,
@@ -87,6 +90,8 @@ export interface GatewayDependencies {
   plannerTimeoutMs?: number;
   /** Manager read-only inspection (no task); without it answerOwnerQuestion is unavailable (fail closed). */
   readOnlyInspector?: ReadOnlyInspector;
+  /** Trusted original contracts + lineage + Worker availability; without it re-runs are unavailable (fail closed). */
+  retrySources?: RetrySourcePort;
 }
 
 const ESCALATION_ID = /^([A-Za-z0-9][A-Za-z0-9._:-]{0,63})\.hd\.([1-9][0-9]{0,3})$/;
@@ -493,6 +498,37 @@ export function createAgentGatewayService(deps: GatewayDependencies): AgentGatew
     const status = deps.runtime.getTaskStatus(taskId);
     if (!status) throw new GatewayError("not_found", "task not found", 404);
     return externalStatus(status);
+  }
+
+  /** Re-runs created by this process whose task may not be in the Manager's lineage view yet. */
+  const recentRetries = new Map<string, string>();
+  const retriesInFlight = new Set<string>();
+
+  /** Deterministic re-run assessment from trusted state only (status, lineage, availability). */
+  function assessRetryOf(taskId: string): RetryAssessment {
+    const port = deps.retrySources;
+    if (!port) throw new GatewayError("unavailable", "re-runs are unavailable", 503);
+    const status = readStatus(taskId);
+    const source = port.source(taskId);
+    if (!source) throw new GatewayError("not_found", "task not found", 404);
+    // Any still-active descendant (a re-run of this task, or of one of its re-runs) blocks a new one.
+    const lineage = port.lineage();
+    const descendants = new Set([taskId]);
+    for (let grew = true; grew; ) {
+      grew = false;
+      for (const t of lineage)
+        if (t.retryOf && descendants.has(t.retryOf) && !descendants.has(t.taskId)) {
+          descendants.add(t.taskId);
+          grew = true;
+        }
+    }
+    let activeRetryId = lineage.filter((t) => t.active && t.taskId !== taskId && descendants.has(t.taskId)).pop()?.taskId ?? null;
+    const recent = recentRetries.get(taskId);
+    if (!activeRetryId && recent && !lineage.some((t) => t.taskId === recent)) {
+      const s = deps.runtime.getTaskStatus(recent);
+      if (s && !isTerminalState(s.taskState)) activeRetryId = recent;
+    }
+    return assessRetry({ status, activeRetryId, decomposed: source.decomposed, availability: port.availability() });
   }
 
   async function decide(
@@ -943,6 +979,77 @@ export function createAgentGatewayService(deps: GatewayDependencies): AgentGatew
       if (!answer) throw new GatewayError("unavailable", "read-only inspection returned no answer", 503);
       deps.audit.record({ event: "owner_question_answered", principalId: auth.principalId, requestId: auth.requestId, action: "answer_owner_question", outcome: "answered" });
       return { answer };
+    },
+
+    async getRetryEligibility(call) {
+      const auth = await principal(call, "task:read", "task_read", "get_retry_eligibility");
+      const request = taskRequest(call.request);
+      const assessment = assessRetryOf(request.taskId);
+      deps.audit.record({ event: "task_status_read", principalId: auth.principalId, taskId: request.taskId, requestId: auth.requestId, action: "get_retry_eligibility", outcome: assessment.eligibility.kind });
+      return assessment;
+    },
+
+    async retryTask(call): Promise<RetryTaskResponse> {
+      const auth = await principal(call, "task:submit", "task_submit", "retry_task");
+      const input = strictObject(call.request, ["interpretationId"]);
+      if (!SAFE_KEY.test(String(input.interpretationId ?? ""))) invalid("interpretationId is malformed");
+      const stored = deps.interpretations?.get(String(input.interpretationId));
+      if (!stored || stored.principalId !== auth.principalId) throw new GatewayError("not_found", "interpretation not found", 404);
+      const d = stored.decision;
+      if (d.kind !== "retry_task" || !d.taskId) throw new GatewayError("conflict", "interpretation is not a re-run of a known task", 409);
+      const port = deps.retrySources;
+      if (!port) throw new GatewayError("unavailable", "re-runs are unavailable", 503);
+      const originalId = d.taskId;
+      // One message creates at most one re-run: a redelivery returns the task it already created.
+      const key = `${stored.interpretationId}.retry`.slice(0, 128);
+      const prior = port.createdBy(key);
+      if (prior) return { result: "created", taskId: prior, retryOf: originalId, status: readStatus(prior), duplicate: true };
+      const assessment = assessRetryOf(originalId);
+      if (assessment.eligibility.kind !== "allowed") {
+        deps.audit.record({ event: "task_submit_requested", principalId: auth.principalId, taskId: originalId, requestId: auth.requestId, action: "retry_task", outcome: `refused_${assessment.eligibility.kind}` });
+        return { result: "refused", taskId: originalId, assessment };
+      }
+      const src = port.source(originalId)!;
+      // Every field of the new task is the ORIGINAL trusted contract; nothing comes from the caller or the planner.
+      const intake: TaskIntakeRequest = {
+        requestId: auth.requestId,
+        idempotencyKey: key,
+        userInstruction: src.objective,
+        title: src.title,
+        ...(src.requestedPriority ? { priority: src.requestedPriority } : {}),
+        ...(src.goal
+          ? {
+              goal: {
+                intent: src.goal.intent,
+                originalRequest: src.goal.originalRequest,
+                interpretedObjective: src.goal.interpretedObjective,
+                criteria: src.goalCriteria,
+                riskObservations: src.riskObservations,
+                ...(src.goal.workArea ? { workArea: src.goal.workArea } : {}),
+              },
+            }
+          : { acceptanceCriteria: src.acceptanceCriteria }),
+        ...(src.mode === "change" ? { requiredValidations: src.requiredValidations as TaskIntakeRequest["requiredValidations"] } : {}),
+        expectedScopeHint: src.expectedScope,
+        retryOf: originalId,
+        source: { type: "gateway", requesterId: auth.principalId, reference: auth.source },
+        submittedAt: deps.now(),
+      };
+      deps.audit.record({ event: "task_submit_requested", principalId: auth.principalId, taskId: originalId, requestId: auth.requestId, action: "retry_task", outcome: "requested" });
+      // Intake awaits classification: a concurrent second re-run of the same task is refused, never a duplicate.
+      if (retriesInFlight.has(originalId)) throw new GatewayError("conflict", "a re-run of this task is already being created", 409);
+      retriesInFlight.add(originalId);
+      let result: Awaited<ReturnType<AgentRuntimeService["submitTask"]>>;
+      try {
+        result = await deps.runtime.submitTask(intake);
+      } finally {
+        retriesInFlight.delete(originalId);
+      }
+      if (result.outcome === "needs_clarification") throw new GatewayError("invalid_request", "task needs clarification", 400);
+      if (result.outcome === "rejected")
+        throw new GatewayError(result.reasonCode === "idempotency_conflict" ? "idempotency_conflict" : "invalid_request", result.reason, result.reasonCode === "idempotency_conflict" ? 409 : 400);
+      recentRetries.set(originalId, result.taskId);
+      return { result: "created", taskId: result.taskId, retryOf: originalId, status: externalStatus(result.status), duplicate: result.outcome === "duplicate" };
     },
 
     async submitInterpretedTask(call) {

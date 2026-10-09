@@ -6,7 +6,30 @@ export const HUMAN_NOTICE_DELIVERED_EVENT = "human_notice_delivered";
 export const HUMAN_TRANSPORT_CURSOR_EVENT = "human_transport_cursor";
 export const HUMAN_INBOUND_HANDLED_EVENT = "human_inbound_handled";
 export const HUMAN_TASK_TRACKED_EVENT = "human_task_tracked";
+export const HUMAN_CONVERSATION_FOCUS_EVENT = "human_conversation_focus";
+export const HUMAN_RESPONSE_INTENT_EVENT = "human_response_intent";
+export const HUMAN_RESPONSE_DELIVERED_EVENT = "human_response_delivered";
+export const HUMAN_RESPONSE_FAILED_EVENT = "human_response_failed";
+export const HUMAN_RESPONSE_ABANDONED_EVENT = "human_response_abandoned";
 export const HUMAN_INTERACTION_STREAM = "human-interaction";
+
+/**
+ * One logical human-facing response to one inbound transport event (e.g. the answer to one
+ * Telegram message). Its identity is the inbound event + response kind — never the text — so two
+ * different messages that happen to produce the same words are two responses, and one message is
+ * answered at most once even when the update is re-handled (restart, re-claim, redelivery).
+ */
+export interface ResponseRecord {
+  responseId: string;
+  /** The exact text to (re)send while delivery is unconfirmed; "" when the response needs no message. */
+  text: string;
+  chatId: number;
+  replyTo: number | null;
+  deliveryRef: string | null;
+  failures: number;
+  abandoned: boolean;
+  createdAt: string;
+}
 
 export interface HandledInbound {
   idempotencyKey: string;
@@ -26,6 +49,17 @@ export interface AuditHumanInteractionLedger extends HumanInteractionLedger {
   /** Tasks whose milestones are reported to the human. */
   tracked(): TrackedTask[];
   track(task: TrackedTask): void;
+  /** Task most recently discussed with the owner (conversation context for the Manager); null when none. */
+  focus(): string | null;
+  setFocus(taskId: string): void;
+  response(responseId: string): ResponseRecord | null;
+  /** Written BEFORE the send: the logical response exists once, whatever happens to the transport. */
+  recordResponseIntent(record: { responseId: string; text: string; chatId: number; replyTo: number | null; createdAt: string }): void;
+  recordResponseDelivered(responseId: string, deliveryRef: string): void;
+  recordResponseFailed(responseId: string): void;
+  recordResponseAbandoned(responseId: string): void;
+  /** Responses whose delivery is not confirmed and not abandoned (oldest first). */
+  pendingResponses(): ResponseRecord[];
 }
 
 const NOTICE_KINDS = new Set<NoticeKind>(["human_decision", "commit_publish_approval", "start_approval", "milestone", "cancel_confirmation"]);
@@ -54,6 +88,8 @@ export function createAuditHumanInteractionLedger(input: {
   const cursors = new Map<string, number>();
   const handled = new Map<string, HandledInbound>();
   const tracked = new Map<string, TrackedTask>();
+  const responses = new Map<string, ResponseRecord>();
+  let focus: string | null = null;
 
   for (const e of input.audit.list({ taskId: stream })) {
     const m = e.metadata as Record<string, unknown>;
@@ -75,13 +111,28 @@ export function createAuditHumanInteractionLedger(input: {
     } else if (e.event === HUMAN_INBOUND_HANDLED_EVENT) {
       if (!str(m.idempotencyKey) || !str(m.outcome)) throw new Error("[human-interaction] malformed inbound record; refusing to load");
       handled.set(m.idempotencyKey as string, { idempotencyKey: m.idempotencyKey as string, outcome: m.outcome as InboundOutcome });
+    } else if (e.event === HUMAN_CONVERSATION_FOCUS_EVENT) {
+      if (!str(m.taskId)) throw new Error("[human-interaction] malformed focus record; refusing to load");
+      focus = m.taskId as string;
+    } else if (e.event === HUMAN_RESPONSE_INTENT_EVENT) {
+      if (!str(m.responseId) || typeof m.text !== "string" || !Number.isSafeInteger(m.chatId) || !str(m.createdAt)) throw new Error("[human-interaction] malformed response-intent record; refusing to load");
+      if (!responses.has(m.responseId as string))
+        responses.set(m.responseId as string, { responseId: m.responseId as string, text: m.text, chatId: m.chatId as number, replyTo: Number.isSafeInteger(m.replyTo) ? (m.replyTo as number) : null, deliveryRef: null, failures: 0, abandoned: false, createdAt: m.createdAt as string });
+    } else if (e.event === HUMAN_RESPONSE_DELIVERED_EVENT || e.event === HUMAN_RESPONSE_FAILED_EVENT || e.event === HUMAN_RESPONSE_ABANDONED_EVENT) {
+      const r = responses.get(m.responseId as string);
+      if (!r) throw new Error("[human-interaction] response outcome without intent; refusing to load");
+      if (e.event === HUMAN_RESPONSE_DELIVERED_EVENT) {
+        if (!str(m.deliveryRef)) throw new Error("[human-interaction] malformed delivered-response record; refusing to load");
+        r.deliveryRef = m.deliveryRef as string;
+      } else if (e.event === HUMAN_RESPONSE_FAILED_EVENT) r.failures++;
+      else r.abandoned = true;
     } else if (e.event === HUMAN_TASK_TRACKED_EVENT) {
       if (!str(m.taskId) || typeof m.label !== "string") throw new Error("[human-interaction] malformed tracked-task record; refusing to load");
       tracked.set(m.taskId as string, { taskId: m.taskId as string, label: m.label });
     }
   }
 
-  const append = (event: string, metadata: Record<string, string | number>) =>
+  const append = (event: string, metadata: Record<string, string | number | null>) =>
     input.audit.append({ id: input.nextId(), taskId: stream, actor: "system", event, metadata });
   const get = (id: string | undefined) => (id && notices.has(id) ? { ...notices.get(id)! } : null);
 
@@ -118,6 +169,38 @@ export function createAuditHumanInteractionLedger(input: {
       append(HUMAN_INBOUND_HANDLED_EVENT, { idempotencyKey: entry.idempotencyKey, outcome: entry.outcome });
       handled.set(entry.idempotencyKey, { ...entry });
     },
+    focus: () => focus,
+    setFocus(taskId) {
+      if (focus === taskId) return;
+      append(HUMAN_CONVERSATION_FOCUS_EVENT, { taskId });
+      focus = taskId;
+    },
+    response: (id) => (responses.has(id) ? { ...responses.get(id)! } : null),
+    recordResponseIntent(record) {
+      if (responses.has(record.responseId)) return;
+      append(HUMAN_RESPONSE_INTENT_EVENT, { responseId: record.responseId, text: record.text, chatId: record.chatId, replyTo: record.replyTo, createdAt: record.createdAt });
+      responses.set(record.responseId, { ...record, deliveryRef: null, failures: 0, abandoned: false });
+    },
+    recordResponseDelivered(id, deliveryRef) {
+      const r = responses.get(id);
+      if (!r) throw new Error("[human-interaction] response delivery without intent");
+      if (r.deliveryRef !== null) return;
+      append(HUMAN_RESPONSE_DELIVERED_EVENT, { responseId: id, deliveryRef, deliveredAt: now() });
+      r.deliveryRef = deliveryRef;
+    },
+    recordResponseFailed(id) {
+      const r = responses.get(id);
+      if (!r || r.deliveryRef !== null) return;
+      append(HUMAN_RESPONSE_FAILED_EVENT, { responseId: id, failedAt: now() });
+      r.failures++;
+    },
+    recordResponseAbandoned(id) {
+      const r = responses.get(id);
+      if (!r || r.deliveryRef !== null || r.abandoned) return;
+      append(HUMAN_RESPONSE_ABANDONED_EVENT, { responseId: id, abandonedAt: now() });
+      r.abandoned = true;
+    },
+    pendingResponses: () => Array.from(responses.values(), (r) => ({ ...r })).filter((r) => r.deliveryRef === null && !r.abandoned),
     tracked: () => Array.from(tracked.values(), (t) => ({ ...t })),
     track(task) {
       if (tracked.has(task.taskId)) return;

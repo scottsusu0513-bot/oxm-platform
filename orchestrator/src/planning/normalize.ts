@@ -1,7 +1,7 @@
 import { AGENT_INTENTS, TASK_CREATING_INTENTS, modeForIntent, type AgentIntent, type TaskCreatingIntent } from "../domain/types";
 import { isDangerousValue, REDACTED } from "../store/sanitize";
 import { validatePlannerGoal } from "./structured";
-import type { CriterionReview, IntentDecision } from "./types";
+import { FOLLOW_UP_TOPICS, type CriterionReview, type FollowUpTopic, type IntentDecision } from "./types";
 
 const text = (v: unknown, max: number): string | null => {
   if (typeof v !== "string") return null;
@@ -49,6 +49,15 @@ export function normalizeIntentDecision(raw: unknown, input: { knownTaskIds: rea
   if (input.requireTask) return { kind: "clarify", question: "「任務：」/goal creates a new task, but this reads like a question about an existing task. Send it without 「任務：」 or /goal." };
   const taskId = typeof r.taskId === "string" && input.knownTaskIds.includes(r.taskId) ? r.taskId : null;
   const kind = intent as Exclude<AgentIntent, TaskCreatingIntent>;
+  if (kind === "task_follow_up") {
+    // Only the fixed topic set survives; order and duplicates are normalized. Unknown topics are dropped.
+    // Missing field (older planner output): topics stay unknown and the answer falls back to the task's outcome.
+    if (!Array.isArray(r.followUpTopics)) return { kind, intent: kind, taskId };
+    const raw = r.followUpTopics as unknown[];
+    const topics = FOLLOW_UP_TOPICS.filter((t) => raw.includes(t)) as FollowUpTopic[];
+    return { kind, intent: kind, taskId, topics };
+  }
+  if (kind === "retry_task") return { kind, intent: kind, taskId };
   return { kind, intent: kind, taskId };
 }
 

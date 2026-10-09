@@ -168,8 +168,9 @@ describe("Manager conversation without the prefix", () => {
     await h.sim.loop.settle();
     const r = await h.say("tg.msg.2", "所以剛剛為什麼停止？");
     expect(r).toMatchObject({ outcome: "info", taskId: "p-task-1" });
-    expect(r.message).toContain("目前進度：任務已取消");
-    expect(r.message).not.toContain("已停止");
+    // One integrated answer (no status card appended): the task by its own name, cancelled.
+    expect(r.message).toBe("「修改首頁」沒有完成，已被取消。");
+    expect(r.message).not.toContain("目前進度");
     expect(h.sim.loop.tasks()).toHaveLength(1);
     expect(planner.calls[1].tasks.map((t) => t.taskId)).toEqual(["p-task-1"]);
   });
@@ -347,11 +348,9 @@ describe("follow-up about a finished task answers why it stopped (trusted reason
     for (const [i, q] of ["為何已停止", "為什麼已停止"].entries()) {
       const r = await h.say(`tg.msg.${i + 2}`, q);
       expect(r).toMatchObject({ outcome: "info", taskId: "p-task-1" });
-      const [lead] = r.message.split("\n\n");
-      expect(lead).toBe("這筆任務沒有完成。原因：系統偵測到 Git 狀態在 Claude 執行期間發生異常變更，為安全起見自動停止，沒有接受 Claude 的修改結果。");
-      expect(lead).not.toMatch(RAW);
-      expect(r.message).not.toMatch(/git_metadata_changed|worker failure/);
-      expect(r.message).toContain("目前進度：任務執行失敗"); // the status card still follows
+      expect(r.message).toBe("「修改柱狀圖人數」沒有完成。原因：系統偵測到 Git 狀態在 Claude 執行期間發生異常變更，為安全起見自動停止，沒有接受 Claude 的修改結果。");
+      expect(r.message).not.toMatch(RAW);
+      expect(r.message).not.toContain("目前進度"); // no status card stacked on a reason answer
     }
     expect(h.sim.loop.tasks()).toHaveLength(tasks);
     expect(h.sim.workerCalls).toHaveLength(runs);
@@ -361,7 +360,7 @@ describe("follow-up about a finished task answers why it stopped (trusted reason
   it("2. failed task + 「請問有修改完成嗎」 says clearly it was not completed, with the reason", async () => {
     const { h } = await failedTask(["請問有修改完成嗎"]);
     const r = await h.say("tg.msg.2", "請問有修改完成嗎");
-    expect(r.message).toMatch(/^這筆任務沒有完成。原因：系統偵測到 Git 狀態/);
+    expect(r.message).toMatch(/^「修改柱狀圖人數」沒有完成。原因：系統偵測到 Git 狀態/);
     expect(r.message).not.toMatch(/已完成/);
     expect(h.sim.loop.tasks()).toHaveLength(1);
   });
@@ -374,7 +373,7 @@ describe("follow-up about a finished task answers why it stopped (trusted reason
     await h.sim.loop.settle();
     expect(h.sim.loop.task("p-task-1")?.state).toBe("complete");
     const r = await h.say("tg.msg.2", "有完成嗎");
-    expect(r.message).toMatch(/^這筆任務已完成。\n\n/);
+    expect(r.message).toBe("「修改首頁」已完成。");
     expect(r.message).not.toMatch(/沒有完成|原因/);
     expect(h.sim.loop.tasks()).toHaveLength(1);
   });

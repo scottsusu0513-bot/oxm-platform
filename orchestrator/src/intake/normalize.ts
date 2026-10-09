@@ -31,6 +31,7 @@ const REQUEST_KEYS = new Set([
   "submittedAt",
   "goal",
   "prioritySignals",
+  "retryOf",
 ]);
 
 function canonical(value: unknown): string {
@@ -81,7 +82,7 @@ function inferredTitle(instruction: string): string {
  * to the owner, including any unverified boundary, is the Manager's
  * synthesis, not a blocking criterion.
  */
-const FIXED_GOAL_CRITERIA: Readonly<Record<TaskGoal["intent"], readonly string[]>> = {
+export const FIXED_GOAL_CRITERIA: Readonly<Record<TaskGoal["intent"], readonly string[]>> = {
   investigate_or_answer: [
     "The owner's question is answered directly",
     "The core answer is supported by trusted repository evidence (file paths)",
@@ -328,6 +329,8 @@ export function validateAndNormalizeRequest(
         : [`The requested outcome is observable: ${title}`]
     ).map((text, i) => ({ id: `AC-${i + 1}`, text }));
   }
+  if (request.retryOf !== undefined && (typeof request.retryOf !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(request.retryOf)))
+    return reject("invalid_lineage", "retryOf is malformed");
   if (mode === "read_only" && request.requiredValidations !== undefined)
     return reject("invalid_validation", "read-only tasks use the fixed read-only validation set");
   const requiredValidations = Array.from(
@@ -354,8 +357,10 @@ export function validateAndNormalizeRequest(
     mode,
     ...(goal ? { goal } : {}),
     ...(riskObservations.length ? { riskObservations } : {}),
+    ...(request.retryOf !== undefined ? { retryOf: request.retryOf } : {}),
   };
   value.fingerprint = fingerprintRequest({
+    retryOf: value.retryOf ?? null,
     mode: value.mode,
     goal: value.goal ?? null,
     riskObservations: value.riskObservations ?? [],

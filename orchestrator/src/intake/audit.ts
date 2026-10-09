@@ -34,6 +34,8 @@ export function createIntakeAuditor(input: {
       llmClassifierCalls?: number;
       activatedIntakeCapabilities?: readonly string[];
       cancellationRequested?: boolean;
+      /** Re-run lineage: the earlier task this one runs again. */
+      retryOf?: string;
     }
   ) =>
     input.audit.append({
