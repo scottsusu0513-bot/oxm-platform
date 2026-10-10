@@ -20,7 +20,7 @@ const INFRA = new Set(["processRunner.ts", "promptFile.ts", "gitInspector.ts", "
 
 describe("worker layer boundaries", () => {
   it("covers the worker modules", () => {
-    expect(sources.sort()).toEqual(["claudeCode.ts", "codex.ts", "fake.ts", "gitInspector.ts", "gitIntegrity.ts", "killSwitch.ts", "lifecycle.ts", "permissions.ts", "processRunner.ts", "prompt.ts", "promptFile.ts", "resultParser.ts", "runtimeWorker.ts", "types.ts", "workerAdapter.ts"]);
+    expect(sources.sort()).toEqual(["attribution.ts", "claudeCode.ts", "codex.ts", "fake.ts", "gitInspector.ts", "gitIntegrity.ts", "killSwitch.ts", "lifecycle.ts", "permissions.ts", "processRunner.ts", "prompt.ts", "promptFile.ts", "resultParser.ts", "runtimeWorker.ts", "types.ts", "workerAdapter.ts"]);
   });
 
   it("only processRunner.ts touches child_process, and never with a shell", () => {

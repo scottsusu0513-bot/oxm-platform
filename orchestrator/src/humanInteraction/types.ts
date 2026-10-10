@@ -65,7 +65,12 @@ export interface CommitApprovalNotice extends NoticeBase {
   branch: string;
   filesChanged: string[];
   validationsPassed: string[];
+  /** Validations that ran and failed. */
   validationsNotPassed: string[];
+  /** Validations that could not be verified (environment / unattributable); not task failures. */
+  validationsUnverified?: string[];
+  /** Other actors' workspace changes the publish leaves out (shared workspace). */
+  excludedPaths?: string[];
   managerAccepted: true;
   risk: RiskLevel;
   expiresAt: string;

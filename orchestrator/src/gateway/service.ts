@@ -3,7 +3,7 @@ import type { AgentRuntimeService, TaskIntakeRequest } from "../intake/types";
 import type { ApprovalRepository } from "../store/repositories";
 import { isDangerousValue, REDACTED } from "../store/sanitize";
 import { fingerprintRequest } from "../intake/normalize";
-import { MAX_HUMAN_GUIDANCE_LENGTH, type HumanDecisionInput } from "../manager/types";
+import { MAX_HUMAN_GUIDANCE_LENGTH, VALIDATION_STATUSES, type HumanDecisionInput } from "../manager/types";
 import { isValidEscalationId } from "../domain/types";
 import type { IsoTimestamp } from "../store/types";
 import { normalizeIntentDecision } from "../planning/normalize";
@@ -356,11 +356,12 @@ function sanitizeCommitEvidence(value: CommitApprovalEvidence | undefined): Comm
     typeof value.branch !== "string" || value.branch.length > 240 || /[\u0000-\u001f\u007f]/.test(value.branch) ||
     !/^[0-9a-f]{40}$/.test(value.expectedHeadSha) ||
     !safeList(value.changedPaths, 200) || !safeList(value.allowedScope, 200) ||
+    (value.excludedPaths !== undefined && (!safeList(value.excludedPaths, 200) || value.excludedPaths.some((p) => value.changedPaths.includes(p)))) ||
     !/^[0-9a-f]{64}$/.test(value.gitMetadataDigest) ||
     !Array.isArray(value.contentIdentities) || value.contentIdentities.length !== new Set(value.changedPaths).size ||
     value.contentIdentities.some((id) => !id || !value.changedPaths.includes(id.path) || !["100644", "100755", "120000", "absent"].includes(id.mode) || (id.mode === "absent" ? id.blob !== null : typeof id.blob !== "string" || !/^[0-9a-f]{40}$/.test(id.blob))) ||
     !Array.isArray(value.validations) || value.validations.length > 50 ||
-    value.validations.some((v) => !v || typeof v.name !== "string" || v.name.length > 100 || /[\u0000-\u001f\u007f]/.test(v.name) || isDangerousValue(v.name) || typeof v.requested !== "boolean" || typeof v.executed !== "boolean" || typeof v.trusted !== "boolean" || !["passed", "failed", "skipped", "missing"].includes(v.status)) ||
+    value.validations.some((v) => !v || typeof v.name !== "string" || v.name.length > 100 || /[\u0000-\u001f\u007f]/.test(v.name) || isDangerousValue(v.name) || typeof v.requested !== "boolean" || typeof v.executed !== "boolean" || typeof v.trusted !== "boolean" || !(VALIDATION_STATUSES as readonly string[]).includes(v.status)) ||
     !Array.isArray(value.acceptance) || value.acceptance.length > 50 ||
     value.acceptance.some((a) => !a || !SAFE_KEY.test(a.criterionId) || !["satisfied", "failed", "unknown"].includes(a.status) || !["validation", "ci_check", "scope", "human", "worker_report", "manager_review", "constraint_check"].includes(a.evidenceType) || (a.reference !== null && (typeof a.reference !== "string" || a.reference.length > 100 || /[\u0000-\u001f\u007f]/.test(a.reference) || isDangerousValue(a.reference)))) ||
     !["green", "yellow", "red"].includes(value.observedRisk) ||

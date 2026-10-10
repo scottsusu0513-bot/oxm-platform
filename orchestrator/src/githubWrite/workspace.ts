@@ -135,14 +135,21 @@ export interface PrepareInput {
   creation?: BranchCreation | null;
   /** Pre-existing dirty paths that are explicitly part of this task (same policy as the worker). */
   allowedDirtyPaths?: readonly string[];
+  /**
+   * The task's allowedScope. When given, unrelated dirty paths OUTSIDE it (other actors' changes
+   * in a shared workspace) are tolerated: the Worker's delta is attributed against a trusted
+   * baseline and they are never committed. Absent: every unrelated dirty path fails closed.
+   */
+  allowedScope?: readonly string[];
 }
 
 const fail = (error: PrepareErrorType, reason: string) => ({ ok: false as const, error, reason });
 const commitFail = (error: CommitErrorType, reason: string) => ({ ok: false as const, error, reason });
 
-export function dirtyViolations(status: GitStatus, allowed: readonly string[]): string[] {
+/** Unrelated dirty paths that block work: all of them, or (with a scope) only those inside the scope. */
+export function dirtyViolations(status: GitStatus, allowed: readonly string[], scope?: readonly string[]): string[] {
   const ok = new Set(allowed);
-  return status.dirtyPaths.filter((p) => !ok.has(p));
+  return status.dirtyPaths.filter((p) => !ok.has(p) && (scope === undefined || isPathInScope(p, scope)));
 }
 
 /** Runs one WORKSPACE_GIT_SUBCOMMANDS command; `allowMissing` maps an empty exit-1 (rev-parse --quiet) to null. */
@@ -185,7 +192,7 @@ export async function prepareAssignedWorkspace(input: PrepareInput, deps: Worksp
     // --- working tree preflight
     const before = await deps.git.status();
     if (before.branch === "HEAD") return fail("detached_head", "workspace is on a detached HEAD");
-    const dirty = dirtyViolations(before, allowedDirty);
+    const dirty = dirtyViolations(before, allowedDirty, input.allowedScope);
     if (dirty.length) return fail("dirty_worktree", `${dirty.length} unrelated dirty path(s) present`);
 
     // --- remote state of exactly this branch
@@ -215,7 +222,7 @@ export async function prepareAssignedWorkspace(input: PrepareInput, deps: Worksp
     const after = await deps.git.status();
     if (after.branch !== plan.branch) return fail("verification_failed", "workspace is not on the assigned branch after preparation");
     if (after.headSha !== expected) return fail("verification_failed", "workspace HEAD is not the expected SHA after preparation");
-    const dirtyAfter = dirtyViolations(after, allowedDirty);
+    const dirtyAfter = dirtyViolations(after, allowedDirty, input.allowedScope);
     if (dirtyAfter.length) return fail("verification_failed", "unexpected dirty paths after preparation");
     const gitMetadataDigest = await deps.git.metadataDigest();
 
@@ -281,6 +288,11 @@ export async function commitValidatedChanges(
   if (paths.length === 0 || paths.some((path) => !isSafeRepoPath(path) || !isPathInScope(path, evidence.allowedScope))) {
     return commitFail("policy_violation", "validated changed paths are empty, unsafe, or outside allowedScope");
   }
+  // Other actors' changes in a shared workspace: named in the approval, never staged or committed.
+  const excluded = new Set(evidence.excludedPaths ?? []);
+  if (Array.from(excluded).some((path) => !isSafeRepoPath(path) || isPathInScope(path, evidence.allowedScope) || paths.includes(path))) {
+    return commitFail("policy_violation", "excluded paths must be safe, outside allowedScope, and disjoint from the validated paths");
+  }
   const approvedContent = normalizeContentIdentities(evidence.contentIdentities ?? []);
   if (
     approvedContent.length !== paths.length ||
@@ -316,7 +328,10 @@ export async function commitValidatedChanges(
     if (before.branch !== plan.branch || before.headSha !== evidence.expectedHeadSha) {
       return commitFail("verification_failed", "workspace branch or HEAD moved before trusted commit");
     }
-    if (!samePaths(before.dirtyPaths)) return commitFail("dirty_worktree", "working tree contains foreign, missing, or unowned dirty paths");
+    // Every validated path is still dirty, and every other dirty path is one the owner saw excluded.
+    if (paths.some((path) => !before.dirtyPaths.includes(path)) || before.dirtyPaths.some((path) => !paths.includes(path) && !excluded.has(path))) {
+      return commitFail("dirty_worktree", "working tree contains foreign, missing, or unowned dirty paths");
+    }
     const stale = await verifyApprovedState();
     if (stale) return stale;
 
@@ -349,11 +364,12 @@ export async function commitValidatedChanges(
     await run(["commit", "--no-verify", "--message", `chore(agent): apply task ${plan.taskId}`]);
 
     const after = await deps.git.status();
-    const committedPaths = await deps.git.changedPathsSince(evidence.expectedHeadSha);
     if (after.branch !== plan.branch || after.headSha === evidence.expectedHeadSha || !isValidSha(after.headSha)) {
       return commitFail("verification_failed", "trusted commit did not advance the assigned branch HEAD");
     }
-    if (after.dirtyPaths.length !== 0 || !samePaths(committedPaths)) {
+    // Exactly the paths of the new commit (excluded working-tree changes stay uncommitted).
+    const committedPaths = (await run(["diff", "--no-renames", "--name-only", "-z", evidence.expectedHeadSha, after.headSha, "--"])).split("\0").filter(Boolean);
+    if (after.dirtyPaths.some((path) => !excluded.has(path)) || !samePaths(committedPaths)) {
       return commitFail("verification_failed", "trusted commit did not contain exactly the validated paths");
     }
     return { ok: true, headSha: after.headSha };
@@ -416,8 +432,8 @@ export function checkWorkerPreconditions(input: {
   if (status.branch === "HEAD") return { ok: false, reason: "workspace is on a detached HEAD" };
   if (status.branch !== p.branch) return { ok: false, reason: "workspace is not on the assigned branch" };
   if (status.headSha !== p.headSha) return { ok: false, reason: "workspace HEAD moved since preparation" };
-  if (dirtyViolations(status, contract.allowedDirtyPaths ?? p.allowedDirtyPaths).length) {
-    return { ok: false, reason: "unrelated dirty paths present" };
+  if (dirtyViolations(status, contract.allowedDirtyPaths ?? p.allowedDirtyPaths, contract.allowedScope).length) {
+    return { ok: false, reason: "unrelated dirty paths present inside the task scope" };
   }
   if (input.metadataDigest !== p.gitMetadataDigest) return { ok: false, reason: "Git metadata changed since preparation" };
   if (contract.gitMetadataDigest !== undefined && contract.gitMetadataDigest !== p.gitMetadataDigest) {

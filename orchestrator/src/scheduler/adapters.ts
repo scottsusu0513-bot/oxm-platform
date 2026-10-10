@@ -9,6 +9,7 @@ import { approvalAuthorizes } from "../store/repositories";
 import type { Approval, IsoTimestamp } from "../store/types";
 import type { GitInspector, WorkerAdapter, WorkerResult, WorkerTaskContract } from "../workers/types";
 import { selectWorkerAdapter } from "../workers/workerAdapter";
+import { isPathInScope } from "../workers/prompt";
 import type { AcceptanceEvidence, ValidationEvidence } from "../manager/types";
 import type { ApprovalPort, EvidencePort, QaPort, RepoStatePort, TrustedRunRecord, WorkerPort, WorkspacePort } from "./types";
 
@@ -16,7 +17,7 @@ import type { ApprovalPort, EvidencePort, QaPort, RepoStatePort, TrustedRunRecor
 export function createWorkspacePort(deps: WorkspaceDeps): WorkspacePort {
   return {
     prepare(input) {
-      return prepareAssignedWorkspace({ plan: input.plan, lease: input.lease, creation: input.creation }, deps);
+      return prepareAssignedWorkspace({ plan: input.plan, lease: input.lease, creation: input.creation, ...(input.allowedScope ? { allowedScope: input.allowedScope } : {}) }, deps);
     },
     async checkPreconditions(input) {
       const status = await deps.git.status();
@@ -109,8 +110,10 @@ export function createEvidencePort(input: { git: GitInspector; validations(contr
       if (!contract.gitMetadataDigest || (await input.git.metadataDigest()) !== contract.gitMetadataDigest) {
         throw new Error("[scheduler] Git metadata changed since workspace preparation");
       }
+      const { owned, foreign } = splitTaskOwnedDelta(changedPaths, contract, result);
       return {
-        changedPaths,
+        changedPaths: owned,
+        ...(foreign.length ? { foreignPaths: foreign } : {}),
         validations: input.validations(contract, result).map((v) => ({ ...v })),
         acceptance: input.acceptance(contract, result).map((a) => ({ ...a })),
         verifiedHeadSha: status.headSha,
@@ -118,6 +121,26 @@ export function createEvidencePort(input: { git: GitInspector; validations(contr
       };
     },
   };
+}
+
+/**
+ * Task-owned part of the Git-observed delta. In-scope paths are the task's (the Worker preflight
+ * refuses to start with unrelated dirty paths inside the scope). Out-of-scope paths are the
+ * task's only when the trusted Worker adapter attributed them to this execution (it lists a
+ * genuine scope violation in filesChanged); everything else is shared-workspace state that is
+ * not the Worker's: excluded from the task delta, never committed, reported to the owner.
+ */
+export function splitTaskOwnedDelta(changedPaths: readonly string[], contract: Partial<Pick<WorkerTaskContract, "allowedScope">>, result: Partial<Pick<WorkerResult, "filesChanged">>): { owned: string[]; foreign: string[] } {
+  const paths = Array.from(new Set(changedPaths)).sort();
+  const scope = contract.allowedScope ?? [];
+  // Without a scope nothing can be attributed away: every change stays the task's (the validator
+  // then fails closed on the undefined scope). Never hide a change from the scope check.
+  if (scope.length === 0) return { owned: paths, foreign: [] };
+  const attributed = new Set(result.filesChanged ?? []);
+  const owned: string[] = [];
+  const foreign: string[] = [];
+  for (const p of paths) (isPathInScope(p, scope) || attributed.has(p) ? owned : foreign).push(p);
+  return { owned, foreign };
 }
 
 function validApprovalTimestamp(a: Approval, at: IsoTimestamp): boolean {

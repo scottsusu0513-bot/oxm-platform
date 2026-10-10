@@ -73,7 +73,16 @@ export type WorkerScript =
   /** The Worker executable cannot be found. */
   | "executable_unavailable"
   /** The Worker's service is down (transient; bounded retries, then a pause). */
-  | "service_unavailable";
+  | "service_unavailable"
+  /**
+   * Shared workspace + broken validation environment (regression t261009-a536e5): the Worker
+   * completes the in-scope change; meanwhile another actor changes files outside the scope; no
+   * validation can run (package manager unavailable).
+   */
+  | "shared_workspace_validation_unavailable";
+
+/** Other actors' changes that appear outside the task scope during a shared-workspace run. */
+export const FOREIGN_PATHS = ["orchestrator/src/humanInteraction/ledger.ts", "orchestrator/src/humanInteraction/notificationPolicy.ts"] as const;
 export type CiScript = "pass" | "fail" | "pending";
 
 export interface SimulationOptions {
@@ -420,6 +429,21 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
           checkResult: "not_run",
           errorType: "validation_incomplete",
         };
+      case "shared_workspace_validation_unavailable": {
+        edit();
+        // Another actor edits files outside the scope while the Worker runs (never the Worker's).
+        const store = contents.get(c.taskId)!;
+        for (const path of FOREIGN_PATHS) store.set(path, `foreign:${path}`);
+        dirtyPaths.set(c.taskId, [...(dirtyPaths.get(c.taskId) ?? []), ...FOREIGN_PATHS]);
+        return {
+          ...base,
+          headSha: start,
+          testsRun: c.requiredValidations.map((v) => ({ command: v === "smoke" ? "pnpm vitest run orchestrator/src/e2e/fixture.test.ts" : v === "typecheck" ? "pnpm check" : "pnpm test", outcome: "not_run" as const })),
+          checkResult: "not_run",
+          workerErrorCode: "validation_unavailable",
+          workspaceAttribution: { preExisting: [], unattributed: [...FOREIGN_PATHS] },
+        };
+      }
       case "scope_violation":
         edit([...files, "server/unrelated.ts"]);
         return {
@@ -501,7 +525,10 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
         if (approval.kind !== "commit_publish" || approval.taskId !== plan.taskId || approval.requestedAction !== COMMIT_PUBLISH_ACTION || approval.bindingShaOrActionId !== commitApprovalBinding(evidence)) {
           return { ok: false, error: "policy_violation", reason: "approval mismatch" };
         }
-        if (!head || head.branch !== plan.branch || head.headSha !== evidence.expectedHeadSha || JSON.stringify([...dirty].sort()) !== JSON.stringify(expectedPaths)) {
+        // Like the real commit layer: other actors' paths the owner saw excluded stay uncommitted.
+        const excluded = new Set(evidence.excludedPaths ?? []);
+        const owned = dirty.filter((p) => !excluded.has(p));
+        if (!head || head.branch !== plan.branch || head.headSha !== evidence.expectedHeadSha || JSON.stringify([...owned].sort()) !== JSON.stringify(expectedPaths)) {
           return { ok: false, error: "dirty_worktree", reason: "trusted commit preconditions failed" };
         }
         if (expectedPaths.length === 0 || expectedPaths.some((path) => !evidence.allowedScope.some((scope) => scope.endsWith("/") ? path.startsWith(scope) : path === scope))) {
@@ -514,7 +541,9 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
         const committed = sha(++nextSha);
         parents.set(committed, evidence.expectedHeadSha);
         heads.set(lease.taskId, { branch: plan.branch, headSha: committed });
-        dirtyPaths.delete(lease.taskId);
+        const remaining = dirty.filter((p) => excluded.has(p));
+        if (remaining.length) dirtyPaths.set(lease.taskId, remaining);
+        else dirtyPaths.delete(lease.taskId);
         return { ok: true, headSha: committed };
       },
     },
@@ -571,12 +600,15 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
                 ? "orchestrator/src/e2e/fixture.test.ts"
                 : "check",
           );
+          // The trusted runner classifies an environment that cannot run the command as unavailable.
+          const infra = o === "not_run" && result.workerErrorCode === "validation_unavailable";
           return {
             name,
             requested: true,
             executed: o !== "not_run",
-            status: o === "passed" ? ("passed" as const) : o === "failed" ? ("failed" as const) : ("missing" as const),
+            status: o === "passed" ? ("passed" as const) : o === "failed" ? ("failed" as const) : infra ? ("unavailable" as const) : ("missing" as const),
             trusted: true,
+            ...(infra ? { summary: "validation could not run: the package manager (corepack/pnpm) could not be prepared" } : {}),
           };
         });
         const validationsPassed =
@@ -605,8 +637,10 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
                   timeoutMs: 5_000,
                 })
             : null;
+        const foreign = [...(result.workspaceAttribution?.preExisting ?? []), ...(result.workspaceAttribution?.unattributed ?? [])].sort();
         const record: TrustedRunRecord = {
           changedPaths: result.filesChanged,
+          ...(foreign.length ? { foreignPaths: foreign } : {}),
           validations,
           ...(judged?.reviewUnavailable ? { goalReviewUnavailable: true } : {}),
           ...(judged ? { managerReviewCalls: judged.reviewCalls, citedFiles: judged.citedFiles, constraintVerdicts: judged.constraintVerdicts, ...(judged.ownerAnswer ? { managerAnswer: judged.ownerAnswer } : {}) } : {}),
@@ -708,12 +742,16 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
     };
     const record = recordsByTask.get(taskId);
     const head = heads.get(taskId);
+    const allDirty = dirtyPaths.get(taskId) ?? [];
+    const ownedDirty = allDirty.filter((p) => !(record?.foreignPaths ?? []).includes(p));
+    const excludedDirty = allDirty.filter((p) => !ownedDirty.includes(p));
     const commitEvidence = record && head ? normalizeCommitApprovalEvidence({
       taskId,
       branch,
       expectedHeadSha: head.headSha,
-      changedPaths: dirtyPaths.get(taskId) ?? [],
-      contentIdentities: identitiesOf(taskId, dirtyPaths.get(taskId) ?? []),
+      changedPaths: ownedDirty,
+      ...(excludedDirty.length ? { excludedPaths: excludedDirty } : {}),
+      contentIdentities: identitiesOf(taskId, ownedDirty),
       gitMetadataDigest: metadataOf(taskId),
       allowedScope: contract.allowedScope,
       validations: record.validations,

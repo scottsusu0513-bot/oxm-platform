@@ -271,22 +271,48 @@ export function inputRejection(code: "empty" | "too_long" | "credential" | "inva
 const RISK_ZH: Record<RiskLevel, string> = { green: "低", yellow: "中", red: "高" };
 const RISK_EN: Record<RiskLevel, string> = { green: "low", yellow: "medium", red: "high" };
 
-export function commitApprovalMessage(input: { lang: OwnerLanguage; label: string; files: readonly string[]; checksPassed: number; checksNotPassed: readonly string[]; risk: RiskLevel; expiresAt: string }): string {
+export function commitApprovalMessage(input: {
+  lang: OwnerLanguage;
+  label: string;
+  files: readonly string[];
+  checksPassed: number;
+  checksNotPassed: readonly string[];
+  /** Checks that could not be verified (environment / unrelated workspace state); not task failures. */
+  checksUnverified?: readonly string[];
+  /** Other actors' workspace changes left out of the publish. */
+  excludedFiles?: readonly string[];
+  risk: RiskLevel;
+  expiresAt: string;
+}): string {
   const zh = input.lang === "zh";
   const files = input.files.slice(0, 15);
   const more = input.files.length - files.length;
+  const unverified = input.checksUnverified ?? [];
+  const excluded = input.excludedFiles ?? [];
+  const checks = input.checksNotPassed.length
+    ? zh
+      ? `自動檢查：${input.checksPassed} 項通過，${input.checksNotPassed.length} 項未通過。`
+      : `Checks: ${input.checksPassed} passed, ${input.checksNotPassed.length} not passed.`
+    : unverified.length
+      ? zh
+        ? `自動檢查：${input.checksPassed} 項通過；${unverified.join("、")} 因環境問題或工作區其他無關變更未能完成驗證，目前沒有證據顯示是這次修改造成的問題，但也還沒驗證到。`
+        : `Checks: ${input.checksPassed} passed; ${unverified.join(", ")} could not be verified (environment or unrelated workspace changes). Nothing shows this change caused a problem, but it is not verified yet.`
+      : zh
+        ? "自動檢查：全部通過。"
+        : "Checks: all passed.";
   return [
-    zh ? `「${input.label}」已完成，也通過我的檢查，等待你批准發布。` : `"${input.label}" is done and passed my review. Waiting for your approval to publish.`,
+    zh ? `「${input.label}」已完成，也通過我的檢查。目前尚未發布，等待你批准。` : `"${input.label}" is done and passed my review. Nothing has been published yet; waiting for your approval.`,
     zh ? `這次改了 ${input.files.length} 個檔案：` : `Files changed (${input.files.length}):`,
     ...files.map((f) => `• ${f}`),
     ...(more > 0 ? [zh ? `…另外 ${more} 個` : `…and ${more} more`] : []),
-    input.checksNotPassed.length
-      ? zh
-        ? `自動檢查：${input.checksPassed} 項通過，${input.checksNotPassed.length} 項未通過。`
-        : `Checks: ${input.checksPassed} passed, ${input.checksNotPassed.length} not passed.`
-      : zh
-        ? "自動檢查：全部通過。"
-        : "Checks: all passed.",
+    checks,
+    ...(excluded.length
+      ? [
+          zh
+            ? `工作區另有 ${excluded.length} 個不屬於這個任務的檔案變更（${excluded.slice(0, 5).join("、")}${excluded.length > 5 ? "…" : ""}），不會包含在這次發布中。`
+            : `The workspace also has ${excluded.length} change(s) that are not part of this task (${excluded.slice(0, 5).join(", ")}${excluded.length > 5 ? ", …" : ""}); they are not included in this publish.`,
+        ]
+      : []),
     zh ? `風險：${RISK_ZH[input.risk]}` : `Risk: ${RISK_EN[input.risk]}`,
     "",
     zh
@@ -539,7 +565,7 @@ export interface TechnicalDetailsView {
   prNumber: number | null;
 }
 
-const STATUS_ZH: Record<string, string> = { passed: "通過", failed: "失敗", skipped: "略過", missing: "沒有執行", unknown: "無法確認", satisfied: "已遵守", violated: "未遵守", unsupported: "無法確認" };
+const STATUS_ZH: Record<string, string> = { passed: "通過", failed: "失敗", skipped: "略過", missing: "沒有執行", unavailable: "環境無法執行（未驗證）", unverified: "未能驗證", unknown: "無法確認", satisfied: "已遵守", violated: "未遵守", unsupported: "無法確認" };
 const OUTCOME_ZH: Record<string, string> = { accepted: "通過", needs_repair: "仍需修正", needs_human_decision: "需要你決定", blocked: "失敗", needs_human_approval: "等待批准", running: "進行中" };
 
 /** Readable technical view: structured facts only (no model reasoning, secrets or hashes). */

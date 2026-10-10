@@ -160,13 +160,20 @@ describe("branch safety", () => {
 });
 
 describe("working tree cleanliness", () => {
-  it("refuses to run with unrelated dirty changes", async () => {
-    const { adapter, runner, promptFiles } = setup({ statuses: [{ ...clean, dirtyPaths: ["server/db.ts", "client/src/App.tsx"] }] });
-    const r = await adapter.start({ contract: contract({ allowedDirtyPaths: ["server/db.ts"] }), now: NOW }).result;
+  it("refuses to run with unrelated dirty changes inside the task scope (ownership would be ambiguous)", async () => {
+    const { adapter, runner, promptFiles } = setup({ statuses: [{ ...clean, dirtyPaths: ["server/db.ts", "server/other.ts"] }] });
+    const r = await adapter.start({ contract: contract({ allowedScope: ["server/"], allowedDirtyPaths: ["server/db.ts"] }), now: NOW }).result;
     expect(r.errorType).toBe("dirty_worktree");
-    expect(r.summary).toBe("1 unrelated dirty path(s) present");
+    expect(r.summary).toBe("1 unrelated dirty path(s) present inside allowedScope");
     expect(runner.specs).toHaveLength(0);
     expect(promptFiles.written).toBe(0);
+  });
+
+  it("tolerates other actors' pre-existing dirty paths outside the scope: recorded, excluded, never the Worker's", async () => {
+    const { adapter, runner } = setup({ statuses: [{ ...clean, dirtyPaths: ["server/db.ts", "client/src/App.tsx"] }, after], changed: ["client/src/App.tsx", "server/db.ts"] });
+    const r = await adapter.start({ contract: contract({ allowedDirtyPaths: ["server/db.ts"] }), now: NOW }).result;
+    expect(runner.specs).toHaveLength(1);
+    expect(r).toMatchObject({ status: "success", errorType: null, filesChanged: ["server/db.ts"], workspaceAttribution: { preExisting: ["client/src/App.tsx"], unattributed: [] } });
   });
 
   it("runs when every dirty path is explicitly part of the task contract", async () => {
@@ -360,11 +367,26 @@ describe("result handling", () => {
     expect(Object.keys(r)).not.toContain("stdout");
   });
 
-  it("downgrades success when required validations did not pass", async () => {
-    const r = await run(envelope(report({ checkResult: "not_run" })));
+  it("downgrades success only when the Worker itself saw a required validation FAIL", async () => {
+    const r = await run(envelope(report({ checkResult: "failed" })));
     expect(r).toMatchObject({ status: "failure", errorType: "validation_incomplete" });
-    const r2 = await run(envelope(report({ testsRun: [] })));
+    const r2 = await run(envelope(report({ testsRun: [{ command: "pnpm test", outcome: "failed" }] })));
     expect(r2.errorType).toBe("validation_incomplete");
+  });
+
+  it("a validation the Worker could not run is unverified, not a failure (the trusted layer re-runs it)", async () => {
+    const r = await run(envelope(report({ checkResult: "not_run" })));
+    expect(r).toMatchObject({ status: "success", errorType: null });
+    const r2 = await run(envelope(report({ testsRun: [] })));
+    expect(r2).toMatchObject({ status: "success", errorType: null });
+  });
+
+  it("a completed change reported as failed only because the environment blocked validation is not a task failure", async () => {
+    const r = await run(envelope(report({ status: "failure", errorType: "validation_unavailable", checkResult: "not_run", testsRun: [] })));
+    expect(r).toMatchObject({ status: "success", errorType: null, workerErrorCode: "validation_unavailable", filesChanged: ["server/db.ts"] });
+    // Any other Worker failure stays a failure.
+    const r2 = await run(envelope(report({ status: "failure", errorType: "gave_up" })));
+    expect(r2).toMatchObject({ status: "failure", errorType: "worker_failure" });
   });
 
   it("escalates risk from actually changed paths (policy beats the worker's own report)", async () => {
@@ -458,10 +480,16 @@ describe("allowedScope enforcement", () => {
       now: NOW,
     }).result;
 
-  it("a worker cannot report success after changing an out-of-scope file (even if it hides it)", async () => {
-    const r = await runWith(["client/src/App.tsx", "server/db.ts"], ["server/db.ts"]);
+  it("a worker that reports an out-of-scope change of its run is a scope violation", async () => {
+    const r = await runWith(["client/src/App.tsx", "server/db.ts"], ["server/db.ts", "client/src/App.tsx"]);
     expect(r).toMatchObject({ status: "failure", errorType: "scope_violation", needsApproval: true, headSha: BASE });
     expect(r.filesChanged).toEqual(["client/src/App.tsx", "server/db.ts"]);
+  });
+
+  it("an unreported out-of-scope change during the run is unattributed: excluded from the task delta, flagged, never blamed on the Worker", async () => {
+    const r = await runWith(["client/src/App.tsx", "server/db.ts"], ["server/db.ts"]);
+    expect(r).toMatchObject({ status: "success", errorType: null, filesChanged: ["server/db.ts"], workspaceAttribution: { preExisting: [], unattributed: ["client/src/App.tsx"] } });
+    expect(r.riskObserved.notes.join(" ")).toMatch(/not attributed to it/);
   });
 
   it("an honest out-of-scope report is still a scope violation", async () => {
@@ -470,13 +498,19 @@ describe("allowedScope enforcement", () => {
   });
 
   it("scope is enforced even when the worker reports failure", async () => {
-    const r = await runWith(["server/other.ts"], [], {}, { status: "failure", errorType: "gave_up" });
+    const r = await runWith(["server/other.ts"], ["server/other.ts"], {}, { status: "failure", errorType: "gave_up" });
     expect(r.errorType).toBe("scope_violation");
   });
 
   it("scope violation keeps the policy-escalated risk", async () => {
-    const r = await runWith(["server/db.ts", ".env"], ["server/db.ts"]);
+    const r = await runWith(["server/db.ts", ".env"], ["server/db.ts", ".env"]);
     expect(r.errorType).toBe("scope_violation");
+    expect(r.riskObserved.level).toBe("red");
+  });
+
+  it("an unattributed sensitive change still escalates risk (state, not blame)", async () => {
+    const r = await runWith(["server/db.ts", ".env"], ["server/db.ts"]);
+    expect(r).toMatchObject({ status: "success", errorType: null, filesChanged: ["server/db.ts"], needsApproval: true });
     expect(r.riskObserved.level).toBe("red");
   });
 
@@ -489,11 +523,11 @@ describe("allowedScope enforcement", () => {
     expect((await runWith(["server/a"], ["server/a"], { allowedScope: ["server/a/"] })).errorType).toBe("scope_violation");
   });
 
-  it("filesChanged comes from git, and reported/actual mismatches are rejected", async () => {
+  it("filesChanged comes from git, never from the Worker's list", async () => {
     const phantom = await runWith(["server/db.ts"], ["server/db.ts", "server/ghost.ts"], { allowedScope: ["server/"] });
-    expect(phantom).toMatchObject({ status: "failure", errorType: "result_mismatch" });
+    expect(phantom).toMatchObject({ status: "success", filesChanged: ["server/db.ts"] });
     const hidden = await runWith(["server/db.ts", "server/x.ts"], ["server/db.ts"], { allowedScope: ["server/"] });
-    expect(hidden).toMatchObject({ status: "failure", errorType: "result_mismatch", filesChanged: ["server/db.ts", "server/x.ts"] });
+    expect(hidden).toMatchObject({ status: "success", filesChanged: ["server/db.ts", "server/x.ts"] });
   });
 
   it("pre-existing allowed dirty paths need not be re-reported but must still be in scope", async () => {
@@ -509,11 +543,17 @@ describe("allowedScope enforcement", () => {
 
   it("a repair allowance never adopts a foreign dirty path", async () => {
     const statuses = [{ ...clean, dirtyPaths: ["server/db.ts", "notes/user-wip.txt"] }, after];
-    const r = await setup({ statuses }).adapter.start({
+    const r = await setup({ statuses, changed: ["notes/user-wip.txt", "server/db.ts"] }).adapter.start({
       contract: contract({ allowedScope: ["server/"], allowedDirtyPaths: ["server/db.ts"] }),
       now: NOW,
     }).result;
-    expect(r).toMatchObject({ status: "failure", errorType: "dirty_worktree" });
+    expect(r.filesChanged).toEqual(["server/db.ts"]);
+    expect(r.workspaceAttribution).toEqual({ preExisting: ["notes/user-wip.txt"], unattributed: [] });
+    const inScope = await setup({ statuses: [{ ...clean, dirtyPaths: ["server/db.ts", "server/user-wip.ts"] }, after] }).adapter.start({
+      contract: contract({ allowedScope: ["server/"], allowedDirtyPaths: ["server/db.ts"] }),
+      now: NOW,
+    }).result;
+    expect(inScope).toMatchObject({ status: "failure", errorType: "dirty_worktree" });
   });
 
   it("rejects an allowed dirty path outside allowedScope", () => {

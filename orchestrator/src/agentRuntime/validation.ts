@@ -1,10 +1,11 @@
 import type { AcceptanceEvidence, ValidationEvidence } from "../manager/types";
-import { MAX_REVIEW_DIFF, semanticAcceptance } from "../planning/goalAcceptance";
+import { MAX_REVIEW_DIFF, semanticAcceptance, validationCriterionStatus } from "../planning/goalAcceptance";
 import type { GoalReviewer, TrustedWorkspaceEvidence } from "../planning/types";
-import { createEvidencePort } from "../scheduler/adapters";
+import { createEvidencePort, splitTaskOwnedDelta } from "../scheduler/adapters";
 import type { EvidencePort } from "../scheduler/types";
 import { VALIDATION_COMMANDS } from "../workers/prompt";
 import type { GitInspector, ProcessRunner, RequiredValidation } from "../workers/types";
+import { attributeValidationFailure, classifyValidationExit, type ValidationClassification } from "./validationOutcome";
 
 const MAX_WORKSPACE_PATHS = 20;
 
@@ -36,20 +37,26 @@ export function createTrustedValidationEvidencePort(input: {
   const commands = input.commands ?? VALIDATION_COMMANDS;
   const base = createEvidencePort({ git: input.git, validations: () => [], acceptance: () => [] });
 
-  async function run(command: string): Promise<"passed" | "failed"> {
+  async function run(command: string): Promise<ValidationClassification> {
     const [exe, ...args] = command.split(" ");
-    const handle = input.runner.spawn({ command: exe, args, cwd: input.repoRoot });
+    let handle: ReturnType<ProcessRunner["spawn"]>;
+    try {
+      handle = input.runner.spawn({ command: exe, args, cwd: input.repoRoot });
+    } catch {
+      return classifyValidationExit(null, false);
+    }
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const timedOut = new Promise<"failed">((resolve) => {
+    const timedOut = new Promise<"timeout">((resolve) => {
       timer = setTimeout(() => {
         handle.kill();
-        resolve("failed");
+        resolve("timeout");
       }, input.timeoutMs);
     });
     try {
-      return await Promise.race([handle.exit.then((exit) => (exit.exitCode === 0 && exit.signal === null ? "passed" : "failed") as "passed" | "failed"), timedOut]);
+      const exit = await Promise.race([handle.exit, timedOut]);
+      return exit === "timeout" ? classifyValidationExit(null, true) : classifyValidationExit(exit, false);
     } catch {
-      return "failed";
+      return classifyValidationExit(null, false);
     } finally {
       clearTimeout(timer);
     }
@@ -57,25 +64,42 @@ export function createTrustedValidationEvidencePort(input: {
 
   return {
     async record(req) {
-      const record = await base.record(req);
-      const before = { changed: [...record.changedPaths].sort(), identities: await input.git.contentIdentities(record.changedPaths) };
-      const validations: ValidationEvidence[] = [];
+      const recorded = await base.record(req);
+      const before = { changed: [...recorded.changedPaths].sort(), identities: await input.git.contentIdentities(recorded.changedPaths) };
+      const runs: { name: RequiredValidation; command: string | undefined; outcome: ValidationClassification }[] = [];
       for (const name of req.contract.requiredValidations) {
         const command = commands[name];
-        const status = command ? await run(command) : "failed";
-        validations.push({ name, requested: true, executed: Boolean(command), status: command ? status : "missing", trusted: true });
+        runs.push({ name, command, outcome: command ? await run(command) : { status: "unverified" } });
       }
-      // A validation run must not alter what the Manager is about to judge.
+      // A validation run must not alter what the Manager is about to judge: the task-owned delta
+      // (paths + exact bytes), branch, HEAD and Git metadata. Other actors' changes elsewhere in a
+      // shared workspace are not the task's and only widen the excluded (foreign) set.
       const [status, changed, digest] = await Promise.all([input.git.status(), input.git.changedPathsSince(req.contract.expectedHeadSha!), input.git.metadataDigest()]);
-      const identities = await input.git.contentIdentities(record.changedPaths);
+      const identities = await input.git.contentIdentities(recorded.changedPaths);
+      const split = splitTaskOwnedDelta(changed, req.contract, req.result);
       if (
-        status.headSha !== record.verifiedHeadSha ||
+        status.headSha !== recorded.verifiedHeadSha ||
         status.branch !== req.contract.branch ||
         digest !== req.contract.gitMetadataDigest ||
-        JSON.stringify([...changed].sort()) !== JSON.stringify(before.changed) ||
+        JSON.stringify(split.owned) !== JSON.stringify(before.changed) ||
         JSON.stringify(identities) !== JSON.stringify(before.identities)
       )
         throw new Error("[agent-runtime] validation changed the workspace; refusing to judge it");
+      const foreign = Array.from(new Set([...(recorded.foreignPaths ?? []), ...split.foreign])).sort();
+      const record = { ...recorded, ...(foreign.length ? { foreignPaths: foreign } : {}) };
+      // Only a run that executed and failed with no infrastructure sign and no unrelated workspace
+      // state present is failed_due_to_task; everything else is reported as not verified.
+      const validations: ValidationEvidence[] = runs.map(({ name, command, outcome }) => {
+        const c = attributeValidationFailure(outcome, foreign.length);
+        return {
+          name,
+          requested: true,
+          executed: Boolean(command) && c.status !== "unavailable",
+          status: command ? c.status : "missing",
+          trusted: true,
+          ...(c.summary ? { summary: c.summary } : {}),
+        };
+      });
       // Reached only after every check above passed (and base.record pinned HEAD to the start SHA).
       const workspace: TrustedWorkspaceEvidence = {
         branch: status.branch,
@@ -116,13 +140,16 @@ export function createTrustedValidationEvidencePort(input: {
           ...(judged.reviewUnavailable ? { goalReviewUnavailable: true } : {}),
         };
       }
-      const allPassed = validations.length > 0 && validations.every((v) => v.status === "passed");
-      const reference = req.contract.requiredValidations[0] ?? null;
+      // Validation-backed criteria: a confirmed failure fails them; validations that could not be
+      // verified leave them unverified (reported to the owner, never repaired).
+      const criterion = validationCriterionStatus(validations);
+      const reference = (criterion === "unknown" ? validations.find((v) => v.status !== "passed")?.name : req.contract.requiredValidations[0]) ?? null;
       const acceptance: AcceptanceEvidence[] = req.contract.acceptanceCriteria.map((_, i) => ({
         criterionId: `AC-${i + 1}`,
-        status: allPassed ? "satisfied" : "failed",
+        status: criterion,
         evidenceType: "validation",
         reference,
+        ...(criterion === "unknown" ? { confirmedFailureOnly: true } : {}),
       }));
       return { ...record, validations, acceptance };
     },

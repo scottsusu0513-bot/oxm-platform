@@ -7,7 +7,7 @@ import type {
   PendingApprovalRequirement,
   PendingHumanDecisionView,
 } from "../gateway/types";
-import { MAX_HUMAN_GUIDANCE_LENGTH } from "../manager/types";
+import { MAX_HUMAN_GUIDANCE_LENGTH, UNVERIFIED_VALIDATION_STATUSES } from "../manager/types";
 import type { TaskMode, WorkerKind } from "../domain/types";
 import {
   DETAILS_REQUEST,
@@ -207,7 +207,9 @@ export function approvalNotice(approval: PendingApprovalRequirement, label?: str
     branch: oneLine(e.branch, 240),
     filesChanged: e.changedPaths.slice(0, 30).map((p) => oneLine(p, 200)),
     validationsPassed: e.validations.filter((v) => v.status === "passed" && v.executed && v.trusted).map((v) => oneLine(v.name, 60)),
-    validationsNotPassed: e.validations.filter((v) => !(v.status === "passed" && v.executed && v.trusted)).map((v) => oneLine(`${v.name} (${v.status})`, 80)),
+    validationsNotPassed: e.validations.filter((v) => !(v.status === "passed" && v.executed && v.trusted) && !UNVERIFIED_VALIDATION_STATUSES.includes(v.status)).map((v) => oneLine(`${v.name} (${v.status})`, 80)),
+    validationsUnverified: e.validations.filter((v) => v.status !== "passed" && UNVERIFIED_VALIDATION_STATUSES.includes(v.status)).map((v) => oneLine(v.name, 60)),
+    excludedPaths: (e.excludedPaths ?? []).slice(0, 30).map((p) => oneLine(p, 200)),
     managerAccepted: true,
     risk,
     expiresAt: approval.expiresAt,

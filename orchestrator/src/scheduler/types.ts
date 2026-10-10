@@ -406,7 +406,10 @@ export type OrchestrationEventType = OrchestrationEvent["type"];
 
 /** Trusted record of one worker run, produced by the git/validation layer — never worker prose. */
 export interface TrustedRunRecord {
+  /** Task-owned delta of the run (see workers/attribution.ts); never other actors' workspace changes. */
   changedPaths: readonly string[];
+  /** Shared-workspace changes that are not this task's: excluded from scope checks and from publication. */
+  foreignPaths?: readonly string[];
   validations: readonly ValidationEvidence[];
   acceptance: readonly AcceptanceEvidence[];
   /** Workspace HEAD verified from git after the run. */
@@ -433,7 +436,7 @@ export interface WorkerPort {
 
 export interface WorkspacePort {
   /** Wraps githubWrite/workspace.prepareAssignedWorkspace. */
-  prepare(input: { plan: unknown; lease: unknown; creation: BranchCreation | null }): Promise<PrepareResult>;
+  prepare(input: { plan: unknown; lease: unknown; creation: BranchCreation | null; allowedScope?: readonly string[] }): Promise<PrepareResult>;
   /** Wraps githubWrite/workspace.checkWorkerPreconditions with the live git status. */
   checkPreconditions(input: { prepared: unknown; plan: unknown; contract: WorkerTaskContract; lease: unknown }): Promise<PreconditionResult>;
   /** Branch/HEAD of the leased workspace from git (repair start check). */

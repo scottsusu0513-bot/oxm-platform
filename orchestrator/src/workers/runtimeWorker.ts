@@ -3,7 +3,9 @@ import { classifyAvailabilityFailure, type AvailabilityFailure } from "../execut
 import { approvalAuthorizes } from "../store/repositories";
 import { createKillSwitch } from "./killSwitch";
 import { looksLikeInteractivePrompt, nonInteractiveViolation, WORKER_INTERACTIVE_PROMPTS_ALLOWED } from "./permissions";
-import { buildWorkerPrompt, checkTaskBranch, contractRisk, maxRisk, redStartBindingId, scopeViolations, sha256Hex, validateContract } from "./prompt";
+import { attributeWorkspaceDelta } from "./attribution";
+import type { PathContentIdentity } from "./gitIntegrity";
+import { VALIDATION_COMMANDS, buildWorkerPrompt, checkTaskBranch, contractRisk, isPathInScope, maxRisk, redStartBindingId, sha256Hex, validateContract } from "./prompt";
 import { parseWorkerReport, sanitizeText, type ParseResult } from "./resultParser";
 import type {
   ClaudeCodeDeps,
@@ -117,9 +119,12 @@ async function execute(
   if (killSwitch.triggered) return cancelled();
   let before: GitStatus;
   let beforeMetadata: string;
+  let baseline: PathContentIdentity[];
   try {
     before = await deps.git.status();
     beforeMetadata = await deps.git.metadataDigest();
+    // Trusted baseline: exact content of every path already dirty before this execution.
+    baseline = await deps.git.contentIdentities(before.dirtyPaths);
   } catch {
     return failure(c, "git_error", "could not read working tree status", risk);
   }
@@ -130,8 +135,11 @@ async function execute(
   if (c.expectedHeadSha !== undefined && before.headSha !== c.expectedHeadSha)
     return failure(c, "branch_mismatch", "working tree HEAD is not the orchestrator-prepared SHA", risk);
   const allowedDirty = new Set(c.allowedDirtyPaths ?? []);
-  const unrelated = before.dirtyPaths.filter((p) => !allowedDirty.has(p));
-  if (unrelated.length) return failure(c, "dirty_worktree", `${unrelated.length} unrelated dirty path(s) present`, risk);
+  // Unrelated dirty paths OUTSIDE the scope belong to someone else in the shared workspace: they
+  // are recorded in the baseline and excluded from the task delta. Inside the scope ownership
+  // would be ambiguous (the Worker may edit them), so those still fail closed.
+  const unrelated = before.dirtyPaths.filter((p) => !allowedDirty.has(p) && isPathInScope(p, c.allowedScope));
+  if (unrelated.length) return failure(c, "dirty_worktree", `${unrelated.length} unrelated dirty path(s) present inside allowedScope`, risk);
 
   if (config.prepareRuntime) {
     let readiness: Awaited<ReturnType<NonNullable<RuntimeWorkerConfig["prepareRuntime"]>>>;
@@ -205,7 +213,7 @@ async function execute(
   if (finalOutcome !== "cancelled" && exit && (finalOutcome === "timeout" || exit.exitCode !== 0) && looksLikeInteractivePrompt(`${exit.stdout}\n${exit.stderr}`))
     return failure(c, "runtime_misconfigured", "worker runtime waited on an interactive confirmation prompt (non-interactive configuration defect)", risk, { headSha: before.headSha });
   if (outcome !== "exited") return terminal(c, outcome, risk, before.headSha);
-  return interpret(config, c, deps, risk, before, exit as ProcessExit, now);
+  return interpret(config, c, deps, risk, before, baseline, exit as ProcessExit, now);
 }
 
 async function interpret(
@@ -214,6 +222,7 @@ async function interpret(
   deps: ClaudeCodeDeps,
   risk: RiskLevel,
   before: GitStatus,
+  baseline: readonly PathContentIdentity[],
   exit: ProcessExit,
   now: string,
 ): Promise<WorkerResult> {
@@ -240,9 +249,11 @@ async function interpret(
   const report = parsed.value;
   let after: GitStatus;
   let changed: string[];
+  let current: PathContentIdentity[];
   try {
     after = await deps.git.status();
     changed = await deps.git.changedPathsSince(before.headSha);
+    current = await deps.git.contentIdentities(Array.from(new Set([...changed, ...baseline.map((b) => b.path)])));
   } catch {
     return failure(c, "git_error", "could not verify working tree after run", risk);
   }
@@ -257,38 +268,50 @@ async function interpret(
     });
   if (report.branch !== c.branch || report.headSha !== after.headSha)
     return failure(c, "result_mismatch", "reported branch/headSha do not match the working tree", risk, { headSha: after.headSha });
-  const observed = contractRisk(c, changed);
+  // Only the delta of THIS execution is the Worker's (shared workspace; see workers/attribution.ts).
+  const delta = attributeWorkspaceDelta({
+    baseline,
+    current,
+    changedNow: changed,
+    allowedScope: c.allowedScope,
+    allowedDirtyPaths: c.allowedDirtyPaths ?? [],
+    reported: report.filesChanged,
+  });
+  const workspaceAttribution =
+    delta.preExisting.length || delta.unattributed.length ? { workspaceAttribution: { preExisting: delta.preExisting, unattributed: delta.unattributed } } : {};
+  const attributed = [...delta.taskOwned, ...delta.workerOutOfScope].sort();
+  // Risk reflects the workspace state, not blame: an unattributed change (e.g. an env file touched
+  // during the run) still escalates risk, even though it is never called a Worker violation.
+  const observed = contractRisk(c, [...attributed, ...delta.unattributed]);
   const finalRisk = maxRisk(maxRisk(risk, observed.level), report.riskObserved.level);
   const riskObserved: RiskObservation = {
     level: finalRisk,
-    notes: [...(observed.level !== risk ? observed.reasons.map((r) => sanitizeText(`policy: ${r}`, 300)) : []), ...report.riskObserved.notes].slice(0, 20),
+    notes: [
+      ...(observed.level !== risk ? observed.reasons.map((r) => sanitizeText(`policy: ${r}`, 300)) : []),
+      ...(delta.unattributed.length
+        ? [sanitizeText(`workspace: ${delta.unattributed.length} out-of-scope path(s) changed during the run were not reported by the Worker; not attributed to it, excluded from the task delta and never committed`, 300)]
+        : []),
+      ...report.riskObserved.notes,
+    ].slice(0, 20),
   };
   const needsApproval = report.needsApproval || finalRisk !== "green";
-  const filesChanged = [...changed];
-  const outOfScope = scopeViolations(changed, c.allowedScope);
-  if (outOfScope.length)
-    return failure(c, "scope_violation", `${outOfScope.length} changed path(s) outside allowedScope`, finalRisk, {
+  if (delta.workerOutOfScope.length)
+    return failure(c, "scope_violation", `${delta.workerOutOfScope.length} changed path(s) outside allowedScope`, finalRisk, {
       headSha: after.headSha,
-      filesChanged,
+      filesChanged: attributed,
       riskObserved,
       needsApproval: true,
+      ...workspaceAttribution,
     });
-  if (report.status === "success") {
-    const actual = new Set(changed);
-    const reported = new Set(report.filesChanged);
-    const preDirty = new Set(c.allowedDirtyPaths ?? []);
-    const phantom = report.filesChanged.filter((p) => !actual.has(p));
-    const unreported = changed.filter((p) => !reported.has(p) && !preDirty.has(p));
-    if (phantom.length || unreported.length)
-      return failure(c, "result_mismatch", "reported filesChanged do not match the working tree", finalRisk, {
-        headSha: after.headSha,
-        filesChanged,
-        riskObserved,
-        needsApproval,
-      });
-  }
+  // Git, not the Worker's list, is the truth for the task-owned delta: an in-scope path the
+  // Worker forgot to list is still its change, and a listed path that did not change is ignored.
+  const filesChanged = delta.taskOwned;
+  // A Worker that finished the change but could not run validations because of the environment
+  // has not failed the task: the trusted layer re-runs every validation itself.
+  const environmentOnly = report.status === "failure" && isEnvironmentErrorCode(report.errorType) && filesChanged.length > 0;
+  const status: WorkerResultStatus = environmentOnly ? "success" : report.status;
   const base: WorkerResult = {
-    status: report.status,
+    status,
     summary: report.summary,
     filesChanged,
     testsRun: report.testsRun,
@@ -299,20 +322,41 @@ async function interpret(
     riskObserved,
     needsApproval,
     fallbackRecommended: report.fallbackRecommended,
-    errorType: report.status === "failure" ? "worker_failure" : null,
+    errorType: status === "failure" ? "worker_failure" : null,
     workerErrorCode: report.errorType,
+    ...workspaceAttribution,
   };
-  if (report.status === "success") {
-    const missing = missingValidations(c.requiredValidations, report);
-    if (missing.length)
+  if (status === "success") {
+    // Only a validation the Worker actually saw FAIL contradicts its success. One it could not run
+    // (not_run) is unverified, not failed: the trusted validation layer decides.
+    const failed = reportedFailedValidations(c.requiredValidations, report);
+    if (failed.length)
       return {
         ...base,
         status: "failure",
         errorType: "validation_incomplete",
-        summary: sanitizeText(`required validation(s) not passed: ${missing.join(", ")}. ${report.summary}`, 2000),
+        summary: sanitizeText(`required validation(s) failed: ${failed.join(", ")}. ${report.summary}`, 2000),
       };
   }
   return base;
+}
+
+/** Worker-reported error codes meaning "the environment could not run validations", not a task failure. */
+const ENVIRONMENT_ERROR_CODE = /^(?:validation|validations|environment|infrastructure|tooling|dependency|dependencies|package_manager)_(?:unavailable|missing|not_run|error|failure|failed)$/;
+
+export function isEnvironmentErrorCode(code: string | null): boolean {
+  return code !== null && ENVIRONMENT_ERROR_CODE.test(code);
+}
+
+/** Required validations the Worker itself observed failing (not those it could not run). */
+export function reportedFailedValidations(required: readonly RequiredValidation[], report: Pick<WorkerReport, "testsRun" | "checkResult">): RequiredValidation[] {
+  return required.filter((v) =>
+    v === "typecheck"
+      ? report.checkResult === "failed"
+      : v === "smoke"
+        ? report.testsRun.some((t) => t.command === VALIDATION_COMMANDS.smoke && t.outcome === "failed")
+        : report.testsRun.some((t) => t.command !== VALIDATION_COMMANDS.smoke && t.outcome === "failed"),
+  );
 }
 
 export function directWorkerReport(stdout: string): ParseResult<WorkerReport> {

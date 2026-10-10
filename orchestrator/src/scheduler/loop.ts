@@ -26,7 +26,7 @@ import { buildHandoffSummary, renderHandoffBlock, type HandoffReason, type Hando
 import { ALL_AVAILABLE, PRIMARY_WORKER, areaForCategory, decideExecutionWorker, type ExecutionDecision, type WorkArea, type WorkerAvailabilityState } from "../executive/workAssignment";
 import type { WorkerResult, WorkerTaskContract } from "../workers/types";
 import { WORKER_INTERACTIVE_PROMPTS_ALLOWED } from "../workers/permissions";
-import { COMMIT_PUBLISH_ACTION, commitApprovalBinding, normalizeCommitApprovalEvidence, redStartBindingId, type CommitApprovalEvidence } from "../workers/prompt";
+import { COMMIT_PUBLISH_ACTION, commitApprovalBinding, isPathInScope, normalizeCommitApprovalEvidence, redStartBindingId, type CommitApprovalEvidence } from "../workers/prompt";
 import type { Approval, IsoTimestamp } from "../store/types";
 import { findDependencyCycle } from "./dependencies";
 import { buildManagerEvidence } from "./evidence";
@@ -239,6 +239,11 @@ function validateIntake(t: TaskIntake, known: ReadonlyMap<string, unknown>): str
   if (!Array.isArray(t.requiredValidations) || t.requiredValidations.length === 0) return "required validations are required";
   if ((t.dependsOn ?? []).includes(t.taskId)) return "task depends on itself";
   return null;
+}
+
+/** Read-only runs are strict: their own delta or an unattributable change during the run both count. */
+function readOnlyRunChanged(record: TrustedRunRecord, result: WorkerResult | null): boolean {
+  return record.changedPaths.length > 0 || (result?.workspaceAttribution?.unattributed.length ?? 0) > 0;
 }
 
 function modeOf(t: { intake: TaskIntake }): TaskMode {
@@ -976,6 +981,8 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       plan,
       lease: t.lease,
       creation,
+      // Other actors' dirty paths outside the scope do not block the task (shared workspace).
+      allowedScope: t.intake.allowedScope ?? t.intake.expectedPaths,
     });
     if (!prepared.ok)
       return block(t, `workspace preparation failed: ${prepared.error}`, {
@@ -1164,7 +1171,8 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     t.record = withConstraintVerdicts(t, record, result);
     const phase = t.pr ? "pre_push" : "post_qa";
     // A read-only task that changed anything is a policy violation, never a repairable result.
-    if (modeOf(t) === "read_only" && record.changedPaths.length > 0)
+    // Read-only is strict: an out-of-scope change during the run that cannot be attributed also stops it.
+    if (modeOf(t) === "read_only" && readOnlyRunChanged(record, result))
       return block(t, "read-only task modified the workspace", { terminal: true, trigger: "scope_violation" });
 
     // Worker usage quota exhausted: typed availability state, never a goal failure. The SAME task
@@ -1240,7 +1248,7 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     t.pendingReview = false;
     t.reviewRetries = 0;
     t.record = withConstraintVerdicts(t, record, t.lastResult);
-    if (modeOf(t) === "read_only" && record.changedPaths.length > 0)
+    if (modeOf(t) === "read_only" && readOnlyRunChanged(record, t.lastResult))
       return block(t, "read-only task modified the workspace", { terminal: true, trigger: "scope_violation" });
     t.status = t.repair.attempt > 0 ? "repair_requested" : "running";
     t.queueReason = null;
@@ -2311,16 +2319,22 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     if (!t.plan || !t.lease || !t.contract || !t.record || !t.contract.expectedHeadSha || !t.contract.gitMetadataDigest) return null;
     const observed = await ports.workspace.observeCommitState(t.lease);
     if (!observed.ok) return null;
+    const allowedScope = t.intake.allowedScope ?? t.intake.expectedPaths;
     const changedPaths = Array.from(new Set(t.record.changedPaths)).sort();
+    const owned = new Set(changedPaths);
     const dirtyPaths = Array.from(new Set(observed.dirtyPaths)).sort();
-    const identityPaths = observed.contentIdentities.map((id) => id.path).sort();
+    // Shared workspace: dirty paths outside the scope that are not the task's are excluded from the
+    // commit and named in the approval. An unowned dirty path INSIDE the scope stays ambiguous: refuse.
+    const excludedPaths = dirtyPaths.filter((p) => !owned.has(p));
+    const identities = observed.contentIdentities.filter((id) => owned.has(id.path));
+    const identityPaths = identities.map((id) => id.path).sort();
     if (
       observed.branch !== t.plan.branch ||
       observed.headSha !== t.contract.expectedHeadSha ||
       observed.gitMetadataDigest !== t.contract.gitMetadataDigest ||
       changedPaths.length === 0 ||
-      changedPaths.length !== dirtyPaths.length ||
-      changedPaths.some((path, index) => path !== dirtyPaths[index]) ||
+      changedPaths.some((path) => !dirtyPaths.includes(path)) ||
+      excludedPaths.some((path) => isPathInScope(path, allowedScope)) ||
       identityPaths.length !== changedPaths.length ||
       identityPaths.some((path, index) => path !== changedPaths[index])
     ) return null;
@@ -2329,7 +2343,8 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       branch: t.plan.branch,
       expectedHeadSha: t.contract.expectedHeadSha,
       changedPaths,
-      contentIdentities: observed.contentIdentities,
+      ...(excludedPaths.length ? { excludedPaths } : {}),
+      contentIdentities: identities,
       gitMetadataDigest: observed.gitMetadataDigest,
       allowedScope: t.intake.allowedScope ?? t.intake.expectedPaths,
       validations: t.record.validations,
@@ -2352,7 +2367,8 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     if (!t.lease || !t.record || t.record.changedPaths.length > 0)
       return block(t, "read-only completion state could not be verified", { terminal: true, trigger: "missing_trusted_evidence" });
     const observed = await ports.workspace.observeCommitState(t.lease);
-    if (!observed.ok || observed.dirtyPaths.length > 0)
+    // Other actors' changes outside the task scope in a shared workspace are not the Worker's.
+    if (!observed.ok || observed.dirtyPaths.some((p) => isPathInScope(p, t.intake.allowedScope ?? t.intake.expectedPaths)))
       return block(t, "read-only task modified the workspace", { terminal: true, trigger: "scope_violation" });
     const from = t.state;
     move(t, "complete", { readOnly: true, preExecutionApproved: t.approval.pre_execution === "approved" });

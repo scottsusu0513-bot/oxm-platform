@@ -207,8 +207,40 @@ describe("trusted validation evidence", () => {
     const failed = await createTrustedValidationEvidencePort({ git: git(), runner: runner({ "pnpm check": 2 }), repoRoot: "/w", timeoutMs: 1_000 }).record(req);
     expect(failed.validations.find((v) => v.name === "typecheck")!.status).toBe("failed");
     expect(failed.acceptance[0].status).toBe("failed");
+    // A timeout cannot be attributed to the task: unverified, never failed_due_to_task.
     const hung = await createTrustedValidationEvidencePort({ git: git(), runner: runner({ "pnpm test": "hang" }), repoRoot: "/w", timeoutMs: 20 }).record(req);
-    expect(hung.validations.find((v) => v.name === "tests")!.status).toBe("failed");
+    expect(hung.validations.find((v) => v.name === "tests")).toMatchObject({ status: "unverified", executed: true });
+    expect(hung.acceptance[0]).toMatchObject({ status: "unknown", confirmedFailureOnly: true });
+  });
+
+  it("infrastructure that cannot run a validation is unavailable, not a task failure", async () => {
+    const infra: ProcessRunner = {
+      spawn(spec) {
+        const cmd = [spec.command, ...spec.args].join(" ");
+        if (cmd === "pnpm test") return { exit: Promise.resolve({ ...ok(), exitCode: 1, stderr: "sh: 1: vitest: not found" }), kill() {} };
+        if (cmd === "pnpm check") return { exit: Promise.resolve({ ...ok(), exitCode: null, spawnError: "ENOENT" }), kill() {} };
+        return { exit: Promise.resolve(ok()), kill() {} };
+      },
+    };
+    const record = await createTrustedValidationEvidencePort({ git: git(), runner: infra, repoRoot: "/w", timeoutMs: 1_000 }).record(req);
+    expect(record.validations.map((v) => [v.name, v.status, v.executed])).toEqual([["tests", "unavailable", false], ["typecheck", "unavailable", false]]);
+    expect(record.validations[0].summary).toMatch(/could not run/);
+    expect(record.acceptance[0]).toMatchObject({ status: "unknown", confirmedFailureOnly: true });
+  });
+
+  it("shared workspace: other actors' out-of-scope changes are excluded from the task delta, and a failure with them present is unverified", async () => {
+    const shared: GitInspector = {
+      status: async () => ({ branch: "agent/task-t1-x", headSha: HEAD, dirtyPaths: ["client/a.ts", "orchestrator/x.ts"] }) as never,
+      changedPathsSince: async () => ["client/a.ts", "orchestrator/x.ts"],
+      metadataDigest: async () => "d".repeat(64),
+      contentIdentities: async (paths) => paths.map((path) => ({ path, mode: "100644", blob: "e".repeat(40) })),
+    };
+    const scoped = { ...req, contract: { ...contract, allowedScope: ["client/"] } as WorkerTaskContract, result: { headSha: HEAD, filesChanged: ["client/a.ts"], riskObserved: { level: "green" } } as never };
+    const record = await createTrustedValidationEvidencePort({ git: shared, runner: runner({ "pnpm check": 2 }), repoRoot: "/w", timeoutMs: 1_000 }).record(scoped);
+    expect(record.changedPaths).toEqual(["client/a.ts"]);
+    expect(record.foreignPaths).toEqual(["orchestrator/x.ts"]);
+    expect(record.validations.find((v) => v.name === "typecheck")).toMatchObject({ status: "unverified", executed: true });
+    expect(record.acceptance[0].status).toBe("unknown");
   });
 
   it("refuses to judge a workspace the validation run modified", async () => {

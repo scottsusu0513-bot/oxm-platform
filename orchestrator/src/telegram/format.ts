@@ -51,7 +51,7 @@ export function formatApprovalNotice(n: CommitApprovalNotice): string {
       ...resent(n),
       // The Manager's own explanation of the result leads; the approval scope below is the fixed binding.
       ...(n.managerSummary ? [n.managerSummary, ""] : []),
-      commitApprovalMessage({ lang: langOf(n), label: nameOf(n), files: n.filesChanged, checksPassed: n.validationsPassed.length, checksNotPassed: n.validationsNotPassed, risk: n.risk, expiresAt: n.expiresAt }),
+      commitApprovalMessage({ lang: langOf(n), label: nameOf(n), files: n.filesChanged, checksPassed: n.validationsPassed.length, checksNotPassed: n.validationsNotPassed, checksUnverified: n.validationsUnverified ?? [], excludedFiles: n.excludedPaths ?? [], risk: n.risk, expiresAt: n.expiresAt }),
     ].join("\n"),
   );
 }

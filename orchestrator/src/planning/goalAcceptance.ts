@@ -1,5 +1,6 @@
 import type { AcceptanceEvidence, ValidationEvidence } from "../manager/types";
 import type { GoalAcceptanceContext } from "../scheduler/types";
+import { FIXED_GOAL_CRITERIA } from "../intake/normalize";
 import { excerptLineNumbers, excerptLines, gatherSourceEvidence, type LineRange, type SourceEvidencePorts } from "../executive/evidencePlan";
 import { normalizeConstraintVerdicts, normalizeGoalReview, normalizeOwnerAnswer } from "./normalize";
 import type { CriterionReview, GoalReviewer, TrustedWorkspaceEvidence } from "./types";
@@ -125,9 +126,26 @@ export interface SemanticAcceptanceResult {
   ownerAnswer: string | null;
 }
 
+/**
+ * Status of a criterion backed by the trusted validations: failed only when a
+ * validation ran and failed because of the task; satisfied when all passed;
+ * otherwise unknown (could not be verified — infrastructure or unattributable).
+ */
+export function validationCriterionStatus(validations: readonly Pick<ValidationEvidence, "status">[]): AcceptanceEvidence["status"] {
+  if (validations.some((v) => v.status === "failed")) return "failed";
+  return validations.length > 0 && validations.every((v) => v.status === "passed") ? "satisfied" : "unknown";
+}
+
+/**
+ * Fixed safeguard criteria (see intake FIXED_GOAL_CRITERIA): only a confirmed
+ * violation (not_satisfied) blocks them; "unsupported" is reported, not repaired.
+ * Owner goal criteria are never safeguards.
+ */
+export const SAFEGUARD_GOAL_CRITERIA: readonly string[] = FIXED_GOAL_CRITERIA.change_code;
+
 export async function semanticAcceptance(input: SemanticAcceptanceInput): Promise<SemanticAcceptanceResult> {
-  const allPassed = input.validations.length > 0 && input.validations.every((v) => v.status === "passed");
-  const firstValidation = input.validations[0]?.name ?? null;
+  const technicalStatus = validationCriterionStatus(input.validations);
+  const technicalReference = (technicalStatus === "unknown" ? input.validations.find((v) => v.status !== "passed")?.name : input.validations[0]?.name) ?? null;
   const goalCriteria = input.goal.criteria.filter((c) => c.kind === "goal");
   let reviews: CriterionReview[] = [];
   let reviewUnavailable = false;
@@ -210,7 +228,11 @@ export async function semanticAcceptance(input: SemanticAcceptanceInput): Promis
           // (infrastructure, like an outage): no verdict, no Worker re-run, no repair cycle.
           ownerAnswer = normalizeOwnerAnswer(raw);
           if (!ownerAnswer) throw new Error("review output has no owner answer");
-        } else if (input.goal.mode !== "read_only" && reviews.every((r) => r.status === "satisfied")) {
+        } else if (
+          input.goal.mode !== "read_only" &&
+          // Owner criteria all met and no safeguard confirmed violated (an unverified safeguard is reported, not a gap).
+          reviews.every((r) => r.status === "satisfied" || (r.status === "unsupported" && isSafeguard(goalCriteria, r.id)))
+        ) {
           // Change work: the Manager's result summary for the owner (optional; a template is the fallback).
           ownerAnswer = normalizeOwnerAnswer(raw);
         }
@@ -223,7 +245,15 @@ export async function semanticAcceptance(input: SemanticAcceptanceInput): Promis
   const byId = new Map(reviews.map((r) => [r.id, r]));
   const acceptance = input.goal.criteria.map((c): AcceptanceEvidence => {
     if (c.kind !== "goal")
-      return { criterionId: c.id, status: allPassed ? "satisfied" : "failed", evidenceType: "validation", reference: firstValidation };
+      return {
+        criterionId: c.id,
+        status: technicalStatus,
+        evidenceType: "validation",
+        reference: technicalReference,
+        ...(technicalStatus === "unknown"
+          ? { confirmedFailureOnly: true, summary: `${c.id} not verified: required validation(s) could not be completed in this environment (not a task failure)` }
+          : {}),
+      };
     const r = byId.get(c.id)!;
     if (r.status === "satisfied")
       return { criterionId: c.id, status: "satisfied", evidenceType: "manager_review", reference: `review:${input.reviewId}`, summary: `${c.id} met: ${r.evidence}`.slice(0, 300) };
@@ -232,11 +262,18 @@ export async function semanticAcceptance(input: SemanticAcceptanceInput): Promis
       status: r.status === "not_satisfied" ? "failed" : "unknown",
       evidenceType: "manager_review",
       reference: null,
+      // A safeguard is unverified, not failed, unless the reviewer confirmed a violation.
+      ...(r.status === "unsupported" && input.goal.mode !== "read_only" && SAFEGUARD_GOAL_CRITERIA.includes(c.text) ? { confirmedFailureOnly: true } : {}),
       // The Manager's natural-language follow-up leads, so bounded renderings keep it intact.
       summary: `${c.id} ${r.status === "not_satisfied" ? "not met" : "not supported by evidence"}: ${r.reason || "no reason given"} (criterion: ${c.text.slice(0, 120)})`.slice(0, 300),
     };
   });
   return { acceptance, reviewUnavailable, reviewCalls, citedFiles: citedPathList, constraintVerdicts, ownerAnswer };
+}
+
+function isSafeguard(criteria: readonly { id: string; text: string }[], id: string): boolean {
+  const c = criteria.find((x) => x.id === id);
+  return c !== undefined && SAFEGUARD_GOAL_CRITERIA.includes(c.text);
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {

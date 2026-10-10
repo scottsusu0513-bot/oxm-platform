@@ -135,6 +135,13 @@ export interface WorkerResult {
   errorType: WorkerErrorType | null;
   /** Worker's own snake_case failure code, if it reported one. */
   workerErrorCode: string | null;
+  /**
+   * Shared-workspace paths excluded from this run's task-owned delta (see
+   * workers/attribution.ts): preExisting = dirty before the run and unchanged;
+   * unattributed = out of scope, changed during the run, not reported by the
+   * Worker. Never committed; never a Worker scope violation.
+   */
+  workspaceAttribution?: { preExisting: string[]; unattributed: string[] };
   /** Typed availability classification of a failed CLI run (quota, rate limit, auth, …) with a trusted reset time when exposed. */
   availability?: { kind: "quota_exhausted" | "rate_limited_transient" | "service_unavailable" | "authentication_unavailable" | "executable_unavailable" | "process_failure"; resetAt: string | null };
 }

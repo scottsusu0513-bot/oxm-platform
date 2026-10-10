@@ -5,7 +5,9 @@ import type { CheckOutcome } from "../github/types";
 import type { WorkerErrorType } from "../workers/types";
 import { managerBudget } from "./budget";
 import { isEvidenceId, normalizeManagerEvidence, sanitizeSummary } from "./evidence";
+import { UNVERIFIED_VALIDATION_STATUSES } from "./types";
 import type {
+  Advisory,
   EscalationIntent,
   EscalationTrigger,
   Finding,
@@ -20,6 +22,13 @@ import type {
  * Validates evidence, not implementation: it never reads code, never infers
  * correctness from prose, never calls an LLM, worker, shell, or GitHub. It
  * only cross-checks structured evidence records and returns a decision.
+ *
+ * Worker-favoring acceptance: only hard boundaries (scope, branch/Git
+ * integrity, approval, untrusted evidence) block, and only CONFIRMED task
+ * failures (a validation that ran and failed, an owner criterion judged not
+ * met, failed CI) are repaired. A validation that could not run or whose
+ * outcome cannot be attributed to the task, and a safeguard criterion that is
+ * merely unverified, become advisories reported to the owner — never a repair.
  *
  * Precedence (most restrictive wins):
  *   blocked > needs_human_approval > needs_human_decision > needs_repair > accepted
@@ -103,9 +112,12 @@ export function scopeViolations(evidence: Pick<ManagerEvidence, "scope">): strin
   return evidence.scope.changedPaths.filter((p) => !isInScope(p, evidence.scope.allowedScope));
 }
 
-function collectFindings(e: ManagerEvidence, approvalRequired: boolean): { findings: Finding[]; triggers: EscalationTrigger[] } {
+function collectFindings(e: ManagerEvidence, approvalRequired: boolean): { findings: Finding[]; triggers: EscalationTrigger[]; advisories: Advisory[] } {
   const findings: Finding[] = [];
   const triggers: EscalationTrigger[] = [];
+  const advisories: Advisory[] = [];
+  const advise = (evidenceId: string, code: Advisory["code"], summary?: string) =>
+    advisories.push({ evidenceId, code, ...(summary ? { summary: sanitizeSummary(summary) } : {}) });
   const add = (evidenceId: string, severity: Finding["severity"], code: string, trigger: EscalationTrigger, summary?: string) =>
     findings.push({ evidenceId, severity, code, trigger, ...(summary ? { summary: sanitizeSummary(summary) } : {}) });
 
@@ -170,7 +182,10 @@ function collectFindings(e: ManagerEvidence, approvalRequired: boolean): { findi
     else if (v.status === "passed" && !v.executed) add(vid, "blocked", "validation_inconsistent", "missing_trusted_evidence");
     else if (v.status === "passed") passedValidations.add(v.name);
     else if (v.status === "failed") add(vid, "needs_repair", "validation_failed", "validation_failure", v.summary);
-    else add(vid, "needs_repair", "validation_missing", "validation_failure", v.summary);
+    else if (UNVERIFIED_VALIDATION_STATUSES.includes(v.status)) {
+      // Infrastructure / unattributable outcome: reported, never a task failure.
+      advise(vid, "validation_unverified", v.summary ?? `validation ${v.name} ${v.status}`);
+    }
   }
 
   // CI (exact trusted head SHA)
@@ -208,7 +223,9 @@ function collectFindings(e: ManagerEvidence, approvalRequired: boolean): { findi
     const a = e.acceptance.find((x) => x.criterionId === cid);
     const aid = `acceptance:${cid}`;
     if (!a || a.status === "unknown") {
-      add(aid, "needs_repair", "acceptance_unverified", "acceptance_failure", a?.summary);
+      // A safeguard criterion that is only unverified (e.g. validations could not run) is reported, not repaired.
+      if (a?.confirmedFailureOnly === true) advise(aid, "acceptance_unverified_advisory", a.summary);
+      else add(aid, "needs_repair", "acceptance_unverified", "acceptance_failure", a?.summary);
       continue;
     }
     if (a.status === "failed") {
@@ -234,7 +251,7 @@ function collectFindings(e: ManagerEvidence, approvalRequired: boolean): { findi
     else if (e.risk.approval !== "approved") add("risk:approval", "needs_human_approval", `approval_${e.risk.approval === "expired" ? "expired" : "required"}`, "approval_required");
   }
 
-  return { findings, triggers };
+  return { findings, triggers, advisories };
 }
 
 function sortedUnique<T extends string>(values: readonly T[]): T[] {
@@ -273,12 +290,13 @@ export function validateEvidence(input: ManagerEvidence): ManagerValidation {
       reasonCodes: ["evidence_rejected"],
       triggers: ["missing_trusted_evidence"],
       intents: ["stop_task"],
+      advisories: [],
     };
   }
   const e = normalized.evidence;
   const riskLevel: RiskLevel = RANK[e.risk.observed] > RANK[e.risk.stored] ? e.risk.observed : e.risk.stored;
   const budget = managerBudget(riskLevel);
-  const { findings, triggers } = collectFindings(e, budget.approvalRequired);
+  const { findings, triggers, advisories } = collectFindings(e, budget.approvalRequired);
 
   // Repair history must be a gap-free, monotonic sequence of prior needs_repair outcomes.
   const { attempt, prior } = e.repair;
@@ -316,5 +334,6 @@ export function validateEvidence(input: ManagerEvidence): ManagerValidation {
     reasonCodes: sortedUnique(findings.map((f) => f.code)),
     triggers: allTriggers,
     intents: intentsFor(decision, allTriggers, findings.filter((f) => f.severity === "blocked").map((f) => f.trigger), budget.allowDeepEscalation),
+    advisories,
   };
 }

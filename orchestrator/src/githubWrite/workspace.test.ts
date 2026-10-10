@@ -145,10 +145,13 @@ function fakeGit(repo: FakeRepo) {
         return out.includes("") ? exit({ exitCode: 128 }) : exit({ stdout: out.join("") });
       }
       if (a[0] === "diff" && a.includes("--cached")) return exit({ stdout: `${(repo.staged ?? []).join("\0")}\0` });
+      // Committed paths of the new commit (`git diff --name-only <expected> <new>`).
+      if (a[0] === "diff") return exit({ stdout: `${(repo.committedPaths ?? []).join("\0")}\0` });
       if (a[0] === "commit") {
-        repo.committedPaths = [...(repo.staged ?? [])];
+        const staged = repo.staged ?? [];
+        repo.committedPaths = [...staged];
         repo.staged = [];
-        repo.dirty = [];
+        repo.dirty = repo.dirty.filter((p) => !staged.includes(p));
         repo.local.set(repo.current, MOVED);
         return exit({});
       }
@@ -318,6 +321,15 @@ describe("prepareAssignedWorkspace: preflight refusals", () => {
     expect(ok.ok).toBe(true);
   });
 
+  it("with the task scope, other actors' dirty paths outside it do not block preparation; inside it they do", async () => {
+    const plan = newPlan();
+    const s = setup(plan, { dirty: ["server/secret-wip.ts"] });
+    expect((await prepareAssignedWorkspace({ plan, lease: s.lease, creation: s.creation, allowedScope: ["client/"] }, s.deps)).ok).toBe(true);
+    const plan2 = newPlan();
+    const s2 = setup(plan2, { dirty: ["client/wip.ts"] });
+    expect(await prepareAssignedWorkspace({ plan: plan2, lease: s2.lease, creation: s2.creation, allowedScope: ["client/"] }, s2.deps)).toMatchObject({ error: "dirty_worktree" });
+  });
+
   it("wrong current branch after switching → verification_failed", async () => {
     const plan = newPlan();
     const s = setup(plan, { brokenSwitch: true });
@@ -450,7 +462,7 @@ describe("commitValidatedChanges", () => {
     expect(result).toEqual({ ok: true, headSha: MOVED });
     expect(s.status()).toEqual({ branch: NEW_BRANCH, headSha: MOVED, dirtyPaths: [] });
     expect(s.repo.committedPaths).toEqual(["client/src/pages/Search.tsx"]);
-    expect(s.specs.map((spec) => spec.args[0])).toEqual(["diff", "add", "diff", "ls-files", "hash-object", "commit"]);
+    expect(s.specs.map((spec) => spec.args[0])).toEqual(["diff", "add", "diff", "ls-files", "hash-object", "commit", "diff"]);
     const commits = s.specs.filter((spec) => spec.args[0] === "commit");
     expect(commits).toHaveLength(1);
     // No pathspec: the commit takes exactly the verified index, never re-reading the working tree.
@@ -465,6 +477,27 @@ describe("commitValidatedChanges", () => {
     expect(result).toMatchObject({ ok: false, error: "dirty_worktree" });
     expect(s.specs).toHaveLength(0);
     expect(s.status().headSha).toBe(BASE);
+  });
+
+  it("shared workspace: other actors' out-of-scope changes the owner saw excluded stay uncommitted and untouched", async () => {
+    const { plan, s } = await ready(["client/src/pages/Search.tsx", "orchestrator/src/humanInteraction/ledger.ts"]);
+    const e = evidence({ excludedPaths: ["orchestrator/src/humanInteraction/ledger.ts"] });
+    const result = await commitValidatedChanges(commitInput(plan, s.lease, e), s.deps);
+    expect(result).toEqual({ ok: true, headSha: MOVED });
+    expect(s.repo.committedPaths).toEqual(["client/src/pages/Search.tsx"]);
+    expect(s.status().dirtyPaths).toEqual(["orchestrator/src/humanInteraction/ledger.ts"]);
+    expect(s.specs.find((spec) => spec.args[0] === "add")?.args).toEqual(["add", "--", "client/src/pages/Search.tsx"]);
+    // The exclusion is part of what the owner approved: a different exclusion is a different binding.
+    expect(commitApprovalBinding(e)).not.toBe(commitApprovalBinding(evidence()));
+  });
+
+  it("refuses excluded paths that are inside the scope or overlap the validated paths", async () => {
+    const { plan, s } = await ready(["client/src/pages/Search.tsx"]);
+    for (const excludedPaths of [["client/src/pages/Search.tsx"], ["client/src/pages/Other.tsx"]]) {
+      const e = evidence({ allowedScope: ["client/"], excludedPaths });
+      expect(await commitValidatedChanges(commitInput(plan, s.lease, e), s.deps)).toMatchObject({ ok: false, error: "policy_violation" });
+    }
+    expect(s.specs).toHaveLength(0);
   });
 
   it("fails closed without git add when any path was already staged", async () => {
@@ -671,7 +704,9 @@ describe("worker preconditions", () => {
     expect(checkWorkerPreconditions({ ...base, status: { ...s.status(), branch: "main" } }).ok).toBe(false);
     expect(checkWorkerPreconditions({ ...base, status: { ...s.status(), branch: "HEAD" } }).ok).toBe(false);
     expect(checkWorkerPreconditions({ ...base, status: { ...s.status(), headSha: MOVED } }).ok).toBe(false);
-    expect(checkWorkerPreconditions({ ...base, status: { ...s.status(), dirtyPaths: ["x.ts"] } }).ok).toBe(false);
+    // An unrelated dirty path inside the task scope blocks; another actor's change outside it does not.
+    expect(checkWorkerPreconditions({ ...base, status: { ...s.status(), dirtyPaths: ["client/x.ts"] } }).ok).toBe(false);
+    expect(checkWorkerPreconditions({ ...base, status: { ...s.status(), dirtyPaths: ["orchestrator/x.ts"] } }).ok).toBe(true);
     expect(checkWorkerPreconditions({ ...base, prepared: { ...p } }).ok).toBe(false);
     expect(checkWorkerPreconditions({ ...base, contract: { ...contract, branch: "agent/task-t1-other" } }).ok).toBe(false);
     expect(checkWorkerPreconditions({ ...base, contract: { ...contract, expectedHeadSha: MOVED } }).ok).toBe(false);

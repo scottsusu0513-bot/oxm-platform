@@ -43,7 +43,7 @@ export const EVIDENCE_KEYS = {
   validation: ["name", "requested", "executed", "status", "trusted", "summary"],
   ci: ["requiredChecks", "headSha", "trusted", "checks"],
   ciCheck: ["name", "outcome"],
-  acceptance: ["criterionId", "status", "evidenceType", "reference", "summary"],
+  acceptance: ["criterionId", "status", "evidenceType", "reference", "summary", "confirmedFailureOnly"],
   risk: ["stored", "observed", "approval"],
   branch: ["assignedBranch", "plannedBaseSha", "verifiedHeadSha", "workerBranch", "workerHeadSha", "workspaceProof", "branchPlanDecision", "baseFreshness", "conflict"],
   pr: ["number", "state"],
@@ -180,6 +180,7 @@ function normalize(raw: unknown): ManagerEvidence {
       evidenceType: oneOf(o.evidenceType, ACCEPTANCE_EVIDENCE_TYPES, `${at}.evidenceType`),
       reference: o.reference === null ? null : id(o.reference, `${at}.reference`),
       ...summary(o.summary, `${at}.summary`),
+      ...(o.confirmedFailureOnly === undefined ? {} : { confirmedFailureOnly: bool(o.confirmedFailureOnly, `${at}.confirmedFailureOnly`) }),
     };
   });
 

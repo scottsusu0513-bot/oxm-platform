@@ -241,7 +241,7 @@ describe("telegram end to end — commit/publish approval", () => {
     await p.service.observe();
     expect(p.api.sent).toHaveLength(1);
     const msg = p.api.sent[0];
-    expect(msg.text).toMatch(/^「tg4」已完成，也通過我的檢查，等待你批准發布。/);
+    expect(msg.text).toMatch(/^「tg4」已完成，也通過我的檢查。目前尚未發布，等待你批准。/);
     for (const line of ["這次改了 1 個檔案", "自動檢查：全部通過。", "按「批准發布」後，我會建立一次 commit、推送到這個任務的工作分支並開 PR。不會合併，也不會部署。"])
       expect(msg.text).toContain(line);
     expect(findInternalJargon(msg.text)).toEqual([]);
