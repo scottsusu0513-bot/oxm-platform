@@ -28,8 +28,10 @@ import {
 } from "./approval";
 import { GatewayError } from "./errors";
 import { assessRetry, gitMetadataFact, outcomeOf, retryFact, stopReasonFact, terminalClass, type RetryAssessment } from "./retry";
+import { buildLiveTaskSnapshot, liveStateKey, prReferences, type LiveStatusKind } from "../observatory/liveStatus";
 import type {
   AgentGatewayService,
+  GatewayExecutionView,
   ApprovalDecisionRequest,
   ApprovalDecisionResponse,
   ApprovalDecisionValue,
@@ -265,8 +267,8 @@ function externalStatus(status: NonNullable<ReturnType<AgentRuntimeService["getT
     priority: status.priority,
     risk: status.risk,
     assignedWorker: status.assignedWorker,
-    branch: status.branch,
-    headSha: status.headSha,
+    branch: status.branch && /^[A-Za-z0-9/._-]{1,200}$/.test(status.branch) && !isDangerousValue(status.branch) ? status.branch : null,
+    headSha: status.headSha && /^[0-9a-f]{40}$/.test(status.headSha) ? status.headSha : null,
     prNumber: status.prNumber,
     prState: status.prState,
     qaState: status.qaState,
@@ -282,6 +284,7 @@ function externalStatus(status: NonNullable<ReturnType<AgentRuntimeService["getT
     ...(status.deliveryTarget ? { deliveryTarget: status.deliveryTarget } : {}),
     ...(status.delivery !== undefined ? { delivery: status.delivery ? sanitizeDelivery(status.delivery) : null } : {}),
     ...(status.preview !== undefined ? { preview: status.preview ? sanitizePreview(status.preview) : null } : {}),
+    ...(status.execution !== undefined ? { execution: status.execution ? sanitizeExecution(status.execution) : null } : {}),
     createdAt: status.createdAt,
     updatedAt: status.updatedAt,
   };
@@ -300,6 +303,39 @@ function sanitizeDelivery(d: NonNullable<import("../intake/types").AgentTaskStat
     unverified: d.unverified.slice(0, 10).map((u) => techText(u, 80)).filter(Boolean),
     verifiedAt: d.verifiedAt,
     productionHost: d.productionHost && /^[a-z0-9.-]{3,120}$/i.test(d.productionHost) ? d.productionHost : null,
+  };
+}
+
+/** Live execution facts: identifiers by strict shape, timestamps parsed, reasons as bounded technical text. */
+export function sanitizeExecution(e: GatewayExecutionView): GatewayExecutionView {
+  const id = (v: string | null, re: RegExp) => (typeof v === "string" && re.test(v) && !isDangerousValue(v) ? v : null);
+  const ts = (v: string | null) => (typeof v === "string" && v.length <= 40 && !Number.isNaN(Date.parse(v)) ? v : null);
+  const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.floor(v) : 0);
+  const reason = (v: string | null) => (v ? techText(v, 200) || null : null);
+  return {
+    lineageId: id(e.lineageId ?? null, /^[A-Za-z0-9._:-]{1,128}$/),
+    deliveryBindingMatches: typeof e.deliveryBindingMatches === "boolean" ? e.deliveryBindingMatches : null,
+    pendingSideEffectId: id(e.pendingSideEffectId ?? null, /^[A-Za-z0-9._:-]{1,128}$/),
+    mergeSha: id(e.mergeSha ?? null, /^[0-9a-f]{40}$/),
+    deployCommitSha: id(e.deployCommitSha ?? null, /^[0-9a-f]{40}$/),
+    ciHeadSha: id(e.ciHeadSha ?? null, /^[0-9a-f]{40}$/),
+    workerRunning: e.workerRunning === true,
+    runId: id(e.runId, /^[A-Za-z0-9._-]{1,100}$/),
+    workerStartedAt: ts(e.workerStartedAt),
+    latestEvent: e.latestEvent && !isDangerousValue(e.latestEvent.event) && /^[a-z0-9_]{1,60}$/.test(e.latestEvent.event) && ts(e.latestEvent.at) ? { event: e.latestEvent.event, at: e.latestEvent.at } : null,
+    staleRunRecord: e.staleRunRecord === true,
+    pendingSideEffect: (["worker", "commit", "push", "pr", "merge"] as const).find((k) => k === e.pendingSideEffect) ?? null,
+    approvalPhase: (["pre_execution", "commit_publish", "post_qa", "deploy"] as const).find((k) => k === e.approvalPhase) ?? null,
+    queueReason: reason(e.queueReason),
+    blockingReason: reason(e.blockingReason),
+    managerReviewPending: e.managerReviewPending === true,
+    paused: e.paused === true,
+    ci: e.ci ? { status: id(e.ci.status, /^[a-z_]{1,30}$/) ?? "unknown", total: n(e.ci.total), passed: n(e.ci.passed), pending: n(e.ci.pending), failed: n(e.ci.failed) } : null,
+    deployApprovedAt: ts(e.deployApprovedAt),
+    mergedAt: ts(e.mergedAt),
+    deployId: id(e.deployId, /^dep-[a-z0-9]{1,60}$/i),
+    workerTimeoutMs: typeof e.workerTimeoutMs === "number" && Number.isFinite(e.workerTimeoutMs) && e.workerTimeoutMs > 0 ? e.workerTimeoutMs : null,
+    runtimeStartedAt: ts(e.runtimeStartedAt) ?? "",
   };
 }
 
@@ -609,7 +645,31 @@ export function createAgentGatewayService(deps: GatewayDependencies): AgentGatew
       managerResult: (s.mode === "read_only" ? s.answer : s.resultSummary)?.slice(0, 1_200) ?? null,
       retryOf,
       openDecision: openDecisionOf(taskId),
+      live: liveSnapshotOf(s, title),
+      liveKey: liveStateKey(s, deps.now()),
     };
+  }
+
+  /**
+   * Live Task Observatory snapshot of one task (read-only; deterministic code assembles every field).
+   * PR owners among the known tasks let a task that merely mentions a PR ("deploy PR #26") point to the
+   * task that actually owns that PR instead of contradicting it.
+   */
+  function liveSnapshotOf(s: GatewayTaskStatus, title: string) {
+    try {
+      const prOwners: { taskId: string; prNumber: number; kind: LiveStatusKind; liveKey: string }[] = [];
+      const mentioned = prReferences(title).filter((n) => n !== s.prNumber);
+      for (const t of mentioned.length ? (deps.taskDirectory?.() ?? []).slice(0, 30) : []) {
+        if (t.taskId === s.taskId) continue;
+        const other = deps.runtime.getTaskStatus(t.taskId);
+        if (!other || other.prNumber === null || !mentioned.includes(other.prNumber)) continue;
+        const o = externalStatus(other);
+        prOwners.push({ taskId: o.taskId, prNumber: o.prNumber!, kind: buildLiveTaskSnapshot(o, { now: deps.now() }).kind, liveKey: liveStateKey(o, deps.now()) });
+      }
+      return buildLiveTaskSnapshot(s, { now: deps.now(), title: sanitizeSummary(title), prOwners });
+    } catch {
+      return null;
+    }
   }
 
   function openDecisionOf(taskId: string): TrustedTaskState["openDecision"] {
@@ -1088,7 +1148,26 @@ export function createAgentGatewayService(deps: GatewayDependencies): AgentGatew
         // A Manager reply is only kept when it was grounded in that task's trusted state; the basis is recorded.
         const st = taskStates.find((t) => t.taskId === decision.taskId);
         if (!st || !decision.ownerReply) delete decision.ownerReply;
-        else decision.replyBasis = { taskId: st.taskId, status: st.status, retryKind: st.retry?.kind ?? null };
+        else {
+          const liveKey = st.liveKey ?? null;
+          const related = st.live?.reconciliation.relatedPr;
+          decision.replyBasis = { taskId: st.taskId, status: st.status, retryKind: st.retry?.kind ?? null, liveKey, ...(related?.ownerKey ? { relatedSource: { taskId: related.ownerTaskId, liveKey: related.ownerKey } } : {}) };
+        }
+        // Observability (bounded classifications only; never the snapshot text).
+        if (decision.kind === "task_follow_up" && decision.taskId) {
+          deps.audit.record({ event: "live_status_task_selected", principalId: auth.principalId, requestId: auth.requestId, taskId: decision.taskId, action: "interpret_owner_message", outcome: "selected" });
+          deps.audit.record({ event: "live_status_requested", principalId: auth.principalId, requestId: auth.requestId, taskId: decision.taskId, action: "interpret_owner_message", outcome: (decision.topics ?? []).join("+") || "status" });
+          deps.audit.record({
+            event: "live_status_snapshot_produced",
+            principalId: auth.principalId,
+            requestId: auth.requestId,
+            taskId: decision.taskId,
+            action: "interpret_owner_message",
+            outcome: st?.live?.kind ?? "unavailable",
+            ...(st?.live?.stall.suspected ? { reasonCode: "possibly_stalled" } : st?.live?.reconciliation.inconsistencies.length ? { reasonCode: "inconsistency_detected" } : {}),
+          });
+          deps.audit.record({ event: "live_status_response_produced", principalId: auth.principalId, requestId: auth.requestId, taskId: decision.taskId, action: "interpret_owner_message", outcome: decision.ownerReply ? "manager_candidate" : "fallback_required" });
+        }
       }
       try {
         repo.create({ interpretationId: request.idempotencyKey, fingerprint, principalId: auth.principalId, originalRequest: request.text, priority: request.priority ?? null, decision, createdAt: deps.now() });

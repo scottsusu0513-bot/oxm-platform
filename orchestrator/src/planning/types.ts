@@ -53,6 +53,10 @@ export interface TrustedTaskState {
   retryOf: string | null;
   /** Open owner decision (escalation after unresolved repair): what still fails and the Manager's own diagnosis. */
   openDecision?: { failingCheck: string; rootCause: string; recommendation: string; attempts: number; stagnated: boolean } | null;
+  /** Live Task Observatory snapshot (trusted, deterministic): the ONLY source for current-state answers. */
+  live?: import("../observatory/liveStatus").LiveTaskSnapshot | null;
+  /** Fingerprint captured with the facts sent to the planner, before it answers. */
+  liveKey?: string | null;
 }
 
 /** Transport statuses the owner already received for this message while the Agent was offline. */
@@ -122,6 +126,10 @@ export interface ReplyBasis {
   taskId: string;
   status: string;
   retryKind: string | null;
+  /** Live state key (observatory) the reply was grounded in; a changed key means fresher live state wins. */
+  liveKey?: string | null;
+  /** Cross-referenced PR owner facts must also remain current. */
+  relatedSource?: { taskId: string; liveKey: string };
 }
 
 export type ReviewStatus = "satisfied" | "not_satisfied" | "unsupported";

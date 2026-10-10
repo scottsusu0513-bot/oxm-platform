@@ -263,6 +263,8 @@ export interface AgentTaskStatus {
   delivery?: import("../scheduler/types").TaskDeliveryView | null;
   /** Live preview of a UI task (null when none was offered). */
   preview?: import("../scheduler/types").TaskPreviewView | null;
+  /** Live execution facts for the read-only status observatory (presentation only). */
+  execution?: import("../scheduler/types").TaskExecutionView;
   lastMeaningfulAuditEvent: Pick<
     AuditEvent,
     "event" | "createdAt" | "fromState" | "toState"

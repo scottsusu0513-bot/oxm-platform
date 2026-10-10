@@ -375,6 +375,7 @@ export async function createAgentRuntime(config: AgentRuntimeConfig, options: Ag
   }, {
     // Production: semantic Manager work requires the configured GPT Manager; never a deterministic stand-in.
     managerMode: "gpt_required",
+    workerTimeoutMs: config.workerTimeoutMs,
   });
   const generate = options.nextTaskId ?? defaultTaskIdGenerator();
   const runtime = createAgentRuntimeService({

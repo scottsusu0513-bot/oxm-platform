@@ -62,7 +62,8 @@ export function buildTaskStatus(input: {
     branch: snap?.branch ?? task.branch,
     headSha: snap?.headSha ?? latestRun?.headSha ?? null,
     prNumber: snap?.prNumber ?? task.prNumber,
-    prState: (snap?.prNumber ?? task.prNumber) === null ? null : "open",
+    // The trusted merge recorded by delivery supersedes the PR-opened flag (never reported "open" after a merge).
+    prState: (snap?.prNumber ?? task.prNumber) === null ? null : snap?.delivery?.mergeSha ? "merged" : "open",
     qaState: snap?.qaStatus ?? null,
     repairAttempt: snap?.repair.attempt ?? task.retries,
     waitReason: snap?.blockingReason ?? snap?.queueReason ?? null,
@@ -95,6 +96,7 @@ export function buildTaskStatus(input: {
         }
       : {}),
     ...(snap ? { lifecyclePhase: snap.lifecyclePhase, deliveryTarget: snap.deliveryTarget, delivery: snap.delivery, preview: snap.preview } : {}),
+    ...(snap?.execution ? { execution: snap.execution } : {}),
     approval: {
       required: approvalState || pending !== null,
       kind:

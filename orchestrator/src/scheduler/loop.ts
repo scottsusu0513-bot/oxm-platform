@@ -62,6 +62,7 @@ import {
   type StartApprovalEvidence,
   type TaskIntake,
   type TaskSnapshot,
+  type TaskExecutionView,
   type TrustedRunRecord,
 } from "./types";
 
@@ -313,6 +314,12 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
   const recs = new Map<string, TaskRecord>();
   const results = new Map<string, WorkerResult>();
   const cancels = new Map<string, (reason: string) => void>();
+  // Observability only (never persisted, never authority): Worker runs this process started and has not
+  // seen finish, and the latest structured event per task. A restart starts these empty.
+  const liveRuns = new Map<string, { taskId: string; startedAt: IsoTimestamp }>();
+  const latestEvents = new Map<string, { event: string; at: IsoTimestamp }>();
+  const runtimeRuns = new Map<string, string>();
+  const runtimeStartedAt = ports.now();
   const workerCompletions = new Set<Promise<void>>();
   const rejected: { taskId: string; reason: string }[] = [];
   const queue: OrchestrationEvent[] = [];
@@ -449,6 +456,7 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       gitMetadata?: AuditGitMetadata;
     } = {},
   ) {
+    latestEvents.set(t.intake.taskId, { event, at: ports.now() });
     ports.audit(
       orchestrationAudit(event, extra.from ?? t.state, extra.to ?? null, {
         taskId: t.intake.taskId,
@@ -527,6 +535,7 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
   }
 
   function snapshot(t: TaskRecord): TaskSnapshot {
+    const execution = executionView(t);
     return structuredClone({
       taskId: t.intake.taskId,
       seq: t.seq,
@@ -548,7 +557,7 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       workspaceId: t.intake.workspaceId,
       expectedPaths: [...t.intake.expectedPaths],
       inFlight: view(t).inFlight,
-      workerRunning: t.workerRunning,
+      workerRunning: execution.workerRunning,
       workerErrorType: t.lastResult?.errorType ?? null,
       paused: t.paused,
       pendingReview: t.pendingReview,
@@ -651,7 +660,63 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
           }
         : null,
       preview: t.preview ? { status: t.preview.status, url: t.preview.url, visibility: t.preview.visibility, access: t.preview.access, reason: t.preview.reason, updatedAt: t.preview.updatedAt } : null,
+      execution,
     });
+  }
+
+  /** Live execution facts (observatory): in-process Worker truth, never the persisted flag alone. */
+  function executionView(t: TaskRecord): TaskExecutionView {
+    const run = t.runId ? liveRuns.get(t.runId) : undefined;
+    const live = Boolean(run && run.taskId === t.intake.taskId);
+    const checks = t.qa?.checks ?? [];
+    let deliveryBindingMatches: boolean | null = null;
+    if (t.delivery) {
+      const d = t.delivery;
+      try {
+        const currentEvidence = deployEvidenceOf(t, t.qa);
+        deliveryBindingMatches = Boolean(
+          d.evidence && currentEvidence &&
+          d.lineageId === t.lineageId &&
+          d.prNumber === t.pr?.number &&
+          d.headSha === t.receipt?.headSha &&
+          d.binding === deployApprovalBinding(d.evidence) &&
+          d.binding === deployApprovalBinding(currentEvidence)
+        );
+      } catch { deliveryBindingMatches = false; }
+    }
+    return {
+      lineageId: t.lineageId,
+      deliveryBindingMatches,
+      pendingSideEffectId: t.pendingSideEffect === "worker" && !live ? null : t.pendingSideEffectId,
+      mergeSha: t.delivery?.mergeSha ?? null,
+      deployCommitSha: t.delivery?.deploy?.commitSha ?? null,
+      ciHeadSha: t.qa?.headSha ?? null,
+      workerRunning: live,
+      runId: live ? t.runId : null,
+      workerStartedAt: live ? run!.startedAt : null,
+      latestEvent: latestEvents.get(t.intake.taskId) ?? null,
+      staleRunRecord: t.workerRunning && !live && runtimeRuns.get(t.intake.taskId) !== t.runId,
+      pendingSideEffect: t.pendingSideEffect === "worker" && !live ? null : t.pendingSideEffect,
+      approvalPhase: t.approvalPhase,
+      queueReason: t.queueReason,
+      blockingReason: t.blockingReason,
+      managerReviewPending: t.pendingReview || t.pendingDiagnosis !== null,
+      paused: t.paused,
+      ci: t.qa
+        ? {
+            status: t.qa.status,
+            total: checks.length,
+            passed: checks.filter((c) => c.outcome === "success").length,
+            pending: checks.filter((c) => c.outcome === "pending" || c.outcome === "missing").length,
+            failed: checks.filter((c) => c.outcome === "failed" || c.outcome === "blocked").length,
+          }
+        : null,
+      deployApprovedAt: t.delivery?.approvedAt ?? null,
+      mergedAt: t.delivery?.mergedAt ?? null,
+      deployId: t.delivery?.deploy?.id ?? null,
+      workerTimeoutMs: policy.workerTimeoutMs ?? null,
+      runtimeStartedAt,
+    };
   }
 
   /** PR-only goal (or a legacy PR-terminal policy): the PR itself is the terminal goal. */
@@ -1204,6 +1269,9 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     const handle = ports.worker.start(t.worker, contract, t.trustedApproval);
     if (handle.runId !== runId) throw new Error("[scheduler] worker handle runId does not match the contract");
     cancels.set(runId, (reason) => handle.cancel(reason));
+    runtimeRuns.set(t.intake.taskId, runId);
+    liveRuns.set(runId, { taskId: t.intake.taskId, startedAt: ports.now() });
+    void handle.result.finally(() => liveRuns.delete(runId)).catch(() => undefined);
     audit(t, "worker_started", { attempt });
     if (t.worker === "codex") audit(t, "codex_worker_started", { attempt });
     const taskId = t.intake.taskId;

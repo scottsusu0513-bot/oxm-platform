@@ -69,6 +69,7 @@ export function createHumanInteractionHarness(input: {
   log?: (event: { event: string; outcome: string; detail?: string }) => void;
 }): {
   gateway: AgentGatewayService;
+  gatewayAudit: ReturnType<typeof createFakeGatewayAudit>;
   service: HumanInteractionService;
   ledger: AuditHumanInteractionLedger;
   transport: RecordingTransport;
@@ -111,7 +112,7 @@ export function createHumanInteractionHarness(input: {
       branch: snap.branch,
       headSha: snap.headSha,
       prNumber: snap.prNumber,
-      prState: snap.prNumber ? "open" : null,
+      prState: snap.prNumber ? (snap.delivery?.mergeSha ? "merged" : "open") : null,
       qaState: snap.qaStatus,
       repairAttempt: snap.repair.attempt,
       waitReason: snap.blockingReason ?? snap.queueReason,
@@ -120,6 +121,7 @@ export function createHumanInteractionHarness(input: {
       deliveryTarget: snap.deliveryTarget,
       delivery: snap.delivery,
       preview: snap.preview,
+      execution: snap.execution,
       createdAt: input.now(),
       updatedAt: input.now(),
     } as unknown as AgentTaskStatus;
@@ -157,6 +159,7 @@ export function createHumanInteractionHarness(input: {
       return status(taskId);
     },
   };
+  const gatewayAudit = createFakeGatewayAudit();
   const gateway = createAgentGatewayService({
     authenticator: owner.authenticator,
     runtime,
@@ -165,7 +168,7 @@ export function createHumanInteractionHarness(input: {
     decisions,
     events,
     rateLimiter: createFakeRateLimiter(),
-    audit: createFakeGatewayAudit(),
+    audit: gatewayAudit,
     now: input.now,
     humanDecisionRequirements: createManagerHumanDecisionReader(input.loop, () => null),
     humanDecisionSubmissions: submissions,
@@ -194,5 +197,5 @@ export function createHumanInteractionHarness(input: {
     ...(input.managerRequired ? { managerRequired: true } : {}),
     ...(input.log ? { log: input.log } : {}),
   });
-  return { gateway, service, ledger, transport, owner, emitted, approvalEvents, cancelCalls };
+  return { gateway, gatewayAudit, service, ledger, transport, owner, emitted, approvalEvents, cancelCalls };
 }

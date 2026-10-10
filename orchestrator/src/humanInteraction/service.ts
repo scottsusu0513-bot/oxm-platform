@@ -31,6 +31,7 @@ import { composeFollowUp, eligibilityVerdict, isPureStatusQuestion, retryRefused
 import { parseTaskCommand, TASK_PREFIX_USAGE } from "./taskPrefix";
 import { decideTaskNotification, type EventCandidate } from "./notificationPolicy";
 import type { FollowUpTopic, ReplyBasis } from "../planning/types";
+import { liveStateKey } from "../observatory/liveStatus";
 import type {
   CancelConfirmationNotice,
   CommitApprovalNotice,
@@ -309,9 +310,10 @@ export function plainPhase(s: GatewayTaskStatus, lang: OwnerLanguage): string {
     case "waiting_branch_conflict":
       return zh ? "任務已排隊，前一個任務完成後會開始處理" : "queued; it starts when the previous task finishes";
     case "running":
-      // Also covers "Worker finished, Manager still validating": never presented as stopped.
+      if (s.execution && !s.execution.workerRunning) return zh ? "目前沒有工程師在執行，正在等我的檢查" : "no Worker running; waiting for my review";
       return zh ? `${w} 正在處理，完成後我會檢查` : `${w} is working; I will review when done`;
     case "repair_requested": {
+      if (s.execution && !s.execution.workerRunning) return zh ? "目前沒有工程師在執行，正在準備修正或檢查結果" : "no Worker running; preparing the repair or reviewing its result";
       const round = s.repairAttempt > 1 ? (zh ? `第 ${s.repairAttempt} 輪` : `round ${s.repairAttempt}`) : zh ? "第一輪" : "the first round";
       return zh ? `${round}結果尚未通過，${w} 正在修正` : `${round} did not pass yet; ${w} is fixing it`;
     }
@@ -323,6 +325,7 @@ export function plainPhase(s: GatewayTaskStatus, lang: OwnerLanguage): string {
       if (s.lifecyclePhase === "preview_ready") return zh ? "修改已完成，預覽已開啟，等你確認是否發布" : "done; preview open, waiting for your publish decision";
       return zh ? "任務暫停，正在等待你的決定（請按批准或拒絕）" : "paused, waiting for your decision (approve or reject)";
     case "deploying":
+      if (s.delivery?.stage === "merging" || s.execution?.pendingSideEffect === "merge") return zh ? `正在合併 PR${s.prNumber ? ` #${s.prNumber}` : ""}，尚未開始觀察部署` : "merging the PR; deployment observation follows";
       return s.lifecyclePhase === "production_verifying"
         ? zh ? "正式站已部署，正在做 health check 與 smoke test" : "deployed; running the production health check and smoke test"
         : zh ? `PR${s.prNumber ? ` #${s.prNumber}` : ""} 已合併，正在等正式站部署完成` : `PR${s.prNumber ? ` #${s.prNumber}` : ""} merged; waiting for the production deployment`;
@@ -385,6 +388,7 @@ export function phaseOf(s: GatewayTaskStatus): string {
       if (s.delivery?.stage === "production_verified") return `complete (PR #${s.delivery.prNumber} merged, deployed, production verified)`;
       return s.prNumber ? `complete (PR #${s.prNumber} passed CI; not merged by the agent)` : "complete";
     case "deploying":
+      if (s.delivery?.stage === "merging" || s.execution?.pendingSideEffect === "merge") return "merging the PR; deployment observation follows";
       return s.lifecyclePhase === "production_verifying" ? "deployed; verifying production" : "merged; waiting for the production deployment";
     case "blocked":
       if (s.taskState === "closed_without_deploy") return "closed without deployment (owner decision)";
@@ -848,12 +852,27 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
     const reply = managed && managed.basis?.taskId === taskId ? usableManagerText(managed.reply, lang, 1_200) : null;
     if (!reply || !managed?.basis) return null;
     const s = await status(taskId).catch(() => null);
-    if (!s || s.status !== managed.basis.status) return null;
+    if (!s) return null;
+    // Fresher live state wins: a reply grounded in an older live view (e.g. before a merge, a Render
+    // status change or a Worker start/stop) is not used; the deterministic status answer is.
+    if (s.status !== managed.basis.status || (managed.basis.liveKey && managed.basis.liveKey !== liveStateKey(s, deps.now()))) {
+      log({ event: "live_status_answered", outcome: "stale_reply_discarded" });
+      return null;
+    }
+    const related = managed.basis.relatedSource;
+    if (related) {
+      const current = await status(related.taskId).catch(() => null);
+      if (!current || liveStateKey(current, deps.now()) !== related.liveKey) {
+        log({ event: "live_status_answered", outcome: "stale_related_reply_discarded" });
+        return null;
+      }
+    }
     const asksRetry = Boolean(topics?.includes("retry_eligibility") || topics?.includes("remediation"));
     const assessment = asksRetry ? await deps.gateway.getRetryEligibility(call({ taskId })).catch(() => null) : null;
     if (asksRetry && (!assessment || assessment.eligibility.kind !== managed.basis.retryKind)) return null;
     const verdict = assessment && topics?.includes("retry_eligibility") ? L(lang, `（系統判定：${eligibilityVerdict(assessment, lang)}）`, `(System verdict: ${eligibilityVerdict(assessment, lang)})`) : null;
     log({ event: "human_task_follow_up_answered", outcome: `manager:${(topics ?? []).join("+") || "status"}` });
+    if (managed.basis.liveKey) log({ event: "live_status_answered", outcome: "manager" });
     return {
       outcome: "info",
       taskId,
@@ -980,7 +999,7 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
     }
     const d = view.decision;
     // A follow-up that asks something specific (why / what now / can it be re-run) is a question, never guidance.
-    const question = d.kind === "task_follow_up" && !isPureStatusQuestion(d.topics) && d.taskId !== null;
+    const question = d.kind === "task_follow_up" && d.taskId !== null;
     const guidanceLike = d.kind === "human_decision" || d.kind === "clarify" || (d.kind === "task_follow_up" && !question && (d.taskId === null || pending.some((p) => p.taskId === d.taskId)));
     if (pending.length === 1 && guidanceLike) return submitGuidance(key, pending[0], text, lang);
     // A reply to the publish / preview message that asks for changes revises THAT task (never a new task).
@@ -1154,7 +1173,7 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
       if (!notice && reply.replyToNoticeRef) notice = deps.ledger.byRef(reply.replyToNoticeRef);
       // Explicit request for technical details (also as a reply to a decision): a question, never guidance.
       if (DETAILS_REQUEST.test(reply.text)) return technicalDetails(notice?.taskId ?? null, lang);
-      if (notice && notice.kind === "human_decision") {
+      if (notice && notice.kind === "human_decision" && !deps.managerRequired) {
         // Explicit reply to a decision message: preferred, exact correlation.
         return submitGuidance(reply.idempotencyKey, { taskId: notice.taskId, escalationId: notice.targetId }, reply.text, lang);
       }
@@ -1165,7 +1184,7 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
         return remember(reply.idempotencyKey, { outcome: "invalid", message: inputRejection(screened.code, lang, "request") });
       }
       // Only an ordinary (not explicitly correlated) message may bind to an open decision implicitly.
-      const pending = notice ? [] : await openDecisions();
+      const pending = notice?.kind === "human_decision" ? (await openDecisions()).filter((p) => p.taskId === notice.taskId) : notice ? [] : await openDecisions();
       // A reply to a publish / preview message may revise that result; an ordinary message may, when exactly one awaits it.
       const gates = notice ? [] : pending.length === 0 ? await openPublishGates() : [];
       const revisable = notice?.kind === "commit_publish_approval" ? { taskId: notice.taskId, explicit: true } : gates.length === 1 ? { taskId: gates[0], explicit: false } : null;
@@ -1174,7 +1193,7 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
       const context = notice?.taskId ?? (pending.length === 1 ? pending[0].taskId : revisable ? revisable.taskId : focus && deps.directory.allTaskIds().includes(focus) ? focus : null);
       const routed = await routeMessage(reply.idempotencyKey, screened.goal, context, false, undefined, pending, revisable);
       if (routed) return routed;
-      if (pending.length === 1) return submitGuidance(reply.idempotencyKey, pending[0], screened.goal, lang);
+      if (pending.length === 1 && !deps.managerRequired) return submitGuidance(reply.idempotencyKey, pending[0], screened.goal, lang);
       if (pending.length > 1) return whichDecision(pending, lang);
       log({ event: "owner_voice_fallback", outcome: "manager_unavailable" });
       return {
@@ -1338,6 +1357,7 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
           L(lang, `任務：${ownerLabelOf(resolved.taskId, label)}`, `Task: ${ownerLabelOf(resolved.taskId, label)}`),
           L(lang, `目前進度：${plainPhase(s, lang)}`, `Progress: ${plainPhase(s, lang)}`),
           L(lang, `負責：${who}`, `Assigned: ${who}`),
+          ...(s.execution ? [L(lang, s.execution.workerRunning ? "工程師正在執行中" : "目前沒有工程師在執行", s.execution.workerRunning ? "Worker running" : "No Worker running")] : []),
           ...(s.repairAttempt > 0 ? [L(lang, `修正次數：${s.repairAttempt}`, `Fix attempts: ${s.repairAttempt}`)] : []),
           ...(s.prNumber ? [`PR: #${s.prNumber}`] : []),
           L(lang, `編號：${resolved.taskId}`, `Id: ${resolved.taskId}`),

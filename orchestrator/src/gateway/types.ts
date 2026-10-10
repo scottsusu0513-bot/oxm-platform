@@ -142,12 +142,15 @@ export interface GatewayTaskStatus {
   delivery?: GatewayDeliveryView | null;
   /** Live preview of a UI task (sanitized; URL validated). */
   preview?: GatewayPreviewView | null;
+  /** Live execution facts for the read-only status observatory (sanitized identities and SHAs; no authorization objects or free Worker text). */
+  execution?: GatewayExecutionView | null;
   createdAt: IsoTimestamp;
   updatedAt: IsoTimestamp;
 }
 
 export type GatewayDeliveryView = Pick<TaskDeliveryView, "stage" | "prNumber" | "deployStatus" | "health" | "smoke" | "failure" | "observerMissing" | "unverified" | "verifiedAt" | "productionHost">;
 export type GatewayPreviewView = TaskPreviewView;
+export type GatewayExecutionView = import("../scheduler/types").TaskExecutionView;
 
 export interface PendingApprovalRequirement {
   approvalRequestId: string;
@@ -439,6 +442,10 @@ export interface GatewayAuditEvent {
     | "human_decision_submitted"
     | "human_decision_rejected"
     | "owner_question_answered"
+    | "live_status_task_selected"
+    | "live_status_response_produced"
+    | "live_status_requested"
+    | "live_status_snapshot_produced"
     | "gateway_rate_limited";
   principalId?: string;
   taskId?: string;

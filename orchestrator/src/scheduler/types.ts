@@ -269,6 +269,8 @@ export interface OrchestrationPolicy {
   completion: CompletionBasis;
   /** Production deployment observation bounds (merge → deployment received → rollout → checks). */
   deliveryWindows: { receiveWindowMs: number; rolloutWindowMs: number; maxCheckFailures: number };
+  /** Configured Worker hard timeout (observability only: stall evidence); null when unknown. */
+  workerTimeoutMs?: number | null;
 }
 
 export const MANAGER_MODES = ["gpt_required", "deterministic_fixture"] as const;
@@ -806,6 +808,50 @@ export interface TaskSnapshot {
   delivery: TaskDeliveryView | null;
   /** Live preview of a UI task (null when none was offered). */
   preview: TaskPreviewView | null;
+  /** Live execution facts for the read-only status observatory (presentation only, never authority). */
+  execution: TaskExecutionView;
+}
+
+/**
+ * Live execution facts of one task as THIS runtime observes them. workerRunning is in-process truth (a
+ * Worker handle this process started is still outstanding); it is never restored from a checkpoint, so a
+ * Worker that died with a previous runtime is never reported as running. Bounded, structured facts only:
+ * no prompts, Worker output, reasoning or authorization objects.
+ */
+export interface TaskExecutionView {
+  /** Trusted identity and delivery binding assessment; no authorization object is exposed. */
+  lineageId?: string | null;
+  deliveryBindingMatches?: boolean | null;
+  pendingSideEffectId?: string | null;
+  mergeSha?: string | null;
+  deployCommitSha?: string | null;
+  ciHeadSha?: string | null;
+  workerRunning: boolean;
+  runId: string | null;
+  /** When this runtime started the outstanding Worker run (null: none running). */
+  workerStartedAt: IsoTimestamp | null;
+  /** Latest structured orchestration event for this task seen by THIS runtime (null after a restart until one occurs). */
+  latestEvent: { event: string; at: IsoTimestamp } | null;
+  /** The persisted record says a Worker run is in flight but this runtime owns no such process (died with a previous runtime). */
+  staleRunRecord: boolean;
+  /** Non-idempotent side effect currently in flight; no authorization object is exposed. */
+  pendingSideEffect: "worker" | "commit" | "push" | "pr" | "merge" | null;
+  approvalPhase: ApprovalPhase | null;
+  queueReason: string | null;
+  blockingReason: string | null;
+  /** A finished run waits for the Manager's goal review / repair diagnosis. */
+  managerReviewPending: boolean;
+  paused: boolean;
+  /** Required CI checks on the exact PR head (counts only). */
+  ci: { status: string; total: number; passed: number; pending: number; failed: number } | null;
+  /** Trusted delivery timeline. */
+  deployApprovedAt: IsoTimestamp | null;
+  mergedAt: IsoTimestamp | null;
+  deployId: string | null;
+  /** Configured Worker hard timeout: a run past it (plus grace) is evidence of a possible stall. */
+  workerTimeoutMs: number | null;
+  /** When this runtime started (restart boundary for latestEvent). */
+  runtimeStartedAt: IsoTimestamp;
 }
 
 export interface TaskDeliveryView {
