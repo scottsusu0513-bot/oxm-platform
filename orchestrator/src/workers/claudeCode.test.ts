@@ -125,20 +125,24 @@ describe("branch safety", () => {
     expect(r.riskObserved.level).toBe("red");
   });
 
-  it("refuses the result when Git metadata changed during the run (config, hooks, refs, index flags)", async () => {
+  // A digest-only inspector cannot say which component changed: that is never proof of a Worker
+  // violation. The implementation stands; publication needs re-established Git evidence.
+  // (Component-level violations are covered in gitMetadata.test.ts.)
+  it("keeps the implementation when an unidentifiable Git metadata change happened during the run (unattributed)", async () => {
     const { adapter, git } = setup({ metadata: [FAKE_GIT_METADATA_DIGEST, "e".repeat(64)] });
     const r = await adapter.start({ contract: contract({ gitMetadataDigest: FAKE_GIT_METADATA_DIGEST }), now: NOW }).result;
-    expect(r).toMatchObject({ status: "failure", errorType: "git_metadata_changed", needsApproval: true, filesChanged: [] });
-    expect(r.riskObserved.level).toBe("red");
+    expect(r).toMatchObject({ status: "success", errorType: null, filesChanged: ["server/db.ts"] });
+    expect(r.riskObserved.level).toBe("green");
+    expect(r.gitMetadata).toMatchObject({ workerViolation: false, publicationTrust: "refresh_required", changes: [{ component: "opaque", classification: "unattributed_change" }] });
     expect(git.metadataCalls).toBe(2);
   });
 
-  it("refuses a timed-out run that also changed Git metadata (checked for every outcome)", async () => {
+  it("checks Git metadata for every outcome: a timed-out run carries the classified delta", async () => {
     const { adapter, runner, timer } = setup({ behavior: () => ({}), metadata: [FAKE_GIT_METADATA_DIGEST, "e".repeat(64)] });
     const handle = adapter.start({ contract: contract(), now: NOW });
     await flush(() => runner.specs.length > 0);
     timer.fire();
-    expect(await handle.result).toMatchObject({ status: "failure", errorType: "git_metadata_changed" });
+    expect(await handle.result).toMatchObject({ status: "timeout", gitMetadata: { changes: [{ classification: "unattributed_change" }] } });
   });
 
   it("does not start when Git metadata drifted from the prepared baseline", async () => {

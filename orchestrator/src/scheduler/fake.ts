@@ -15,7 +15,8 @@ import { createFakeRemote, type FakeRemote } from "../githubWrite/fake";
 import { createWorkspaceLeaseRegistry, type WorkspaceLease } from "../githubWrite/lease";
 import type { PreparedWorkspace } from "../githubWrite/workspace";
 import { COMMIT_PUBLISH_ACTION, commitApprovalBinding, normalizeCommitApprovalEvidence } from "../workers/prompt";
-import { gitBlobId, sameContentIdentities, type PathContentIdentity } from "../workers/gitIntegrity";
+import { gitBlobId, sameContentIdentities, type GitMetadataComponentId, type GitMetadataSnapshot, type PathContentIdentity } from "../workers/gitIntegrity";
+import { assessGitMetadataRebind, gitMetadataEvidence } from "../workers/gitMetadataPolicy";
 import type { NewAuditEvent } from "../store/types";
 import type { WorkerHandle, WorkerResult, WorkerTaskContract } from "../workers/types";
 import { redStartBindingId } from "../workers/prompt";
@@ -79,7 +80,14 @@ export type WorkerScript =
    * completes the in-scope change; meanwhile another actor changes files outside the scope; no
    * validation can run (package manager unavailable).
    */
-  | "shared_workspace_validation_unavailable";
+  | "shared_workspace_validation_unavailable"
+  /**
+   * Regression t261010-a61cac: the Worker completes an in-scope change while Codespaces/VS Code and a
+   * background repack rewrite editor caches and .git/info/refs (benign; integrity digest unchanged).
+   */
+  | "benign_git_metadata"
+  /** The Worker completes the change while a Git-inert config key appears (rebindable; digest changes). */
+  | "inert_git_metadata";
 
 /** Other actors' changes that appear outside the task scope during a shared-workspace run. */
 export const FOREIGN_PATHS = ["orchestrator/src/humanInteraction/ledger.ts", "orchestrator/src/humanInteraction/notificationPolicy.ts"] as const;
@@ -154,6 +162,8 @@ export interface Simulation {
   remote: FakeRemote;
   audit: Omit<NewAuditEvent, "id">[];
   workerCalls: WorkerCall[];
+  /** Exact contract of every started Worker run, in order. */
+  workerContracts: WorkerTaskContract[];
   qaReads: number[];
   qaDecisions: QaDecision[];
   trustedRecords: TrustedRunRecord[];
@@ -168,7 +178,17 @@ export interface Simulation {
    * Out-of-band workspace change (e.g. after Manager review): writes/removes files
    * (null = delete) and/or replaces the Git metadata digest.
    */
-  mutateWorkspace(taskId: string, change: { files?: Record<string, string | null>; gitMetadataDigest?: string }): void;
+  mutateWorkspace(
+    taskId: string,
+    change: {
+      files?: Record<string, string | null>;
+      gitMetadataDigest?: string;
+      /** Component the metadata change belongs to (absent: unidentifiable, like a digest-only inspector). */
+      gitMetadataComponent?: GitMetadataComponentId;
+      /** Config key -> value hash of that component after the change. */
+      gitMetadataKeys?: Record<string, string>;
+    },
+  ): void;
   /** Posts task_created and settles. */
   create(task: TaskIntake): Promise<void>;
   /** Posts an event and settles. */
@@ -212,6 +232,14 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
   const contents = new Map<string, Map<string, string | null>>(); // taskId -> path -> bytes (null = deleted)
   const gitMetadata = new Map<string, string>(); // taskId -> current Git metadata digest of its workspace
   const metadataOf = (taskId: string) => gitMetadata.get(taskId) ?? FAKE_METADATA_DIGEST;
+  // Component view of each workspace's metadata (mirrors gitIntegrity snapshots) and the trusted binding per lease.
+  const metadataComponents = new Map<string, Map<GitMetadataComponentId, { digest: string; keys: Record<string, string> }>>();
+  const snapshotOf = (taskId: string): GitMetadataSnapshot => ({
+    digest: metadataOf(taskId),
+    components: Array.from(metadataComponents.get(taskId) ?? []).map(([id, c]) => ({ id, digest: c.digest, entries: {}, keys: { ...c.keys } })),
+  });
+  const metadataBindings = new Map<string, GitMetadataSnapshot>(); // leaseId -> trusted snapshot
+  const preparedSnapshots = new Map<string, GitMetadataSnapshot>(); // taskId -> snapshot at preparation
   const identitiesOf = (taskId: string, paths: readonly string[]): PathContentIdentity[] =>
     Array.from(new Set(paths)).sort().map((path): PathContentIdentity => {
       const bytes = contents.get(taskId)?.get(path);
@@ -226,6 +254,7 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
   const recordsByTask = new Map<string, TrustedRunRecord>();
   const runsByTask = new Map<string, number>();
   const contractsByTask = new Map<string, WorkerTaskContract>();
+  const workerContracts: WorkerTaskContract[] = [];
   const held = new Map<string, () => void>();
   let nextSha = 0xb0000;
   let mainReads = 0;
@@ -272,6 +301,48 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
       case "mutate_readonly":
       case "success":
         return { ...base, headSha: edit() };
+      case "benign_git_metadata": {
+        const change = (component: "repo.info_server" | "repo.config_integration", entries: string[], keys: string[]) => ({
+          component,
+          scope: "repository" as const,
+          trust: component === "repo.info_server" ? ("housekeeping" as const) : ("integration" as const),
+          change: "modified" as const,
+          entries,
+          keys,
+          classification: "benign_integration_change" as const,
+          rebindable: true,
+          reason: "editor integration cache / Git housekeeping output Git never reads",
+        });
+        const changes = [
+          change("repo.config_integration", [`git:config:branch.${c.branch}.github-pr-base-branch`], [`branch.${c.branch}.github-pr-base-branch`, `branch.${c.branch}.vscode-merge-base`]),
+          change("repo.info_server", ["git:info/refs"], []),
+        ];
+        return {
+          ...base,
+          headSha: edit(),
+          gitMetadata: { window: "worker_run", beforeDigest: metadataOf(c.taskId), afterDigest: metadataOf(c.taskId), components: {}, changes, workerViolation: false, publicationTrust: "trusted", summary: "repo.config_integration=benign_integration_change; repo.info_server=benign_integration_change" },
+        };
+      }
+      case "inert_git_metadata": {
+        const beforeDigest = metadataOf(c.taskId);
+        gitMetadata.set(c.taskId, "f".repeat(64));
+        const key = `branch.${c.branch}.github-pr-owner-number`;
+        metadataComponents.set(c.taskId, new Map([...Array.from(metadataComponents.get(c.taskId) ?? []), ["repo.config", { digest: "f".repeat(64), keys: { [key]: "h1" } }]]));
+        return {
+          ...base,
+          headSha: edit(),
+          gitMetadata: {
+            window: "worker_run",
+            beforeDigest,
+            afterDigest: "f".repeat(64),
+            components: { "repo.config": "f".repeat(64) },
+            changes: [{ component: "repo.config", scope: "repository", trust: "security", change: "modified", entries: ["git:config"], keys: [key], classification: "unattributed_change", rebindable: true, reason: "only config keys Git never reads changed; not attributable to the Worker" }],
+            workerViolation: false,
+            publicationTrust: "rebind_allowed",
+            summary: `repo.config=unattributed_change[${key}]`,
+          },
+        };
+      }
       case "risk_red":
         return {
           ...base,
@@ -302,6 +373,18 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
           riskObserved: { level: "red", notes: [] },
           needsApproval: true,
           errorType: "git_metadata_changed",
+          gitMetadata: {
+            window: "worker_run",
+            beforeDigest: FAKE_METADATA_DIGEST,
+            afterDigest: "d".repeat(64),
+            components: { "repo.hooks": "d".repeat(64) },
+            changes: [
+              { component: "repo.hooks", scope: "repository", trust: "security", change: "modified", entries: ["git:hooks/pre-commit"], keys: [], classification: "worker_security_violation", rebindable: false, reason: "Git hooks changed during the Worker's exclusive run window; no integration writes it" },
+            ],
+            workerViolation: true,
+            publicationTrust: "blocked",
+            summary: "repo.hooks=worker_security_violation[git:hooks/pre-commit]",
+          },
         };
       case "timeout":
         return {
@@ -495,7 +578,20 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
           allowedDirtyPaths: [],
           gitMetadataDigest: metadataOf(plan.taskId),
         });
+        metadataBindings.set(lease.leaseId, snapshotOf(plan.taskId));
+        preparedSnapshots.set(plan.taskId, snapshotOf(plan.taskId));
         return { ok: true, prepared };
+      },
+      async rebindGitMetadata({ lease, contract }) {
+        if (!leases.holds(lease) || lease.taskId !== contract.taskId) return { ok: false, reason: "lease not held", evidence: null };
+        const head = heads.get(lease.taskId);
+        if (!head || head.branch !== contract.branch || head.headSha !== contract.expectedHeadSha || !contract.gitMetadataDigest)
+          return { ok: false, reason: "workspace is not on the bound branch/HEAD", evidence: null };
+        const now = snapshotOf(lease.taskId);
+        const assessed = assessGitMetadataRebind(metadataBindings.get(lease.leaseId) ?? null, contract.gitMetadataDigest, now);
+        if (!assessed.ok) return assessed;
+        metadataBindings.set(lease.leaseId, now);
+        return { ok: true, gitMetadataDigest: now.digest, evidence: assessed.evidence };
       },
       async checkPreconditions({ prepared, contract, lease }) {
         const p = prepared as PreparedWorkspace;
@@ -550,6 +646,7 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
     worker: {
       start(kind, contract): WorkerHandle {
         contractsByTask.set(contract.taskId, structuredClone(contract));
+        workerContracts.push(structuredClone(contract));
         const n = (runsByTask.get(contract.taskId) ?? 0) + 1;
         runsByTask.set(contract.taskId, n);
         workerCalls.push({
@@ -566,10 +663,14 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
         });
         const script = opts.worker?.[contract.taskId] ?? ["success"];
         const outcome = script[Math.min(n - 1, script.length - 1)];
+        // Mirrors the runtime Worker preflight: a contract not bound to the live metadata never runs.
+        const unbound = contract.gitMetadataDigest !== undefined && contract.gitMetadataDigest !== metadataOf(contract.taskId);
         const result = new Promise<WorkerResult>((resolve) => {
           const cmds = opts.workerCommands?.[contract.taskId];
           const finish = () => {
-            const r = resultFor(contract, outcome);
+            const r: WorkerResult = unbound
+              ? { ...resultFor(contract, "failure"), status: "failure", summary: "Git metadata changed between workspace preparation and Worker start", filesChanged: [], headSha: contract.expectedHeadSha ?? null, errorType: "git_metadata_changed" }
+              : resultFor(contract, outcome);
             // The orchestrator's own (trusted) validations stay independent of what the Worker reports running.
             if (cmds) trustedTestRuns.set(contract.runId, r.testsRun);
             resolve(cmds ? { ...r, testsRun: cmds[Math.min(n - 1, cmds.length - 1)].map((command) => ({ command, outcome: "passed" as const })) } : r);
@@ -587,9 +688,21 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
     },
     evidence: {
       async record({ contract, result, lease, goal, runId }): Promise<TrustedRunRecord> {
-        if (!contract.gitMetadataDigest || metadataOf(lease.taskId) !== contract.gitMetadataDigest) {
-          throw new Error("[fake] Git metadata changed since workspace preparation");
-        }
+        // Mirrors createEvidencePort: typed errors; metadata drift is recorded and classified, never thrown.
+        if (!contract.gitMetadataDigest) throw Object.assign(new Error("[fake] no Git metadata baseline"), { code: "missing_metadata_baseline" });
+        if (result.gitMetadata?.workerViolation) throw Object.assign(new Error("[fake] worker Git metadata violation"), { code: "git_metadata_violation", gitMetadata: result.gitMetadata });
+        const now = metadataOf(lease.taskId);
+        const recordedMetadata =
+          result.gitMetadata ??
+          (now !== contract.gitMetadataDigest
+            ? gitMetadataEvidence(
+                metadataBindings.get(lease.leaseId)?.digest === contract.gitMetadataDigest
+                  ? metadataBindings.get(lease.leaseId)!
+                  : { digest: contract.gitMetadataDigest, components: preparedSnapshots.get(lease.taskId)?.components ?? [] },
+                snapshotOf(lease.taskId),
+                "after_worker_run",
+              )
+            : undefined);
         const trustedRuns = trustedTestRuns.get(runId) ?? result.testsRun;
         const outcomeOf = (needle: string) => trustedRuns.find((r) => r.command.includes(needle))?.outcome ?? "not_run";
         const validations = contract.requiredValidations.map((name) => {
@@ -654,6 +767,7 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
               })),
           verifiedHeadSha: heads.get(lease.taskId)?.headSha ?? null,
           observedRisk: result.riskObserved.level,
+          ...(recordedMetadata ? { gitMetadata: recordedMetadata } : {}),
         };
         trustedRecords.push(structuredClone(record));
         recordsByTask.set(contract.taskId, structuredClone(record));
@@ -811,6 +925,7 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
     remote,
     audit,
     workerCalls,
+    workerContracts,
     qaReads,
     qaDecisions,
     trustedRecords,
@@ -820,7 +935,14 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
     rejectApproval: (taskId, phase) => decideApproval(taskId, phase, "rejected"),
     expireApproval: (taskId, phase) => decideApproval(taskId, phase, "expired"),
     mutateWorkspace(taskId, change) {
-      if (change.gitMetadataDigest !== undefined) gitMetadata.set(taskId, change.gitMetadataDigest);
+      if (change.gitMetadataDigest !== undefined) {
+        gitMetadata.set(taskId, change.gitMetadataDigest);
+        if (change.gitMetadataComponent) {
+          const comps = metadataComponents.get(taskId) ?? new Map();
+          comps.set(change.gitMetadataComponent, { digest: change.gitMetadataDigest, keys: { ...(change.gitMetadataKeys ?? {}) } });
+          metadataComponents.set(taskId, comps);
+        }
+      }
       const files = contents.get(taskId) ?? new Map<string, string | null>();
       const dirty = new Set(dirtyPaths.get(taskId) ?? []);
       for (const [path, bytes] of Object.entries(change.files ?? {})) {

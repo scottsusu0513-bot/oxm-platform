@@ -42,6 +42,8 @@ export interface TrustedTaskState {
   stopReason: string | null;
   /** Plain English description of the stop reason (fixed text per class). */
   stopReasonFact: string | null;
+  /** Deterministic description of the classified Git metadata delta (which component, which class); null: none. */
+  gitMetadataFact?: string | null;
   /** Deterministic re-run verdict (null when it could not be assessed). */
   retry: { kind: string; detail: string } | null;
   worker: string | null;

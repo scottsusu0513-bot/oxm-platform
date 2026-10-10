@@ -25,7 +25,7 @@ import {
   validateApprovalDecisionRequest,
 } from "./approval";
 import { GatewayError } from "./errors";
-import { assessRetry, outcomeOf, retryFact, stopReasonFact, terminalClass, type RetryAssessment } from "./retry";
+import { assessRetry, gitMetadataFact, outcomeOf, retryFact, stopReasonFact, terminalClass, type RetryAssessment } from "./retry";
 import type {
   AgentGatewayService,
   ApprovalDecisionRequest,
@@ -301,6 +301,21 @@ function sanitizeDetails(d: import("../intake/types").TaskTechnicalDetails): imp
     repairAttempts: d.repairAttempts.slice(-8).map((a) => ({ round: a.round, cycle: a.cycle, strategy: a.strategy ? techText(a.strategy, 200) : null, outcome: techText(a.outcome, 80) })),
     changedPaths: paths(d.changedPaths),
     citedFiles: paths(d.citedFiles),
+    ...(d.gitMetadata
+      ? {
+          gitMetadata: {
+            publicationTrust: techText(d.gitMetadata.publicationTrust, 40),
+            workerViolation: d.gitMetadata.workerViolation === true,
+            changes: d.gitMetadata.changes.slice(0, 20).map((c) => ({
+              component: techText(c.component, 60),
+              what: techText(c.what, 200),
+              classification: techText(c.classification, 60),
+              keys: c.keys.slice(0, 10).map((k) => techText(k, 120)).filter(Boolean),
+              entries: c.entries.slice(0, 10).map((e) => techText(e, 200)).filter(Boolean),
+            })),
+          },
+        }
+      : {}),
   };
 }
 
@@ -536,6 +551,7 @@ export function createAgentGatewayService(deps: GatewayDependencies): AgentGatew
       outcome,
       stopReason: cls,
       stopReasonFact: stopReasonFact(cls),
+      gitMetadataFact: gitMetadataFact(s.details?.gitMetadata),
       retry: a ? { kind: a.eligibility.kind, detail: retryFact(a.eligibility) } : null,
       worker: s.assignedWorker,
       prNumber: s.prNumber,

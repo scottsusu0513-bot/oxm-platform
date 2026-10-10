@@ -202,6 +202,14 @@ export interface TaskTechnicalDetails {
   repairAttempts: { round: number; cycle: number; strategy: string | null; outcome: string }[];
   changedPaths: string[];
   citedFiles: string[];
+  /** Classified Git metadata delta (component ids, classes, key names; never values). Absent: nothing changed. */
+  gitMetadata?: TaskGitMetadataFacts | null;
+}
+
+export interface TaskGitMetadataFacts {
+  publicationTrust: string;
+  workerViolation: boolean;
+  changes: { component: string; what: string; classification: string; keys: string[]; entries: string[] }[];
 }
 
 /** Owner-facing Worker assignment state: area, primary, temporary cover, availability pause. */

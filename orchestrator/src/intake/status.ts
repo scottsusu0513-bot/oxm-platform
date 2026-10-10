@@ -1,3 +1,4 @@
+import { GIT_METADATA_COMPONENTS } from "../workers/gitIntegrity";
 import type { TaskTechnicalDetails } from "./types";
 import type { TaskSnapshot } from "../scheduler/types";
 import type {
@@ -163,5 +164,12 @@ function technicalDetails(snap: TaskSnapshot): TaskTechnicalDetails {
     })),
     changedPaths: ev?.changedPaths ?? [],
     citedFiles: ev?.citedFiles ?? [],
+    gitMetadata: snap.gitMetadata
+      ? {
+          publicationTrust: snap.gitMetadata.publicationTrust,
+          workerViolation: snap.gitMetadata.workerViolation,
+          changes: snap.gitMetadata.changes.map((c) => ({ component: c.component, what: GIT_METADATA_COMPONENTS[c.component]?.what ?? c.component, classification: c.classification, keys: [...c.keys], entries: [...c.entries] })),
+        }
+      : null,
   };
 }

@@ -5,7 +5,8 @@ import type { AssignedBranchPlan } from "../branches/types";
 import type { GitInspector, GitStatus, ProcessRunner, WorkerTaskContract } from "../workers/types";
 import { commitApprovalBinding, isPathInScope, type CommitApprovalEvidence } from "../workers/prompt";
 import { isSafeRepoPath } from "../workers/resultParser";
-import { normalizeContentIdentities, sameContentIdentities, type PathContentIdentity } from "../workers/gitIntegrity";
+import { normalizeContentIdentities, opaqueGitMetadataSnapshot, sameContentIdentities, type GitMetadataSnapshot, type PathContentIdentity } from "../workers/gitIntegrity";
+import { assessGitMetadataRebind, type GitMetadataEvidence } from "../workers/gitMetadataPolicy";
 import { approvalAuthorizes } from "../store/repositories";
 import type { Approval, IsoTimestamp } from "../store/types";
 import { expectedRemoteHead } from "./flow";
@@ -440,6 +441,37 @@ export function checkWorkerPreconditions(input: {
     return { ok: false, reason: "contract expects a different Git metadata baseline" };
   }
   return { ok: true, contract: { ...contract, expectedHeadSha: p.headSha, gitMetadataDigest: p.gitMetadataDigest } };
+}
+
+export type MetadataRebindResult =
+  | { ok: true; gitMetadataDigest: string; snapshot: GitMetadataSnapshot; evidence: GitMetadataEvidence | null }
+  | { ok: false; reason: string; evidence: GitMetadataEvidence | null };
+
+/**
+ * Trusted re-binding of the Git integrity baseline right before a follow-up run of the same task
+ * (repair / retry / continuation). Only the metadata binding can change: the lease, task, branch
+ * and the exact expected HEAD must still hold. Security-relevant deltas since the current trusted
+ * binding (`prior`) are refused (workers/gitMetadataPolicy.assessGitMetadataRebind).
+ */
+export async function refreshGitMetadataBinding(input: { lease: unknown; contract: WorkerTaskContract; prior: GitMetadataSnapshot | null }, deps: WorkspaceDeps): Promise<MetadataRebindResult> {
+  const { contract } = input;
+  const lease = input.lease as WorkspaceLease;
+  if (!deps.leases.holds(lease)) return { ok: false, reason: "workspace lease is not held", evidence: null };
+  if (lease.taskId !== contract.taskId || lease.branch !== contract.branch) return { ok: false, reason: "workspace lease belongs to a different task/branch", evidence: null };
+  if (!contract.gitMetadataDigest || !contract.expectedHeadSha) return { ok: false, reason: "contract has no Git binding", evidence: null };
+  let status: GitStatus;
+  let now: GitMetadataSnapshot;
+  try {
+    status = await deps.git.status();
+    now = deps.git.metadataSnapshot ? await deps.git.metadataSnapshot() : opaqueGitMetadataSnapshot(await deps.git.metadataDigest());
+  } catch {
+    return { ok: false, reason: "trusted workspace state is unavailable", evidence: null };
+  }
+  if (status.branch === "HEAD" || status.branch !== contract.branch || status.headSha !== contract.expectedHeadSha) {
+    return { ok: false, reason: "workspace is not on the bound branch/HEAD", evidence: null };
+  }
+  const assessed = assessGitMetadataRebind(input.prior, contract.gitMetadataDigest, now);
+  return assessed.ok ? { ok: true, gitMetadataDigest: now.digest, snapshot: now, evidence: assessed.evidence } : assessed;
 }
 
 export type RuntimeRestoreResult =

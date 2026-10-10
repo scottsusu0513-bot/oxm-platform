@@ -46,7 +46,7 @@ const ALLOWED_RUNTIME = new Set([
   "../workers/prompt",
 ]);
 /** Type-only imports allowed (erased at runtime). */
-const ALLOWED_TYPE_ONLY = new Set([...ALLOWED_RUNTIME, "../planning/managerReasoning", "../github/types", "../githubWrite/types", "../githubWrite/lease", "../githubWrite/workspace", "../manager/types", "../store/types", "../workers/types"]);
+const ALLOWED_TYPE_ONLY = new Set([...ALLOWED_RUNTIME, "../planning/managerReasoning", "../github/types", "../githubWrite/types", "../githubWrite/lease", "../githubWrite/workspace", "../manager/types", "../store/types", "../workers/types", "../workers/gitMetadataPolicy"]);
 ALLOWED_TYPE_ONLY.add("../codespace/types");
 
 function imports(f: string): { spec: string; typeOnly: boolean }[] {

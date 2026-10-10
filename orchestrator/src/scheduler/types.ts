@@ -13,6 +13,7 @@
  *
  * Pure type/constant definitions: no I/O, env, network, or nondeterminism.
  */
+import type { GitMetadataEvidence } from "../workers/gitMetadataPolicy";
 import type { AssignedBranchPlan, BranchLineage } from "../branches/types";
 import type { ApprovalPhase } from "../domain/taskState";
 import type { ClassificationResult, RiskLevel, RoutingDecision, TaskAction, TaskCategory, TaskGoal, TaskMode, TaskState, WorkerKind } from "../domain/types";
@@ -427,6 +428,11 @@ export interface TrustedRunRecord {
   managerAnswer?: string | null;
   /** Per-constraint verification attached by the Manager Loop (trusted + semantic). */
   ownerConstraints?: readonly ConstraintVerdict[];
+  /**
+   * Classified Git metadata delta since workspace preparation (absent: nothing changed). Its
+   * publicationTrust decides whether the owner's commit approval may bind to the current metadata.
+   */
+  gitMetadata?: GitMetadataEvidence;
 }
 
 export interface WorkerPort {
@@ -439,6 +445,11 @@ export interface WorkspacePort {
   prepare(input: { plan: unknown; lease: unknown; creation: BranchCreation | null; allowedScope?: readonly string[] }): Promise<PrepareResult>;
   /** Wraps githubWrite/workspace.checkWorkerPreconditions with the live git status. */
   checkPreconditions(input: { prepared: unknown; plan: unknown; contract: WorkerTaskContract; lease: unknown }): Promise<PreconditionResult>;
+  /**
+   * Trusted Git metadata re-binding right before a follow-up run (repair/retry/continuation):
+   * returns the digest the run must bind to, or refuses on a security-relevant delta.
+   */
+  rebindGitMetadata(input: { lease: WorkspaceLease; contract: WorkerTaskContract }): Promise<{ ok: true; gitMetadataDigest: string; evidence: GitMetadataEvidence | null } | { ok: false; reason: string; evidence: GitMetadataEvidence | null }>;
   /** Branch/HEAD of the leased workspace from git (repair start check). */
   head(lease: WorkspaceLease): Promise<{ branch: string; headSha: string } | null>;
   /** Re-reads branch, HEAD, and dirty paths from trusted Git. */
@@ -570,6 +581,10 @@ export interface PersistedTaskRecord {
   commitApprovalEvidence?: CommitApprovalEvidence | null;
   queueReason: string | null;
   blockingReason: string | null;
+  /** Classified Git metadata delta of the latest run (optional: absent in older checkpoints). */
+  gitMetadata?: GitMetadataEvidence | null;
+  /** Strictest publication trust of the task's trusted metadata re-bindings (optional in older checkpoints). */
+  gitMetadataRebind?: GitMetadataEvidence | null;
   escalations: EscalationRecord[];
   capabilities: Capability[];
   pendingSideEffect: PendingSideEffect;
@@ -743,4 +758,6 @@ export interface TaskSnapshot {
     /** Criterion texts (ids -> owner-level wording) for readable technical details. */
     criteria: { id: string; text: string }[];
   } | null;
+  /** Classified Git metadata delta (components, classes, key names; never values). null: nothing changed. */
+  gitMetadata?: GitMetadataEvidence | null;
 }

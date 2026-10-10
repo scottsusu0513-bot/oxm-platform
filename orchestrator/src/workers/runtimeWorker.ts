@@ -4,7 +4,8 @@ import { approvalAuthorizes } from "../store/repositories";
 import { createKillSwitch } from "./killSwitch";
 import { looksLikeInteractivePrompt, nonInteractiveViolation, WORKER_INTERACTIVE_PROMPTS_ALLOWED } from "./permissions";
 import { attributeWorkspaceDelta } from "./attribution";
-import type { PathContentIdentity } from "./gitIntegrity";
+import { opaqueGitMetadataSnapshot, type GitMetadataSnapshot, type PathContentIdentity } from "./gitIntegrity";
+import { gitMetadataEvidence, type GitMetadataEvidence } from "./gitMetadataPolicy";
 import { VALIDATION_COMMANDS, buildWorkerPrompt, checkTaskBranch, contractRisk, isPathInScope, maxRisk, redStartBindingId, sha256Hex, validateContract } from "./prompt";
 import { parseWorkerReport, sanitizeText, type ParseResult } from "./resultParser";
 import type {
@@ -118,18 +119,23 @@ async function execute(
   const cancelled = () => terminal(c, "cancelled", risk, null);
   if (killSwitch.triggered) return cancelled();
   let before: GitStatus;
-  let beforeMetadata: string;
+  let beforeMetadata: GitMetadataSnapshot;
   let baseline: PathContentIdentity[];
   try {
     before = await deps.git.status();
-    beforeMetadata = await deps.git.metadataDigest();
+    beforeMetadata = await metadataSnapshot(deps);
     // Trusted baseline: exact content of every path already dirty before this execution.
     baseline = await deps.git.contentIdentities(before.dirtyPaths);
   } catch {
     return failure(c, "git_error", "could not read working tree status", risk);
   }
-  if (c.gitMetadataDigest !== undefined && beforeMetadata !== c.gitMetadataDigest)
-    return failure(c, "git_metadata_changed", "Git metadata changed since workspace preparation", "red", { needsApproval: true });
+  // Drift between preparation and this start happened before the Worker ran: never the Worker's
+  // (unattributed), but the run must not start on an unverified baseline. Nothing is lost.
+  if (c.gitMetadataDigest !== undefined && beforeMetadata.digest !== c.gitMetadataDigest)
+    return failure(c, "git_metadata_changed", "Git metadata changed between workspace preparation and Worker start (not attributed to the Worker)", risk, {
+      needsApproval: true,
+      gitMetadata: gitMetadataEvidence(opaqueGitMetadataSnapshot(c.gitMetadataDigest), opaqueGitMetadataSnapshot(beforeMetadata.digest), "before_worker_start"),
+    });
   if (killSwitch.triggered) return cancelled();
   if (before.branch !== c.branch) return failure(c, "branch_mismatch", "working tree is on a different branch than the task branch", risk);
   if (c.expectedHeadSha !== undefined && before.headSha !== c.expectedHeadSha)
@@ -198,22 +204,52 @@ async function execute(
     unsubscribe?.();
     if (removePrompt) await removePrompt().catch(() => {});
   }
-  // Checked for every outcome (including timeout/cancel): Git metadata is never the Worker's to change.
-  let afterMetadata: string | null = null;
+  // Checked for every outcome (including timeout/cancel): the component-level delta of THIS run is
+  // classified (workers/gitMetadataPolicy.ts). Only a security-relevant change attributable to the
+  // Worker refuses the result; integration caches, Git housekeeping, environment changes and
+  // unattributable changes are recorded and never fail the implementation.
+  let afterMetadata: GitMetadataSnapshot;
   try {
-    afterMetadata = await deps.git.metadataDigest();
+    afterMetadata = await metadataSnapshot(deps);
   } catch {
-    afterMetadata = null;
+    return failure(c, "git_metadata_changed", "Git metadata could not be re-read after the run (unverifiable; not attributed to the Worker)", risk, { needsApproval: true });
   }
-  if (afterMetadata !== beforeMetadata)
-    return failure(c, "git_metadata_changed", "worker run changed or hid Git metadata; result refused", "red", { needsApproval: true });
+  const gitMetadata = gitMetadataEvidence(beforeMetadata, afterMetadata, "worker_run");
+  if (gitMetadata.workerViolation)
+    return failure(c, "git_metadata_changed", `worker run changed security-relevant Git metadata; result refused (${gitMetadata.summary})`, "red", { needsApproval: true, gitMetadata });
+  const metadataEvidence = gitMetadata.changes.length ? { gitMetadata } : {};
   // A run that stalled or failed on an interactive confirmation is a runtime
   // configuration defect: not a transient timeout, never retried or repaired.
   const finalOutcome = outcome as "exited" | "cancelled" | "timeout";
   if (finalOutcome !== "cancelled" && exit && (finalOutcome === "timeout" || exit.exitCode !== 0) && looksLikeInteractivePrompt(`${exit.stdout}\n${exit.stderr}`))
     return failure(c, "runtime_misconfigured", "worker runtime waited on an interactive confirmation prompt (non-interactive configuration defect)", risk, { headSha: before.headSha });
-  if (outcome !== "exited") return terminal(c, outcome, risk, before.headSha);
-  return interpret(config, c, deps, risk, before, baseline, exit as ProcessExit, now);
+  if (outcome !== "exited") return { ...terminal(c, outcome, risk, before.headSha), ...metadataEvidence };
+  const result = await interpret(config, c, deps, risk, before, baseline, exit as ProcessExit, now);
+  if (!gitMetadata.changes.length || result.gitMetadata) return result;
+  const notes = gitMetadata.publicationTrust === "trusted" ? [] : [sanitizeText(`git metadata: ${gitMetadata.summary}; not attributed to the Worker; publication ${gitMetadata.publicationTrust === "rebind_allowed" ? "may re-bind to the new state" : "needs re-established Git evidence"}`, 300)];
+  return { ...result, gitMetadata, riskObserved: { ...result.riskObserved, notes: [...notes, ...result.riskObserved.notes].slice(0, 20) } };
+}
+
+/** Component-level snapshot; a digest-only inspector yields one opaque (unidentifiable) component. */
+async function metadataSnapshot(deps: ClaudeCodeDeps): Promise<GitMetadataSnapshot> {
+  return deps.git.metadataSnapshot ? deps.git.metadataSnapshot() : opaqueGitMetadataSnapshot(await deps.git.metadataDigest());
+}
+
+/** Evidence for a HEAD/branch move the Worker made (trusted `git status`, inside its run window). */
+function headMoveEvidence(c: WorkerTaskContract, what: string): GitMetadataEvidence {
+  const change = {
+    component: "repo.head" as const,
+    scope: "repository" as const,
+    trust: "security" as const,
+    change: "modified" as const,
+    entries: [what],
+    keys: [],
+    classification: "worker_security_violation" as const,
+    rebindable: false,
+    reason: `${what} during the Worker's exclusive run window`,
+  };
+  const digest = c.gitMetadataDigest ?? "";
+  return { window: "worker_run", beforeDigest: digest, afterDigest: digest, components: {}, changes: [change], workerViolation: true, publicationTrust: "blocked", summary: `repo.head=worker_security_violation[${what}]` };
 }
 
 async function interpret(
@@ -260,11 +296,13 @@ async function interpret(
   if (after.branch !== c.branch)
     return failure(c, "branch_changed", "worker left the task branch", "red", {
       headSha: null,
+      gitMetadata: headMoveEvidence(c, "branch switched"),
     });
   if (after.headSha !== before.headSha)
     return failure(c, "git_metadata_changed", "worker moved HEAD; only the trusted layer may commit", "red", {
       headSha: null,
       needsApproval: true,
+      gitMetadata: headMoveEvidence(c, "HEAD commit moved"),
     });
   if (report.branch !== c.branch || report.headSha !== after.headSha)
     return failure(c, "result_mismatch", "reported branch/headSha do not match the working tree", risk, { headSha: after.headSha });

@@ -27,6 +27,8 @@ export type FailureClass =
   | "cancelled"
   | "approval_rejected"
   | "publish"
+  | "publication_evidence"
+  | "git_metadata_refresh"
   | "persistence";
 
 const TERMINAL_REASON_CLASSES: { re: RegExp; cls: FailureClass }[] = [
@@ -45,6 +47,8 @@ const TERMINAL_REASON_CLASSES: { re: RegExp; cls: FailureClass }[] = [
   { re: /^cancelled by operator$/, cls: "cancelled" },
   { re: /^(?:pre_execution|commit|push|publish|pre_push|post_qa) approval rejected$/, cls: "approval_rejected" },
   { re: /^(?:trusted commit failed|push failed|PR creation failed): /, cls: "publish" },
+  { re: /^publication paused: Git publication evidence must be re-established$/, cls: "publication_evidence" },
+  { re: /^git metadata refresh refused: /, cls: "git_metadata_refresh" },
   { re: /^orchestration persistence failed$/, cls: "persistence" },
 ];
 
@@ -140,11 +144,41 @@ const STOP_FACT: Record<FailureClass, string> = {
   cancelled: "the task was cancelled",
   approval_rejected: "an approval request was rejected",
   publish: "the change was made, but submitting or publishing it to GitHub failed",
+  git_metadata_refresh:
+    "before the next engineer run could start, the system re-checked the Git state and found a security-relevant Git change (named in gitMetadataFact) that was not attributed to the engineer; for safety the run was not started and nothing was published",
+  publication_evidence:
+    "the engineer's implementation was accepted and kept in the workspace, but Git metadata changed since the work started in a way that was not attributed to the engineer; nothing was published, and publishing needs freshly re-established trusted Git evidence first",
   persistence: "the system failed to save the task state and stopped for safety",
 };
 
 export function stopReasonFact(cls: FailureClass | null): string | null {
   return cls ? STOP_FACT[cls] : null;
+}
+
+const CLASS_FACT: Record<string, string> = {
+  benign_integration_change: "harmless editor/Git housekeeping change Git never reads (never blocks)",
+  environment_change: "machine-level Git configuration change outside the task, not the engineer's",
+  unattributed_change: "change that cannot be attributed to the engineer",
+  worker_security_violation: "security-relevant change made during the engineer's run (hard safety boundary)",
+};
+const TRUST_FACT: Record<string, string> = {
+  trusted: "publication evidence is intact",
+  rebind_allowed: "publication may bind to the new state because Git does not act on it",
+  refresh_required: "publication is paused until trusted Git evidence is re-established",
+  blocked: "the result was refused and nothing can be published",
+};
+
+/**
+ * Plain-English, deterministic description of the classified Git metadata delta (input to the
+ * Manager; component ids and config key names only, never values). null when nothing changed.
+ */
+export function gitMetadataFact(g: import("../intake/types").TaskGitMetadataFacts | null | undefined): string | null {
+  if (!g || !g.changes.length) return null;
+  const parts = g.changes.slice(0, 6).map((c) => {
+    const detail = c.keys.length ? ` (config keys: ${c.keys.slice(0, 4).join(", ")})` : c.entries.length ? ` (${c.entries.slice(0, 3).join(", ")})` : "";
+    return `${c.what}${detail} — ${CLASS_FACT[c.classification] ?? c.classification}`;
+  });
+  return `Git safety layer saw: ${parts.join("; ")}. ${g.workerViolation ? "The engineer crossed a hard Git safety boundary." : "The engineer was not found to have crossed any Git safety boundary."} ${TRUST_FACT[g.publicationTrust] ?? ""}`.trim();
 }
 
 /** Plain-English description of the deterministic re-run verdict (input to the Manager). */

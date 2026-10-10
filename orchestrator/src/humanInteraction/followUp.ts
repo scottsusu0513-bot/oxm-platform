@@ -40,6 +40,14 @@ const REASON_TEXT: Record<FailureClass, { zh: (w: string) => string; en: (w: str
   cancelled: { zh: () => "任務被取消", en: () => "the task was cancelled" },
   approval_rejected: { zh: () => "批准請求被拒絕", en: () => "the approval request was rejected" },
   publish: { zh: () => "把結果提交或發布到 GitHub 時失敗", en: () => "submitting or publishing the result to GitHub failed" },
+  git_metadata_refresh: {
+    zh: (w) => `在 ${w} 下一輪開始前，系統重新檢查 Git 狀態時發現與安全相關的 Git 變更（並非 ${w} 造成），為安全起見沒有啟動這一輪，也沒有發布任何內容`,
+    en: (w) => `before ${w}'s next run could start, the system re-checked Git and found a security-relevant Git change not attributed to ${w}; for safety the run was not started and nothing was published`,
+  },
+  publication_evidence: {
+    zh: (w) => `${w} 的修改已被接受並保留在工作區，但工作期間 Git 設定有非 ${w} 造成的變動，發布前必須重新建立可信的 Git 證據，因此目前沒有發布任何內容`,
+    en: (w) => `${w}'s implementation was accepted and kept in the workspace, but Git metadata changed during the work in a way not attributed to ${w}; publishing needs re-established trusted Git evidence, so nothing was published`,
+  },
   persistence: { zh: () => "系統內部儲存任務狀態失敗，為安全起見停止", en: () => "the system failed to save the task state, so it stopped for safety" },
 };
 
@@ -109,7 +117,7 @@ function remediation(a: RetryAssessment, lang: OwnerLanguage, w: string, retryPh
       const lead =
         a.outcome === "cancelled"
           ? ""
-          : a.failureClass === "git_safety" || a.failureClass === "workspace_safety"
+          : a.failureClass === "git_safety" || a.failureClass === "workspace_safety" || a.failureClass === "git_metadata_refresh"
             ? L(lang, "這是安全檢查造成的停止。", "This was a safety stop.")
             : a.failureClass === "scope"
               ? L(lang, "如果需求本身就需要改到更多地方，建議重新執行前先補充說明範圍，否則可能再次被擋下。", "If the request really needs to touch more places, clarify the scope before a re-run, or it may be stopped again.")
@@ -119,6 +127,8 @@ function remediation(a: RetryAssessment, lang: OwnerLanguage, w: string, retryPh
                   ? L(lang, "這是因為批准被拒絕而停止；重新執行時，執行或發布前仍會再請你批准。", "It stopped because an approval was rejected; a re-run still asks for your approval before running or publishing.")
                   : a.failureClass === "publish"
                     ? L(lang, "修改有完成，但提交或發布到 GitHub 時失敗。", "The change was made, but submitting or publishing it to GitHub failed.")
+                    : a.failureClass === "publication_evidence"
+                      ? L(lang, "修改本身已被接受，只是發布前需要重新建立可信的 Git 證據；不是工程師越界。", "The implementation itself was accepted; only publishing needs re-established trusted Git evidence. The engineer did not cross a boundary.")
                     : a.failureClass === "timeout" || a.failureClass === "worker_error" || a.failureClass === "persistence"
                       ? L(lang, "這類錯誤通常是暫時性的。", "This kind of error is usually temporary.")
                       : a.failureClass === "auth" || a.failureClass === "runtime"

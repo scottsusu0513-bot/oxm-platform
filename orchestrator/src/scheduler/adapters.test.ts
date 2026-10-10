@@ -165,15 +165,33 @@ describe("scheduler production adapters", () => {
       verifiedHeadSha: sha(1),
       changedPaths: ["server/adapter1.ts"],
     });
-    // Evidence is never produced for the Manager if Git metadata drifted from the prepared baseline.
+    // Drift from the prepared baseline that the Worker run did not cause is recorded and classified
+    // (never attributed to the Worker); it pauses publication instead of hiding the implementation.
     metadata = "e".repeat(64);
     await expect(
       evidence.record({ taskId: "adapter1", runId: contract.runId, contract, result, lease: {} as never }),
-    ).rejects.toThrow(/Git metadata changed/);
+    ).resolves.toMatchObject({
+      changedPaths: ["server/adapter1.ts"],
+      gitMetadata: { window: "after_worker_run", workerViolation: false, publicationTrust: "refresh_required", changes: [{ component: "opaque", classification: "unattributed_change" }] },
+    });
     metadata = "c".repeat(64);
     await expect(
       evidence.record({ taskId: "adapter1", runId: contract.runId, contract: { ...contract, gitMetadataDigest: undefined }, result, lease: {} as never }),
-    ).rejects.toThrow(/Git metadata changed/);
+    ).rejects.toMatchObject({ name: "EvidenceRecordError", code: "missing_metadata_baseline" });
+    // A classified Worker violation is refused with a typed code that carries the component evidence.
+    const violation = {
+      window: "worker_run" as const,
+      beforeDigest: "c".repeat(64),
+      afterDigest: "c".repeat(64),
+      components: {},
+      changes: [{ component: "repo.hooks" as const, scope: "repository" as const, trust: "security" as const, change: "added" as const, entries: ["git:hooks/pre-commit"], keys: [], classification: "worker_security_violation" as const, rebindable: false, reason: "hooks" }],
+      workerViolation: true,
+      publicationTrust: "blocked" as const,
+      summary: "repo.hooks=worker_security_violation[git:hooks/pre-commit]",
+    };
+    await expect(
+      evidence.record({ taskId: "adapter1", runId: contract.runId, contract, result: { ...result, gitMetadata: violation }, lease: {} as never }),
+    ).rejects.toMatchObject({ code: "git_metadata_violation", gitMetadata: { workerViolation: true, changes: [{ component: "repo.hooks" }] } });
     // A worker-moved HEAD is not trusted evidence either.
     await expect(
       evidence.record({ taskId: "adapter1", runId: contract.runId, contract: { ...contract, expectedHeadSha: sha(3) }, result, lease: {} as never }),

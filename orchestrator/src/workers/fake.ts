@@ -1,4 +1,4 @@
-import { gitBlobId, type PathContentIdentity } from "./gitIntegrity";
+import { gitBlobId, opaqueGitMetadataSnapshot, type GitMetadataSnapshot, type PathContentIdentity } from "./gitIntegrity";
 import type {
   GitInspector,
   GitStatus,
@@ -52,11 +52,20 @@ export function createFakeRunner(behavior: (spec: ProcessSpec) => FakeProcessBeh
 
 export const FAKE_GIT_METADATA_DIGEST = "d".repeat(64);
 
+/**
+ * `metadata` is consumed one entry per metadata read. Plain digests model a digest-only inspector;
+ * snapshots (gitIntegrity.GitMetadataSnapshot) model the production component-level inspector.
+ */
 export function createFakeGit(
   statuses: GitStatus[],
   changed: string[] = [],
-  metadata: readonly string[] = [FAKE_GIT_METADATA_DIGEST],
+  metadata: readonly (string | GitMetadataSnapshot)[] = [FAKE_GIT_METADATA_DIGEST],
 ): GitInspector & { statusCalls: number; metadataCalls: number } {
+  const nextMetadata = () => {
+    const d = metadata[Math.min(git.metadataCalls, metadata.length - 1)];
+    git.metadataCalls++;
+    return d;
+  };
   const git = {
     statusCalls: 0,
     metadataCalls: 0,
@@ -72,10 +81,17 @@ export function createFakeGit(
       return Array.from(new Set(paths)).sort().map((path) => ({ path, mode: "100644" as const, blob: gitBlobId(Buffer.from(`fake:${path}`)) }));
     },
     async metadataDigest() {
-      const d = metadata[Math.min(git.metadataCalls, metadata.length - 1)];
-      git.metadataCalls++;
-      return d;
+      const d = nextMetadata();
+      return typeof d === "string" ? d : d.digest;
     },
+    ...(metadata.some((m) => typeof m !== "string")
+      ? {
+          async metadataSnapshot(): Promise<GitMetadataSnapshot> {
+            const d = nextMetadata();
+            return typeof d === "string" ? opaqueGitMetadataSnapshot(d) : structuredClone(d);
+          },
+        }
+      : {}),
   };
   return git;
 }

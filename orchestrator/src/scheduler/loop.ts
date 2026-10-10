@@ -25,12 +25,13 @@ import { constraintAcceptance, constraintChecks, semanticConstraintPrompts, veri
 import { buildHandoffSummary, renderHandoffBlock, type HandoffReason, type HandoffSummary } from "../executive/handoff";
 import { ALL_AVAILABLE, PRIMARY_WORKER, areaForCategory, decideExecutionWorker, type ExecutionDecision, type WorkArea, type WorkerAvailabilityState } from "../executive/workAssignment";
 import type { WorkerResult, WorkerTaskContract } from "../workers/types";
+import type { GitMetadataEvidence, GitPublicationTrust } from "../workers/gitMetadataPolicy";
 import { WORKER_INTERACTIVE_PROMPTS_ALLOWED } from "../workers/permissions";
 import { COMMIT_PUBLISH_ACTION, commitApprovalBinding, isPathInScope, normalizeCommitApprovalEvidence, redStartBindingId, type CommitApprovalEvidence } from "../workers/prompt";
 import type { Approval, IsoTimestamp } from "../store/types";
 import { findDependencyCycle } from "./dependencies";
 import { buildManagerEvidence } from "./evidence";
-import { orchestrationAudit, type OrchestrationAuditEvent } from "./events";
+import { orchestrationAudit, type AuditGitMetadata, type OrchestrationAuditEvent } from "./events";
 import { assessPriority } from "./priority";
 import { decideSchedule } from "./scheduler";
 import {
@@ -168,6 +169,13 @@ interface TaskRecord {
   queueReason: string | null;
   blockingReason: string | null;
   escalations: EscalationRecord[];
+  /** Latest classified Git metadata delta (run evidence or recorder view); null when nothing changed. */
+  gitMetadata: GitMetadataEvidence | null;
+  /**
+   * Strictest publication trust of every trusted re-binding before a follow-up run (repair/retry/
+   * continuation). A re-binding moves the integrity baseline, never the publication verdict.
+   */
+  gitMetadataRebind: GitMetadataEvidence | null;
   capabilities: Set<Capability>;
   pendingSideEffect: "worker" | "commit" | "push" | "pr" | null;
   pendingSideEffectId: string | null;
@@ -244,6 +252,30 @@ function validateIntake(t: TaskIntake, known: ReadonlyMap<string, unknown>): str
 /** Read-only runs are strict: their own delta or an unattributable change during the run both count. */
 function readOnlyRunChanged(record: TrustedRunRecord, result: WorkerResult | null): boolean {
   return record.changedPaths.length > 0 || (result?.workspaceAttribution?.unattributed.length ?? 0) > 0;
+}
+
+const PUBLICATION_TRUST_ORDER: readonly GitPublicationTrust[] = ["trusted", "rebind_allowed", "refresh_required", "blocked"];
+/** The stricter of two publication trust levels (kept local: the scheduler imports no runtime worker modules). */
+function worstPublicationTrust(a: GitPublicationTrust | undefined, b: GitPublicationTrust | undefined): GitPublicationTrust {
+  return PUBLICATION_TRUST_ORDER[Math.max(PUBLICATION_TRUST_ORDER.indexOf(a ?? "trusted"), PUBLICATION_TRUST_ORDER.indexOf(b ?? "trusted"))];
+}
+
+/** Typed evidence-recorder error code; a plain Error still yields its name, never an empty code. */
+function evidenceErrorCode(err: unknown): string {
+  const code = (err as { code?: unknown } | null)?.code;
+  if (typeof code === "string" && /^[a-z_]{1,60}$/.test(code)) return code;
+  return err instanceof Error ? `untyped:${err.name}` : "untyped:unknown";
+}
+
+/** Audit view of classified Git metadata evidence (ids, classes, labels and key names; no values). */
+export function auditGitMetadata(e: GitMetadataEvidence): AuditGitMetadata {
+  return {
+    window: e.window,
+    publicationTrust: e.publicationTrust,
+    workerViolation: e.workerViolation,
+    summary: e.summary,
+    changes: e.changes.map((c) => ({ component: c.component, classification: c.classification, change: c.change, entries: [...c.entries], keys: [...c.keys], reason: c.reason })),
+  };
 }
 
 function modeOf(t: { intake: TaskIntake }): TaskMode {
@@ -334,6 +366,8 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       commitApprovalEvidence: t.commitApprovalEvidence ? structuredClone(t.commitApprovalEvidence) : null,
       queueReason: t.queueReason,
       blockingReason: t.blockingReason,
+      gitMetadata: t.gitMetadata ? structuredClone(t.gitMetadata) : null,
+      gitMetadataRebind: t.gitMetadataRebind ? structuredClone(t.gitMetadataRebind) : null,
       escalations: structuredClone(t.escalations),
       capabilities: capabilityList(t),
       pendingSideEffect: t.pendingSideEffect,
@@ -387,6 +421,9 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       dependencyIds?: readonly string[];
       fallbackFrom?: WorkerKind | null;
       reasonCode?: string | null;
+      code?: string;
+      primaryError?: string | null;
+      gitMetadata?: AuditGitMetadata;
     } = {},
   ) {
     ports.audit(
@@ -404,6 +441,9 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
         queueReason: extra.reason ?? t.queueReason,
         outcome: t.status,
         activatedCapabilities: capabilityList(t),
+        ...(extra.code !== undefined ? { evidenceError: extra.code } : {}),
+        ...(extra.primaryError !== undefined ? { primaryError: extra.primaryError } : {}),
+        ...(extra.gitMetadata ? { gitMetadata: extra.gitMetadata } : {}),
       }),
     );
   }
@@ -550,6 +590,7 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
             criteria: t.intake.acceptanceCriteria.map((c) => ({ id: c.id, text: c.text })),
           }
         : null,
+      gitMetadata: t.gitMetadata ?? t.lastResult?.gitMetadata ?? null,
       combinedReview: t.intake.goal?.group
         ? {
             ...(groups.get(t.intake.goal.group.id) ?? { groupId: t.intake.goal.group.id, status: "waiting_parts" as const, verdict: null, attempts: 0 }),
@@ -714,6 +755,8 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       queueReason: null,
       blockingReason: null,
       escalations: [],
+      gitMetadata: null,
+      gitMetadataRebind: null,
       capabilities: new Set<Capability>(["scheduler"]),
       pendingSideEffect: null,
       pendingSideEffectId: null,
@@ -1157,16 +1200,27 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
         goal: goalContext(t),
       });
     } catch (err) {
+      // Fallback audit first: whatever happens next, the diagnosable facts (typed code, primary
+      // Worker error, classified Git metadata components) are durable, never only an Error name.
+      const code = evidenceErrorCode(err);
+      const gitMetadata = (err as { gitMetadata?: GitMetadataEvidence } | null)?.gitMetadata ?? result.gitMetadata;
+      t.gitMetadata = gitMetadata ?? t.gitMetadata;
+      audit(t, "evidence_record_failed", {
+        code,
+        primaryError: result.errorType,
+        ...(gitMetadata ? { gitMetadata: auditGitMetadata(gitMetadata) } : {}),
+      });
       // No prior failure: the evidence error is the primary failure (generic fail-closed path).
       if (result.status === "success" || result.errorType === null) throw err;
       // A Worker failure (e.g. git_metadata_changed with headSha=null) is primary; the
       // evidence error is secondary and must never mask it. Still terminal, no repair.
-      escalate(t, `secondary:evidence_record_failed(${err instanceof Error ? err.name : "unknown"})`, "block");
+      escalate(t, `secondary:evidence_record_failed(${code})`, "block");
       return block(t, `worker failure: ${result.errorType}`, {
         terminal: true,
         trigger: `worker_${result.errorType}`,
       });
     }
+    t.gitMetadata = record.gitMetadata ?? result.gitMetadata ?? null;
     t.managerCalls.semanticReview += record.managerReviewCalls ?? 0;
     t.record = withConstraintVerdicts(t, record, result);
     const phase = t.pr ? "pre_push" : "post_qa";
@@ -1293,6 +1347,9 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     const head = await ports.workspace.head(t.lease);
     if (!head || head.branch !== t.plan.branch || head.headSha !== contract.expectedHeadSha)
       return block(t, "workspace is not at the retry head", { terminal: true, trigger: "unsafe_branch_state" });
+    const bound = await bindGitMetadata(t, contract);
+    if (!bound) return;
+    contract = bound;
     t.pendingRetry = null;
     t.pendingHandback = false;
     t.infraRetries++;
@@ -1446,6 +1503,9 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     const head = await ports.workspace.head(t.lease);
     if (!head || head.branch !== t.plan.branch || head.headSha !== contract.expectedHeadSha)
       return block(t, "workspace is not at the checkpoint head", { terminal: true, trigger: "unsafe_branch_state" });
+    const bound = await bindGitMetadata(t, contract);
+    if (!bound) return;
+    contract = bound;
     t.pendingRetry = null;
     t.pendingHandback = false;
     t.availabilityPause = null;
@@ -2143,12 +2203,44 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     };
   }
 
+  /**
+   * Trusted Git metadata re-binding right before a follow-up run actually starts (repair, retry,
+   * continuation). The earlier contract still carries the digest pinned at first dispatch; benign,
+   * housekeeping, environment and Git-inert deltas since that binding are re-bound (never a Worker
+   * verdict), a security-relevant delta refuses the run. Only `gitMetadataDigest` changes: goal,
+   * criteria, scope, branch lineage, HEAD, risk and approvals are untouched, and any publication
+   * approval state bound to the old digest is dropped (the owner approves again).
+   */
+  async function bindGitMetadata(t: TaskRecord, contract: WorkerTaskContract): Promise<WorkerTaskContract | null> {
+    if (!t.lease || !contract.gitMetadataDigest) return contract;
+    const r = await ports.workspace.rebindGitMetadata({ lease: t.lease, contract });
+    if (!r.ok) {
+      if (r.evidence) t.gitMetadata = r.evidence;
+      audit(t, "git_metadata_rebind_refused", { reason: r.reason, ...(r.evidence ? { gitMetadata: auditGitMetadata(r.evidence) } : {}) });
+      block(t, "git metadata refresh refused: security-relevant Git metadata changed before the run", { terminal: true, trigger: "git_metadata_refresh_refused" });
+      return null;
+    }
+    if (r.gitMetadataDigest === contract.gitMetadataDigest) return contract;
+    if (r.evidence) {
+      t.gitMetadata = r.evidence;
+      t.gitMetadataRebind = { ...r.evidence, publicationTrust: worstPublicationTrust(t.gitMetadataRebind?.publicationTrust, r.evidence.publicationTrust) };
+      audit(t, "git_metadata_rebound", { gitMetadata: auditGitMetadata(r.evidence) });
+    }
+    t.commitApprovalEvidence = null;
+    if (t.approval.commit_publish !== "none") t.approval.commit_publish = "none";
+    if (t.baseContract) t.baseContract = { ...t.baseContract, gitMetadataDigest: r.gitMetadataDigest };
+    return { ...contract, gitMetadataDigest: r.gitMetadataDigest };
+  }
+
   /** Starts an authorized repair run. Repair history is advanced only when the Worker actually starts. */
   async function launchRepair(t: TaskRecord, req: RepairRequest, contract: WorkerTaskContract) {
     if (!t.lease) return block(t, "repair request incomplete", { terminal: true, trigger: "missing_trusted_evidence" });
     const head = await ports.workspace.head(t.lease);
     if (!head || head.branch !== req.branch || head.headSha !== req.expectedHeadSha)
       return block(t, "workspace is not at the repair head", { terminal: true, trigger: "unsafe_branch_state" });
+    const bound = await bindGitMetadata(t, contract);
+    if (!bound) return;
+    contract = bound;
     t.pendingRepair = null;
     t.pendingHandback = false;
     t.capabilities.add("repair_loop");
@@ -2328,10 +2420,13 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     const excludedPaths = dirtyPaths.filter((p) => !owned.has(p));
     const identities = observed.contentIdentities.filter((id) => owned.has(id.path));
     const identityPaths = identities.map((id) => id.path).sort();
+    // The owner's approval binds to the prepared metadata, or (rebind) to exactly the classified state
+    // the run was recorded at when every change since preparation is one Git does not act on.
+    const rebind = t.record.gitMetadata?.publicationTrust === "rebind_allowed" ? t.record.gitMetadata.afterDigest : null;
     if (
       observed.branch !== t.plan.branch ||
       observed.headSha !== t.contract.expectedHeadSha ||
-      observed.gitMetadataDigest !== t.contract.gitMetadataDigest ||
+      (observed.gitMetadataDigest !== t.contract.gitMetadataDigest && observed.gitMetadataDigest !== rebind) ||
       changedPaths.length === 0 ||
       changedPaths.some((path) => !dirtyPaths.includes(path)) ||
       excludedPaths.some((path) => isPathInScope(path, allowedScope)) ||
@@ -2378,6 +2473,15 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
   async function requestCommitApproval(t: TaskRecord) {
     // Defense in depth: a read-only task can never reach commit/publish.
     if (modeOf(t) === "read_only") return block(t, "read-only task cannot request commit/publish", { terminal: true, trigger: "scope_violation" });
+    // Implementation accepted, but Git metadata changed since preparation in a way Git may act on and
+    // that is not the Worker's: publication waits for re-established trusted Git evidence. Not a
+    // Worker failure and not a safety violation; the accepted changes stay in the workspace.
+    const trust = worstPublicationTrust(t.record?.gitMetadata?.publicationTrust, t.gitMetadataRebind?.publicationTrust);
+    if (trust === "refresh_required" || trust === "blocked") {
+      const why = t.record?.gitMetadata?.publicationTrust === trust ? t.record.gitMetadata : (t.gitMetadataRebind ?? t.record!.gitMetadata!);
+      audit(t, "publication_evidence_refresh_required", { gitMetadata: auditGitMetadata(why) });
+      return block(t, "publication paused: Git publication evidence must be re-established", { terminal: true, trigger: "git_publication_evidence_refresh_required" });
+    }
     const evidence = await currentCommitApprovalEvidence(t);
     if (!evidence) {
       return block(t, "commit approval state could not be verified", { terminal: true, trigger: "unsafe_branch_state" });
@@ -2863,6 +2967,8 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       approvalPhase: saved.approvalPhase,
       queueReason: saved.queueReason,
       blockingReason: saved.blockingReason,
+      gitMetadata: saved.gitMetadata ? structuredClone(saved.gitMetadata) : null,
+      gitMetadataRebind: saved.gitMetadataRebind ? structuredClone(saved.gitMetadataRebind) : null,
       escalations: structuredClone(saved.escalations),
       capabilities: new Set(saved.capabilities),
       pendingSideEffect: saved.pendingSideEffect,

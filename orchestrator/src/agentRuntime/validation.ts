@@ -80,7 +80,8 @@ export function createTrustedValidationEvidencePort(input: {
       if (
         status.headSha !== recorded.verifiedHeadSha ||
         status.branch !== req.contract.branch ||
-        digest !== req.contract.gitMetadataDigest ||
+        // Against the state the run was recorded at (a classified, non-violating change since preparation stays as recorded).
+        digest !== (recorded.gitMetadata?.afterDigest ?? req.contract.gitMetadataDigest) ||
         JSON.stringify(split.owned) !== JSON.stringify(before.changed) ||
         JSON.stringify(identities) !== JSON.stringify(before.identities)
       )
