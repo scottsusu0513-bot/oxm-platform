@@ -36,12 +36,17 @@ describe("telegram control plane purity / boundaries", () => {
     }
   });
 
-  it("no Telegram path can carry merge or deploy authority", () => {
+  it("no Telegram path can execute a merge or deploy; it can only carry the Owner's exact deploy DECISION", () => {
     const format = readFileSync(join(SRC, "telegram/format.ts"), "utf8");
     expect(format).toMatch(/CALLBACK_ACTIONS = \{ a: "approve", r: "reject", c: "cancel_request", k: "cancel_confirm", n: "cancel_keep" \}/);
     const auth = readFileSync(join(SRC, "humanInteraction/auth.ts"), "utf8");
     const caps = /HUMAN_OWNER_CAPABILITIES[^=]*= Object\.freeze\(\[([\s\S]*?)\]\)/.exec(auth)![1];
-    expect(caps).not.toMatch(/task:pause|merge|deploy/);
+    // Deploy appears only as the kind-scoped approval decision; no merge capability, no generic approval.
+    const deployCaps = [...caps.matchAll(/"([^"]*deploy[^"]*)"/g)].map((m) => m[1]).sort();
+    expect(deployCaps).toEqual(["approval:grant:deploy", "approval:reject:deploy"]);
+    expect(caps).not.toMatch(/task:pause|merge|"approval:grant"|"approval:reject"/);
+    // Telegram code never reaches the trusted delivery layer.
+    for (const f of files("telegram")) expect(f.text, f.name).not.toMatch(/mergeApproved|delivery\/(merge|port|render)|observeDeployment|verifyProduction/);
   });
 
   it("the planning layer cannot reach Git, Workers, shells or the Manager loop", () => {

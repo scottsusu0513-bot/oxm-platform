@@ -75,6 +75,23 @@ export interface CommitApprovalNotice extends NoticeBase {
   risk: RiskLevel;
   expiresAt: string;
   authorizes: { commit: true; normalPush: true; openOrReusePr: true; merge: false; deploy: false };
+  /** UI work: the live preview of this exact result (one message: result + preview + publish decision). */
+  preview?: { status: "ready" | "unavailable"; url: string | null; access: "github_sign_in" | "public" | null; reason: string | null };
+}
+
+/** Merge + production deployment approval of one exact PR head (separate scope from commit/publish). */
+export interface DeployApprovalNotice extends NoticeBase {
+  kind: "deploy_approval";
+  approvalRequestId: string;
+  taskLabel: string;
+  prNumber: number;
+  checksPassed: number;
+  unverified: string[];
+  risk: RiskLevel;
+  productionHost: string | null;
+  expiresAt: string;
+  managerSummary?: string;
+  authorizes: { merge: true; deploy: true; commit: false; push: false; forcePush: false; productionDatabase: false };
 }
 
 /** Red-risk pre-execution approval of one exact Worker contract (an orchestrator approval, never a Worker prompt). */
@@ -119,6 +136,10 @@ export const MILESTONES = [
   "combined_not_accepted",
   "combined_review_waiting",
   "combined_repairing",
+  // Production delivery: an approved / merged delivery that cannot proceed or be verified (new information).
+  "deploy_waiting",
+  // Owner declined publication / deployment (terminal, never "completed").
+  "closed_without_deploy",
 ] as const;
 export type Milestone = (typeof MILESTONES)[number];
 
@@ -137,7 +158,7 @@ export interface CancelConfirmationNotice extends NoticeBase {
   expiresAt: string;
 }
 
-export type HumanNotice = HumanDecisionNotice | CommitApprovalNotice | StartApprovalNotice | MilestoneNotice | CancelConfirmationNotice;
+export type HumanNotice = HumanDecisionNotice | CommitApprovalNotice | StartApprovalNotice | DeployApprovalNotice | MilestoneNotice | CancelConfirmationNotice;
 export type NoticeKind = HumanNotice["kind"];
 
 /** Outbound side of a transport. deliveryRef is the transport's own message identity. */

@@ -34,6 +34,7 @@ import type { FollowUpTopic, ReplyBasis } from "../planning/types";
 import type {
   CancelConfirmationNotice,
   CommitApprovalNotice,
+  DeployApprovalNotice,
   HumanDecisionNotice,
   HumanInteractionDirectory,
   HumanInteractionTransport,
@@ -67,6 +68,7 @@ export type HumanInteractionGateway = Pick<
   | "approveTask"
   | "rejectTask"
   | "cancelTask"
+  | "requestPublishRevision"
 >;
 
 export interface HumanInteractionServiceDeps {
@@ -182,7 +184,7 @@ export function decisionNotice(view: PendingHumanDecisionView, label?: string, c
 
 const RISK_ORDER = ["green", "yellow", "red"] as const;
 
-export function approvalNotice(approval: PendingApprovalRequirement, label?: string, managerSummary?: string | null): CommitApprovalNotice | null {
+export function approvalNotice(approval: PendingApprovalRequirement, label?: string, managerSummary?: string | null, preview?: GatewayTaskStatus["preview"]): CommitApprovalNotice | null {
   const e = approval.commitEvidence;
   if (approval.kind !== "commit_publish" || approval.phase !== "commit_publish" || !e) return null;
   const a = e.authorization;
@@ -214,8 +216,44 @@ export function approvalNotice(approval: PendingApprovalRequirement, label?: str
     risk,
     expiresAt: approval.expiresAt,
     authorizes: { commit: true, normalPush: true, openOrReusePr: true, merge: false, deploy: false },
+    ...(preview && (preview.status === "ready" || preview.status === "unavailable")
+      ? { preview: { status: preview.status, url: preview.status === "ready" ? preview.url : null, access: preview.access, reason: preview.reason } }
+      : {}),
   };
 }
+
+/** Merge + deploy approval notice; null unless it is exactly a deploy approval with its fixed scope. */
+export function deployApprovalNotice(approval: PendingApprovalRequirement, label?: string, status?: GatewayTaskStatus | null): DeployApprovalNotice | null {
+  const e = approval.deployEvidence;
+  if (approval.kind !== "deploy" || approval.phase !== "deploy" || !e) return null;
+  const a = e.authorization;
+  if (!(a.merge === true && a.deploy === true && a.commit === false && a.push === false && a.forcePush === false && a.productionDatabase === false)) return null;
+  const noticeId = `ap:${approval.approvalRequestId}`;
+  const lang = ownerLanguage(label);
+  const summary = usableManagerText(status?.resultSummary ?? null, lang, 600);
+  return {
+    kind: "deploy_approval",
+    noticeId,
+    ref: noticeRef(noticeId),
+    taskId: approval.taskId,
+    lang,
+    ownerLabel: ownerLabelOf(approval.taskId, label),
+    approvalRequestId: approval.approvalRequestId,
+    taskLabel: taskLabel(approval.taskId, label),
+    voice: summary ? "manager" : "safety_binding",
+    ...(summary ? { managerSummary: summary } : {}),
+    prNumber: e.prNumber,
+    checksPassed: e.ci.checks.filter((c) => c.outcome === "success").length,
+    unverified: e.unverified.slice(0, 8).map((u) => oneLine(u, 80)),
+    risk: RISK_ORDER[Math.max(RISK_ORDER.indexOf(approval.risk), RISK_ORDER.indexOf(e.risk))] ?? "red",
+    productionHost: status?.delivery?.productionHost ?? null,
+    expiresAt: approval.expiresAt,
+    authorizes: { merge: true, deploy: true, commit: false, push: false, forcePush: false, productionDatabase: false },
+  };
+}
+
+/** How long a publish notice waits for its starting preview before it is sent without it. */
+const PREVIEW_WAIT_MS = 5 * 60_000;
 
 /** Red-risk pre-execution approval notice; null unless it is exactly a start approval with structured evidence. */
 export function startApprovalNotice(approval: PendingApprovalRequirement, label?: string): StartApprovalNotice | null {
@@ -280,7 +318,14 @@ export function plainPhase(s: GatewayTaskStatus, lang: OwnerLanguage): string {
     case "qa_pending":
       return zh ? `PR${s.prNumber ? ` #${s.prNumber}` : ""} 已開，等自動檢查` : `PR${s.prNumber ? ` #${s.prNumber}` : ""} open, waiting for checks`;
     case "needs_human_approval":
+      if (s.lifecyclePhase === "awaiting_deploy_approval")
+        return zh ? `PR${s.prNumber ? ` #${s.prNumber}` : ""} 自動檢查已通過，等你決定是否部署正式站（任務尚未完成）` : `PR${s.prNumber ? ` #${s.prNumber}` : ""} passed the checks; waiting for your deploy decision (not complete yet)`;
+      if (s.lifecyclePhase === "preview_ready") return zh ? "修改已完成，預覽已開啟，等你確認是否發布" : "done; preview open, waiting for your publish decision";
       return zh ? "任務暫停，正在等待你的決定（請按批准或拒絕）" : "paused, waiting for your decision (approve or reject)";
+    case "deploying":
+      return s.lifecyclePhase === "production_verifying"
+        ? zh ? "正式站已部署，正在做 health check 與 smoke test" : "deployed; running the production health check and smoke test"
+        : zh ? `PR${s.prNumber ? ` #${s.prNumber}` : ""} 已合併，正在等正式站部署完成` : `PR${s.prNumber ? ` #${s.prNumber}` : ""} merged; waiting for the production deployment`;
     case "needs_human_decision":
       return zh ? "任務暫停，正在等待你的決定（直接傳訊息給我即可）" : "paused, waiting for your decision (just message me)";
     case "waiting_infrastructure":
@@ -292,9 +337,13 @@ export function plainPhase(s: GatewayTaskStatus, lang: OwnerLanguage): string {
     case "waiting_group":
       return zh ? "這部分已完成，等整個需求合在一起檢查" : "this part is done; waiting for the combined review";
     case "accepted":
+      if (s.delivery?.stage === "production_verified")
+        return zh ? `任務已完成（PR #${s.delivery.prNumber} 已合併並部署，正式站檢查通過）` : `completed (PR #${s.delivery.prNumber} merged, deployed and verified on production)`;
       return zh ? (s.prNumber ? `任務已完成（PR #${s.prNumber} 通過檢查，未合併）` : "任務已完成") : s.prNumber ? `completed (PR #${s.prNumber} passed checks; not merged)` : "completed";
     case "blocked":
       if (s.taskState === "cancelled") return zh ? "任務已取消" : "cancelled";
+      if (s.taskState === "closed_without_deploy") return zh ? "已結束，沒有部署（依你的決定）" : "closed without deployment (your decision)";
+      if (s.delivery?.stage === "deployment_failed") return zh ? "正式站部署失敗，任務未完成" : "production deployment failed; not complete";
       if (s.taskState === "failed") return zh ? "任務執行失敗" : "failed";
       return zh ? "任務暫停，正在等待你的決定" : "paused, waiting for your decision";
     default:
@@ -333,8 +382,12 @@ export function phaseOf(s: GatewayTaskStatus): string {
     case "waiting_infrastructure":
       return "waiting for the Manager's goal reviewer (infrastructure outage; repair cycles not consumed)";
     case "accepted":
+      if (s.delivery?.stage === "production_verified") return `complete (PR #${s.delivery.prNumber} merged, deployed, production verified)`;
       return s.prNumber ? `complete (PR #${s.prNumber} passed CI; not merged by the agent)` : "complete";
+    case "deploying":
+      return s.lifecyclePhase === "production_verifying" ? "deployed; verifying production" : "merged; waiting for the production deployment";
     case "blocked":
+      if (s.taskState === "closed_without_deploy") return "closed without deployment (owner decision)";
       return s.taskState === "cancelled" ? "cancelled" : s.taskState === "failed" ? "failed" : "paused: waiting for an owner decision";
     default:
       return "unknown";
@@ -481,8 +534,13 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
 
   async function observeMilestones(taskId: string, label: string | undefined): Promise<number> {
     // Done only once the final notice was delivered (or decided silent): an unconfirmed send is retried.
-    const terminal = deps.ledger.byNotice(`ms:${taskId}:terminal`);
-    if ((terminal && terminal.deliveryRef !== null) || deps.ledger.suppressed(`ms:${taskId}:terminal`)) return 0;
+    const finished = (key: string) => {
+      const n = deps.ledger.byNotice(`ms:${taskId}:${key}`);
+      return Boolean((n && n.deliveryRef !== null) || deps.ledger.suppressed(`ms:${taskId}:${key}`));
+    };
+    if (finished("terminal:delivery")) return 0;
+    // A legacy terminal notice (PR passed = "complete") was sent: only a task reopened at its deploy gate continues.
+    if (finished("terminal") && !deps.directory.activeTaskIds().includes(taskId)) return 0;
     const candidates: Candidate[] = [];
     const lang = ownerLanguage(label);
     /** Owner-relevant meaning (result / blocker) must be the Manager's; operational status may be fixed text. */
@@ -517,6 +575,10 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
     if (s.status === "waiting_infrastructure")
       progress(`infra:${s.repairAttempt}`, "infrastructure_waiting", "reviewing_infrastructure_wait", {});
     if (s.status === "qa_pending" && s.prNumber) progress(`pr:${s.prNumber}`, "pr_opened", "pr_opened", { prNumber: s.prNumber });
+    // An approved / merged delivery that cannot proceed or be verified: new information, once per cause.
+    const wait = s.delivery?.failure?.code;
+    if ((s.status === "deploying" || s.status === "needs_human_approval") && s.delivery && (wait === "deploy_capability_disabled" || wait === "deploy_observer_unconfigured" || wait === "delivery_state_unavailable"))
+      progress(`deploy:${wait}`, "deploy_waiting", "deploy_waiting", { prNumber: s.delivery.prNumber, deployWait: wait });
     if (s.status === "needs_human_approval") {
       const approval = await currentApproval(taskId).catch(() => null);
       // Only approval kinds this transport cannot decide (e.g. post-QA) become an informational milestone.
@@ -538,15 +600,22 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
       return sent;
     }
     if (TERMINAL.has(s.status)) {
+      // A task with a delivery record has its own terminal notice (a reopened legacy task already had "terminal").
+      const terminalKey = s.delivery ? "terminal:delivery" : "terminal";
       const answered = s.status === "accepted" && s.mode === "read_only";
-      const kind: Milestone = answered ? "answered" : s.status === "accepted" ? "completed" : s.taskState === "cancelled" ? "cancelled" : "blocked";
+      const closed = s.taskState === "closed_without_deploy";
+      const kind: Milestone = answered ? "answered" : s.status === "accepted" ? "completed" : s.taskState === "cancelled" ? "cancelled" : closed ? "closed_without_deploy" : "blocked";
       // The answer / result summary is the Manager reviewer's own text; the template only frames trusted facts.
       const summary = kind === "completed" ? usableManagerText(s.resultSummary, lang, 600) : null;
-      const voice: OwnerVoice | undefined = kind === "answered" ? (s.answer ? "manager" : "fallback") : kind === "completed" ? (summary ? "manager" : "fallback") : undefined;
+      const completion = s.delivery?.stage === "production_verified" ? "production" : s.deliveryTarget === "pull_request" && s.mode === "change" ? "pull_request" : "legacy";
+      const voice: OwnerVoice | undefined = kind === "answered" ? (s.answer ? "manager" : "fallback") : kind === "completed" ? (summary ? "manager" : "fallback") : kind === "closed_without_deploy" ? "system_status" : undefined;
       const paused = kind === "blocked" && s.taskState !== "failed";
-      const stopped = kind === "blocked" ? await managerNoticeText(`ms:${taskId}:terminal`, taskId, label, lang, s.status) : null;
-      if (stopped) candidates.push({ key: "terminal", kind, voice: "manager", detail: `${stopped}\n${stoppedTaskFacts(lang, paused)}` });
-      else progress("terminal", kind, kind as ProgressEvent, { answer: s.answer ?? null, prNumber: s.prNumber, summary, ...(paused ? { paused: true } : {}) }, voice);
+      const facts = [stoppedTaskFacts(lang, paused), deliveryFact(s, lang)].filter(Boolean).join("\n");
+      const stopped = kind === "blocked" ? await managerNoticeText(`ms:${taskId}:${terminalKey}`, taskId, label, lang, s.status) : null;
+      if (stopped) candidates.push({ key: terminalKey, kind, voice: "manager", detail: `${stopped}\n${facts}` });
+      else if (kind === "blocked" && s.delivery) candidates.push({ key: terminalKey, kind, voice: "fallback", detail: `${progressMessage("blocked", { lang, ...(paused ? { paused: true } : {}) })}\n${deliveryFact(s, lang)}` });
+      else
+        progress(terminalKey, kind, kind as ProgressEvent, { answer: s.answer ?? null, prNumber: s.delivery?.prNumber ?? s.prNumber, summary, completion, declined: s.delivery ? "deploy" : "publish", ...(paused ? { paused: true } : {}) }, voice);
     }
     return decideAndNotify(taskId, label, candidates);
   }
@@ -841,7 +910,39 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
    * explicit reply: with exactly one, ordinary guidance-like text is bound to
    * it; with several, the owner is asked which one (never a guess).
    */
-  async function routeMessage(key: string, text: string, contextTaskId: string | null, requireTask: boolean, priority?: InboundGoal["priority"], pending: { taskId: string; escalationId: string; label: string }[] = []): Promise<InboundResult | null> {
+  /**
+   * The Owner asks for changes to a result awaiting publish approval (usually after looking at the preview):
+   * the SAME task is repaired. Guidance only — never an approval.
+   */
+  async function submitRevision(key: string, taskId: string, text: string, lang: OwnerLanguage): Promise<InboundResult> {
+    const normalized = normalizeGuidance(text);
+    if (!normalized.ok) return remember(key, { outcome: "invalid", message: inputRejection(normalized.code, lang, "guidance") });
+    const name = ownerLabelOf(taskId, labels().get(taskId));
+    try {
+      const r = await deps.gateway.requestPublishRevision(call({ taskId, idempotencyKey: key, guidance: normalized.guidance }));
+      if (r.duplicate) return remember(key, { outcome: "duplicate", message: L(lang, "這個修改要求已經送出過了，沒有重複執行。", "This revision was already submitted. Nothing was changed.") });
+      log({ event: "human_publish_revision_submitted", outcome: "submitted" });
+      return remember(key, {
+        outcome: "resumed",
+        taskId,
+        message: L(lang, `收到，我會請工程師照你的意見修改「${name}」，改好、檢查過後再給你新的預覽。這只是修改指示，不代表批准發布。`, `Got it — the engineer will revise "${name}" as you asked; I will send a new preview once it passes my review. This is guidance only, not a publish approval.`),
+      });
+    } catch (error) {
+      return remember(key, gatewayOutcome(error, lang));
+    }
+  }
+
+  /** Tasks whose result awaits publish approval (a reply there may be a revision request). */
+  async function openPublishGates(): Promise<string[]> {
+    const out: string[] = [];
+    for (const taskId of Array.from(new Set(deps.directory.activeTaskIds()))) {
+      const s = await status(taskId).catch(() => null);
+      if (s?.status === "needs_human_approval" && (s.lifecyclePhase === "preview_ready" || s.lifecyclePhase === "awaiting_publish_approval")) out.push(taskId);
+    }
+    return out;
+  }
+
+  async function routeMessage(key: string, text: string, contextTaskId: string | null, requireTask: boolean, priority?: InboundGoal["priority"], pending: { taskId: string; escalationId: string; label: string }[] = [], revisable: { taskId: string; explicit: boolean } | null = null): Promise<InboundResult | null> {
     const lang = ownerLanguage(text);
     let view: Awaited<ReturnType<HumanInteractionGateway["interpretOwnerMessage"]>>;
     try {
@@ -856,6 +957,9 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
     const question = d.kind === "task_follow_up" && !isPureStatusQuestion(d.topics) && d.taskId !== null;
     const guidanceLike = d.kind === "human_decision" || d.kind === "clarify" || (d.kind === "task_follow_up" && !question && (d.taskId === null || pending.some((p) => p.taskId === d.taskId)));
     if (pending.length === 1 && guidanceLike) return submitGuidance(key, pending[0], text, lang);
+    // A reply to the publish / preview message that asks for changes revises THAT task (never a new task).
+    if (revisable?.explicit && (guidanceLike || (d.kind === "task" && d.mode !== "read_only"))) return submitRevision(key, revisable.taskId, text, lang);
+    if (revisable && !revisable.explicit && pending.length === 0 && d.kind === "human_decision") return submitRevision(key, revisable.taskId, text, lang);
     if (pending.length > 1 && d.kind === "human_decision") return whichDecision(pending, lang);
     switch (d.kind) {
       case "task": {
@@ -947,8 +1051,13 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
         }
         try {
           const approval = await currentApproval(taskId);
-          const summary = approval?.kind === "commit_publish" ? await status(taskId).then((s) => s.resultSummary ?? null).catch(() => null) : null;
-          const notice = approval ? (approvalNotice(approval, names.get(taskId), summary) ?? startApprovalNotice(approval, names.get(taskId))) : null;
+          const st = approval && approval.kind !== "start" ? await status(taskId).catch(() => null) : null;
+          // One message carries the result, the preview and the publish decision: wait (bounded) for a starting preview.
+          const previewPending = approval?.kind === "commit_publish" && st?.preview?.status === "starting" && Date.parse(deps.now()) - Date.parse(st.preview.updatedAt) < PREVIEW_WAIT_MS;
+          const notice =
+            approval && !previewPending
+              ? (approvalNotice(approval, names.get(taskId), st?.resultSummary ?? null, st?.preview) ?? startApprovalNotice(approval, names.get(taskId)) ?? deployApprovalNotice(approval, names.get(taskId), st))
+              : null;
           if (approval && notice && (await notify(notice, approval.approvalRequestId))) {
             delivered++;
             deps.ledger.track({ taskId, label: names.get(taskId) ?? "" });
@@ -1031,10 +1140,13 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
       }
       // Only an ordinary (not explicitly correlated) message may bind to an open decision implicitly.
       const pending = notice ? [] : await openDecisions();
+      // A reply to a publish / preview message may revise that result; an ordinary message may, when exactly one awaits it.
+      const gates = notice ? [] : pending.length === 0 ? await openPublishGates() : [];
+      const revisable = notice?.kind === "commit_publish_approval" ? { taskId: notice.taskId, explicit: true } : gates.length === 1 ? { taskId: gates[0], explicit: false } : null;
       // Conversation context: the replied-to task, else the one open decision, else the task discussed last.
       const focus = deps.ledger.focus();
-      const context = notice?.taskId ?? (pending.length === 1 ? pending[0].taskId : focus && deps.directory.allTaskIds().includes(focus) ? focus : null);
-      const routed = await routeMessage(reply.idempotencyKey, screened.goal, context, false, undefined, pending);
+      const context = notice?.taskId ?? (pending.length === 1 ? pending[0].taskId : revisable ? revisable.taskId : focus && deps.directory.allTaskIds().includes(focus) ? focus : null);
+      const routed = await routeMessage(reply.idempotencyKey, screened.goal, context, false, undefined, pending, revisable);
       if (routed) return routed;
       if (pending.length === 1) return submitGuidance(reply.idempotencyKey, pending[0], screened.goal, lang);
       if (pending.length > 1) return whichDecision(pending, lang);
@@ -1118,12 +1230,13 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
             message: L(lang, `已取消「${name}」。這個動作沒有做任何 commit、推送或 PR。`, `Task ${notice.taskId} was cancelled. No commit, push, or PR was made by this action.`),
           });
         }
-        if (notice.kind !== "commit_publish_approval" && notice.kind !== "start_approval")
+        if (notice.kind !== "commit_publish_approval" && notice.kind !== "start_approval" && notice.kind !== "deploy_approval")
           return remember(action.idempotencyKey, { outcome: "invalid", message: L(lang, "只有批准訊息可以按批准或拒絕，沒有做任何變更。", "Only approval messages can be approved or rejected. Nothing was changed.") });
         const current = await currentApproval(notice.taskId);
         // The button only names a notice; the exact binding is re-read from the Manager through the Gateway,
-        // and the notice kind must still match the approval kind (a start approval can never become commit/publish).
-        const expected = notice.kind === "commit_publish_approval" ? { kind: "commit_publish", phase: "commit_publish" } : { kind: "start", phase: "pre_execution" };
+        // and the notice kind must still match the approval kind (start / publish / deploy never stand in for each other).
+        const expected =
+          notice.kind === "commit_publish_approval" ? { kind: "commit_publish", phase: "commit_publish" } : notice.kind === "deploy_approval" ? { kind: "deploy", phase: "deploy" } : { kind: "start", phase: "pre_execution" };
         if (!current || current.approvalRequestId !== notice.targetId || current.kind !== expected.kind || current.phase !== expected.phase)
           return remember(action.idempotencyKey, { outcome: "stale", message: L(lang, "這個批准請求已經不是最新的了，沒有做任何變更。", "This approval request is no longer current. Nothing was changed.") });
         const decision = action.action === "approve" ? "approved" : "rejected";
@@ -1139,18 +1252,24 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
         const result = decision === "approved" ? await deps.gateway.approveTask(call(request)) : await deps.gateway.rejectTask(call(request));
         if (result.duplicate) return remember(action.idempotencyKey, { outcome: "duplicate", message: L(lang, "這個已經決定過了，沒有做任何變更。", "Already decided. Nothing was changed.") });
         const outcome: InboundOutcome = decision === "approved" ? "approved" : "rejected";
-        const start = current.kind === "start";
-        return remember(action.idempotencyKey, {
-          outcome,
-          taskId: current.taskId,
-          message: start
+        const pr = current.deployEvidence?.prNumber ?? null;
+        // A decline ends the task: this reply IS its final message (no second "closed" notice).
+        if (decision === "rejected" && current.kind === "commit_publish") markInline(current.taskId, "terminal");
+        if (decision === "rejected" && current.kind === "deploy") markInline(current.taskId, "terminal:delivery");
+        // ONE reply per button: the approval acknowledgement and what starts now are the same message.
+        const message =
+          current.kind === "start"
             ? decision === "approved"
               ? L(lang, `已批准執行「${name}」。只允許這一次執行；之後要發布時會另外請你批准。不會合併，也不會部署。`, `Approved this exact execution for ${current.taskId}. The Worker may now run this contract only. Commit/publish is a separate later approval; merge and deploy are NOT approved.`)
               : L(lang, `已拒絕執行「${name}」，工程師不會執行這次的內容。`, `Rejected the execution of ${current.taskId}. The Worker will not run this contract.`)
-            : decision === "approved"
-              ? L(lang, `已批准發布「${name}」：我會建立 commit、推送並開 PR。不會合併，也不會部署。`, `Approved commit + publish for ${current.taskId}: commit, normal push, open/reuse PR. Merge and deploy are NOT approved.`)
-              : L(lang, `已拒絕發布「${name}」，這次不會 commit 或推送。`, `Rejected commit + publish for ${current.taskId}. Nothing will be committed or pushed for this request.`),
-        });
+            : current.kind === "deploy"
+              ? decision === "approved"
+                ? L(lang, `收到，已批准部署「${name}」。我現在合併 PR #${pr} 並部署正式站；部署完成、正式站檢查通過後再告訴你結果。`, `Deploy approved for "${name}". I am merging PR #${pr} and deploying to production now; I will report once the deployment is live and production checks pass.`)
+                : progressMessage("closed_without_deploy", { lang, prNumber: pr, declined: "deploy" })
+              : decision === "approved"
+                ? L(lang, `已批准發布「${name}」：我會建立 commit、推送並開 PR。自動檢查通過後，我會再問你要不要部署正式站。`, `Approved commit + publish for ${current.taskId}: commit, normal push, open/reuse PR. I will ask separately about deploying once the checks pass.`)
+                : progressMessage("closed_without_deploy", { lang, declined: "publish" });
+        return remember(action.idempotencyKey, { outcome, taskId: current.taskId, message });
       } catch (error) {
         return remember(action.idempotencyKey, gatewayOutcome(error, lang));
       }
@@ -1204,6 +1323,34 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
     },
   };
   return service;
+}
+
+/** Trusted, plain-language fact about a stopped production delivery (no SHAs or internal codes). */
+export function deliveryFact(s: GatewayTaskStatus, lang: OwnerLanguage): string {
+  const d = s.delivery;
+  if (!d || (d.stage !== "deployment_failed" && d.stage !== "blocked")) return "";
+  const zh = lang === "zh";
+  const n = d.prNumber;
+  const code = d.failure?.code ?? "";
+  if (d.stage === "deployment_failed")
+    return zh
+      ? `PR #${n} 已合併，但正式站部署失敗（Render：${(d.deployStatus ?? code).replace(/_/g, " ")}），所以這項任務沒有完成。正式站應仍是先前的版本，請到 Render 確認。`
+      : `PR #${n} was merged, but the production deployment failed (Render: ${(d.deployStatus ?? code).replace(/_/g, " ")}), so the task is not complete. Production should still run the previous version; please check Render.`;
+  const why: Record<string, [string, string]> = {
+    deployed_sha_mismatch: ["部署的版本無法確認就是這次合併的內容", "the deployed revision could not be proven to be this merge"],
+    deployed_revision_unproven: ["之後的部署取代了它，無法確認正式站包含這次的修改", "a later deployment replaced it and production cannot be proven to contain this change"],
+    production_health_failed: ["正式站 health check 沒有通過", "the production health check failed"],
+    production_smoke_failed: ["正式站 smoke test 沒有通過", "the production smoke test failed"],
+    deploy_not_received: ["Render 沒有收到這次合併的部署", "Render never received a deployment of this merge"],
+    deploy_rollout_timeout: ["部署太久沒有完成", "the deployment did not finish in time"],
+    pr_head_moved: ["PR 在你批准後又被更新，這次批准已失效，沒有合併", "the PR changed after your approval, so the approval was void and nothing was merged"],
+    pr_not_open: ["PR 已經不是開啟狀態，這次批准已失效，沒有合併", "the PR is no longer open, so the approval was void and nothing was merged"],
+    deploy_approval_stale: ["自動檢查結果在你批准後改變，這次批准已失效，沒有合併", "the check results changed after your approval, so the approval was void and nothing was merged"],
+    merge_indeterminate: ["重新啟動後無法確認合併結果，沒有重複合併", "the merge outcome could not be confirmed after a restart; nothing was repeated"],
+  };
+  const merged = !["pr_head_moved", "pr_not_open", "deploy_approval_stale"].includes(code) && !code.startsWith("pr_") && !code.startsWith("merge_") && code !== "deploy_capability_disabled" && code !== "transport_failed";
+  const reason = why[code] ?? (merged ? ["正式站驗證沒有通過", "production verification did not pass"] : ["PR 無法合併", "the PR could not be merged"]);
+  return zh ? `PR #${n}：${reason[0]}，所以這項任務沒有完成。` : `PR #${n}: ${reason[1]}, so the task is not complete.`;
 }
 
 /** Plain-language cancel confirmation text (exported for transports). */

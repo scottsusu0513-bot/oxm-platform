@@ -239,6 +239,9 @@ export function createInMemoryApprovalRepository(now: Clock): ApprovalRepository
       if (input.kind === "merge" && !GIT_SHA_RE.test(input.bindingShaOrActionId)) {
         throw new Error("[store] merge approval must bind to a full git SHA");
       }
+      if (input.kind === "deploy" && !/^deploy:[0-9a-f]{64}$/.test(input.bindingShaOrActionId)) {
+        throw new Error("[store] deploy approval must bind to an exact deploy evidence identity");
+      }
       if (rows.has(input.id)) throw new Error(`[store] approval ${input.id} already exists`);
       const approval: Approval = {
         id: input.id,

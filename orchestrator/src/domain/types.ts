@@ -6,7 +6,13 @@
  * no DB, no HTTP, no filesystem, no environment variables, no worker execution.
  */
 
-export const TASK_STATES = ["received", "classified", "routed", "queued", "running", "pr_opened", "qa_running", "qa_passed", "awaiting_approval", "complete", "failed", "cancelled"] as const;
+/**
+ * "deploying" covers the Owner-approved merge, the production deployment and its verification;
+ * "closed_without_deploy" is the terminal state when the Owner declines publication or deployment.
+ * A change task targeting production reaches "complete" only via "deploying", after production
+ * verification (see the taskState and delivery policy modules).
+ */
+export const TASK_STATES = ["received", "classified", "routed", "queued", "running", "pr_opened", "qa_running", "qa_passed", "awaiting_approval", "deploying", "complete", "failed", "cancelled", "closed_without_deploy"] as const;
 export type TaskState = (typeof TASK_STATES)[number];
 
 export const RISK_LEVELS = ["green", "yellow", "red"] as const;
@@ -73,7 +79,16 @@ export interface TaskGoal {
    * the GPT Manager's final combined review against the original owner request.
    */
   group?: { id: string; parts: readonly { area: "programming" | "visual"; objective: string }[] };
+  /**
+   * What "done" means for a change task. production (default): merged, deployed and verified on the
+   * production site. pull_request: the Owner explicitly asked for a PR only (no deployment); the task
+   * completes once the PR passed CI. Never inferred from risk; only the trusted interpretation sets it.
+   */
+  deliveryTarget?: DeliveryTarget;
 }
+
+export const DELIVERY_TARGETS = ["production", "pull_request"] as const;
+export type DeliveryTarget = (typeof DELIVERY_TARGETS)[number];
 export type RiskLevel = (typeof RISK_LEVELS)[number];
 
 export const WORKER_KINDS = ["claude", "codex"] as const;

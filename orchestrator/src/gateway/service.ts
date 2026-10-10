@@ -13,6 +13,8 @@ import { TRANSPORT_STATUS_CONTEXT, type IntentPlanner, type OwnerNoticeComposer,
 import type { ReadOnlyInspector } from "../planning/ownerQuestion";
 import { normalizeOwnerAnswer } from "../planning/normalize";
 import type { StartApprovalEvidence } from "../scheduler/types";
+import { deployApprovalBinding, normalizeDeployEvidence } from "../delivery/approval";
+import type { DeployApprovalEvidence } from "../delivery/types";
 import { COMMIT_PUBLISH_ACTION, normalizeCommitApprovalEvidence, type CommitApprovalEvidence } from "../workers/prompt";
 import { authenticateAndAuthorize } from "./auth";
 import {
@@ -54,6 +56,8 @@ import type {
   GatewayRateAction,
   GatewayRateLimiter,
   GatewayTaskStatus,
+  GatewayDeliveryView,
+  GatewayPreviewView,
   PendingApprovalRequirement,
   ApprovalRequirementReader,
   SubmitTaskRequest,
@@ -274,9 +278,41 @@ function externalStatus(status: NonNullable<ReturnType<AgentRuntimeService["getT
     ...(status.workforce ? { workforce: sanitizeWorkforce(status.workforce) } : {}),
     ...(status.details ? { details: sanitizeDetails(status.details) } : {}),
     approvalRequired: status.approval.required,
+    ...(status.lifecyclePhase ? { lifecyclePhase: status.lifecyclePhase } : {}),
+    ...(status.deliveryTarget ? { deliveryTarget: status.deliveryTarget } : {}),
+    ...(status.delivery !== undefined ? { delivery: status.delivery ? sanitizeDelivery(status.delivery) : null } : {}),
+    ...(status.preview !== undefined ? { preview: status.preview ? sanitizePreview(status.preview) : null } : {}),
     createdAt: status.createdAt,
     updatedAt: status.updatedAt,
   };
+}
+
+function sanitizeDelivery(d: NonNullable<import("../intake/types").AgentTaskStatus["delivery"]>): GatewayDeliveryView {
+  const check = (c: { ok: boolean; detail: string } | null) => (c ? { ok: c.ok === true, detail: techText(c.detail, 120) } : null);
+  return {
+    stage: d.stage,
+    prNumber: d.prNumber,
+    deployStatus: d.deployStatus ? techText(d.deployStatus, 40) : null,
+    health: check(d.health),
+    smoke: check(d.smoke),
+    failure: d.failure ? { code: techText(d.failure.code, 60), reason: techText(d.failure.reason, 200) } : null,
+    observerMissing: d.observerMissing === true,
+    unverified: d.unverified.slice(0, 10).map((u) => techText(u, 80)).filter(Boolean),
+    verifiedAt: d.verifiedAt,
+    productionHost: d.productionHost && /^[a-z0-9.-]{3,120}$/i.test(d.productionHost) ? d.productionHost : null,
+  };
+}
+
+/** Preview URL: only an https Codespaces forwarding URL without credentials, query or fragment. */
+function sanitizePreview(p: GatewayPreviewView): GatewayPreviewView {
+  let url: string | null = null;
+  try {
+    const u = p.url ? new URL(p.url) : null;
+    if (u && u.protocol === "https:" && !u.username && !u.password && !u.search && !u.hash && /^[a-z0-9-]+-\d{2,5}\.[a-z0-9.-]+$/i.test(u.host)) url = `${u.origin}/`;
+  } catch {
+    url = null;
+  }
+  return { status: p.status, url, visibility: p.visibility, access: p.access, reason: p.reason ? techText(p.reason, 60) : null, updatedAt: p.updatedAt };
 }
 
 /** Technical text for the owner: one line, bounded, SHAs/digests removed, credential-like values redacted. */
@@ -396,8 +432,10 @@ function sanitizeRequirement(
     value.taskId !== taskId ||
     !SAFE_KEY.test(value.taskId) ||
     !SAFE_KEY.test(value.approvalRequestId) ||
-    (value.kind !== "start" && value.kind !== "commit_publish" && value.kind !== "merge" && value.kind !== "execute_red_action") ||
-    (value.phase !== "pre_execution" && value.phase !== "commit_publish" && value.phase !== "post_qa") ||
+    (value.kind !== "start" && value.kind !== "commit_publish" && value.kind !== "merge" && value.kind !== "execute_red_action" && value.kind !== "deploy") ||
+    (value.phase !== "pre_execution" && value.phase !== "commit_publish" && value.phase !== "post_qa" && value.phase !== "deploy") ||
+    (value.kind === "deploy") !== (value.phase === "deploy") ||
+    (value.phase === "deploy") !== Boolean(value.deployEvidence) ||
     (value.risk !== "green" && value.risk !== "yellow" && value.risk !== "red") ||
     value.status !== "pending" ||
     typeof value.action !== "string" ||
@@ -430,7 +468,20 @@ function sanitizeRequirement(
     reasonSummary: `${value.phase} approval required for ${value.action}`,
     ...(value.commitEvidence ? { commitEvidence: sanitizeCommitEvidence(value.commitEvidence) } : {}),
     ...(value.startEvidence && value.phase === "pre_execution" ? { startEvidence: sanitizeStartEvidence(value.startEvidence) } : {}),
+    ...(value.deployEvidence && value.phase === "deploy" ? { deployEvidence: sanitizeDeployEvidence(value.deployEvidence, value.taskId, value.bindingTarget) } : {}),
   };
+}
+
+/** Exact deploy evidence: canonical, scope-fixed, and hashing to the requirement's own binding. */
+function sanitizeDeployEvidence(value: DeployApprovalEvidence, taskId: string, binding: string): DeployApprovalEvidence {
+  let normalized: DeployApprovalEvidence;
+  try {
+    normalized = normalizeDeployEvidence(value);
+  } catch {
+    throw new GatewayError("unavailable", "deploy approval evidence is malformed", 503);
+  }
+  if (normalized.taskId !== taskId || deployApprovalBinding(normalized) !== binding) throw new GatewayError("unavailable", "deploy approval evidence does not match its binding", 503);
+  return { ...normalized, unverified: normalized.unverified.map((u) => sanitizeSummary(u)?.slice(0, 80) ?? REDACTED) };
 }
 
 function sanitizeStartEvidence(value: StartApprovalEvidence): StartApprovalEvidence {
@@ -607,7 +658,7 @@ export function createAgentGatewayService(deps: GatewayDependencies): AgentGatew
     const verb = decision === "approved" ? "grant" : "reject";
     const generic: GatewayCapability = decision === "approved" ? "approval:grant" : "approval:reject";
     const scoped = (kind: string) => `approval:${verb}:${kind}` as GatewayCapability;
-    const auth = await principal(call, [generic, scoped("start"), scoped("commit_publish")], "approval_mutate", `approval_${decision}`);
+    const auth = await principal(call, [generic, scoped("start"), scoped("commit_publish"), scoped("deploy")], "approval_mutate", `approval_${decision}`);
     const request = validateApprovalDecisionRequest(call.request);
     // Least privilege: a kind-scoped principal may decide only its own approval kinds.
     if (!auth.capabilities.includes(generic) && !auth.capabilities.includes(scoped(request.kind))) {
@@ -1144,6 +1195,7 @@ export function createAgentGatewayService(deps: GatewayDependencies): AgentGatew
                 criteria: src.goalCriteria,
                 riskObservations: src.riskObservations,
                 ...(src.goal.workArea ? { workArea: src.goal.workArea } : {}),
+                ...(src.goal.deliveryTarget === "pull_request" ? { deliveryTarget: "pull_request" as const } : {}),
               },
             }
           : { acceptanceCriteria: src.acceptanceCriteria }),
@@ -1204,6 +1256,7 @@ export function createAgentGatewayService(deps: GatewayDependencies): AgentGatew
             criteria: split ? criteriaForArea(d.criteria, part.area) : d.criteria,
             riskObservations: d.riskObservations ?? [],
             workArea: part.area,
+            ...(d.deliveryTarget === "pull_request" ? { deliveryTarget: "pull_request" as const } : {}),
             // Parts of one decomposed request are accepted together, after the GPT Manager's combined review.
             ...(split ? { group: { id: stored.interpretationId, parts: parts.map((x) => ({ area: x.area, objective: x.objective.slice(0, 2_000) })) } } : {}),
           },
@@ -1218,6 +1271,51 @@ export function createAgentGatewayService(deps: GatewayDependencies): AgentGatew
         results.push({ taskId: result.taskId, status: externalStatus(result.status), duplicate: result.outcome === "duplicate" });
       }
       return { ...results[0], ...(results.length > 1 ? { relatedTaskIds: results.slice(1).map((r) => r.taskId), parts: results.map((r, i) => ({ taskId: r.taskId, area: parts[i].area })) } : {}) };
+    },
+
+    async requestPublishRevision(call) {
+      const auth = await principal(call, "publish:revise", "human_decision_mutate", "request_publish_revision");
+      if (auth.principalType === "service") throw new GatewayError("forbidden", "a revision requires a human principal", 403);
+      const input = strictObject(call.request, ["taskId", "idempotencyKey", "guidance"]);
+      if (!SAFE_KEY.test(String(input.taskId ?? "")) || !SAFE_KEY.test(String(input.idempotencyKey ?? ""))) invalid("taskId / idempotencyKey is malformed");
+      if (typeof input.guidance !== "string") invalid("guidance is malformed");
+      const guidance = input.guidance.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
+      if (guidance.length < 1 || guidance.length > MAX_HUMAN_GUIDANCE_LENGTH) invalid("guidance is malformed");
+      if (isDangerousValue(guidance)) invalid("guidance looks like a credential or secret; remove it and resubmit");
+      const taskId = String(input.taskId);
+      const idempotencyKey = String(input.idempotencyKey);
+      const submissions = deps.humanDecisionSubmissions;
+      if (!submissions) throw new GatewayError("unavailable", "revisions are unavailable", 503);
+      const escalationId = `${taskId}.revision`;
+      const fingerprint = fingerprintRequest({ principalId: auth.principalId, escalationId, guidance });
+      const decisionId = `rv-${fingerprintRequest({ principalId: auth.principalId, idempotencyKey })}`;
+      const existing = submissions.get(idempotencyKey);
+      if (existing) {
+        if (existing.fingerprint !== fingerprint || existing.principalId !== auth.principalId) throw new GatewayError("idempotency_conflict", "idempotency key is bound to a different request", 409);
+        return { taskId: existing.taskId, result: "submitted", duplicate: true };
+      }
+      if (!deps.runtime.getTaskStatus(taskId)) throw new GatewayError("not_found", "task not found", 404);
+      // Server-side binding: the current publish gate's exact branch and workspace HEAD.
+      const current = sanitizeRequirement(await deps.approvalRequirements.current(taskId), taskId);
+      if (!current || current.phase !== "commit_publish" || !current.commitEvidence) throw new GatewayError("conflict", "the result is not awaiting publish approval", 409);
+      try {
+        submissions.create({ idempotencyKey, fingerprint, principalId: auth.principalId, taskId, escalationId, decisionId, eventEmitted: false, createdAt: deps.now() });
+      } catch {
+        return { taskId, result: "submitted", duplicate: true };
+      }
+      deps.events.publishRevisionRequested(taskId, {
+        decisionId,
+        escalationId,
+        taskId,
+        branch: current.commitEvidence.branch,
+        expectedHeadSha: current.commitEvidence.expectedHeadSha,
+        kind: "continue_with_guidance",
+        guidance,
+        decidedBy: auth.principalId,
+      });
+      submissions.markEventEmitted(idempotencyKey);
+      deps.audit.record({ event: "human_decision_submitted", principalId: auth.principalId, taskId, requestId: auth.requestId, action: "request_publish_revision", outcome: "submitted", bindingReference: bindingReference(current.bindingTarget) });
+      return { taskId, result: "submitted", duplicate: false };
     },
   };
 }

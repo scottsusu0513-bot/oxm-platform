@@ -252,7 +252,8 @@ describe("restart durability", () => {
     expect(first.sim.loop.task("p-task-1")!.status).toBe("needs_human_approval");
     // Restart: a new Manager loop from the durable checkpoint, a new human-interaction service from the same audit.
     first.sim.ports.leases.release(first.sim.ports.leases.current("default"));
-    const loop2 = createManagerLoop(first.sim.ports, { managerMode: "deterministic_fixture" });
+    // Same (PR-terminal) completion policy as the simulation it restarts.
+    const loop2 = createManagerLoop(first.sim.ports, { managerMode: "deterministic_fixture", completion: "pull_request" });
     await loop2.resume();
     await loop2.settle();
     const t2 = createRecordingTransport(800);

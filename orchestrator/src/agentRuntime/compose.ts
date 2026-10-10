@@ -41,6 +41,8 @@ import type { GoalReviewer, IntentPlanner, OwnerNoticeComposer } from "../planni
 import { createReadOnlyInspector, type OwnerQuestionAnswerer } from "../planning/ownerQuestion";
 import { createInMemoryInterpretationRepository, INTERPRETATION_REPLAY_DUPLICATE_POLICY } from "../gateway/fake";
 import { createTrustedValidationEvidencePort } from "./validation";
+import { createDeliveryPort } from "../delivery/port";
+import type { DeliveryPort, PreviewPort } from "../delivery/types";
 
 export interface AgentRuntimeOptions {
   /** Durable append-only audit repository: Manager checkpoint + journaled runtime/Gateway repositories. */
@@ -66,6 +68,13 @@ export interface AgentRuntimeOptions {
    * the replay audit stream and honoured on later starts without being passed again.
    */
   supersededJournalEvents?: readonly string[];
+  /**
+   * Codespaces live preview for UI tasks (built by the entrypoint with the runtime state directory).
+   * Null/absent: no preview is offered; the publish decision proceeds without one.
+   */
+  preview?: PreviewPort | null;
+  /** Test override of the trusted delivery port (production builds it from config.delivery). */
+  delivery?: DeliveryPort;
 }
 
 /** Startup replay diagnostics; deliberately not the repository journal stream it describes. */
@@ -83,6 +92,10 @@ export interface AgentRuntime {
   runtimeBaseline: RuntimeBaseline;
   /** Startup return of a finished task-branch checkout to the runtime branch, when it happened. */
   workspaceRestored: string | null;
+  /** Names (never values) of settings still missing for verified, Owner-approved production delivery. */
+  deliveryMissing: string[];
+  /** Whether a Codespaces preview is offered for UI tasks. */
+  previewEnabled: boolean;
   activeTaskIds(): string[];
   allTaskIds(): string[];
 }
@@ -241,6 +254,23 @@ export async function createAgentRuntime(config: AgentRuntimeConfig, options: Ag
     taskBaseSha: () => repoState.taskBaseSha(),
   });
   const leases = createWorkspaceLeaseRegistry();
+  // Trusted delivery control plane: merge only after an exact Owner deploy approval; Render + production are
+  // read-only observations. The Render key stays inside this port (never in a log, prompt or Worker env).
+  const delivery =
+    options.delivery ??
+    createDeliveryPort({
+      config: config.delivery,
+      repo,
+      runner,
+      repoRoot: config.base.repoRoot,
+      fetch: (url, init) => fetch(url, init),
+      httpGet: (url, init) => fetch(url, init),
+      isAncestor: async (merged, live) => {
+        const relation = await writeTransport.compareCommits(repo, merged, live);
+        return relation === "ahead" || relation === "identical";
+      },
+      now,
+    });
   const identity = {
     codespaceName: config.base.codespaceName,
     repository: { owner: repo.owner, repository: repo.repo },
@@ -335,6 +365,8 @@ export async function createAgentRuntime(config: AgentRuntimeConfig, options: Ag
         }
       : {}),
     persistence: checkpoints,
+    delivery,
+    ...(options.preview ? { preview: options.preview } : {}),
     now,
     audit(event) {
       options.audit.append({ id: nextAuditId(), ...event });
@@ -410,6 +442,8 @@ export async function createAgentRuntime(config: AgentRuntimeConfig, options: Ag
       reconciled,
       runtimeBaseline: baseline,
       workspaceRestored,
+      deliveryMissing: [...config.delivery.missing],
+      previewEnabled: Boolean(options.preview),
       activeTaskIds: () => loop.tasks().filter((t) => isActive(t.status)).map((t) => t.taskId),
       allTaskIds: () => loop.tasks().map((t) => t.taskId),
     },

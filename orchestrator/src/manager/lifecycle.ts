@@ -19,9 +19,9 @@ import { REPAIRABLE_STATES, validateEvidence } from "./validator";
  *
  * Nothing is executed or written: transitions are pre-checked with
  * domain/taskState and applied by the caller through TaskRepository; audit
- * events are appended by the caller. The Manager never merges — "complete"
- * is the existing task state, and merging stays a separate human-approved
- * action outside this layer.
+ * events are appended by the caller. The Manager never merges: QA acceptance
+ * ("complete_task") hands a production goal to the Owner's deploy gate; the
+ * merge is executed only by the trusted delivery layer after that approval.
  */
 
 export const MANAGER_NEXT_STEPS = [
@@ -136,7 +136,9 @@ export function managerStep(input: {
   }
 
   if (transition) {
-    const check = validateTransition(from, transition, { riskLevel: v.riskLevel, approved, approvalPhase });
+    // "complete_task" means: QA-accepted. Its pre-check validates the PR-only completion edge; a production
+    // goal never takes it — the loop moves to the deploy gate instead and validates its own move.
+    const check = validateTransition(from, transition, { riskLevel: v.riskLevel, approved, approvalPhase, ...(transition === "complete" ? { completion: "pull_request" as const } : {}) });
     if (!check.ok) return { ok: false, reason: check.reason };
   }
   return { ok: true, validation: v, next, transition, repairRequest, taskPatch, audit };

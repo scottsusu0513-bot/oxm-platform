@@ -242,7 +242,7 @@ describe("telegram end to end — commit/publish approval", () => {
     expect(p.api.sent).toHaveLength(1);
     const msg = p.api.sent[0];
     expect(msg.text).toMatch(/^「tg4」已完成，也通過我的檢查。目前尚未發布，等待你批准。/);
-    for (const line of ["這次改了 1 個檔案", "自動檢查：全部通過。", "按「批准發布」後，我會建立一次 commit、推送到這個任務的工作分支並開 PR。不會合併，也不會部署。"])
+    for (const line of ["這次改了 1 個檔案", "自動檢查：全部通過。", "按「批准發布」後，我會建立一次 commit、推送到這個任務的工作分支並開 PR。這個批准不包含合併或部署；自動檢查通過後，我會另外問你要不要部署正式站。"])
       expect(msg.text).toContain(line);
     expect(findInternalJargon(msg.text)).toEqual([]);
     const [[approve, reject]] = msg.buttons as { text: string; callback_data: string }[][];
@@ -259,7 +259,10 @@ describe("telegram end to end — commit/publish approval", () => {
     await p.sim.loop.settle();
     expect(p.approvalEvents).toEqual([{ taskId: "tg4", decision: "approved" }]);
     expect(p.sim.commits).toHaveLength(1);
-    expect(p.api.answered[0].text).toContain("不會合併，也不會部署");
+    // ONE owner-facing reply per tap: the button is acknowledged silently (no toast), the chat reply carries the message.
+    expect(p.api.answered[0].text).toBeUndefined();
+    expect(p.api.sent.filter((m) => m.text.includes("已批准發布「tg4」"))).toHaveLength(1);
+    expect(p.api.sent.at(-1)!.text).toContain("自動檢查通過後，我會再問你要不要部署正式站");
     expect(p.api.calls.some((c) => c.method === "editMessageReplyMarkup")).toBe(true);
 
     p.api.updates.push(callbackUpdate({ chatId: OWNER, data: approve.callback_data, messageId: msg.messageId, id: "cb-2" }));

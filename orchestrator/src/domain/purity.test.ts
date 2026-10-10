@@ -20,8 +20,8 @@ const FORBIDDEN = [
 ];
 
 describe("policy core purity", () => {
-  it("covers the four domain modules", () => {
-    expect(sources.sort()).toEqual(["risk.ts", "routing.ts", "taskState.ts", "types.ts"]);
+  it("covers the five domain modules", () => {
+    expect(sources.sort()).toEqual(["delivery.ts", "risk.ts", "routing.ts", "taskState.ts", "types.ts"]);
   });
 
   it.each(sources)("%s has no I/O, env, network, or nondeterminism", (file) => {

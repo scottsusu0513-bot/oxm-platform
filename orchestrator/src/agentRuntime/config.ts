@@ -1,7 +1,12 @@
 import { isSafeWorkspaceRoot } from "../codespace/policy";
 import type { LiveSmokeConfig } from "../e2e/types";
+import { readDeliveryConfig, type DeliveryConfig } from "../delivery/port";
 
-/** Explicit opt-in for the long-lived Agent runtime (distinct from the smoke confirmation). */
+/**
+ * Explicit opt-in for the long-lived Agent runtime (distinct from the smoke confirmation). The phrase is kept
+ * for compatibility: the runtime itself never merges or deploys on its own; an Owner-approved merge + deploy
+ * additionally requires OXM_AGENT_OWNER_APPROVED_DEPLOY=enabled (see delivery/port).
+ */
 export const AGENT_RUNTIME_CONFIRMATION = "run-oxm-agent-tasks-without-merge-or-deploy" as const;
 
 export interface AgentRuntimeConfig {
@@ -14,6 +19,8 @@ export interface AgentRuntimeConfig {
   workerTimeoutMs: number;
   /** Bound for each orchestrator-executed validation command. */
   validationTimeoutMs: number;
+  /** Owner-approved production delivery (merge + Render observation + production verification). */
+  delivery: DeliveryConfig;
 }
 
 const int = (value: string | undefined, fallback: number, min: number, max: number) => {
@@ -47,6 +54,8 @@ export function readAgentRuntimeConfig(
   const workerTimeoutMs = int(env.OXM_AGENT_WORKER_TIMEOUT_MS, 900_000, 60_000, 4 * 3_600_000);
   const validationTimeoutMs = int(env.OXM_AGENT_VALIDATION_TIMEOUT_MS, 1_200_000, 60_000, 4 * 3_600_000);
   if (workerTimeoutMs === null || validationTimeoutMs === null) return { ok: false, reason: "OXM_AGENT_WORKER_TIMEOUT_MS / OXM_AGENT_VALIDATION_TIMEOUT_MS are out of range" };
+  const delivery = readDeliveryConfig(env);
+  if (!delivery.ok) return { ok: false, reason: delivery.reason };
   return {
     ok: true,
     config: {
@@ -71,6 +80,7 @@ export function readAgentRuntimeConfig(
       workers,
       workerTimeoutMs,
       validationTimeoutMs,
+      delivery: delivery.config,
     },
   };
 }

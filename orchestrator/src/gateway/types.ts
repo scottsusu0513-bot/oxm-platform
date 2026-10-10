@@ -5,7 +5,10 @@ import type { Approval, ApprovalKind, IsoTimestamp } from "../store/types";
 import type { CommitApprovalEvidence } from "../workers/prompt";
 import type { HumanDecisionInput, HumanDecisionRequest } from "../manager/types";
 import type { IntentDecision } from "../planning/types";
-import type { StartApprovalEvidence } from "../scheduler/types";
+import type { StartApprovalEvidence, TaskDeliveryView, TaskPreviewView } from "../scheduler/types";
+import type { DeployApprovalEvidence } from "../delivery/types";
+import type { DeliveryTarget } from "../domain/types";
+import type { LifecyclePhase } from "../domain/delivery";
 
 export const GATEWAY_CAPABILITIES = [
   "task:submit",
@@ -21,6 +24,14 @@ export const GATEWAY_CAPABILITIES = [
   "approval:grant:commit_publish",
   "approval:reject:start",
   "approval:reject:commit_publish",
+  /**
+   * Decide an Owner merge + production deployment approval bound to exact deploy evidence. A DECISION
+   * only: execution stays with the trusted delivery layer after the Manager re-binds fresh PR/CI state.
+   */
+  "approval:grant:deploy",
+  "approval:reject:deploy",
+  /** Ask for changes to a result awaiting publish approval (same task). Grants no approval of any kind. */
+  "publish:revise",
   /** Ask the trusted planning layer to interpret an owner message (no side effects besides storing the interpretation). */
   "task:interpret",
   /** View an open needs_human_decision escalation and decision outcomes. */
@@ -124,9 +135,19 @@ export interface GatewayTaskStatus {
     } | null;
   };
   approvalRequired: boolean;
+  /** Owner-facing lifecycle phase; "completed" only after a verified terminal success. */
+  lifecyclePhase?: LifecyclePhase;
+  deliveryTarget?: DeliveryTarget;
+  /** Production delivery facts (sanitized; no SHAs). */
+  delivery?: GatewayDeliveryView | null;
+  /** Live preview of a UI task (sanitized; URL validated). */
+  preview?: GatewayPreviewView | null;
   createdAt: IsoTimestamp;
   updatedAt: IsoTimestamp;
 }
+
+export type GatewayDeliveryView = Pick<TaskDeliveryView, "stage" | "prNumber" | "deployStatus" | "health" | "smoke" | "failure" | "observerMissing" | "unverified" | "verifiedAt" | "productionHost">;
+export type GatewayPreviewView = TaskPreviewView;
 
 export interface PendingApprovalRequirement {
   approvalRequestId: string;
@@ -144,6 +165,8 @@ export interface PendingApprovalRequirement {
   commitEvidence?: CommitApprovalEvidence;
   /** Sanitized description of a red-risk pre-execution approval. */
   startEvidence?: StartApprovalEvidence;
+  /** Exact merge + deploy evidence of a deploy approval; present for deploy only. */
+  deployEvidence?: DeployApprovalEvidence;
 }
 
 // ---------------------------------------------------------------------------
@@ -359,6 +382,8 @@ export interface GatewayControlEventPort {
   ): void;
   /** Emits the typed human_decision_submitted event; the Manager re-binds and may still reject it. */
   humanDecisionSubmitted(taskId: string, decision: HumanDecisionInput): void;
+  /** Emits publish_revision_requested; the Manager re-binds to the exact publish gate and may still reject it. */
+  publishRevisionRequested(taskId: string, decision: HumanDecisionInput): void;
 }
 
 export type GatewayRateAction =
@@ -476,4 +501,10 @@ export interface AgentGatewayService {
    * The stopped task itself never changes state. Refused (nothing created) unless the policy allows it.
    */
   retryTask(call: GatewayCall<unknown>): Promise<RetryTaskResponse>;
+  /**
+   * The Owner asks for changes to a result that awaits publish approval (e.g. after the preview). Bound
+   * server-side to the current publish gate (task, branch, workspace HEAD); idempotent per key. The SAME
+   * task is repaired; nothing is approved, committed, published, merged or deployed.
+   */
+  requestPublishRevision(call: GatewayCall<unknown>): Promise<{ taskId: string; result: "submitted"; duplicate: boolean }>;
 }

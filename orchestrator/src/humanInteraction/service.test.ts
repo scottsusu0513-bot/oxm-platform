@@ -270,8 +270,8 @@ describe("human interaction — commit/publish approval", () => {
     const ref = transport.sent[0].notice.ref;
     const r = await service.handleAction({ kind: "action", idempotencyKey: `tg.cb.${ref}.approve`, ref, action: "approve" });
     expect(r.outcome).toBe("approved");
-    // No tracked label -> default Traditional Chinese; it states merge/deploy are not part of it.
-    expect(r.message).toContain("不會合併，也不會部署");
+    // No tracked label -> default Traditional Chinese; it states deployment is a separate, later decision.
+    expect(r.message).toContain("自動檢查通過後，我會再問你要不要部署正式站");
     await sim.loop.settle();
     expect(approvalEvents).toEqual([{ taskId: "ap2", decision: "approved" }]);
     expect(sim.commits).toHaveLength(1);

@@ -1,4 +1,4 @@
-import type { ApprovalPhase, TransitionResult } from "../domain/taskState";
+import type { ApprovalPhase, CompletionBasis, TransitionResult } from "../domain/taskState";
 import type { TaskState } from "../domain/types";
 import type {
   Approval,
@@ -26,6 +26,9 @@ export interface TaskTransitionContext {
   /** Required when leaving awaiting_approval (other than to failed/cancelled). */
   approvalPhase?: ApprovalPhase;
   approved?: boolean;
+  /** Required for every change-task edge into "complete" (see domain/taskState). */
+  completion?: CompletionBasis;
+  declined?: boolean;
 }
 
 export interface TaskRepository {

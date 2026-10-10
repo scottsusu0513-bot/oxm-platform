@@ -104,6 +104,8 @@ export type IntentDecision =
       visualObjective?: string | null;
       /** The Manager's own acknowledgement to the owner (semantic content only; trusted facts are added by the system). */
       ownerReply?: string | null;
+      /** Explicit PR-only goal ("只要 PR，不要部署"); absent = production delivery. */
+      deliveryTarget?: "pull_request";
     }
   | { kind: "status_query" | "cancel_or_pause" | "human_decision"; intent: Exclude<AgentIntent, TaskCreatingIntent>; taskId: string | null }
   /**

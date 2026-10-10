@@ -33,6 +33,8 @@ import { createTelegramBotClient, TelegramApiError } from "../orchestrator/src/t
 import { readTelegramConfig, readTelegramSourceConfig } from "../orchestrator/src/telegram/config";
 import { checkGateway, createGatewayUpdatesClient } from "../orchestrator/src/telegram/gatewaySource";
 import { createTelegramControlPlane, createTelegramTransport, TelegramStartupError } from "../orchestrator/src/telegram/controlPlane";
+import { createNodePreviewController } from "../orchestrator/src/preview/node";
+import { createNodeProcessRunner } from "../orchestrator/src/workers/processRunner";
 
 const args = new Set(process.argv.slice(2));
 const now = () => new Date().toISOString();
@@ -131,6 +133,8 @@ const reviewer = planned.reviewer;
 
 const runtimeConfig = readAgentRuntimeConfig(process.env, process.cwd());
 if (!runtimeConfig.ok) fail(runtimeConfig.reason);
+// UI tasks: live preview of the workspace through the repo's own dev server (OXM_AGENT_PREVIEW=off disables it).
+const preview = process.env.OXM_AGENT_PREVIEW === "off" ? null : createNodePreviewController({ runner: createNodeProcessRunner(), repoRoot: process.cwd(), stateDir, env: process.env });
 const created = await createAgentRuntime((runtimeConfig as Extract<typeof runtimeConfig, { ok: true }>).config, {
   audit: audit!,
   owner,
@@ -142,6 +146,7 @@ const created = await createAgentRuntime((runtimeConfig as Extract<typeof runtim
   noticeComposer: planned.noticeComposer,
   // Operator acknowledgement of specific historical conflicting journal records (comma-separated event ids).
   supersededJournalEvents: (process.env.OXM_AGENT_JOURNAL_SUPERSEDE ?? "").split(",").map((s) => s.trim()).filter(Boolean),
+  preview,
 });
 if (!created.ok) {
   const f = created as Extract<typeof created, { ok: false }>;
@@ -151,6 +156,9 @@ const runtime = (created as Extract<typeof created, { ok: true }>).runtime;
 for (const line of runtime.reconciled) say(`reconciled ${line}`);
 say(`runtime baseline ${runtime.runtimeBaseline.branch}@${runtime.runtimeBaseline.sha.slice(0, 12)}`);
 if (runtime.workspaceRestored) say(runtime.workspaceRestored);
+say(runtime.previewEnabled ? "UI preview: enabled (Codespaces forwarded port, private visibility)" : "UI preview: disabled");
+// Names only, never values: what verified production delivery still needs.
+say(runtime.deliveryMissing.length ? `production delivery: not fully configured (missing ${runtime.deliveryMissing.join(", ")}); deploy approvals cannot complete until set` : "production delivery: Owner-approved merge + Render observation + production verification enabled");
 say(runtime.checkpointRestored ? `Manager checkpoint restored (${runtime.restoredTaskIds.length} task(s), ${runtime.activeTaskIds().length} active)` : "no Manager checkpoint; starting fresh");
 
 let hiSequence = 0;
@@ -223,6 +231,11 @@ const reviewTimer = setInterval(() => {
   }
 }, 60_000);
 
+// Production delivery driver: observes the Render deployment of merged, Owner-approved tasks (read-only).
+const deliveryTimer = setInterval(() => {
+  for (const task of runtime.loop.tasks()) if (task.status === "deploying") runtime.loop.post({ type: "delivery_poll", taskId: task.taskId });
+}, 20_000);
+
 // Worker availability driver: resumes tasks paused on a Worker usage quota once a trusted reset time has
 // passed, and re-probes pauses without one hourly (a renewed quota error just pauses again). Never a repair.
 const availabilityTimer = setInterval(() => {
@@ -237,6 +250,7 @@ async function shutdown(signal: string) {
   clearInterval(qaTimer);
   clearInterval(reviewTimer);
   clearInterval(availabilityTimer);
+  clearInterval(deliveryTimer);
   await controlPlane.stop();
   audit!.close();
   process.exit(0);
@@ -251,6 +265,7 @@ try {
   clearInterval(qaTimer);
   clearInterval(reviewTimer);
   clearInterval(availabilityTimer);
+  clearInterval(deliveryTimer);
   audit!.close();
   fail(error instanceof TelegramStartupError ? error.message : "control plane stopped unexpectedly");
 }

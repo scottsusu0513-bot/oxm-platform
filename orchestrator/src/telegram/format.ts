@@ -1,5 +1,5 @@
-import type { CancelConfirmationNotice, CommitApprovalNotice, HumanDecisionNotice, HumanNotice, MilestoneNotice, StartApprovalNotice } from "../humanInteraction/types";
-import { cancelConfirmationMessage, commitApprovalMessage, decisionMessage, startApprovalMessage, type OwnerLanguage } from "../executive/communication";
+import type { CancelConfirmationNotice, CommitApprovalNotice, DeployApprovalNotice, HumanDecisionNotice, HumanNotice, MilestoneNotice, StartApprovalNotice } from "../humanInteraction/types";
+import { cancelConfirmationMessage, commitApprovalMessage, decisionMessage, deployApprovalMessage, startApprovalMessage, type OwnerLanguage } from "../executive/communication";
 import type { InlineButton } from "./client";
 
 /** Telegram text limit is 4096 characters; stay well below it. */
@@ -51,7 +51,16 @@ export function formatApprovalNotice(n: CommitApprovalNotice): string {
       ...resent(n),
       // The Manager's own explanation of the result leads; the approval scope below is the fixed binding.
       ...(n.managerSummary ? [n.managerSummary, ""] : []),
-      commitApprovalMessage({ lang: langOf(n), label: nameOf(n), files: n.filesChanged, checksPassed: n.validationsPassed.length, checksNotPassed: n.validationsNotPassed, checksUnverified: n.validationsUnverified ?? [], excludedFiles: n.excludedPaths ?? [], risk: n.risk, expiresAt: n.expiresAt }),
+      commitApprovalMessage({ lang: langOf(n), label: nameOf(n), files: n.filesChanged, checksPassed: n.validationsPassed.length, checksNotPassed: n.validationsNotPassed, checksUnverified: n.validationsUnverified ?? [], excludedFiles: n.excludedPaths ?? [], risk: n.risk, expiresAt: n.expiresAt, preview: n.preview ?? null }),
+    ].join("\n"),
+  );
+}
+
+export function formatDeployApproval(n: DeployApprovalNotice): string {
+  return clip(
+    [
+      ...resent(n),
+      deployApprovalMessage({ lang: langOf(n), label: nameOf(n), prNumber: n.prNumber, checksPassed: n.checksPassed, unverified: n.unverified, risk: n.risk, host: n.productionHost, expiresAt: n.expiresAt, summary: n.managerSummary ?? null }),
     ].join("\n"),
   );
 }
@@ -78,6 +87,8 @@ export function noticeButtons(n: HumanNotice): InlineButton[][] | undefined {
       return [[{ text: zh ? "批准發布" : "Approve publish", callback_data: callbackData(n.ref, "a") }, { text: zh ? "不要發布" : "Reject", callback_data: callbackData(n.ref, "r") }]];
     case "start_approval":
       return [[{ text: zh ? "批准執行" : "Approve this run", callback_data: callbackData(n.ref, "a") }, { text: zh ? "拒絕" : "Reject", callback_data: callbackData(n.ref, "r") }]];
+    case "deploy_approval":
+      return [[{ text: zh ? "批准部署" : "Approve deploy", callback_data: callbackData(n.ref, "a") }, { text: zh ? "暫不部署" : "Not now", callback_data: callbackData(n.ref, "r") }]];
     case "human_decision":
       return [[{ text: zh ? "取消任務" : "Cancel task", callback_data: callbackData(n.ref, "c") }]];
     case "cancel_confirmation":
@@ -95,6 +106,8 @@ export function formatNotice(n: HumanNotice): string {
       return formatApprovalNotice(n);
     case "start_approval":
       return formatStartApproval(n);
+    case "deploy_approval":
+      return formatDeployApproval(n);
     case "milestone":
       return formatMilestone(n);
     case "cancel_confirmation":
@@ -108,7 +121,7 @@ export const HELP_TEXT = [
   "要正式執行（修改程式、修 bug）時，請用「任務：」開頭，例如「任務：把首頁搜尋框提示文字改成搜尋工廠」。我會安排 Claude（程式）或 Codex（畫面設計）處理，檢查過後再請你批准發布。",
   "",
   "需要你決定時，直接傳訊息給我即可（同時有多件事要決定時，我會先問你指的是哪一件）。",
-  "你的指示只是方向，不代表批准發布；發布和高風險執行都要按訊息上的按鈕。我不會合併或部署。",
+  "你的指示只是方向，不代表批准；發布、部署正式站和高風險執行都要按訊息上的按鈕。沒有你按「批准部署」，我不會合併或部署。",
   "",
   "可用指令：",
   "任務：<要做的事> — 建立正式任務",

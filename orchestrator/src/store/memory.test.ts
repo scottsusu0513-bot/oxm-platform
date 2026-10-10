@@ -57,9 +57,12 @@ describe("TaskRepository", () => {
     expect(() => tasks.transition("t1", "running")).toThrow(/\[taskState\].*not allowed/);
     expect(tasks.get("t1")!.state).toBe("received");
 
-    for (const s of ["classified", "routed", "queued", "running", "pr_opened", "qa_running", "qa_passed", "complete"] as const) {
+    for (const s of ["classified", "routed", "queued", "running", "pr_opened", "qa_running", "qa_passed"] as const) {
       expect(tasks.transition("t1", s).state).toBe(s);
     }
+    // A passing PR is not completion unless the goal was the PR itself.
+    expect(() => tasks.transition("t1", "complete")).toThrow(/PR-only goal/);
+    expect(tasks.transition("t1", "complete", { completion: "pull_request" }).state).toBe("complete");
     expect(() => tasks.transition("t1", "failed")).toThrow(/not allowed/);
   });
 

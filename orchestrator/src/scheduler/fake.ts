@@ -140,6 +140,13 @@ export interface SimulationOptions {
   runtimeBaseline?: { branch: string; sha: string; relation?: CommitRelation | null };
   /** Idle return-to-runtime-branch port (production: githubWrite/workspace.restoreRuntimeWorkspace). */
   runtimeWorkspace?: OrchestrationPorts["runtimeWorkspace"];
+  /**
+   * Trusted merge / deployment / verification port. When given, the simulation uses the production
+   * completion semantics (deploy gate → merge → deployment → verification) unless policy overrides it.
+   */
+  delivery?: OrchestrationPorts["delivery"] | ((sim: { remote: FakeRemote; now: () => string }) => NonNullable<OrchestrationPorts["delivery"]>);
+  /** Codespaces preview port for UI tasks. */
+  preview?: OrchestrationPorts["preview"];
 }
 
 export interface WorkerCall {
@@ -545,6 +552,8 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
     leases,
     audit: (e) => audit.push(structuredClone(e)),
     ...(opts.runtimeWorkspace ? { runtimeWorkspace: opts.runtimeWorkspace } : {}),
+    ...(opts.delivery ? { delivery: typeof opts.delivery === "function" ? opts.delivery({ remote, now }) : opts.delivery } : {}),
+    ...(opts.preview ? { preview: opts.preview } : {}),
     repo: baselineRepo ?? {
       async taskBaseSha() {
         const seq = opts.mainHeads ?? [];
@@ -834,7 +843,9 @@ export function createSimulation(opts: SimulationOptions = {}): Simulation {
   };
 
   // Explicit fixture: a simulation may run the deterministic Manager when no GPT port is injected.
-  const loop = createManagerLoop(ports, { managerMode: "deterministic_fixture", ...opts.policy });
+  // Scenario simulations without a delivery port keep the PR as their terminal goal (explicitly, never
+  // by default in production); a simulation with a delivery port runs the production completion path.
+  const loop = createManagerLoop(ports, { managerMode: "deterministic_fixture", completion: opts.delivery ? "production_verified" : "pull_request", ...opts.policy });
   const decideApproval = (taskId: string, phase: "pre_execution" | "commit_publish" | "post_qa", status: "approved" | "rejected" | "expired", overrides = {}) => {
     const task = intakes.get(taskId);
     const latestContract = contractsByTask.get(taskId);

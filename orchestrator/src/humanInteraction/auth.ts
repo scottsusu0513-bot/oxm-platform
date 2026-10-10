@@ -4,11 +4,13 @@ import type { AuthContext, GatewayAuthenticationInput, GatewayAuthenticator, Gat
 /**
  * Exactly what the human owner may do through a human-interaction transport
  * (least privilege): interpret a message / submit a task through the normal
- * Task Intake Gateway, read status, give guidance, cancel, and decide ONLY
- * red-risk pre-execution ("start") and commit/publish approvals through the
- * Approval Gateway. There is no generic approval capability, so a future
- * approval kind (e.g. merge) cannot be decided through this session even if
- * transport code were wrong; pause, merge and deploy do not exist at all.
+ * Task Intake Gateway, read status, give guidance or a revision, cancel, and
+ * decide ONLY red-risk pre-execution ("start"), commit/publish and deploy
+ * (merge + production deployment, bound to exact evidence) approvals through
+ * the Approval Gateway. There is no generic approval capability, so another
+ * approval kind (e.g. the legacy "merge") cannot be decided through this
+ * session even if transport code were wrong. No capability EXECUTES a merge or
+ * deploy: the trusted delivery layer does, only after the Manager re-binds.
  */
 export const HUMAN_OWNER_CAPABILITIES: readonly GatewayCapability[] = Object.freeze([
   "task:interpret",
@@ -20,8 +22,11 @@ export const HUMAN_OWNER_CAPABILITIES: readonly GatewayCapability[] = Object.fre
   "approval:grant:commit_publish",
   "approval:reject:start",
   "approval:reject:commit_publish",
+  "approval:grant:deploy",
+  "approval:reject:deploy",
   "human_decision:read",
   "human_decision:submit",
+  "publish:revise",
 ]);
 
 export interface HumanOwnerSession {

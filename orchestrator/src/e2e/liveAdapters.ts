@@ -504,6 +504,9 @@ export async function createLiveSmokeEnvironment(
         return outcome;
       },
     },
+  }, {
+    // The smoke task's terminal goal is its PR: it is never merged or deployed.
+    completion: "pull_request",
   });
   const runtime = createAgentRuntimeService({
     ...store,

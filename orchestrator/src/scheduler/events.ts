@@ -55,6 +55,22 @@ export const ORCHESTRATION_AUDIT_EVENTS = [
   // Trusted Git metadata re-binding before a follow-up run: accepted (baseline moved) / refused.
   "git_metadata_rebound",
   "git_metadata_rebind_refused",
+  // Production delivery: Owner deploy gate → trusted merge → deployment observation → verification.
+  "delivery_merge_requested",
+  "delivery_merged",
+  "delivery_deploy_observed",
+  "delivery_production_verified",
+  "delivery_failed",
+  "delivery_unavailable",
+  // The Owner declined publication / deployment: closed, never "complete".
+  "task_closed_without_deploy",
+  // UI preview before publish approval (never a deployment, never authority).
+  "preview_requested",
+  "preview_ready",
+  "preview_unavailable",
+  // Owner revision of a result awaiting publish approval (same task / branch / Worker).
+  "publish_revision_accepted",
+  "publish_revision_rejected",
 ] as const;
 export type OrchestrationAuditEvent = (typeof ORCHESTRATION_AUDIT_EVENTS)[number];
 
@@ -140,6 +156,8 @@ const ACTOR: Partial<Record<OrchestrationAuditEvent, AuditActor>> = {
   human_decision_requested: "manager",
   human_decision_accepted: "manager",
   human_decision_rejected: "manager",
+  publish_revision_accepted: "manager",
+  publish_revision_rejected: "manager",
 };
 
 export function orchestrationAudit(event: OrchestrationAuditEvent, fromState: TaskState | null, toState: TaskState | null, meta: OrchestrationAuditMetadata): Omit<NewAuditEvent, "id"> {

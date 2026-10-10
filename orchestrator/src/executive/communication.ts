@@ -283,9 +283,34 @@ export function commitApprovalMessage(input: {
   excludedFiles?: readonly string[];
   risk: RiskLevel;
   expiresAt: string;
+  /** UI work: the live preview of exactly this result (ready: the URL from Codespaces; unavailable: why). */
+  preview?: { status: "ready" | "unavailable"; url: string | null; access: "github_sign_in" | "public" | null; reason: string | null } | null;
 }): string {
   const zh = input.lang === "zh";
   const files = input.files.slice(0, 15);
+  const p = input.preview ?? null;
+  const preview: string[] =
+    p?.status === "ready" && p.url
+      ? zh
+        ? [
+            "修改已完成，我已開啟預覽。",
+            "電腦與手機都可以用：",
+            p.url,
+            p.access === "public" ? "（預覽連的是開發環境，不是正式站資料。）" : "（請用已登入 GitHub 的瀏覽器開啟，手機 Safari 也可以；預覽連的是開發環境，不是正式站資料，需要登入的後台頁面在預覽中可能無法使用正式帳號登入。）",
+            "這還沒有發布到正式站。你確認畫面沒問題後，可以按「批准發布」；要修改的話，直接回覆這則訊息告訴我要改什麼。",
+            "",
+          ]
+        : [
+            "The change is done and I opened a preview.",
+            "It works on desktop and phone:",
+            p.url,
+            p.access === "public" ? "(The preview uses the development environment, not production data.)" : "(Open it in a browser signed in to GitHub, iPhone Safari included. It uses the development environment, not production data; sign-in-only admin pages may not accept production accounts there.)",
+            'Nothing is on the production site yet. When the screen looks right, press "Approve publish"; to change something, just reply to this message.',
+            "",
+          ]
+      : p?.status === "unavailable"
+        ? [zh ? "這次的預覽暫時無法開啟，你仍然可以依下面的內容決定是否發布；要修改的話直接回覆這則訊息。" : "The preview is unavailable this time; you can still decide from the details below, or reply to this message to ask for changes.", ""]
+        : [];
   const more = input.files.length - files.length;
   const unverified = input.checksUnverified ?? [];
   const excluded = input.excludedFiles ?? [];
@@ -301,6 +326,7 @@ export function commitApprovalMessage(input: {
         ? "自動檢查：全部通過。"
         : "Checks: all passed.";
   return [
+    ...preview,
     zh ? `「${input.label}」已完成，也通過我的檢查。目前尚未發布，等待你批准。` : `"${input.label}" is done and passed my review. Nothing has been published yet; waiting for your approval.`,
     zh ? `這次改了 ${input.files.length} 個檔案：` : `Files changed (${input.files.length}):`,
     ...files.map((f) => `• ${f}`),
@@ -316,8 +342,43 @@ export function commitApprovalMessage(input: {
     zh ? `風險：${RISK_ZH[input.risk]}` : `Risk: ${RISK_EN[input.risk]}`,
     "",
     zh
-      ? "按「批准發布」後，我會建立一次 commit、推送到這個任務的工作分支並開 PR。不會合併，也不會部署。"
-      : 'Pressing "Approve publish" creates one commit, pushes the task branch and opens a PR. It never merges or deploys.',
+      ? "按「批准發布」後，我會建立一次 commit、推送到這個任務的工作分支並開 PR。這個批准不包含合併或部署；自動檢查通過後，我會另外問你要不要部署正式站。"
+      : 'Pressing "Approve publish" creates one commit, pushes the task branch and opens a PR. It does not merge or deploy; after the checks pass I will ask you separately about deploying to production.',
+    zh ? `此批准在 ${formatResetTime(input.expiresAt, "zh").replace("（台北時間）", "")} 前有效。` : `Valid until ${formatResetTime(input.expiresAt, "en").replace(" (Taipei time)", "")}.`,
+  ].join("\n");
+}
+
+/**
+ * Deploy approval (merge + production deployment) of one exact PR head. Natural language only: no SHAs,
+ * digests or internal state codes.
+ */
+export function deployApprovalMessage(input: {
+  lang: OwnerLanguage;
+  label: string;
+  prNumber: number;
+  checksPassed: number;
+  /** Items the Manager could not verify before deployment. */
+  unverified: readonly string[];
+  risk: RiskLevel;
+  /** Production site host, when known. */
+  host: string | null;
+  expiresAt: string;
+  /** The Manager's own result explanation (optional). */
+  summary?: string | null;
+}): string {
+  const zh = input.lang === "zh";
+  const n = input.prNumber;
+  return [
+    ...(input.summary ? [input.summary, ""] : []),
+    zh ? `「${input.label}」的 PR #${n} 自動檢查已完成（${input.checksPassed} 項通過）。` : `The checks for "${input.label}" (PR #${n}) have passed (${input.checksPassed}).`,
+    zh ? "正式站尚未更新，所以這項任務還沒有完成。" : "The production site has not been updated yet, so this task is not complete.",
+    ...(input.unverified.length ? [zh ? `尚未驗證的項目：${input.unverified.join("、")}（目前沒有證據顯示有問題，但也還沒驗證到）。` : `Not yet verified: ${input.unverified.join(", ")} (nothing shows a problem, but it is not verified).`] : []),
+    ...(input.risk === "red" ? [zh ? "風險：高。請確認後再批准。" : "Risk: high. Please review before approving."] : []),
+    "",
+    zh ? `是否批准合併 PR #${n} 並部署正式站${input.host ? `（${input.host}）` : ""}？` : `Approve merging PR #${n} and deploying to production${input.host ? ` (${input.host})` : ""}?`,
+    zh
+      ? `按「批准部署」後，我會合併 PR #${n}、等 Render 部署完成，再檢查正式站（health check 與 smoke test），全部通過才算完成。按「暫不部署」則不會合併，正式站不會有任何變更。`
+      : `"Approve deploy" merges PR #${n}, waits for the Render deployment and then checks production (health check and smoke test); the task completes only if all pass. "Not now" merges nothing and leaves production unchanged.`,
     zh ? `此批准在 ${formatResetTime(input.expiresAt, "zh").replace("（台北時間）", "")} 前有效。` : `Valid until ${formatResetTime(input.expiresAt, "en").replace(" (Taipei time)", "")}.`,
   ].join("\n");
 }
@@ -398,6 +459,8 @@ export const PROGRESS_EVENTS = [
   "blocked",
   "cancelled",
   "awaiting_other_approval",
+  "deploy_waiting",
+  "closed_without_deploy",
 ] as const;
 export type ProgressEvent = (typeof PROGRESS_EVENTS)[number];
 
@@ -418,6 +481,12 @@ export function progressMessage(
     targets?: readonly ("programming" | "visual")[];
     /** blocked without a failure (non-terminal stop): paused for the owner, not failed. */
     paused?: boolean;
+    /** completed: production = merged, deployed and verified; pull_request = PR-only goal; legacy = old PR-terminal policy. */
+    completion?: "production" | "pull_request" | "legacy";
+    /** deploy_waiting: why the approved / merged delivery cannot proceed or be verified. */
+    deployWait?: "deploy_capability_disabled" | "deploy_observer_unconfigured" | "delivery_state_unavailable";
+    /** closed_without_deploy: which decision closed it. */
+    declined?: "publish" | "deploy";
   },
 ): string {
   const zh = input.lang === "zh";
@@ -508,13 +577,45 @@ export function progressMessage(
         : "Both parts are done, but my combined review service is unavailable, so I cannot confirm the whole yet; I will review it automatically when it is back.";
     case "pr_opened":
       return zh
-        ? `已開 PR${input.prNumber ? ` #${input.prNumber}` : ""}，正在等 GitHub 的自動檢查。我不會合併或部署。`
-        : `PR${input.prNumber ? ` #${input.prNumber}` : ""} is open and waiting for the GitHub checks. I will not merge or deploy.`;
+        ? `已開 PR${input.prNumber ? ` #${input.prNumber}` : ""}，正在等 GitHub 的自動檢查。檢查通過後我會問你要不要部署正式站；沒有你的批准不會合併或部署。`
+        : `PR${input.prNumber ? ` #${input.prNumber}` : ""} is open and waiting for the GitHub checks. Once they pass I will ask whether to deploy; nothing is merged or deployed without your approval.`;
+    case "deploy_waiting":
+      if (input.deployWait === "deploy_capability_disabled")
+        return zh
+          ? `你已批准部署 PR${input.prNumber ? ` #${input.prNumber}` : ""}，但這個 Agent 目前沒有啟用合併與部署功能，所以還沒有合併，正式站沒有任何變更。這項任務尚未完成；功能啟用後會直接用你這次的批准繼續，不需要重新建立任務。`
+          : `You approved deploying PR${input.prNumber ? ` #${input.prNumber}` : ""}, but merge + deploy is not enabled in this Agent, so nothing was merged and production is unchanged. The task is not complete; once enabled it continues with this same approval.`;
+      if (input.deployWait === "deploy_observer_unconfigured")
+        return zh
+          ? `PR${input.prNumber ? ` #${input.prNumber}` : ""} 已合併，但我目前無法讀取 Render 的部署狀態（缺少部署監控設定），所以還不能確認正式站已經更新。這項任務尚未完成。`
+          : `PR${input.prNumber ? ` #${input.prNumber}` : ""} is merged, but I cannot read the Render deployment status (deployment monitoring is not configured), so I cannot confirm production was updated. The task is not complete.`;
+      return zh
+        ? "我暫時讀不到 PR 或自動檢查的最新狀態，所以還沒有合併任何東西，正式站沒有變更。稍後會再確認。"
+        : "I cannot read the latest PR / check state right now, so nothing was merged and production is unchanged. I will re-check shortly.";
+    case "closed_without_deploy":
+      return input.declined === "publish"
+        ? zh
+          ? "好，這次不發布。沒有 commit、推送或 PR，正式站沒有任何變更；這項任務以「未發布」結束。"
+          : "OK, not publishing. No commit, push or PR was made and production is unchanged; the task is closed without deployment."
+        : zh
+          ? `好，PR${input.prNumber ? ` #${input.prNumber}` : ""} 不部署，保持未合併，正式站沒有任何變更；這項任務以「未部署」結束。`
+          : `OK, PR${input.prNumber ? ` #${input.prNumber}` : ""} is not deployed and stays unmerged; production is unchanged. The task is closed without deployment.`;
     case "answered":
       return zh
         ? `查到了。\n\n${input.answer ?? "（沒有記錄到答案）"}\n\n這次沒有修改任何檔案，答案已對照實際程式碼確認。`
         : `Here is the answer.\n\n${input.answer ?? "(no answer recorded)"}\n\nNo file was changed; I checked the answer against the actual source.`;
     case "completed":
+      if (input.completion === "production") {
+        const fact = zh
+          ? `PR${input.prNumber ? ` #${input.prNumber}` : ""} 已合併，正式站部署完成，production smoke 通過。這項任務已完成。`
+          : `PR${input.prNumber ? ` #${input.prNumber}` : ""} is merged, the production deployment is live and the production smoke test passed. This task is complete.`;
+        return input.summary ? `${input.summary}\n${fact}` : fact;
+      }
+      if (input.completion === "pull_request") {
+        const fact = zh
+          ? `依你的要求只建立 PR、不部署：PR${input.prNumber ? ` #${input.prNumber}` : ""} 已通過自動檢查。這項任務已完成，正式站沒有變更。`
+          : `As you asked, PR only (no deployment): PR${input.prNumber ? ` #${input.prNumber}` : ""} passed the checks. This task is complete; production is unchanged.`;
+        return input.summary ? `${input.summary}\n${fact}` : fact;
+      }
       // Manager summary first; then only trusted facts (PR checks, merge/deploy stay with the owner).
       if (input.summary)
         return zh

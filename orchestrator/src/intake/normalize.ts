@@ -102,7 +102,10 @@ export const FIXED_GOAL_CRITERIA: Readonly<Record<TaskGoal["intent"], readonly s
 function checkGoal(value: unknown): { ok: true; goal: TaskGoal; criteria: string[]; riskObservations: string[] } | { ok: false; reason: string } {
   const g = value as Record<string, unknown> | null;
   if (!g || typeof g !== "object" || Array.isArray(g)) return { ok: false, reason: "goal must be an object" };
-  if (Object.keys(g).some((k) => !["intent", "originalRequest", "interpretedObjective", "criteria", "riskObservations", "workArea", "group"].includes(k))) return { ok: false, reason: "goal contains an unsupported field" };
+  if (Object.keys(g).some((k) => !["intent", "originalRequest", "interpretedObjective", "criteria", "riskObservations", "workArea", "group", "deliveryTarget"].includes(k))) return { ok: false, reason: "goal contains an unsupported field" };
+  if (g.deliveryTarget !== undefined && g.deliveryTarget !== "pull_request") return { ok: false, reason: "goal delivery target is unsupported" };
+  // A PR-only goal is a change-task concept; a read-only task has nothing to publish.
+  if (g.deliveryTarget === "pull_request" && (g.intent === "investigate_or_answer" || g.intent === "audit_or_review")) return { ok: false, reason: "a read-only goal has no delivery target" };
   const group = g.group as { id?: unknown; parts?: unknown } | undefined;
   if (
     group !== undefined &&
@@ -131,6 +134,7 @@ function checkGoal(value: unknown): { ok: true; goal: TaskGoal; criteria: string
       originalRequest,
       interpretedObjective: planned.interpretedObjective,
       ...(g.workArea ? { workArea: g.workArea as "programming" | "visual" } : {}),
+      ...(g.deliveryTarget === "pull_request" ? { deliveryTarget: "pull_request" as const } : {}),
       ...(group ? { group: { id: group.id as string, parts: (group.parts as { area: "programming" | "visual"; objective: string }[]).map((p) => ({ area: p.area, objective: p.objective })) } } : {}),
     },
     criteria: planned.criteria,

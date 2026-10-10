@@ -94,6 +94,7 @@ export function buildTaskStatus(input: {
           },
         }
       : {}),
+    ...(snap ? { lifecyclePhase: snap.lifecyclePhase, deliveryTarget: snap.deliveryTarget, delivery: snap.delivery, preview: snap.preview } : {}),
     approval: {
       required: approvalState || pending !== null,
       kind:
@@ -104,6 +105,8 @@ export function buildTaskStatus(input: {
             ? "commit_publish"
           : phase === "post_qa"
             ? "merge"
+          : phase === "deploy"
+            ? "deploy"
             : null),
       phase,
       bindingTarget:
@@ -123,6 +126,8 @@ export function buildTaskStatus(input: {
             ? "commit_and_publish_task_branch_for_pr_review"
           : phase === "post_qa"
             ? "complete_post_qa"
+          : phase === "deploy"
+            ? "merge_and_deploy_production"
             : null),
     },
     lastMeaningfulAuditEvent: lastAudit

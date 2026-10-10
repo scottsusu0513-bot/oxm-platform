@@ -29,6 +29,9 @@ export function createManagerLoopGatewayEvents(
     humanDecisionSubmitted(taskId, decision) {
       loop.post({ type: "human_decision_submitted", taskId, decision });
     },
+    publishRevisionRequested(taskId, decision) {
+      loop.post({ type: "publish_revision_requested", taskId, decision });
+    },
   };
 }
 
@@ -114,6 +117,7 @@ export function createManagerApprovalRequirementReader(
         reasonSummary: `${check.phase} approval required for ${check.requestedAction}`,
         ...(check.evidence ? { commitEvidence: structuredClone(check.evidence) } : {}),
         ...(check.startEvidence ? { startEvidence: structuredClone(check.startEvidence) } : {}),
+        ...(check.deployEvidence ? { deployEvidence: structuredClone(check.deployEvidence) } : {}),
       };
     },
   };

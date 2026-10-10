@@ -45,6 +45,8 @@ export function normalizeIntentDecision(raw: unknown, input: { knownTaskIds: rea
       programmingObjective: part(r.programmingObjective),
       visualObjective: part(r.visualObjective),
       ownerReply: text(r.ownerReply, 600),
+      // Only an explicit PR-only request changes what "done" means; anything else is production delivery.
+      ...(r.deliveryTarget === "pull_request" ? { deliveryTarget: "pull_request" as const } : {}),
     };
   }
   if (input.requireTask) return { kind: "clarify", question: "「任務：」/goal creates a new task, but this reads like a question about an existing task. Send it without 「任務：」 or /goal." };

@@ -28,7 +28,8 @@ SHA-256 identity over sanitized structured evidence:
 - trusted validation and acceptance evidence;
 - Manager acceptance and observed risk;
 - the explicit authority limits: one commit, normal push, and open/reuse PR;
-  never merge or deploy.
+  never merge or deploy. Merge + production deployment is a SEPARATE Owner
+  approval (kind `deploy`, see below) that this approval can never stand in for.
 
 The user sees those fields (paths, modes, blob ids, digests), not file
 contents, prompts, diffs, stdout, logs, or secrets.
@@ -80,3 +81,33 @@ covered by a deterministic integrity check (`workers/gitIntegrity.ts`):
   repairable). Nothing is restored automatically.
 
 A worker that moves HEAD (for example by committing) is refused the same way.
+
+## Deploy approval (merge + production deployment)
+
+A change task that targets production is complete only after production
+verification. After CI passes on the published PR, the SAME task (same lineage,
+branch and PR) waits at the deploy gate; the Owner sees the PR number, the CI
+result, unverified items and that production is not updated yet, and decides
+"批准部署" or "暫不部署".
+
+- The approval kind is `deploy`; its binding is
+  `deploy:<sha256 of the canonical evidence>` over task id, lineage, PR number,
+  exact approved head SHA, the CI result on that head, risk, unverified items and
+  the fixed scope (merge + deploy; no commit, push, force push or production
+  database). It expires like every approval.
+- Right before the merge the loop re-reads the PR (open, base `main`, head ==
+  the approved SHA) and CI on that head; any drift voids the approval.
+- The trusted delivery layer merges with `PUT pulls/<n>/merge` and
+  `sha=<approved head>` (GitHub refuses a moved head), then re-reads the merge
+  from GitHub. A restart during the merge never repeats it; the outcome is read
+  back.
+- Completion requires a Render deployment record of exactly the merge commit
+  with status `live` (rollout finished), then a passing production health check
+  (`/api/health`, `/api/health/ready`) and smoke test (`/`). A deployment that
+  is still rolling out, failed, on another SHA, unobservable or failing checks is
+  never "complete".
+- "暫不部署" (or declining publication) closes the task as
+  `closed_without_deploy`, never `complete`.
+- Execution requires `OXM_AGENT_OWNER_APPROVED_DEPLOY=enabled`; verification
+  requires `RENDER_API_KEY` + `RENDER_SERVICE_ID` (trusted control plane only;
+  never in a Worker environment, Manager prompt, repository or log).

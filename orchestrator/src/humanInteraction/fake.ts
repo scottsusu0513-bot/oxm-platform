@@ -114,6 +114,10 @@ export function createHumanInteractionHarness(input: {
       repairAttempt: snap.repair.attempt,
       waitReason: snap.blockingReason ?? snap.queueReason,
       approval: { required: snap.status === "needs_human_approval" },
+      lifecyclePhase: snap.lifecyclePhase,
+      deliveryTarget: snap.deliveryTarget,
+      delivery: snap.delivery,
+      preview: snap.preview,
       createdAt: input.now(),
       updatedAt: input.now(),
     } as unknown as AgentTaskStatus;

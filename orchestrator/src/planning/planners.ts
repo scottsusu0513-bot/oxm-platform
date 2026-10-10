@@ -25,7 +25,7 @@ export interface StructuredPlanningBackend {
 export const INTENT_SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["intent", "taskId", "followUpTopics", "title", "interpretedObjective", "criteria", "clarificationQuestion", "riskObservations", "workAreas", "programmingObjective", "visualObjective", "ownerReply"],
+  required: ["intent", "taskId", "followUpTopics", "title", "interpretedObjective", "criteria", "clarificationQuestion", "riskObservations", "workAreas", "programmingObjective", "visualObjective", "ownerReply", "deliveryTarget"],
   properties: {
     intent: {
       type: "string",
@@ -47,6 +47,7 @@ export const INTENT_SCHEMA = {
     programmingObjective: { type: "string" },
     visualObjective: { type: "string" },
     ownerReply: { type: "string" },
+    deliveryTarget: { type: "string", enum: ["production", "pull_request"] },
   },
 } as const;
 
@@ -85,9 +86,11 @@ For other intents leave title, interpretedObjective and clarificationQuestion em
   For task_follow_up and retry_task, ownerReply is YOUR answer to the owner about that task, written ONLY from its TRUSTED TASK STATE entry (never invent a fact; if the state does not show something, say plainly that the record does not show it): answer every asked topic, conclusion first, 1-4 natural sentences in the owner's language. For a stopped task explain why it stopped from stopReasonFact (and, when present, name the Git component and its classification from gitMetadataFact — e.g. which boundary was or was not crossed and whether the implementation was kept or publication paused); for remediation say what can be done; for retry_eligibility state exactly the system's re-run verdict from "retry" (you never decide it; a re-run always creates a new task from the original request). For retry_task, describe what happens according to that same verdict. Never claim that anything was re-run, committed, published, merged or deployed unless the state says so. When the chosen task has no TRUSTED TASK STATE entry, leave ownerReply empty.
   When OWNER ALREADY RECEIVED lists connection statuses, the owner already knows their message was queued while the Agent was offline: do not acknowledge receipt or the delay again; go straight to the substance.
   Empty for every other intent.
+- deliveryTarget: "production" (the default) — a product change is done only when it is live on the production site after the owner's separate deploy approval. Use "pull_request" ONLY when the owner explicitly says they want just a PR / no deployment (e.g. "只要開 PR，不要部署"). Never infer it from risk or size. "production" for every non-task intent.
 - riskObservations: list every risk you observe in the request, in ANY language (e.g. 正式環境/production data writes, deleting data, deploying, exposing or changing secrets, disabling authentication or security controls, force-pushing or merging to main, destructive migrations). Use the given kinds; leave empty only when none apply. Observations can only raise risk; they never lower it.
 You only interpret; you cannot choose workers, branches, scope, or approvals, and you cannot lower risk.
-When the owner's message is guidance on a task that is waiting for their decision (CONTEXT TASK marked "waiting for owner decision"), choose human_decision with that taskId.`;
+When the owner's message is guidance on a task that is waiting for their decision (CONTEXT TASK marked "waiting for owner decision"), choose human_decision with that taskId.
+When CONTEXT TASK is a finished result awaiting the owner's publish decision (status needs_human_approval, e.g. after a preview) and the owner asks for changes to it, choose human_decision with that taskId — it is a revision of that same task, not a new task.`;
 
 const TRANSPORT_CONTEXT_TEXT: Record<TransportStatusContext, string> = {
   waking: "the Agent was offline and is being woken; the message was queued",

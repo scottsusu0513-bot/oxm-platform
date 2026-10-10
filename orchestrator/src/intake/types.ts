@@ -84,6 +84,8 @@ export interface IntakeGoal {
   workArea?: "programming" | "visual";
   /** Decomposed request this part belongs to (combined review before the whole is accepted). */
   group?: { id: string; parts: readonly { area: "programming" | "visual"; objective: string }[] };
+  /** Explicit PR-only goal (no deployment); absent = production delivery. */
+  deliveryTarget?: "pull_request";
 }
 
 export type ClassificationPath = "deterministic" | "llm_fallback";
@@ -183,7 +185,7 @@ export type IntakeResult =
 export interface ApprovalNeededStatus {
   required: boolean;
   kind: ApprovalKind | null;
-  phase: "pre_execution" | "commit_publish" | "post_qa" | null;
+  phase: "pre_execution" | "commit_publish" | "post_qa" | "deploy" | null;
   bindingTarget: string | null;
   action: string | null;
 }
@@ -254,6 +256,13 @@ export interface AgentTaskStatus {
   /** Structured technical facts for an explicit owner request (presentation only). */
   details?: TaskTechnicalDetails;
   approval: ApprovalNeededStatus;
+  /** Owner-facing lifecycle phase ("completed" only after a verified terminal success). */
+  lifecyclePhase?: import("../domain/delivery").LifecyclePhase;
+  deliveryTarget?: import("../domain/types").DeliveryTarget;
+  /** Production delivery facts after CI (null before the deploy gate). */
+  delivery?: import("../scheduler/types").TaskDeliveryView | null;
+  /** Live preview of a UI task (null when none was offered). */
+  preview?: import("../scheduler/types").TaskPreviewView | null;
   lastMeaningfulAuditEvent: Pick<
     AuditEvent,
     "event" | "createdAt" | "fromState" | "toState"

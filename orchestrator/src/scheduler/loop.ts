@@ -3,6 +3,9 @@ import { BASE_BRANCH, type ActiveWork, type AssignedBranchPlan } from "../branch
 import { isValidBranchTaskId } from "../branches/naming";
 import { normalizePathSet } from "../branches/overlap";
 import { assertTransition, isTerminalState, type ApprovalPhase, type TransitionContext } from "../domain/taskState";
+import { deliveryTargetOf, deriveLifecyclePhase, judgeDeployment } from "../domain/delivery";
+import { deployApprovalBinding } from "../delivery/approval";
+import { DEPLOY_ACTION, DEPLOY_AUTHORIZATION, type DeliveryRecord, type DeployApprovalEvidence, type PreviewRecord, type PreviewResult } from "../delivery/types";
 import { TASK_CATEGORIES, checkMutability, type RiskLevel, type TaskMode, type TaskState, type WorkerKind } from "../domain/types";
 import { DEFAULT_POLL_POLICY, nextPollStep } from "../github/qa";
 import type { QaDecision } from "../github/types";
@@ -14,9 +17,9 @@ import { managerStep, type ManagerStep } from "../manager/lifecycle";
 import { TaskBaseError } from "../branches/taskBase";
 import { buildHumanEscalationReport, failureFingerprint, PROTECTED_AREAS, primaryFailureCode, repairOutcomeSummary } from "../manager/diagnosis";
 import { checkHumanDecisionBinding, humanDecisionResumeStep, normalizeHumanDecision } from "../manager/humanDecision";
-import { advanceRepairCounters, repairWorkerContract } from "../manager/repair";
+import { advanceRepairCounters, buildRepairRequest, repairWorkerContract } from "../manager/repair";
 import { gateTransition } from "../manager/sequencing";
-import type { ApprovalEvidenceState, ManagerDiagnosis, HumanDecisionRequest, HumanEscalationReport, ManagerValidation, RepairCounters, RepairCycleRecord, RepairPlanningContext, RepairRequest } from "../manager/types";
+import { UNVERIFIED_VALIDATION_STATUSES, type ApprovalEvidenceState, type ManagerDiagnosis, type HumanDecisionRequest, type HumanEscalationReport, type ManagerValidation, type RepairCounters, type RepairCycleRecord, type RepairPlanningContext, type RepairRequest } from "../manager/types";
 import { AVAILABILITY_WAIT_ERRORS, REPAIRABLE_STATES, TRANSIENT_WORKER_ERRORS, validateEvidence } from "../manager/validator";
 import { deriveEvidencePlan } from "../executive/evidencePlan";
 import { constraintSummary, deriveGuidanceConstraint, semanticGuidanceConstraint, type GuidanceConstraint } from "../executive/guidance";
@@ -84,14 +87,22 @@ import {
  *       (lease kept) -> bound human decision -> Manager consumes it as
  *       evidence -> fresh diagnosis (next round) -> same task/branch/worker
  *       repairs -> revalidation; or cancel
- *     accepted (no PR): commit/publish approval -> trusted commit -> safe push -> open PR -> QA
- *     QA final: validation -> qa_passed -> complete | human approval
+ *     accepted (no PR): [UI: live preview] -> commit/publish approval (or an Owner
+ *       revision: same task/branch/Worker repairs) -> trusted commit -> safe push -> open PR -> QA
+ *     QA final: validation -> qa_passed ->
+ *       production goal: Owner deploy approval (exact PR/head/CI binding) -> trusted merge ->
+ *         production deployment observed -> health check + smoke test -> complete
+ *         (deploy declined: closed_without_deploy; deployment failed / unverifiable: never complete)
+ *       PR-only goal: complete
  *     blocked: stop (failed) or replan marker
  *
  * Boundaries: the loop never reads source code, never runs a shell, never
- * calls an LLM, and has no merge/deploy/approve/close/force-push path. It
- * only reaches GitHub, git, workers, QA and the audit log through the
- * injected ports, and only with planner-approved plans and held leases.
+ * calls an LLM, and has no approve/close/force-push path. It merges ONLY
+ * through the injected trusted delivery port, ONLY after an Owner deploy
+ * approval bound to the exact evidence and re-bound to fresh PR/CI state; it
+ * never deploys itself (the platform deploys the merged commit, the loop only
+ * observes and verifies). It reaches GitHub, git, workers, QA, delivery,
+ * preview and the audit log only through injected ports.
  */
 
 export const DEFAULT_ORCHESTRATION_POLICY: OrchestrationPolicy = Object.freeze({
@@ -108,6 +119,8 @@ export const DEFAULT_ORCHESTRATION_POLICY: OrchestrationPolicy = Object.freeze({
   qaPoll: DEFAULT_POLL_POLICY,
   deepReviewEnabled: false as const,
   llmCallBudget: null,
+  completion: "production_verified",
+  deliveryWindows: Object.freeze({ receiveWindowMs: 20 * 60_000, rolloutWindowMs: 45 * 60_000, maxCheckFailures: 3 }),
 });
 
 const EXECUTABLE_THIS_PHASE: readonly WorkerKind[] = ["claude", "codex"];
@@ -120,7 +133,11 @@ export const APPROVAL_ACTIONS = {
   pre_execution: "start",
   commit_publish: COMMIT_PUBLISH_ACTION,
   post_qa: "complete_post_qa",
+  deploy: DEPLOY_ACTION,
 } as const;
+
+/** Visual / frontend work gets a live preview before publish approval. */
+const PREVIEW_CATEGORIES = new Set(["ui", "css", "layout", "visual_polish", "frontend_styling"]);
 
 interface TaskRecord {
   intake: TaskIntake;
@@ -177,9 +194,13 @@ interface TaskRecord {
    */
   gitMetadataRebind: GitMetadataEvidence | null;
   capabilities: Set<Capability>;
-  pendingSideEffect: "worker" | "commit" | "push" | "pr" | null;
+  pendingSideEffect: "worker" | "commit" | "push" | "pr" | "merge" | null;
   pendingSideEffectId: string | null;
   trustedApproval: Approval | null;
+  /** Production delivery after CI (deploy gate → merge → deployment → verification). */
+  delivery: DeliveryRecord | null;
+  /** Live preview of a UI task before publish approval. */
+  preview: PreviewRecord | null;
   approvalRequestedAt: IsoTimestamp | null;
   commitApprovalEvidence: CommitApprovalEvidence | null;
   paused: boolean;
@@ -386,6 +407,8 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       decisionDiagnosis: t.decisionDiagnosis ? structuredClone(t.decisionDiagnosis) : null,
       managerCalls: { ...t.managerCalls },
       groupDecision: t.groupDecision,
+      delivery: t.delivery ? structuredClone(t.delivery) : null,
+      preview: t.preview ? structuredClone(t.preview) : null,
     };
   }
 
@@ -458,6 +481,7 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
   }
 
   function releaseLease(t: TaskRecord): boolean {
+    stopPreview(t);
     if (!t.lease) return false;
     const released = ports.leases.release(t.lease).ok;
     t.lease = null;
@@ -471,8 +495,8 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       priority: t.priority.priority,
       state: t.state,
       status: t.status,
-      // A held group part has no workspace and no running work.
-      inFlight: t.plan !== null && !isTerminalStatus(t.status) && t.status !== "waiting_group",
+      // A held group part and a task in production delivery have no workspace and no running work.
+      inFlight: t.plan !== null && !isTerminalStatus(t.status) && t.status !== "waiting_group" && t.delivery === null,
       worker: t.worker,
       dependsOn: t.intake.dependsOn ?? [],
       workspaceId: t.intake.workspaceId,
@@ -486,7 +510,7 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
   function activeWork(): ActiveWork[] {
     const out: ActiveWork[] = [];
     for (const t of Array.from(recs.values())) {
-      if (!t.plan || isTerminalStatus(t.status) || t.status === "waiting_group") continue;
+      if (!t.plan || isTerminalStatus(t.status) || t.status === "waiting_group" || t.delivery !== null) continue;
       out.push({
         taskId: t.intake.taskId,
         lineageId: t.plan.lineageId,
@@ -597,7 +621,42 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
             leadTaskId: groupParts(t.intake.goal.group.id)[0]?.intake.taskId ?? t.intake.taskId,
           }
         : null,
+      lifecyclePhase: deriveLifecyclePhase({
+        state: t.state,
+        status: t.status,
+        mode: modeOf(t),
+        approvalPhase: t.approvalPhase,
+        deliveryStage: t.delivery?.stage ?? null,
+        previewStatus: t.preview?.status ?? null,
+        hasPr: t.pr !== null,
+        publishing: t.pendingSideEffect === "commit" || t.pendingSideEffect === "push" || t.pendingSideEffect === "pr",
+      }),
+      // The goal's own delivery target (a legacy PR-terminal policy does not turn it into a PR-only goal).
+      deliveryTarget: deliveryTargetOf(t.intake.goal),
+      delivery: t.delivery
+        ? {
+            stage: t.delivery.stage,
+            prNumber: t.delivery.prNumber,
+            headSha: t.delivery.headSha,
+            mergeSha: t.delivery.mergeSha,
+            deployStatus: t.delivery.deploy?.status ?? null,
+            deployCommitSha: t.delivery.deploy?.commitSha ?? null,
+            health: t.delivery.checks?.health ?? null,
+            smoke: t.delivery.checks?.smoke ?? null,
+            failure: t.delivery.failure,
+            observerMissing: t.delivery.observerMissing,
+            unverified: [...(t.delivery.evidence?.unverified ?? [])],
+            verifiedAt: t.delivery.verifiedAt,
+            productionHost: ports.delivery?.productionHost ?? null,
+          }
+        : null,
+      preview: t.preview ? { status: t.preview.status, url: t.preview.url, visibility: t.preview.visibility, access: t.preview.access, reason: t.preview.reason, updatedAt: t.preview.updatedAt } : null,
     });
+  }
+
+  /** PR-only goal (or a legacy PR-terminal policy): the PR itself is the terminal goal. */
+  function targetOf(t: TaskRecord): "production" | "pull_request" {
+    return policy.completion === "pull_request" ? "pull_request" : deliveryTargetOf(t.intake.goal);
   }
 
   // ------------------------------------------------------ terminal outcomes
@@ -750,7 +809,7 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       qa: null,
       qaPolls: 0,
       nextQaPollDelayMs: null,
-      approval: { pre_execution: "none", commit_publish: "none", post_qa: "none" },
+      approval: { pre_execution: "none", commit_publish: "none", post_qa: "none", deploy: "none" },
       approvalPhase: null,
       queueReason: null,
       blockingReason: null,
@@ -775,6 +834,8 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       pendingDiagnosis: null,
       pendingHandback: false,
       decisionDiagnosis: null,
+      delivery: null,
+      preview: null,
       // One GPT interpretation produced this task (a decomposed request counts it on its first part).
       managerCalls: { ...NO_CALLS, interpretation: task.goal && !task.groupRepairOf && (!task.goal.group || task.goal.group.parts[0]?.area === task.goal.workArea) ? 1 : 0 },
       groupDecision: false,
@@ -1733,6 +1794,11 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
   function finalizeGroup(groupId: string) {
     for (const t of groupParts(groupId)) {
       if (t.status !== "waiting_group") continue;
+      // A production part waits for its own deploy decision; only a PR-terminal part completes here.
+      if (t.state === "qa_passed" && needsProductionDelivery(t)) {
+        enterDeployApproval(t, t.state);
+        continue;
+      }
       t.status = "accepted";
       t.queueReason = null;
       audit(t, "manager_accepted", { reason: "combined review accepted the whole request" });
@@ -2094,10 +2160,17 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
           trigger: "missing_trusted_evidence",
         });
       case "complete_task":
-        move(t, "complete", from === "awaiting_approval" ? { approved: true, approvalPhase: "post_qa" } : {});
+        // CI passed: a production goal is not complete — the SAME task waits for the Owner's deploy decision.
+        if (needsProductionDelivery(t)) return enterDeployApproval(t, from);
+        move(t, "complete", { ...(from === "awaiting_approval" ? { approved: true, approvalPhase: "post_qa" as const } : {}), completion: "pull_request" });
         return accept(t, from);
       case "request_post_qa_approval":
+        // Production goal: the Owner's deploy approval is the post-QA gate for every risk level.
+        if (needsProductionDelivery(t)) return enterDeployApproval(t, from);
+        if (step.transition) move(t, step.transition);
+        return awaitApproval(t, "post_qa", step.validation.triggers.join(",") || "approval_required");
       case "await_human_approval": {
+        if (t.state === "qa_passed" && needsProductionDelivery(t)) return enterDeployApproval(t, from);
         if (step.transition) move(t, step.transition);
         const phase: ApprovalPhase = t.state === "awaiting_approval" ? "post_qa" : "pre_execution";
         return awaitApproval(t, phase, step.validation.triggers.join(",") || "approval_required");
@@ -2489,7 +2562,9 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     t.commitApprovalEvidence = evidence;
     t.approval.commit_publish = "pending";
     move(t, "awaiting_approval");
-    return awaitApproval(t, "commit_publish", "approval_required");
+    awaitApproval(t, "commit_publish", "approval_required");
+    // Visual work: the Owner can look at the running result (phone / desktop) before deciding to publish.
+    if (wantsPreview(t)) startPreview(t);
   }
 
   async function commitAndPush(t: TaskRecord, approval: Approval) {
@@ -2647,6 +2722,375 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     return evaluate(t); // still pending after the poll budget: the validator blocks (ci_incomplete)
   }
 
+  // ------------------------------------------------- production delivery
+
+  function needsProductionDelivery(t: TaskRecord): boolean {
+    return modeOf(t) === "change" && targetOf(t) === "production";
+  }
+
+  /** Sanitized merge + deploy evidence from trusted PR / QA state: CI passed on the exact published head. */
+  function deployEvidenceOf(t: TaskRecord, qa: QaDecision | null): DeployApprovalEvidence | null {
+    if (!t.pr || !t.receipt || !qa || qa.status !== "passed" || qa.prNumber !== t.pr.number || qa.headSha !== t.receipt.headSha || qa.checks.length === 0) return null;
+    return {
+      taskId: t.intake.taskId,
+      lineageId: t.lineageId,
+      prNumber: t.pr.number,
+      headSha: t.receipt.headSha,
+      baseBranch: "main",
+      ci: { status: "passed", checks: qa.checks.map((c) => ({ name: c.name, outcome: c.outcome })) },
+      risk: t.risk,
+      unverified: (t.record?.validations ?? []).filter((v) => v.status !== "passed" && UNVERIFIED_VALIDATION_STATUSES.includes(v.status)).map((v) => v.name),
+      action: DEPLOY_ACTION,
+      authorization: { ...DEPLOY_AUTHORIZATION },
+    };
+  }
+
+  /**
+   * CI passed on the published PR. The SAME task (same lineage, branch and PR) now waits for the Owner's
+   * merge + deploy decision; it is not complete. The workspace is released (the PR carries the work).
+   */
+  function enterDeployApproval(t: TaskRecord, from: TaskState) {
+    if (t.intake.goal?.group && groups.get(t.intake.goal.group.id)?.status !== "accepted") return holdForGroup(t, from);
+    const evidence = deployEvidenceOf(t, t.qa);
+    let binding: string | null = null;
+    try {
+      binding = evidence ? deployApprovalBinding(evidence) : null;
+    } catch {
+      binding = null;
+    }
+    if (!evidence || !binding) return block(t, "deploy evidence could not be established (CI must pass on the exact published head)", { terminal: true, trigger: "missing_trusted_evidence" });
+    t.delivery = {
+      target: "production",
+      stage: "awaiting_deploy_approval",
+      prNumber: evidence.prNumber,
+      headSha: evidence.headSha,
+      lineageId: t.lineageId,
+      evidence,
+      binding,
+      approvalId: null,
+      approvedAt: null,
+      mergeSha: null,
+      mergedAt: null,
+      deploy: null,
+      checks: null,
+      checkFailures: 0,
+      polls: 0,
+      verifiedAt: null,
+      failure: null,
+      observerMissing: false,
+    };
+    const freed = t.lease?.workspaceId ?? null;
+    releaseLease(t);
+    t.approval.deploy = "pending";
+    if (t.state !== "awaiting_approval") move(t, "awaiting_approval", { approvalPhase: "deploy" });
+    t.queueReason = null;
+    awaitApproval(t, "deploy", "deploy_approval_required");
+    if (freed) post({ type: "workspace_available", workspaceId: freed });
+  }
+
+  /** The Owner declined publication or deployment: closed without deployment — never "complete". */
+  function closeWithoutDeploy(t: TaskRecord, phase: "commit_publish" | "deploy") {
+    const from = t.state;
+    move(t, "closed_without_deploy", { declined: true, approvalPhase: phase });
+    t.status = "blocked";
+    t.approvalPhase = null;
+    t.approvalRequestedAt = null;
+    t.queueReason = null;
+    t.blockingReason = phase === "deploy" ? "owner declined deployment" : "owner declined publication";
+    if (t.delivery) t.delivery.stage = "closed_without_deploy";
+    escalate(t, "approval_rejected", "block");
+    const freed = t.lease?.workspaceId ?? null;
+    releaseLease(t);
+    audit(t, "task_closed_without_deploy", { from, to: t.state, reason: t.blockingReason });
+    post({ type: "dependency_completed", taskId: t.intake.taskId });
+    if (freed) post({ type: "workspace_available", workspaceId: freed });
+  }
+
+  function failDelivery(t: TaskRecord, stage: "deployment_failed" | "blocked", code: string, reason: string) {
+    if (t.delivery) {
+      t.delivery.stage = stage;
+      t.delivery.failure = { code, reason: reason.slice(0, 200) };
+    }
+    audit(t, "delivery_failed", { reason: `${code}: ${reason}` });
+    return block(t, `${stage === "deployment_failed" ? "deployment failed" : "delivery blocked"}: ${reason}`, { terminal: true, trigger: stage === "deployment_failed" ? "deployment_failed" : code });
+  }
+
+  /**
+   * Owner deploy approval. Re-binds against FRESH trusted state before any write: the PR is still open on
+   * the exact approved head and CI is still passed on it (same evidence binding). Only then the trusted
+   * layer merges that exact head. Neither the Worker nor the Manager can reach this path.
+   */
+  async function onDeployApproved(t: TaskRecord, approval: Approval) {
+    const d = t.delivery;
+    if (!d || !d.evidence || !d.binding) return block(t, "deploy evidence missing", { terminal: true, trigger: "missing_trusted_evidence" });
+    if (!ports.delivery || !ports.delivery.enabled) {
+      // Recoverable: the exact approval stays valid; the deploy runs once the capability is enabled.
+      d.failure = { code: "deploy_capability_disabled", reason: "owner-approved deploy is not enabled in this runtime" };
+      t.queueReason = "deploy approved, but merge + deploy is not enabled in this runtime";
+      audit(t, "delivery_unavailable", { reason: d.failure.code });
+      return;
+    }
+    let pr: Awaited<ReturnType<NonNullable<typeof ports.delivery>["prState"]>>;
+    let qa: QaDecision | null;
+    try {
+      pr = await ports.delivery.prState(d.prNumber);
+      qa = await ports.qa.read(d.prNumber);
+    } catch {
+      d.failure = { code: "delivery_state_unavailable", reason: "PR / CI state could not be re-read; nothing was merged" };
+      t.queueReason = d.failure.reason;
+      audit(t, "delivery_unavailable", { reason: d.failure.code });
+      return;
+    }
+    if (!pr || pr.state !== "open" || pr.merged) return failDelivery(t, "blocked", "pr_not_open", "the PR is no longer open; the deploy approval is void");
+    if (pr.headSha !== d.headSha) return failDelivery(t, "blocked", "pr_head_moved", "the PR head changed after the deploy approval; the approval is void");
+    const fresh = deployEvidenceOf(t, qa);
+    let freshBinding: string | null = null;
+    try {
+      freshBinding = fresh ? deployApprovalBinding(fresh) : null;
+    } catch {
+      freshBinding = null;
+    }
+    if (freshBinding !== d.binding) return failDelivery(t, "blocked", "deploy_approval_stale", "CI state changed after the deploy approval; the approval is void");
+    t.approval.deploy = "approved";
+    t.approvalPhase = null;
+    t.approvalRequestedAt = null;
+    t.queueReason = null;
+    d.failure = null;
+    d.approvalId = approval.id;
+    d.approvedAt = ports.now();
+    move(t, "deploying", { approved: true, approvalPhase: "deploy" });
+    t.status = "deploying";
+    d.stage = "merging";
+    t.capabilities.add("github_write");
+    t.pendingSideEffect = "merge";
+    t.pendingSideEffectId = d.headSha;
+    audit(t, "delivery_merge_requested", { reason: `PR #${d.prNumber}` });
+    persistOrThrow();
+    const merged = await ports.delivery.mergeApproved({ evidence: d.evidence, approval, binding: d.binding });
+    t.pendingSideEffect = null;
+    t.pendingSideEffectId = null;
+    if (!merged.ok) return failDelivery(t, "blocked", merged.error, `the approved PR could not be merged: ${merged.error.replace(/_/g, " ")}`);
+    d.mergeSha = merged.mergeSha;
+    d.mergedAt = ports.now();
+    d.stage = "deploying";
+    audit(t, "delivery_merged", { reason: `PR #${d.prNumber} merged` });
+    post({ type: "delivery_poll", taskId: t.intake.taskId });
+  }
+
+  /** Restart during the merge write: never repeat it; learn the outcome from GitHub. */
+  async function recoverMerge(t: TaskRecord) {
+    const d = t.delivery;
+    if (!d || !ports.delivery) return block(t, "restart found an indeterminate merge; refusing to repeat it", { terminal: true, trigger: "missing_trusted_evidence" });
+    const pr = await ports.delivery.prState(d.prNumber).catch(() => null);
+    t.pendingSideEffect = null;
+    t.pendingSideEffectId = null;
+    if (pr && pr.merged && pr.headSha === d.headSha && pr.mergeSha) {
+      d.mergeSha = pr.mergeSha;
+      d.mergedAt = d.mergedAt ?? ports.now();
+      d.stage = "deploying";
+      audit(t, "delivery_merged", { reason: `PR #${d.prNumber} merged; outcome recovered after restart` });
+      post({ type: "delivery_poll", taskId: t.intake.taskId });
+      return;
+    }
+    return failDelivery(t, "blocked", "merge_indeterminate", "the merge outcome could not be confirmed after a restart; nothing was repeated");
+  }
+
+  /**
+   * Production deployment observation (external timer). Completion requires the deployment of exactly
+   * the merged commit to be live and the production health check + smoke test to pass.
+   */
+  async function onDeliveryPoll(taskId: string) {
+    const t = recs.get(taskId);
+    const d = t?.delivery;
+    if (!t || !d || t.state !== "deploying" || t.status !== "deploying" || !d.mergeSha || t.pendingSideEffect !== null) return;
+    if (!ports.delivery) return;
+    d.polls++;
+    const w = policy.deliveryWindows;
+    const elapsedMs = Math.max(0, Date.parse(ports.now()) - Date.parse(d.mergedAt ?? ports.now()));
+    const observation = await ports.delivery.observeDeployment(d.mergeSha).catch(() => ({ observer: "unavailable" as const, deploy: null }));
+    d.observerMissing = observation.observer === "unconfigured";
+    if (observation.deploy) {
+      const changed = d.deploy?.id !== observation.deploy.id || d.deploy?.status !== observation.deploy.status;
+      d.deploy = { ...observation.deploy };
+      if (changed) audit(t, "delivery_deploy_observed", { reason: `${observation.deploy.status}` });
+    }
+    const judge = (checks: Awaited<ReturnType<NonNullable<typeof ports.delivery>["verifyProduction"]>> | null) =>
+      judgeDeployment({ mergeSha: d.mergeSha!, observation, checks, priorCheckFailures: d.checkFailures, maxCheckFailures: w.maxCheckFailures, elapsedMs, receiveWindowMs: w.receiveWindowMs, rolloutWindowMs: w.rolloutWindowMs });
+    let verdict = judge(null);
+    if (verdict.kind === "verify") {
+      d.stage = "production_verifying";
+      const checks = await ports.delivery.verifyProduction().catch(() => ({ health: { ok: false, detail: "verification failed to run" }, smoke: { ok: false, detail: "verification failed to run" } }));
+      d.checks = checks;
+      verdict = judge(checks);
+    }
+    switch (verdict.kind) {
+      case "waiting":
+      case "unobservable":
+        d.stage = "deploying";
+        t.queueReason = verdict.reason;
+        if (verdict.kind === "unobservable" && d.failure?.code !== verdict.code) {
+          d.failure = { code: verdict.code, reason: verdict.reason };
+          audit(t, "delivery_unavailable", { reason: verdict.code });
+        }
+        return;
+      case "verify":
+      case "retry_checks":
+        d.stage = "production_verifying";
+        d.checkFailures++;
+        t.queueReason = verdict.reason;
+        return;
+      case "verified": {
+        d.stage = "production_verified";
+        d.verifiedAt = ports.now();
+        d.failure = null;
+        t.queueReason = null;
+        audit(t, "delivery_production_verified", { reason: verdict.reason });
+        move(t, "complete", { completion: "production_verified" });
+        return accept(t, "deploying");
+      }
+      case "deployment_failed":
+        return failDelivery(t, "deployment_failed", verdict.code, verdict.reason);
+      case "blocked":
+        return failDelivery(t, "blocked", verdict.code, verdict.reason);
+    }
+  }
+
+  // --------------------------------------------------------------- preview
+
+  function wantsPreview(t: TaskRecord): boolean {
+    return Boolean(ports.preview) && modeOf(t) === "change" && (t.workArea === "visual" || PREVIEW_CATEGORIES.has(t.intake.category));
+  }
+
+  const previewResults = new Map<string, PreviewResult>();
+
+  /** Starts (or reuses) the workspace preview; the result arrives as preview_updated. Never blocks the gate. */
+  function startPreview(t: TaskRecord) {
+    if (!ports.preview || !t.plan) return;
+    const requestId = (t.preview?.requestId ?? 0) + 1;
+    const taskId = t.intake.taskId;
+    t.preview = { status: "starting", requestId, url: null, port: null, visibility: null, access: null, reason: null, updatedAt: ports.now() };
+    audit(t, "preview_requested");
+    const done = ports.preview
+      .ensure({ taskId, branch: t.plan.branch })
+      .catch((): PreviewResult => ({ status: "unavailable", url: null, port: null, visibility: null, access: null, reason: "preview_failed", reused: false }))
+      .then((r) => {
+        previewResults.set(`${taskId}#${requestId}`, r);
+        post({ type: "preview_updated", taskId, requestId });
+      });
+    workerCompletions.add(done);
+    void done.finally(() => workerCompletions.delete(done));
+  }
+
+  function onPreviewUpdated(taskId: string, requestId: number) {
+    const t = recs.get(taskId);
+    const key = `${taskId}#${requestId}`;
+    const r = previewResults.get(key);
+    previewResults.delete(key);
+    if (!t || !r || !t.preview || t.preview.requestId !== requestId || t.preview.status !== "starting") return;
+    // The task already left the publish gate (published / cancelled): the preview has no audience.
+    if (t.status !== "needs_human_approval" || t.approvalPhase !== "commit_publish") return stopPreview(t);
+    t.preview = { status: r.status, requestId, url: r.url, port: r.port, visibility: r.visibility, access: r.access, reason: r.reason, updatedAt: ports.now() };
+    // A preview failure never fails the implementation: the Owner is told it is unavailable and still decides.
+    audit(t, r.status === "ready" ? "preview_ready" : "preview_unavailable", { reason: r.status === "ready" ? `port ${r.port ?? "?"} (${r.visibility ?? "unknown"})${r.reused ? " reused" : ""}` : r.reason });
+  }
+
+  /** keepServer: the task keeps the workspace (Owner revision); the dev server keeps serving it for the next preview. */
+  function stopPreview(t: TaskRecord, keepServer = false) {
+    if (!t.preview || t.preview.status === "stopped") return;
+    t.preview = { ...t.preview, status: "stopped", updatedAt: ports.now() };
+    if (ports.preview && !keepServer) void ports.preview.release(t.intake.taskId).catch(() => undefined);
+  }
+
+  // ------------------------------------------------------- owner revision
+
+  /**
+   * The Owner asks for changes to a result that awaits publish approval (typically after the preview).
+   * Like a human decision it is untrusted input: normalized, de-duplicated, bound to the exact task branch
+   * and workspace HEAD, interpreted by the GPT Manager into a durable constraint, and consumed as failed
+   * goal evidence so the SAME task / branch / Worker repairs it. It grants no approval.
+   */
+  async function onPublishRevision(taskId: string, raw: unknown) {
+    const t = recs.get(taskId);
+    if (!t) return;
+    const normalized = normalizeHumanDecision(raw);
+    const reject = (reason: string, d: { decisionId: string; escalationId: string } | null) => {
+      t.humanDecisionLog.push({ decisionId: d?.decisionId ?? null, escalationId: d?.escalationId ?? null, outcome: "rejected", reason: reason.slice(0, 200), at: ports.now() });
+      audit(t, "publish_revision_rejected", { reason });
+    };
+    if (!normalized.ok) return reject(normalized.reason, null);
+    const d = normalized.decision;
+    if (t.consumedHumanDecisionIds.includes(d.decisionId)) return;
+    if (d.taskId !== taskId) return reject("revision belongs to another task", d);
+    if (t.state !== "awaiting_approval" || t.status !== "needs_human_approval" || t.approvalPhase !== "commit_publish") return reject(`task is ${t.status}, not awaiting publish approval`, d);
+    if (!t.lease || !t.plan || !t.lastResult || !t.record || !t.worker || !t.contract?.expectedHeadSha) return reject("task state is incomplete", d);
+    if (d.branch !== t.plan.branch || d.expectedHeadSha !== t.contract.expectedHeadSha) return reject("revision does not match the task branch / HEAD", d);
+    if (t.humanRound - 1 >= policy.maxHumanResumes) return reject("revision budget exhausted; decide publish or cancel", d);
+    const head = await ports.workspace.head(t.lease);
+    if (!head || head.branch !== t.plan.branch || head.headSha !== t.contract.expectedHeadSha) return reject("workspace no longer matches the task branch / HEAD", d);
+    const saved = { status: t.status, queueReason: t.queueReason };
+    const constraint = await interpretOwnerGuidance(t, d, t.humanRound + 1);
+    if (!constraint) {
+      // The GPT Manager could not interpret it: nothing consumed; the publish gate stays exactly as it was.
+      t.status = saved.status;
+      t.queueReason = saved.queueReason;
+      return;
+    }
+    t.consumedHumanDecisionIds.push(d.decisionId);
+    t.guidanceConstraints.push(constraint);
+    // The Owner's verdict on the delivered result: the goal is not met as delivered.
+    const goalIds = t.intake.acceptanceCriteria.filter((c) => c.kind === "goal").map((c) => c.id);
+    const target = goalIds[0] ?? t.intake.acceptanceCriteria[0]?.id;
+    t.record = {
+      ...t.record,
+      acceptance: t.record.acceptance.map((a) => (a.criterionId === target ? { ...a, status: "failed" as const, evidenceType: "human" as const, reference: d.decisionId, summary: `Owner requested a revision: ${d.guidance}`.slice(0, 400) } : a)),
+    };
+    stopPreview(t, true);
+    t.approval.commit_publish = "none";
+    t.approvalPhase = null;
+    t.approvalRequestedAt = null;
+    t.commitApprovalEvidence = null;
+    move(t, "running", { revision: true, approvalPhase: "commit_publish" });
+    t.status = "running";
+    t.humanRound++;
+    t.repair = { attempt: 0, prior: [] };
+    t.humanDecisionLog.push({ decisionId: d.decisionId, escalationId: d.escalationId, outcome: "accepted", reason: `owner revision; round ${t.humanRound}`, at: ports.now() });
+    audit(t, "publish_revision_accepted", { reason: `round ${t.humanRound}` });
+    escalate(t, `owner_revision:${d.decisionId}`, "return_to_worker");
+    // The Owner's revision is the human evidence that opens this new repair round.
+    const human = { decisionId: d.decisionId, escalationId: d.escalationId, round: t.humanRound, kind: d.kind, guidance: d.guidance, decidedBy: d.decidedBy };
+    // Anchor: the previous round's last diagnosis, or the Manager's acceptance of the result the Owner reviewed.
+    const lastCycle = t.repairCycles.filter((c) => c.round === t.humanRound - 1).at(-1);
+    const anchor = lastCycle
+      ? { diagnosis: lastCycle.diagnosis, repairOutcome: repairOutcomeSummary(lastCycle) }
+      : {
+          diagnosis: {
+            kind: "manager_diagnosis" as const,
+            taskId,
+            round: t.humanRound - 1,
+            cycle: 0,
+            phase: "local_validation" as const,
+            headSha: t.contract.expectedHeadSha,
+            failureCode: "owner_revision_requested",
+            failingCheck: "owner_review",
+            expected: "the Owner accepts the delivered result",
+            actual: "the Owner asked for changes after reviewing it",
+            rootCause: "The Manager accepted the result; the Owner's review asked for a revision.",
+            requiredFix: d.guidance,
+            protectedAreas: [...PROTECTED_AREAS],
+            acceptanceCriteria: [],
+            evidenceUsed: ["owner_review"],
+            fingerprint: "owner_review=owner_revision_requested",
+            findings: [],
+            previous: null,
+            humanDecision: null,
+          },
+          repairOutcome: "accepted by the Manager; the Owner requested a revision",
+        };
+    const built = buildRepairRequest(evidenceFor(t, "pre_push"), anchor, { round: t.humanRound, human }, planningContext(t));
+    if (!built.ok) return block(t, `owner revision could not be planned as a repair (${built.reason})`, { terminal: true, trigger: "task_state_blocked" });
+    return planRepair(t, built.request, "pre_push");
+  }
+
   // ------------------------------------------------------------ approvals
 
   async function approvalCheck(t: TaskRecord, phase: ApprovalPhase) {
@@ -2660,6 +3104,18 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
         requestedAction: APPROVAL_ACTIONS.commit_publish,
         bindingShaOrActionId: commitApprovalBinding(evidence),
         evidence,
+      };
+    }
+    if (phase === "deploy") {
+      const d = t.delivery;
+      if (!d || !d.evidence || !d.binding || d.stage !== "awaiting_deploy_approval") return null;
+      return {
+        taskId: t.intake.taskId,
+        phase,
+        kind: "deploy" as const,
+        requestedAction: APPROVAL_ACTIONS.deploy,
+        bindingShaOrActionId: d.binding,
+        deployEvidence: structuredClone(d.evidence),
       };
     }
     if (phase === "post_qa") {
@@ -2731,6 +3187,8 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     t.approval[phase] = resolved.state;
     if (resolved.state === "rejected") {
       t.approval[phase] = "rejected";
+      // Declining to publish / deploy is a decision, not a failure: the task closes without deployment.
+      if (phase === "commit_publish" || phase === "deploy") return closeWithoutDeploy(t, phase);
       return block(t, `${phase} approval rejected`, {
         terminal: true,
         trigger: "approval_rejected",
@@ -2761,6 +3219,7 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       t.status = "running";
       return commitAndPush(t, resolved.approval);
     }
+    if (phase === "deploy") return onDeployApproved(t, resolved.approval);
     t.trustedApproval = resolved.approval;
     t.approvalPhase = null;
     t.approvalRequestedAt = null;
@@ -2827,6 +3286,12 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
         return onAvailabilityCheck(e.probeAfterMs ?? null);
       case "combined_review":
         return onCombinedReview(e.groupId);
+      case "delivery_poll":
+        return onDeliveryPoll(e.taskId);
+      case "preview_updated":
+        return onPreviewUpdated(e.taskId, e.requestId);
+      case "publish_revision_requested":
+        return onPublishRevision(e.taskId, e.decision);
     }
   }
 
@@ -2914,7 +3379,8 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
     if (saved.pr && saved.prState !== "open") throw new Error("[scheduler] persisted PR is not open");
     const plan = restorePlan(saved);
     let lease: WorkspaceLease | null = null;
-    if (plan && !isTerminalStatus(saved.status)) {
+    // A task in production delivery (deploy gate / deploying) or held for its group owns no workspace.
+    if (plan && !isTerminalStatus(saved.status) && !saved.delivery && saved.status !== "waiting_group") {
       const acquired = ports.leases.acquire({
         workspaceId: saved.intake.workspaceId,
         taskId: saved.intake.taskId,
@@ -2963,7 +3429,8 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       qa: saved.qa ? structuredClone(saved.qa) : null,
       qaPolls: saved.qaPolls,
       nextQaPollDelayMs: saved.nextQaPollDelayMs,
-      approval: structuredClone(saved.approval),
+      // Older checkpoints have no deploy gate state.
+      approval: { ...structuredClone(saved.approval), deploy: (saved.approval as Partial<typeof saved.approval>).deploy ?? "none" },
       approvalPhase: saved.approvalPhase,
       queueReason: saved.queueReason,
       blockingReason: saved.blockingReason,
@@ -2994,7 +3461,45 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       decisionDiagnosis: saved.decisionDiagnosis ? structuredClone(saved.decisionDiagnosis) : null,
       managerCalls: { ...NO_CALLS, ...(saved.managerCalls ?? {}) },
       groupDecision: saved.groupDecision === true,
+      delivery: saved.delivery ? structuredClone(saved.delivery) : null,
+      preview: saved.preview ? structuredClone(saved.preview) : null,
     };
+  }
+
+  /**
+   * A checkpoint written before production delivery existed recorded "complete" when the PR passed CI.
+   * Under the current semantics that task is NOT complete: its PR still awaits the Owner's deploy decision.
+   */
+  function legacyPrCompletion(t: TaskRecord, saved: PersistedTaskRecord | undefined): boolean {
+    return (
+      saved !== undefined &&
+      !("delivery" in saved) &&
+      t.state === "complete" &&
+      t.status === "accepted" &&
+      t.delivery === null &&
+      needsProductionDelivery(t) &&
+      t.pr !== null &&
+      t.receipt !== null &&
+      t.qa?.status === "passed" &&
+      t.qa.headSha === t.receipt.headSha &&
+      !t.intake.goal?.group
+    );
+  }
+
+  /**
+   * Reopens such a task at its deploy gate (same task, lineage, branch and PR) — only while GitHub still
+   * shows that PR open on exactly the CI-passed head. Nothing is merged or approved here: the Owner is
+   * asked. A merged / closed / moved PR leaves the historical record untouched.
+   */
+  async function reopenLegacyCompletion(t: TaskRecord) {
+    if (!ports.delivery || !t.pr || !t.receipt) return;
+    const pr = await ports.delivery.prState(t.pr.number).catch(() => null);
+    if (!pr || pr.state !== "open" || pr.merged || pr.headSha !== t.receipt.headSha || pr.baseRef !== "main") return;
+    // Migration of a record written under the old completion semantics (not a lifecycle transition).
+    t.state = "qa_passed";
+    t.status = "running";
+    audit(t, "manager_accepted", { from: "complete", to: "qa_passed", reason: "legacy PR completion reopened at the deploy gate" });
+    enterDeployApproval(t, "qa_passed");
   }
 
   async function resume() {
@@ -3014,8 +3519,24 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
         recs.set(t.intake.taskId, t);
       }
       for (const t of Array.from(recs.values()).sort((a, b) => a.seq - b.seq)) {
+        if (legacyPrCompletion(t, checkpoint.tasks.find((x) => x.intake.taskId === t.intake.taskId))) await reopenLegacyCompletion(t);
+        if (isTerminalStatus(t.status)) continue;
+        // Production delivery resumes from its durable record: a merge interrupted by the restart is never
+        // repeated (its outcome is read back from GitHub); a pending deployment is observed again.
+        if (t.status === "deploying") {
+          if (t.pendingSideEffect === "merge") await recoverMerge(t);
+          else post({ type: "delivery_poll", taskId: t.intake.taskId });
+          continue;
+        }
+        if (t.status === "needs_human_approval") {
+          // An Owner deploy approval recorded before the restart (e.g. capability enabled since) is re-checked.
+          if (t.approvalPhase === "deploy") post({ type: "approval_granted", taskId: t.intake.taskId, phase: "deploy" });
+          // The publish gate's preview is re-validated (reused if still serving, rebuilt otherwise).
+          if (t.approvalPhase === "commit_publish" && t.preview && (t.preview.status === "starting" || t.preview.status === "ready") && wantsPreview(t)) startPreview(t);
+          continue;
+        }
         // A task paused for Worker availability stays paused until a trusted availability signal or its reset time.
-        if (isTerminalStatus(t.status) || t.status === "needs_human_approval" || t.status === "needs_human_decision" || t.status === "qa_pending" || t.status === "waiting_worker_quota" || t.status === "waiting_worker_availability") continue;
+        if (t.status === "needs_human_decision" || t.status === "qa_pending" || t.status === "waiting_worker_quota" || t.status === "waiting_worker_availability") continue;
         // Guidance could not be interpreted before the restart.  Its bound owner
         // decision remains open, but no submitted guidance was retained; wait for
         // the owner to resend after the GPT Manager is available.

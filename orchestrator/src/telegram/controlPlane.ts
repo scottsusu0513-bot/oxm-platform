@@ -183,10 +183,12 @@ export function createTelegramControlPlane(deps: TelegramControlPlaneDeps): Tele
         return reply(await deps.service.handleReply(parsed.inbound));
       case "action": {
         const result = await deps.service.handleAction(parsed.inbound);
-        await quiet(() => deps.client.answerCallbackQuery({ callbackQueryId: parsed.callbackQueryId, text: result.message || "Confirmation sent." }, controller.signal));
+        // Acknowledge the tap WITHOUT text: the one owner-facing reply is the chat message below
+        // (a toast with the same text was a second, duplicate reply on phones).
+        await quiet(() => deps.client.answerCallbackQuery({ callbackQueryId: parsed.callbackQueryId }, controller.signal));
         const notice = deps.ledger.byRef(parsed.inbound.ref);
         const final = ["approved", "rejected", "cancelled", "kept", "stale", "duplicate"].includes(result.outcome);
-        const onApprovalOrConfirm = notice && (notice.kind === "commit_publish_approval" || notice.kind === "start_approval" || notice.kind === "cancel_confirmation");
+        const onApprovalOrConfirm = notice && (notice.kind === "commit_publish_approval" || notice.kind === "start_approval" || notice.kind === "deploy_approval" || notice.kind === "cancel_confirmation");
         if (final && onApprovalOrConfirm && notice.deliveryRef && /^[0-9]+$/.test(notice.deliveryRef)) {
           const messageId = Number(notice.deliveryRef);
           await quiet(() => deps.client.removeButtons({ chatId: parsed.chatId, messageId }, controller.signal));

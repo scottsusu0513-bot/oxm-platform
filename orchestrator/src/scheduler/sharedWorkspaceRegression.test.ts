@@ -250,7 +250,7 @@ describe("regression t261009-a536e5 — Manager Loop: accept, report honestly, p
     expect(text).toContain("client/index.ts");
     expect(text).toMatch(/smoke、tests、typecheck 因環境問題/);
     expect(text).toContain("不會包含在這次發布中");
-    expect(text).toContain("不會合併，也不會部署");
+    expect(text).toContain("這個批准不包含合併或部署");
   });
 
   it("publication happens only after an explicit approval bound to this exact reviewed result; foreign changes are never committed", async () => {

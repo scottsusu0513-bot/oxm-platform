@@ -86,7 +86,7 @@ export interface AuditHumanInteractionLedger extends HumanInteractionLedger {
   recordManagerText(entry: { noticeId: string; text: string; status: string }): void;
 }
 
-const NOTICE_KINDS = new Set<NoticeKind>(["human_decision", "commit_publish_approval", "start_approval", "milestone", "cancel_confirmation"]);
+const NOTICE_KINDS = new Set<NoticeKind>(["human_decision", "commit_publish_approval", "start_approval", "deploy_approval", "milestone", "cancel_confirmation"]);
 const str = (v: unknown) => typeof v === "string" && v !== "";
 
 /**

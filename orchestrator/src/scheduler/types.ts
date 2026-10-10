@@ -15,8 +15,10 @@
  */
 import type { GitMetadataEvidence } from "../workers/gitMetadataPolicy";
 import type { AssignedBranchPlan, BranchLineage } from "../branches/types";
-import type { ApprovalPhase } from "../domain/taskState";
-import type { ClassificationResult, RiskLevel, RoutingDecision, TaskAction, TaskCategory, TaskGoal, TaskMode, TaskState, WorkerKind } from "../domain/types";
+import type { ApprovalPhase, CompletionBasis } from "../domain/taskState";
+import type { DeliveryStage, LifecyclePhase, PreviewStatus } from "../domain/delivery";
+import type { DeliveryPort, DeliveryRecord, DeployApprovalEvidence, PreviewPort, PreviewRecord } from "../delivery/types";
+import type { ClassificationResult, DeliveryTarget, RiskLevel, RoutingDecision, TaskAction, TaskCategory, TaskGoal, TaskMode, TaskState, WorkerKind } from "../domain/types";
 import type { PullRequestState, QaDecision } from "../github/types";
 import type { PollPolicy } from "../github/qa";
 import type { BranchCreation, GitHubWriteClient, PushReceipt, TrustedPullRequest } from "../githubWrite/types";
@@ -119,6 +121,11 @@ export const ORCHESTRATION_STATUSES = [
    * the GPT Manager's combined review / cross-part repair. Holds no workspace lease; not terminal.
    */
   "waiting_group",
+  /**
+   * The Owner approved merge + deploy: the trusted layer merged the exact approved head and the task
+   * waits for the production deployment of that commit and its verification. Holds no workspace.
+   */
+  "deploying",
   "accepted",
   "blocked",
 ] as const;
@@ -254,6 +261,14 @@ export interface OrchestrationPolicy {
   deepReviewEnabled: false;
   /** Placeholder for a future LLM call budget; the loop itself makes no LLM calls. */
   llmCallBudget: number | null;
+  /**
+   * What completes a change task. production_verified (default, production): CI-passed PR → Owner
+   * deploy approval → merge → production deployment → production verification. pull_request: legacy /
+   * smoke simulations whose terminal goal is the PR itself (a task's own PR-only goal also completes there).
+   */
+  completion: CompletionBasis;
+  /** Production deployment observation bounds (merge → deployment received → rollout → checks). */
+  deliveryWindows: { receiveWindowMs: number; rolloutWindowMs: number; maxCheckFailures: number };
 }
 
 export const MANAGER_MODES = ["gpt_required", "deterministic_fixture"] as const;
@@ -398,7 +413,17 @@ export type OrchestrationEvent =
    */
   | { type: "availability_check"; probeAfterMs?: number }
   /** Run (or retry) the GPT Manager's final combined review of a decomposed request. */
-  | { type: "combined_review"; groupId: string };
+  | { type: "combined_review"; groupId: string }
+  /** External timer: observe the production deployment of an Owner-approved, merged task (read-only). */
+  | { type: "delivery_poll"; taskId: string }
+  /** Internal: the preview port finished request `requestId`; the result is taken from the loop's own record. */
+  | { type: "preview_updated"; taskId: string; requestId: number }
+  /**
+   * Untrusted Owner revision of a result that awaits publish approval (e.g. after the preview):
+   * normalized, bound and consumed like a human decision; the SAME task, branch and Worker repair it.
+   * Never an approval.
+   */
+  | { type: "publish_revision_requested"; taskId: string; decision: unknown };
 
 export type OrchestrationEventType = OrchestrationEvent["type"];
 
@@ -491,6 +516,8 @@ export interface ApprovalCheck {
   evidence?: CommitApprovalEvidence;
   /** Structured, sanitized evidence for a red-risk pre-execution approval UI. */
   startEvidence?: StartApprovalEvidence;
+  /** Exact merge + deploy evidence of a deploy approval (its canonical hash is the binding). */
+  deployEvidence?: DeployApprovalEvidence;
 }
 
 export interface TrustedApprovalResult {
@@ -505,7 +532,7 @@ export interface ApprovalPort {
   resolve(check: ApprovalCheck): Promise<TrustedApprovalResult>;
 }
 
-export type PendingSideEffect = "worker" | "commit" | "push" | "pr" | null;
+export type PendingSideEffect = "worker" | "commit" | "push" | "pr" | "merge" | null;
 
 /**
  * Versioned, sanitized Manager Loop checkpoint. This contains structured
@@ -606,6 +633,10 @@ export interface PersistedTaskRecord {
   decisionDiagnosis?: ManagerDiagnosis | null;
   managerCalls?: ManagerCallCounts;
   groupDecision?: boolean;
+  /** Production delivery after CI (optional: absent in older checkpoints and before the deploy gate). */
+  delivery?: DeliveryRecord | null;
+  /** Live preview of a UI task before publish approval (optional in older checkpoints). */
+  preview?: PreviewRecord | null;
 }
 
 /** Final combined review of a decomposed request (group of Claude + Codex parts). */
@@ -650,7 +681,7 @@ export interface OrchestrationPersistencePort {
 }
 
 export interface OrchestrationPorts {
-  /** Narrow write client: no merge, approve, close, force push or main push exist on it. */
+  /** Narrow write client: no merge, approve, close, force push or main push exist on it (merge lives only in `delivery`). */
   github: Pick<GitHubWriteClient, "createTaskBranch" | "pushTaskBranch" | "openPullRequest">;
   leases: WorkspaceLeaseRegistry;
   workspace: WorkspacePort;
@@ -667,6 +698,13 @@ export interface OrchestrationPorts {
   manager?: ManagerReasoningPort;
   /** Configured deployments provide it; absent in isolated simulations (the workspace is never moved back). */
   runtimeWorkspace?: RuntimeWorkspacePort;
+  /**
+   * Trusted merge / production deployment / verification. Called ONLY on the deploy gate after an
+   * Owner deploy approval bound to the exact evidence. Absent: deploy approvals cannot be executed.
+   */
+  delivery?: DeliveryPort;
+  /** Codespaces live preview of UI tasks before publish approval. Absent: no preview offered. */
+  preview?: PreviewPort;
   /** Optional only for backwards-compatible local simulations; configured deployments provide it. */
   lifecycle?: {
     reconcile(work: LifecycleWorkload, now: IsoTimestamp): Promise<LifecycleOutcome>;
@@ -760,4 +798,38 @@ export interface TaskSnapshot {
   } | null;
   /** Classified Git metadata delta (components, classes, key names; never values). null: nothing changed. */
   gitMetadata?: GitMetadataEvidence | null;
+  /** Owner-facing lifecycle phase (completed only after a verified terminal success). */
+  lifecyclePhase: LifecyclePhase;
+  /** What completes this task: the production deployment by default, or the PR itself for a PR-only goal / legacy policy. */
+  deliveryTarget: DeliveryTarget;
+  /** Production delivery facts after CI (null before the deploy gate). */
+  delivery: TaskDeliveryView | null;
+  /** Live preview of a UI task (null when none was offered). */
+  preview: TaskPreviewView | null;
+}
+
+export interface TaskDeliveryView {
+  stage: DeliveryStage;
+  prNumber: number;
+  headSha: string;
+  mergeSha: string | null;
+  deployStatus: string | null;
+  deployCommitSha: string | null;
+  health: { ok: boolean; detail: string } | null;
+  smoke: { ok: boolean; detail: string } | null;
+  failure: { code: string; reason: string } | null;
+  observerMissing: boolean;
+  unverified: string[];
+  verifiedAt: string | null;
+  /** Production site host (from the trusted delivery configuration). */
+  productionHost: string | null;
+}
+
+export interface TaskPreviewView {
+  status: PreviewStatus;
+  url: string | null;
+  visibility: "private" | "org" | "public" | null;
+  access: "github_sign_in" | "public" | null;
+  reason: string | null;
+  updatedAt: string;
 }

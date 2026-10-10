@@ -119,6 +119,8 @@ export function createFakeGatewayEvents(): GatewayControlEventPort & {
       events.push({ type: "task_re_evaluate_requested", taskId, phase, decision }),
     humanDecisionSubmitted: (taskId, humanDecision) =>
       events.push({ type: "human_decision_submitted", taskId, humanDecision: structuredClone(humanDecision) }),
+    publishRevisionRequested: (taskId, humanDecision) =>
+      events.push({ type: "publish_revision_requested", taskId, humanDecision: structuredClone(humanDecision) }),
   };
 }
 

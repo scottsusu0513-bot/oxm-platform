@@ -24,8 +24,11 @@ const ALLOWED_RUNTIME = new Set([
   "../branches/planner",
   "../branches/taskBase",
   "../branches/types",
+  "../domain/delivery",
   "../domain/taskState",
   "../domain/types",
+  "../delivery/approval",
+  "../delivery/types",
   "../executive/evidencePlan",
   "../executive/guidance",
   "../executive/handoff",
@@ -36,6 +39,7 @@ const ALLOWED_RUNTIME = new Set([
   "../manager/diagnosis",
   "../manager/humanDecision",
   "../manager/lifecycle",
+  "../manager/types",
   "../manager/managerPlan",
   "../manager/constraintCheck",
   "../manager/repair",
@@ -97,14 +101,30 @@ describe("scheduler / manager-loop boundaries", () => {
     }
   });
 
-  it("has no merge, approve, close, deploy, force-push, main-push, or production-DB path", () => {
+  it("has no merge, approve, close, deploy, force-push, main-push, or production-DB path of its own", () => {
+    // The ONLY merge the loop can reach is the injected trusted delivery port, exactly once, on the
+    // Owner deploy gate (see the next test). Pure deploy-evidence helpers are not side effects.
+    const allowed = /ports\.delivery\.mergeApproved\(|\bdeployApprovalBinding\(|\bdeployEvidenceOf\(/g;
     for (const f of all) {
-      const src = code(f);
+      const src = code(f).replace(allowed, "");
       expect(src, f).not.toMatch(/\bmerge\w*\s*\(|mergePullRequest|approvePullRequest|closePullRequest|\.close\s*\(|\bdeploy\w*\s*\(/i);
       expect(src, f).not.toMatch(/--force|force\s*:\s*true|forcePush|\+refs\//);
       expect(src, f).not.toMatch(/pushBranch\s*\(\s*["'](main|master)["']|refs\/heads\/(main|master)/);
       expect(src, f).not.toMatch(/drizzle|mysql|DATABASE_URL|\.\.\/\.\.\/server\//);
     }
+  });
+
+  it("merges only through the trusted delivery port, once, after an Owner deploy approval of the exact evidence", () => {
+    const loop = code("loop.ts");
+    expect([...loop.matchAll(/ports\.delivery\.mergeApproved\(/g)]).toHaveLength(1);
+    const body = loop.slice(loop.indexOf("async function onDeployApproved("), loop.indexOf("async function recoverMerge("));
+    const order = ["ports.delivery.enabled", "ports.delivery.prState(", "ports.qa.read(", "deployApprovalBinding(fresh)", 'move(t, "deploying", { approved: true, approvalPhase: "deploy" })', 'pendingSideEffect = "merge"', "persistOrThrow()", "ports.delivery.mergeApproved("].map((x) => body.indexOf(x));
+    expect(order.every((i) => i >= 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    // The deploy approval path is reached only from a resolved, approved deploy-phase approval.
+    expect(loop).toMatch(/if \(phase === "deploy"\) return onDeployApproved\(t, resolved\.approval\);/);
+    // Completion after delivery only with the production_verified basis.
+    expect([...loop.matchAll(/move\(t, "complete", \{ completion: "production_verified" \}\)/g)]).toHaveLength(1);
   });
 
   it("never invents a branch name: branches come only from planBranch", () => {

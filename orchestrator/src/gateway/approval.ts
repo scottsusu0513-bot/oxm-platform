@@ -64,11 +64,13 @@ export function validateApprovalDecisionRequest(
     if (!SAFE_KEY.test(String(input[key] ?? ""))) invalid(`${key} is malformed`);
   }
   const kind = input.kind;
-  if (kind !== "start" && kind !== "commit_publish" && kind !== "merge" && kind !== "execute_red_action")
+  if (kind !== "start" && kind !== "commit_publish" && kind !== "merge" && kind !== "execute_red_action" && kind !== "deploy")
     invalid("kind is unsupported");
   const phase = input.phase;
-  if (phase !== "pre_execution" && phase !== "commit_publish" && phase !== "post_qa")
+  if (phase !== "pre_execution" && phase !== "commit_publish" && phase !== "post_qa" && phase !== "deploy")
     invalid("phase is unsupported");
+  // The deploy scope is its own kind AND phase; it can never be confused with publish.
+  if ((kind === "deploy") !== (phase === "deploy")) invalid("deploy kind and phase must match");
   const action = safeString(input.action, "action", 120);
   const bindingTarget = safeString(input.bindingTarget, "bindingTarget", 256);
   return {

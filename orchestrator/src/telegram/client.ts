@@ -62,7 +62,8 @@ export interface TelegramBotClient {
   getMe(signal?: AbortSignal): Promise<TelegramUser>;
   getUpdates(input: { offset: number | null; timeoutSeconds: number }, signal?: AbortSignal): Promise<TelegramUpdate[]>;
   sendMessage(input: { chatId: number; text: string; replyToMessageId?: number; buttons?: InlineButton[][] }, signal?: AbortSignal): Promise<{ messageId: number }>;
-  answerCallbackQuery(input: { callbackQueryId: string; text: string }, signal?: AbortSignal): Promise<void>;
+  /** Stops the button spinner. Without text no toast is shown (the chat reply is the one owner-facing answer). */
+  answerCallbackQuery(input: { callbackQueryId: string; text?: string }, signal?: AbortSignal): Promise<void>;
   removeButtons(input: { chatId: number; messageId: number }, signal?: AbortSignal): Promise<void>;
 }
 
@@ -170,7 +171,7 @@ export function createTelegramBotClient(input: {
       return { messageId: result.message_id };
     },
     async answerCallbackQuery({ callbackQueryId, text }, signal) {
-      await call("answerCallbackQuery", { callback_query_id: callbackQueryId, text: text.slice(0, 190) }, requestTimeoutMs, signal);
+      await call("answerCallbackQuery", { callback_query_id: callbackQueryId, ...(text ? { text: text.slice(0, 190) } : {}) }, requestTimeoutMs, signal);
     },
     async removeButtons({ chatId, messageId }, signal) {
       await call("editMessageReplyMarkup", { chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: [] } }, requestTimeoutMs, signal);

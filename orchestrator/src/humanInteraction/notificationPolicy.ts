@@ -62,6 +62,7 @@ const RELEVANCE: Record<InternalEventKind, OwnerRelevance> = {
   infrastructure_waiting: "action_required",
   combined_review_waiting: "action_required",
   combined_not_accepted: "action_required",
+  deploy_waiting: "action_required",
   blocked: "action_required",
   guidance_rejected: "action_required",
   // Results.
@@ -70,6 +71,7 @@ const RELEVANCE: Record<InternalEventKind, OwnerRelevance> = {
   completed: "result",
   answered: "result",
   cancelled: "result",
+  closed_without_deploy: "result",
   combined_accepted: "result",
 };
 
@@ -83,7 +85,9 @@ const PRIORITY: Partial<Record<Milestone, number>> = {
   completed: 95,
   answered: 95,
   cancelled: 95,
+  closed_without_deploy: 95,
   combined_accepted: 95,
+  deploy_waiting: 80,
   combined_not_accepted: 90,
   awaiting_other_approval: 85,
   quota_paused: 80,
@@ -103,7 +107,7 @@ const PRIORITY: Partial<Record<Milestone, number>> = {
  */
 const SUPERSEDED_BY: Partial<Record<InternalEventKind, readonly InternalEventKind[]>> = {
   quota_takeover: ["quota_paused", "availability_paused", "completed", "blocked", "cancelled"],
-  pr_opened: ["blocked", "cancelled"],
+  pr_opened: ["blocked", "cancelled", "closed_without_deploy"],
 };
 
 export interface EventCandidate {
