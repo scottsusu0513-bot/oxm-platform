@@ -65,6 +65,8 @@ export function createHumanInteractionHarness(input: {
   /** Production behavior: never fall back to legacy non-GPT intake. */
   managerRequired?: boolean;
   idPrefix?: string;
+  /** Safe operational log events of the service (observability tests). */
+  log?: (event: { event: string; outcome: string; detail?: string }) => void;
 }): {
   gateway: AgentGatewayService;
   service: HumanInteractionService;
@@ -190,6 +192,7 @@ export function createHumanInteractionHarness(input: {
     transport,
     now: input.now,
     ...(input.managerRequired ? { managerRequired: true } : {}),
+    ...(input.log ? { log: input.log } : {}),
   });
   return { gateway, service, ledger, transport, owner, emitted, approvalEvents, cancelCalls };
 }

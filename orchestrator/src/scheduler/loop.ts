@@ -4,7 +4,7 @@ import { isValidBranchTaskId } from "../branches/naming";
 import { normalizePathSet } from "../branches/overlap";
 import { assertTransition, isTerminalState, type ApprovalPhase, type TransitionContext } from "../domain/taskState";
 import { deliveryTargetOf, deriveLifecyclePhase, judgeDeployment } from "../domain/delivery";
-import { deployApprovalBinding } from "../delivery/approval";
+import { deployApprovalBinding, restoreRedactedDeployEvidence } from "../delivery/approval";
 import { DEPLOY_ACTION, DEPLOY_AUTHORIZATION, type DeliveryRecord, type DeployApprovalEvidence, type PreviewRecord, type PreviewResult } from "../delivery/types";
 import { TASK_CATEGORIES, checkMutability, type RiskLevel, type TaskMode, type TaskState, type WorkerKind } from "../domain/types";
 import { DEFAULT_POLL_POLICY, nextPollStep } from "../github/qa";
@@ -3461,9 +3461,21 @@ export function createManagerLoop(ports: OrchestrationPorts, overrides: Partial<
       decisionDiagnosis: saved.decisionDiagnosis ? structuredClone(saved.decisionDiagnosis) : null,
       managerCalls: { ...NO_CALLS, ...(saved.managerCalls ?? {}) },
       groupDecision: saved.groupDecision === true,
-      delivery: saved.delivery ? structuredClone(saved.delivery) : null,
+      delivery: saved.delivery ? restoreDelivery(saved.delivery, saved.intake.taskId) : null,
       preview: saved.preview ? structuredClone(saved.preview) : null,
     };
+  }
+
+  /**
+   * The checkpoint sanitizer redacts the deploy evidence's "authorization" key as well; its fixed
+   * merge + deploy scope is restored only when the evidence still hashes to the persisted binding.
+   * Anything else stays as persisted and fails closed at the deploy gate.
+   */
+  function restoreDelivery(saved: DeliveryRecord, taskId: string): DeliveryRecord {
+    const d = structuredClone(saved);
+    const restored = restoreRedactedDeployEvidence(d, taskId);
+    if (restored) d.evidence = restored;
+    return d;
   }
 
   /**

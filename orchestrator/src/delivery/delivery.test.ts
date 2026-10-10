@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { judgeDeployment } from "../domain/delivery";
+import { REDACTED, sanitizeMetadata } from "../store/sanitize";
 import type { Approval } from "../store/types";
 import type { ProcessRunner, ProcessSpec } from "../workers/types";
-import { deployApprovalBinding, normalizeDeployEvidence } from "./approval";
+import { deployApprovalBinding, normalizeDeployEvidence, restoreRedactedDeployEvidence } from "./approval";
 import { createGhMergeTransport, mergeApprovedPullRequest, type PrMergeTransport } from "./merge";
 import { readDeliveryConfig } from "./port";
 import { createProductionVerifier } from "./production";
@@ -71,6 +72,59 @@ describe("deploy approval binding", () => {
     expect(() => normalizeDeployEvidence({ ...evidence, authorization: { ...DEPLOY_AUTHORIZATION, productionDatabase: true } as never })).toThrow(/authorization/);
     expect(() => normalizeDeployEvidence({ ...evidence, baseBranch: "release" as never })).toThrow(/main/);
     expect(() => normalizeDeployEvidence({ ...evidence, ci: { status: "failed" as never, checks: [] } })).toThrow(/CI/);
+  });
+});
+
+describe("persisted deploy evidence (checkpoint sanitizer compatibility)", () => {
+  // What the audit sanitizer actually writes for a delivery record: "authorization" becomes REDACTED.
+  const persisted = () => sanitizeMetadata({ evidence }).evidence as unknown as DeployApprovalEvidence;
+  const record = (e: unknown = persisted(), over: Record<string, unknown> = {}) =>
+    ({ evidence: e as DeployApprovalEvidence, binding, prNumber: 26, headSha: HEAD, lineageId: "t26", ...over }) as Parameters<typeof restoreRedactedDeployEvidence>[0];
+
+  it("the sanitizer redacts the scope literal, so the raw persisted evidence fails closed", () => {
+    expect((persisted() as unknown as { authorization: unknown }).authorization).toBe(REDACTED);
+    expect(() => normalizeDeployEvidence(persisted())).toThrow(/authorization/);
+  });
+
+  it("restores exactly the fixed merge + deploy scope and the identical binding", () => {
+    const restored = restoreRedactedDeployEvidence(record(), "t26")!;
+    expect(restored.authorization).toEqual({ merge: true, deploy: true, commit: false, push: false, forcePush: false, productionDatabase: false });
+    expect(restored.authorization).not.toBe(DEPLOY_AUTHORIZATION);
+    expect(deployApprovalBinding(restored)).toBe(binding);
+    expect(normalizeDeployEvidence(restored)).toEqual(normalizeDeployEvidence(evidence));
+  });
+
+  it("never rehydrates outside the exact redaction case", () => {
+    const p = persisted() as unknown as Record<string, unknown>;
+    const cases: [string, unknown, Record<string, unknown>?][] = [
+      ["intact (not redacted)", { ...evidence }],
+      ["arbitrary authorization", { ...p, authorization: "anything" }],
+      ["partially modified authorization", { ...p, authorization: { ...DEPLOY_AUTHORIZATION, push: true } }],
+      ["widened authorization object", { ...p, authorization: { ...DEPLOY_AUTHORIZATION, productionDatabase: true } }],
+      ["missing authorization", (({ authorization: _a, ...rest }) => rest)(p)],
+      ["extra field", { ...p, token: REDACTED }],
+      ["wrong action", { ...p, action: "merge_only" }],
+      ["wrong base branch", { ...p, baseBranch: "release" }],
+      ["other task", { ...p, taskId: "t27" }],
+      ["other lineage", { ...p, lineageId: "other" }],
+      ["other PR", { ...p, prNumber: 27 }],
+      ["other head", { ...p, headSha: "c".repeat(40) }],
+      ["CI not passed", { ...p, ci: { status: "failed", checks: [{ name: "verify", outcome: "failure" }] } }],
+      ["CI changed", { ...p, ci: { status: "passed", checks: [{ name: "verify", outcome: "neutral" }] } }],
+      ["risk changed", { ...p, risk: "red" }],
+      ["malformed risk", { ...p, risk: "purple" }],
+      ["malformed unverified", { ...p, unverified: "x" }],
+      ["not an object", REDACTED],
+      ["null", null],
+      ["array", [p]],
+      ["binding mismatch", p, { binding: `deploy:${"0".repeat(64)}` }],
+      ["binding missing", p, { binding: null }],
+      ["record PR differs", p, { prNumber: 27 }],
+      ["record head differs", p, { headSha: "c".repeat(40) }],
+      ["record lineage differs", p, { lineageId: "other" }],
+    ];
+    for (const [name, e, over] of cases) expect(restoreRedactedDeployEvidence(record(e, over), "t26"), name).toBeNull();
+    expect(restoreRedactedDeployEvidence(record(), "t27")).toBeNull();
   });
 });
 

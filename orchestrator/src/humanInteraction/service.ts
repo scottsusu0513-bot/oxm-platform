@@ -82,7 +82,7 @@ export interface HumanInteractionServiceDeps {
   /** Lifetime of a cancel confirmation (default 10 minutes). */
   cancelConfirmationMs?: number;
   /** Safe operational events only: no guidance/goal text, credentials, or Gateway payloads. */
-  log?: (event: { event: string; outcome: string }) => void;
+  log?: (event: { event: string; outcome: string; detail?: string }) => void;
   /** Production: never fall back to the legacy (non-GPT) intake when the GPT Manager is unavailable. */
   managerRequired?: boolean;
 }
@@ -396,6 +396,26 @@ export function phaseOf(s: GatewayTaskStatus): string {
 
 export { terminalFollowUp, terminalReason } from "./followUp";
 
+/** Gateway failure messages that are fixed internal strings, mapped to stable diagnosis codes. */
+const GATEWAY_FAILURE_REASONS: Readonly<Record<string, string>> = {
+  "deploy approval evidence is malformed": "deploy_evidence_malformed",
+  "deploy approval evidence does not match its binding": "deploy_evidence_binding_mismatch",
+  "commit approval evidence is malformed": "commit_evidence_malformed",
+  "approval requirement is malformed": "approval_requirement_malformed",
+  "approval decision is unavailable": "approval_decision_unavailable",
+  "task not found": "task_not_found",
+};
+
+/**
+ * Closed-set classification of a failed Gateway call for operational logs. Never carries the raw
+ * message, provider prose, evidence or payloads: only the Gateway code plus a known reason code.
+ */
+export function failureDetail(error: unknown): string {
+  if (error instanceof GatewayError) return `gateway_${error.code}:${Object.hasOwn(GATEWAY_FAILURE_REASONS, error.message) ? GATEWAY_FAILURE_REASONS[error.message] : "unclassified"}`;
+  if (error instanceof Error) return `internal:${/^[A-Za-z]{1,40}$/.test(error.name) ? error.name : "Error"}`;
+  return "internal:non_error";
+}
+
 function gatewayOutcome(error: unknown, lang: OwnerLanguage = "zh"): InboundResult {
   if (error instanceof GatewayError) {
     if (["stale_binding", "conflict", "approval_not_required", "approval_expired", "not_found"].includes(error.code))
@@ -412,6 +432,12 @@ const TASK_REF = /^[a-z0-9-]{4,64}$/;
 export function createHumanInteractionService(deps: HumanInteractionServiceDeps): HumanInteractionService {
   const inFlight = new Set<string>();
   const log = deps.log ?? (() => {});
+  /** gatewayOutcome() plus a classified log line when the Owner only sees "could not process". */
+  const outcomeOf = (error: unknown, lang: OwnerLanguage): InboundResult => {
+    const result = gatewayOutcome(error, lang);
+    if (result.outcome === "failed") log({ event: "gateway_call_failed", outcome: "failed", detail: failureDetail(error) });
+    return result;
+  };
   const cancelMs = deps.cancelConfirmationMs ?? 10 * 60 * 1000;
   const call = <T>(request: T) => ({ authentication: deps.authentication(), request });
   const labels = () => new Map(deps.ledger.tracked().map((t) => [t.taskId, t.label]));
@@ -689,7 +715,7 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
         message: L(lang, `收到你的指示，我會重新確認任務狀態後照這個方向繼續，有結果再告訴你。${NOT_APPROVAL_ZH}`, `Guidance received. I will re-check the task state and continue in this direction, and report back. ${NOT_APPROVAL}`),
       });
     } catch (error) {
-      return remember(key, gatewayOutcome(error, lang));
+      return remember(key, outcomeOf(error, lang));
     }
   }
 
@@ -731,7 +757,7 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
         message: technicalDetailsMessage({ taskId: id, label, phase: plainPhase(s, lang), prNumber: s.prNumber, ...d }, lang),
       };
     } catch (error) {
-      return gatewayOutcome(error, lang);
+      return outcomeOf(error, lang);
     }
   }
 
@@ -765,7 +791,7 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
             "I cannot complete this read-only lookup right now (service unavailable). No task was created and no file was changed. Ask again shortly, or send 「任務：…」 for a formal investigation.",
           ),
         };
-      return remember(key, gatewayOutcome(error, lang));
+      return remember(key, outcomeOf(error, lang));
     }
   }
 
@@ -792,7 +818,7 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
     try {
       s = await status(taskId);
     } catch (error) {
-      return gatewayOutcome(error, lang);
+      return outcomeOf(error, lang);
     }
     const label = ownerLabelOf(taskId, labels().get(taskId));
     // Interpretations stored before topics existed: the earlier behaviour (a finished task leads with its outcome).
@@ -896,7 +922,7 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
     } catch (error) {
       if (error instanceof GatewayError && error.code === "unavailable")
         return { outcome: "info", message: L(lang, "重新執行的功能現在無法使用，沒有建立任何任務。請稍後再說一次。", "Re-running is unavailable right now; no task was created. Please ask again shortly.") };
-      return remember(key, gatewayOutcome(error, lang));
+      return remember(key, outcomeOf(error, lang));
     }
   }
 
@@ -928,7 +954,7 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
         message: L(lang, `收到，我會請工程師照你的意見修改「${name}」，改好、檢查過後再給你新的預覽。這只是修改指示，不代表批准發布。`, `Got it — the engineer will revise "${name}" as you asked; I will send a new preview once it passes my review. This is guidance only, not a publish approval.`),
       });
     } catch (error) {
-      return remember(key, gatewayOutcome(error, lang));
+      return remember(key, outcomeOf(error, lang));
     }
   }
 
@@ -950,7 +976,7 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
       view = await deps.gateway.interpretOwnerMessage(call({ idempotencyKey: key, text, contextTaskId, requireTask, ...(priority ? { priority } : {}), ...(told.length ? { transportContext: told } : {}) }));
     } catch (error) {
       if (error instanceof GatewayError && error.code === "unavailable") return null;
-      return remember(key, gatewayOutcome(error, lang));
+      return remember(key, outcomeOf(error, lang));
     }
     const d = view.decision;
     // A follow-up that asks something specific (why / what now / can it be re-run) is a question, never guidance.
@@ -991,7 +1017,7 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
               outcome: "invalid",
               message: L(lang, "我沒辦法把這段話轉成明確的任務，可以再說明一下你想要的結果嗎？沒有建立任何任務。", `The Manager could not turn this into a task (${oneLine(error.message, 120)}). Please restate the goal as the outcome you want. No task was created.`),
             });
-          return remember(key, gatewayOutcome(error, lang));
+          return remember(key, outcomeOf(error, lang));
         }
       }
       case "clarify": {
@@ -1062,8 +1088,8 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
             delivered++;
             deps.ledger.track({ taskId, label: names.get(taskId) ?? "" });
           }
-        } catch {
-          log({ event: "approval_read_failed", outcome: "skipped" });
+        } catch (error) {
+          log({ event: "approval_read_failed", outcome: "skipped", detail: failureDetail(error) });
         }
       }
       const known = new Set(deps.directory.allTaskIds());
@@ -1110,7 +1136,7 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
       } catch (error) {
         if (error instanceof GatewayError && error.code === "invalid_request" && /clarification/.test(error.message))
           return remember(goal.idempotencyKey, { outcome: "invalid", message: L(lang, "我需要更明確的目標（要改什麼、希望看到什麼結果）。沒有建立任務。", "The Manager needs a more specific goal (what to change and the observable outcome). No task was created.") });
-        return remember(goal.idempotencyKey, gatewayOutcome(error, lang));
+        return remember(goal.idempotencyKey, outcomeOf(error, lang));
       }
     },
 
@@ -1183,7 +1209,7 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
         const s = await status(taskId);
         if (TERMINAL.has(s.status)) return remember(request.idempotencyKey, { outcome: "stale", message: L(lang, `「${ownerLabelOf(taskId, label)}」已經結束了，沒有做任何變更。`, `Task ${taskId} is already finished. Nothing was changed.`) });
       } catch (error) {
-        return remember(request.idempotencyKey, gatewayOutcome(error, lang));
+        return remember(request.idempotencyKey, outcomeOf(error, lang));
       }
       const noticeId = `cancel:${taskId}:${request.idempotencyKey}`;
       const confirmation: CancelConfirmationNotice = {
@@ -1271,7 +1297,7 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
                 : progressMessage("closed_without_deploy", { lang, declined: "publish" });
         return remember(action.idempotencyKey, { outcome, taskId: current.taskId, message });
       } catch (error) {
-        return remember(action.idempotencyKey, gatewayOutcome(error, lang));
+        return remember(action.idempotencyKey, outcomeOf(error, lang));
       }
     },
 
@@ -1318,7 +1344,7 @@ export function createHumanInteractionService(deps: HumanInteractionServiceDeps)
         ];
         return { outcome: "info", taskId: resolved.taskId, message: lines.join("\n") };
       } catch (error) {
-        return gatewayOutcome(error, lang);
+        return outcomeOf(error, lang);
       }
     },
   };

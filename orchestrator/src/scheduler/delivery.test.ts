@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { createFakeDelivery, createFakePreview, deployed, PASSING_CHECKS, type FakeDelivery } from "../delivery/fake";
+import { deployApprovalBinding } from "../delivery/approval";
+import { DEPLOY_AUTHORIZATION } from "../delivery/types";
 import { createMemoryStore } from "../store/memory";
+import { REDACTED } from "../store/sanitize";
 import { createManagerLoop } from "./loop";
 import { createSimulation, driveQa, fakeIntake, sha, type Simulation, type SimulationOptions } from "./fake";
 import { createAuditCheckpointRepository } from "./persistence";
@@ -361,6 +364,80 @@ describe("restart / replay of pending delivery", () => {
     expect(loop2.task("gate")).toMatchObject({ state: "awaiting_approval", approvalPhase: "deploy", lifecyclePhase: "awaiting_deploy_approval" });
     expect(loop2.task("rolling")).toMatchObject({ state: "complete", lifecyclePhase: "completed" });
     expect(merges(sim, delivery)).toHaveLength(1);
+  });
+
+  it("t261010 regression: a deploy gate persisted through the sanitizing audit store stays readable and approvable after restart", async () => {
+    const persistence = durable();
+    let delivery!: FakeDelivery;
+    const sim = createSimulation({ autoApproveCommits: false, persistence, delivery: ({ remote, now }) => (delivery = createFakeDelivery({ remote, now })) });
+    await sim.create(uiTask("gate"));
+    await sim.loop.settle({ waitForWorkers: true });
+    await publish(sim, "gate");
+    const before = (await sim.loop.pendingApproval("gate"))!;
+    expect(before).toMatchObject({ phase: "deploy", kind: "deploy" });
+
+    // The durable checkpoint really carries the sanitizer sentinel (the live failure shape).
+    const raw = persistence.load()!.tasks.find((t) => t.intake.taskId === "gate")!.delivery!;
+    expect(raw.evidence!.authorization as unknown).toBe(REDACTED);
+    expect(raw.binding).toBe(before.bindingShaOrActionId);
+
+    const loop2 = createManagerLoop(sim.ports, { managerMode: "deterministic_fixture", completion: "production_verified" });
+    await loop2.resume();
+    await loop2.settle();
+    expect(loop2.task("gate")).toMatchObject({ status: "needs_human_approval", state: "awaiting_approval", approvalPhase: "deploy", lifecyclePhase: "awaiting_deploy_approval" });
+    const after = (await loop2.pendingApproval("gate"))!;
+    expect(after).toMatchObject({ phase: "deploy", kind: "deploy", bindingShaOrActionId: before.bindingShaOrActionId });
+    expect(after.deployEvidence!.authorization).toEqual({ merge: true, deploy: true, commit: false, push: false, forcePush: false, productionDatabase: false });
+    expect(deployApprovalBinding(after.deployEvidence!)).toBe(before.bindingShaOrActionId);
+    expect(after.deployEvidence).toEqual(before.deployEvidence);
+    expect(merges(sim, delivery)).toEqual([]); // resumed at the gate only — nothing merged by the restart
+
+    // The Owner's deploy approval is accepted after the restart: exactly one merge.
+    delivery.observations = [deployed("build_in_progress")];
+    const a = sim.approvals.create({ id: "deploy-after-restart", taskId: "gate", kind: "deploy", requestedAction: after.requestedAction, bindingShaOrActionId: after.bindingShaOrActionId, expiresAt: "2026-10-05T12:00:00.000Z" });
+    sim.approvals.decide(a.id, { status: "approved", decidedBy: "owner", channel: "test" });
+    loop2.post({ type: "approval_granted", taskId: "gate", phase: "deploy" });
+    await loop2.settle();
+    expect(loop2.task("gate")!.state).toBe("deploying");
+    expect(merges(sim, delivery)).toHaveLength(1);
+
+    // A second restart while deploying neither repeats the merge nor reopens the gate.
+    const loop3 = createManagerLoop(sim.ports, { managerMode: "deterministic_fixture", completion: "production_verified" });
+    delivery.observations = [deployed("live")];
+    await loop3.resume();
+    await loop3.settle();
+    expect(loop3.task("gate")).toMatchObject({ state: "complete", lifecyclePhase: "completed" });
+    expect(merges(sim, delivery)).toHaveLength(1);
+  });
+
+  it("a persisted deploy record outside the exact redaction case is never rehydrated (fails closed, nothing merged)", async () => {
+    const persistence = durable();
+    let delivery!: FakeDelivery;
+    const sim = createSimulation({ autoApproveCommits: false, persistence, delivery: ({ remote, now }) => (delivery = createFakeDelivery({ remote, now })) });
+    await sim.create(uiTask("gate"));
+    await sim.loop.settle({ waitForWorkers: true });
+    await publish(sim, "gate");
+    const saved = persistence.load()!;
+    const tamper: [string, (d: Record<string, unknown>, e: Record<string, unknown>) => void][] = [
+      ["widened authorization", (_d, e) => void (e.authorization = { ...DEPLOY_AUTHORIZATION, push: true })],
+      ["arbitrary authorization", (_d, e) => void (e.authorization = "granted")],
+      ["other binding", (d) => void (d.binding = `deploy:${"0".repeat(64)}`)],
+      ["other head", (_d, e) => void (e.headSha = sha(9))],
+      ["CI changed", (_d, e) => void (e.ci = { status: "passed", checks: [{ name: "verify", outcome: "skipped" }] })],
+    ];
+    for (const [name, mutate] of tamper) {
+      const cp = structuredClone(saved);
+      const d = cp.tasks.find((t) => t.intake.taskId === "gate")!.delivery! as unknown as Record<string, unknown>;
+      mutate(d, d.evidence as Record<string, unknown>);
+      const loop2 = createManagerLoop({ ...sim.ports, persistence: { load: () => cp, save: () => undefined } }, { managerMode: "deterministic_fixture", completion: "production_verified" });
+      await loop2.resume();
+      await loop2.settle();
+      const check = await loop2.pendingApproval("gate");
+      const ev = check?.deployEvidence;
+      const valid = ev ? (() => { try { return deployApprovalBinding(ev) === check!.bindingShaOrActionId; } catch { return false; } })() : false;
+      expect(valid, name).toBe(false);
+    }
+    expect(merges(sim, delivery)).toEqual([]);
   });
 
   it("a restart during the merge write never repeats it; the outcome is read back from GitHub", async () => {

@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { createFakeDelivery, createFakePreview, deployed, type FakeDelivery } from "../delivery/fake";
 import type { IntentPlanner, IntentPlannerInput } from "../planning/types";
-import { createSimulation, driveQa, sha } from "../scheduler/fake";
+import { createSimulation, driveQa, sha, type SimulationOptions } from "../scheduler/fake";
+import { createManagerLoop } from "../scheduler/loop";
+import { createAuditCheckpointRepository } from "../scheduler/persistence";
 import { createInMemoryAuditRepository } from "../store/memory";
 import { formatNotice, noticeButtons } from "../telegram/format";
 import { createHumanInteractionHarness, createRecordingTransport } from "./fake";
@@ -32,13 +34,14 @@ function planner(extra: Record<string, (i: IntentPlannerInput) => unknown> = {})
   };
 }
 
-function setup(opts: { observations?: FakeDelivery["observations"] } = {}) {
+function setup(opts: { observations?: FakeDelivery["observations"]; persistence?: SimulationOptions["persistence"] } = {}) {
   const audit = createInMemoryAuditRepository(() => "2026-10-10T00:00:00.000Z");
   let delivery!: FakeDelivery;
   const preview = createFakePreview();
   const sim = createSimulation({
     autoApproveCommits: false,
     preview,
+    ...(opts.persistence ? { persistence: opts.persistence } : {}),
     delivery: ({ remote, now }) => {
       delivery = createFakeDelivery({ remote, now });
       if (opts.observations) delivery.observations = opts.observations;
@@ -238,5 +241,68 @@ describe("H. one Owner-facing message per semantic step (PR #26 lifecycle)", () 
     expect(done.detail).not.toContain("由你決定");
     expect(done.detail).toContain("這項任務已完成");
     expect(sha(1)).toHaveLength(40);
+  });
+});
+
+describe("H. deploy approval survives a runtime restart (t261010-38b41a regression)", () => {
+  async function toDeployQuestion() {
+    const checkpoints = createInMemoryAuditRepository(() => "2026-10-10T00:00:00.000Z");
+    let n = 0;
+    const persistence = createAuditCheckpointRepository({ audit: checkpoints, nextId: () => `cp-${++n}` });
+    const x = setup({ persistence });
+    const { taskId } = await x.say("任務：做柱狀圖");
+    await x.rounds();
+    await x.h.service.handleAction({ kind: "action", idempotencyKey: "p", ref: x.transport.sent[0].notice.ref, action: "approve" });
+    await x.sim.loop.settle();
+    await driveQa(x.sim, taskId!);
+    await x.rounds();
+    const deploy = x.transport.sent.find((s) => s.notice.kind === "deploy_approval")!.notice as DeployApprovalNotice;
+    return { x, taskId: taskId!, deploy, persistence };
+  }
+  /** Runtime restart: a new loop from the durable checkpoint and a new service over the same ledger. */
+  async function restart(x: Awaited<ReturnType<typeof toDeployQuestion>>["x"], persistence: SimulationOptions["persistence"], logs: { event: string; outcome: string; detail?: string }[]) {
+    const loop2 = createManagerLoop({ ...x.sim.ports, persistence }, { managerMode: "deterministic_fixture", completion: "production_verified" });
+    await loop2.resume();
+    await loop2.settle();
+    const t2 = createRecordingTransport(900);
+    const h2 = createHumanInteractionHarness({ loop: loop2, approvals: x.sim.approvals, audit: x.audit, now: x.sim.ports.now, transport: t2, durableGateway: true, idPrefix: "r2", log: (e) => logs.push(e) });
+    return { loop2, h2, t2 };
+  }
+
+  it("after restart the pending deploy approval is read cleanly and the existing 「批准部署」 button merges exactly once", async () => {
+    const { x, taskId, deploy, persistence } = await toDeployQuestion();
+    const logs: { event: string; outcome: string; detail?: string }[] = [];
+    const { loop2, h2, t2 } = await restart(x, persistence, logs);
+    for (let i = 0; i < 3; i++) await h2.service.observe();
+    expect(logs.filter((e) => e.event === "approval_read_failed")).toEqual([]);
+    expect(t2.sent).toEqual([]); // the deploy question was already delivered; not asked again
+    const pending = await h2.gateway.getPendingApproval({ authentication: h2.owner.authentication(), request: { taskId } });
+    expect(pending).toMatchObject({ result: "pending", approval: { kind: "deploy", phase: "deploy", approvalRequestId: deploy.approvalRequestId } });
+
+    x.delivery().observations = [deployed("build_in_progress"), deployed("live")];
+    const go = await h2.service.handleAction({ kind: "action", idempotencyKey: `tg.cb.${deploy.ref}.approve`, ref: deploy.ref, action: "approve" });
+    expect(go.outcome).toBe("approved");
+    await loop2.settle();
+    expect(loop2.task(taskId)!.state).toBe("deploying");
+    expect(x.delivery().calls.filter((c) => c.startsWith("MERGE"))).toHaveLength(1);
+    const replay = await h2.service.handleAction({ kind: "action", idempotencyKey: `tg.cb.${deploy.ref}.approve`, ref: deploy.ref, action: "approve" });
+    expect(replay.outcome).toBe("duplicate");
+    expect(x.delivery().calls.filter((c) => c.startsWith("MERGE"))).toHaveLength(1);
+  });
+
+  it("tampered persisted deploy evidence still fails closed, with a classified (non-leaking) diagnosis", async () => {
+    const { x, deploy, persistence } = await toDeployQuestion();
+    const saved = persistence.load()!;
+    const d = saved.tasks[0].delivery!;
+    (d.evidence as unknown as Record<string, unknown>).authorization = { merge: true, deploy: true, commit: false, push: true, forcePush: false, productionDatabase: false };
+    const logs: { event: string; outcome: string; detail?: string }[] = [];
+    const { h2 } = await restart(x, { load: () => saved, save: () => undefined }, logs);
+    await h2.service.observe();
+    expect(logs).toContainEqual({ event: "approval_read_failed", outcome: "skipped", detail: "gateway_unavailable:deploy_evidence_malformed" });
+    const go = await h2.service.handleAction({ kind: "action", idempotencyKey: "tap", ref: deploy.ref, action: "approve" });
+    expect(go.outcome).toBe("failed");
+    expect(logs).toContainEqual({ event: "gateway_call_failed", outcome: "failed", detail: "gateway_unavailable:deploy_evidence_malformed" });
+    expect(JSON.stringify(logs)).not.toMatch(/deploy:[0-9a-f]{64}|[0-9a-f]{40}|authorization/);
+    expect(x.delivery().calls.filter((c) => c.startsWith("MERGE"))).toEqual([]);
   });
 });

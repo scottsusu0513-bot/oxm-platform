@@ -171,7 +171,7 @@ const service = createHumanInteractionService({
   ledger,
   transport: createTelegramTransport(client, config.ownerChatId),
   now,
-  log: (e) => say(`${e.event}: ${e.outcome}`),
+  log: (e) => say(`${e.event}: ${e.outcome}${e.detail ? ` (${e.detail})` : ""}`),
   // Production never downgrades from the GPT Manager to a deterministic intake.
   managerRequired: true,
 });
