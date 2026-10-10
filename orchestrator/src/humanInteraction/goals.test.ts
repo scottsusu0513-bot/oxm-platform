@@ -162,7 +162,7 @@ describe("telegram goal intake — status views", () => {
     await sim.loop.settle();
     const list = await service.listTasks();
     expect(list.message).toContain(r.taskId!);
-    expect(list.message).toContain("等你批准");
+    expect(list.message).toContain("任務暫停，正在等待你的決定（請按批准或拒絕）");
     const st = await service.taskStatus(r.taskId!.slice(-6));
     expect(st.outcome).toBe("info");
     for (const text of [list.message, st.message]) {
@@ -170,7 +170,7 @@ describe("telegram goal intake — status views", () => {
       expect(text).not.toMatch(/[0-9a-f]{64}/);
       expect(text).not.toMatch(/commit-publish:|bindingTarget|approvalRequestId|prompt|stdout|stderr/i);
     }
-    expect(st.message).toMatch(/目前進度：等你批准/);
+    expect(st.message).toMatch(/目前進度：任務暫停，正在等待你的決定（請按批准或拒絕）/);
     expect(st.message).toMatch(/負責：(Claude|Codex)/);
     for (const text of [list.message, st.message]) expect(findInternalJargon(text)).toEqual([]);
     expect((await service.taskStatus("zz")).outcome).toBe("invalid");
@@ -194,7 +194,7 @@ describe("telegram goal intake — restart", () => {
     const t2 = createRecordingTransport(700);
     const second = createHumanInteractionHarness({ loop: loop2, approvals: first.sim.approvals, audit: first.audit, now: first.sim.ports.now, transport: t2, durableGateway: true, idPrefix: "g2" });
     expect(await second.service.observe()).toEqual({ delivered: 0 });
-    expect((await second.service.taskStatus(r.taskId!)).message).toContain("目前進度：等你批准");
+    expect((await second.service.taskStatus(r.taskId!)).message).toContain("目前進度：任務暫停，正在等待你的決定（請按批准或拒絕）");
     // The same Telegram goal update redelivered after restart does not create a second task.
     expect((await second.service.submitGoal(goal("tg.goal.60"))).outcome).toBe("duplicate");
     expect(loop2.tasks()).toHaveLength(1);

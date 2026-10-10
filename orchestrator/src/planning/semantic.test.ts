@@ -6,8 +6,9 @@ import { fakeEvidence } from "../manager/fake";
 import { validateEvidence } from "../manager/validator";
 import { createAnthropicGoalReviewer, createAnthropicIntentPlanner } from "./anthropic";
 import { createAnthropicHttpTransport } from "./anthropicHttp";
-import { citedPaths, semanticAcceptance } from "./goalAcceptance";
+import { citedLocations, citedPaths, semanticAcceptance } from "./goalAcceptance";
 import { normalizeGoalReview, normalizeIntentDecision } from "./normalize";
+import { createStructuredGoalReviewer } from "./planners";
 import type { GoalReviewer, GoalReviewInput, IntentPlanner } from "./types";
 
 const MSG = "幫我把搜尋 loading 做順一點，手機版一起處理";
@@ -36,6 +37,8 @@ function reviewer(script: (call: number, input: GoalReviewInput) => Record<strin
         criteria: input.criteria
           .filter((c) => verdicts[c.id] !== "omit")
           .map((c) => ({ id: c.id, status: verdicts[c.id] ?? "satisfied", evidence: verdicts[c.id] === "satisfied" || !verdicts[c.id] ? `diff shows ${c.id}` : "", reason: verdicts[c.id] && verdicts[c.id] !== "satisfied" ? `${c.id} not visible in the diff` : "" })),
+        // Like the real schema, the Manager always writes its owner answer (used for read-only work only).
+        ownerAnswer: input.mode === "read_only" ? "Manager answer." : "",
       };
     },
   };
@@ -44,7 +47,7 @@ function reviewer(script: (call: number, input: GoalReviewInput) => Record<strin
 async function goalTask(r: GoalReviewer, worker?: readonly WorkerScript[]) {
   const sim = createSimulation({ autoApproveCommits: false, goalReviewer: r, ...(worker ? { worker: { "s-task-1": worker } } : {}) });
   const h = createHumanInteractionHarness({ loop: sim.loop, approvals: sim.approvals, audit: createInMemoryAuditRepository(() => "t"), now: sim.ports.now, planner, idPrefix: "s" });
-  const res = await h.service.handleReply({ kind: "reply", idempotencyKey: "tg.msg.1", replyToDeliveryRef: null, text: MSG });
+  const res = await h.service.handleReply({ kind: "reply", idempotencyKey: "tg.msg.1", replyToDeliveryRef: null, text: `任務：${MSG}` });
   expect(res.outcome).toBe("submitted");
   await sim.loop.settle();
   return { sim, ...h };
@@ -168,6 +171,103 @@ describe("read-only answers are judged against cited repository files", () => {
   it("citedPaths ignores absolute and traversal paths", () => {
     expect(citedPaths("see /etc/passwd and ../x/y.ts and client/a.ts and `server/b.ts:12`")).toEqual(["client/a.ts", "server/b.ts"]);
   });
+
+  // A large Home.tsx whose placeholder sits far beyond the first 8 KB (as in the live E2E).
+  const HOME_PATH = "client/src/pages/Home.tsx";
+  const bigHome = Array.from({ length: 900 }, (_, i) => (i + 1 === 644 ? '      placeholder="搜尋工廠、產品或製程"' : `  const filler${i + 1} = "${"x".repeat(40)}";`)).join("\n");
+  const readOnly = (answer: string, read: (p: string) => string | null, extra: Partial<Parameters<typeof semanticAcceptance>[0]> = {}) => {
+    const r = reviewer(() => ({}));
+    return {
+      r,
+      run: () =>
+        semanticAcceptance({
+          goal: { mode: "read_only", title: "t", objective: "o", goal: { intent: "investigate_or_answer", originalRequest: "q", interpretedObjective: "o" }, criteria: [{ id: "AC-1", text: "answered", kind: "goal" }] },
+          validations: [],
+          reviewer: r,
+          reviewId: "run-1",
+          diff: { text: "", truncated: false },
+          answer,
+          fileContent: read,
+          timeoutMs: 1000,
+          ...extra,
+        }),
+    };
+  };
+
+  it("citedLocations keeps :line and :line-range references, bounded and normalized", () => {
+    expect(citedLocations("client/src/pages/Home.tsx:641-647, again `client/src/pages/Home.tsx:700` and server/b.ts and x/y.ts:9-3")).toEqual([
+      { path: "client/src/pages/Home.tsx", ranges: [{ start: 641, end: 647 }, { start: 700, end: 700 }] },
+      { path: "server/b.ts", ranges: [] },
+      { path: "x/y.ts", ranges: [{ start: 3, end: 9 }] },
+    ]);
+    expect(citedLocations("a/b.ts:1-999999")[0].ranges).toEqual([{ start: 1, end: 60 }]);
+    expect(citedLocations(Array.from({ length: 9 }, (_, i) => `a/b.ts:${i + 1}`).join(" "))[0].ranges).toHaveLength(4);
+    expect(citedLocations("../etc/passwd:1 /etc/x.ts:3 ./a/b.ts:4")).toEqual([]);
+  });
+
+  it("a path:line citation gives the reviewer the cited lines of a large file, not its first 8 KB", async () => {
+    const { r, run } = readOnly(`The placeholder is in ${HOME_PATH}:644.`, (p) => (p === HOME_PATH ? bigHome : null));
+    await run();
+    const [f] = r.calls[0].citedFiles;
+    expect(f.path).toBe(HOME_PATH);
+    expect(f.excerpt).toContain('644:       placeholder="搜尋工廠、產品或製程"');
+    expect(f.excerpt).toContain("636: ");
+    expect(f.excerpt).toContain("652: ");
+    expect(f.excerpt).not.toMatch(/^1: /m);
+    expect(f.excerpt.length).toBeLessThanOrEqual(8_000);
+  });
+
+  it("a path:line-range citation includes the whole range with context", async () => {
+    const { r, run } = readOnly(`See ${HOME_PATH}:641-647`, (p) => (p === HOME_PATH ? bigHome : null));
+    await run();
+    const ex = r.calls[0].citedFiles[0].excerpt;
+    for (let n = 633; n <= 655; n++) expect(ex).toContain(`${n}: `);
+    expect(ex).toContain("placeholder=");
+    expect(ex).not.toContain("632: ");
+  });
+
+  it("without a usable line reference the cited file falls back to the bounded head", async () => {
+    for (const answer of [`See ${HOME_PATH}.`, `See ${HOME_PATH}:5000`]) {
+      const { r, run } = readOnly(answer, (p) => (p === HOME_PATH ? bigHome : null));
+      await run();
+      const ex = r.calls[0].citedFiles[0].excerpt;
+      expect(ex).toBe(bigHome.slice(0, 8_000));
+      expect(ex).not.toContain("placeholder=");
+    }
+  });
+
+  it("cited excerpts stay bounded for huge lines and many ranges", async () => {
+    const huge = Array.from({ length: 400 }, (_, i) => `${i + 1}${"y".repeat(5_000)}`).join("\n");
+    const { r, run } = readOnly("a/huge.ts:10-70 a/huge.ts:100-160 a/huge.ts:200 a/huge.ts:300", (p) => (p === "a/huge.ts" ? huge : null));
+    await run();
+    const ex = r.calls[0].citedFiles[0].excerpt;
+    expect(ex.length).toBeLessThanOrEqual(8_000);
+    expect(ex).toMatch(/^10: /); // the first cited line is kept before any context
+  });
+
+  it("unsafe cited paths are never read, whatever line they carry", async () => {
+    const asked: string[] = [];
+    const { r, run } = readOnly("see ../secrets/key.ts:1 and /etc/passwd.txt:2 and client/../x.ts:3", (p) => (asked.push(p), "SECRET"));
+    await run();
+    expect(asked).toEqual([]);
+    expect(r.calls[0].citedFiles).toEqual([]);
+  });
+
+  it("Manager source evidence for a cited path is kept when it shows lines the cited excerpt lacks", async () => {
+    const plan = { kind: "factual_lookup" as const, requirements: ["r"], targets: ["Home", "placeholder"], validationIsEvidence: false };
+    const ports = { listFiles: async () => [HOME_PATH] };
+    const goal = { mode: "read_only" as const, title: "t", objective: "o", goal: { intent: "investigate_or_answer" as const, originalRequest: "q", interpretedObjective: "o" }, criteria: [{ id: "AC-1", text: "answered", kind: "goal" as const }], evidencePlan: plan };
+    // Cited without a line: the cited head misses line 644, the Manager's keyword excerpt has it.
+    const a = readOnly(`It is in ${HOME_PATH}.`, (p) => (p === HOME_PATH ? bigHome : null), { goal, sourcePorts: ports });
+    await a.run();
+    expect(a.r.calls[0].citedFiles[0].excerpt).not.toContain("placeholder=");
+    expect(a.r.calls[0].sourceEvidence?.find((f) => f.path === HOME_PATH)?.excerpt).toContain('644:       placeholder="搜尋工廠、產品或製程"');
+    // Cited at the exact lines: the Manager excerpt adds nothing new and is not duplicated.
+    const b = readOnly(`It is in ${HOME_PATH}:644.`, (p) => (p === HOME_PATH ? bigHome : null), { goal, sourcePorts: ports });
+    await b.run();
+    expect(b.r.calls[0].citedFiles[0].excerpt).toContain("644: ");
+    expect(b.r.calls[0].sourceEvidence ?? []).toEqual([]);
+  });
 });
 
 describe("planning output validation", () => {
@@ -225,5 +325,178 @@ describe("Claude-backed planning adapters", () => {
   it("a refusal or non-JSON reply throws (callers fail closed)", async () => {
     await expect(createAnthropicGoalReviewer({ client: fakeClient({ stop_reason: "refusal", text: "" }).client }).review({ mode: "change", intent: null, title: "t", originalRequest: "o", interpretedObjective: "o", criteria: [], validations: [], diff: "", diffTruncated: false, answer: null, citedFiles: [] })).rejects.toThrow(/refusal/);
     await expect(createAnthropicIntentPlanner({ client: fakeClient({ stop_reason: "end_turn", text: "hello" }).client }).interpret({ message: "x", contextTaskId: null, tasks: [], requireTask: false })).rejects.toThrow();
+  });
+});
+
+describe("read-only no-change and uncertainty criteria (AC-4 / AC-7 wiring)", () => {
+  const NO_CHANGE = "不修改任何檔案";
+  const UNCERTAINTY = "Uncertainty and unverified assumptions are stated explicitly";
+  const roGoal = {
+    mode: "read_only" as const,
+    title: "首頁搜尋框",
+    objective: "o",
+    goal: { intent: "investigate_or_answer" as const, originalRequest: "首頁搜尋框的 placeholder 是什麼？不修改任何檔案", interpretedObjective: "o" },
+    criteria: [
+      { id: "AC-4", text: NO_CHANGE, kind: "goal" as const },
+      { id: "AC-7", text: UNCERTAINTY, kind: "goal" as const },
+    ],
+  };
+  const UNCHANGED = { branch: "agent/task-t1-x", headSha: "1".repeat(40), changedPaths: [], changedPathCount: 0, workspaceUnchanged: true };
+  // Stand-in reviewer applying the REVIEWER_SYSTEM rules to what it actually receives: the no-change
+  // criterion only from the trusted workspace verdict, uncertainty from unqualified runtime assertions.
+  const ruleReviewer = (): GoalReviewer & { calls: GoalReviewInput[] } => {
+    const calls: GoalReviewInput[] = [];
+    return {
+      calls,
+      async review(input) {
+        calls.push(structuredClone(input));
+        const ws = input.workspace;
+        const noChange = !ws ? "unsupported" : ws.workspaceUnchanged ? "satisfied" : "not_satisfied";
+        const asserted = /正式站顯示|production shows|on iPhone it shows/i.test(input.answer ?? "");
+        const qualified = /未(另外)?驗證|not verified/i.test(input.answer ?? "");
+        const uncertainty = asserted && !qualified ? "not_satisfied" : "satisfied";
+        const v = (id: string, status: string) => ({ id, status, evidence: status === "satisfied" ? `${id} evidence` : "", reason: status === "satisfied" ? "" : `${id} not shown` });
+        // Like the real REVIEW_SCHEMA: the Manager's owner answer, "" unless every criterion is satisfied.
+        const allSatisfied = noChange === "satisfied" && uncertainty === "satisfied";
+        return { criteria: [v("AC-4", noChange), v("AC-7", uncertainty)], ownerAnswer: allSatisfied ? "首頁搜尋框是「搜尋工廠」（client/src/pages/Home.tsx:1）；依 repository 原始碼，未驗證正式站。" : "" };
+      },
+    };
+  };
+  const judge = (answer: string, extra: Partial<Parameters<typeof semanticAcceptance>[0]> = {}) => {
+    const r = ruleReviewer();
+    const run = semanticAcceptance({
+      goal: roGoal,
+      validations: [],
+      reviewer: r,
+      reviewId: "run-ro",
+      diff: { text: "", truncated: false },
+      answer,
+      fileContent: (p) => (p === "client/src/pages/Home.tsx" ? '1: placeholder="搜尋工廠"' : null),
+      timeoutMs: 1000,
+      ...extra,
+    });
+    return { r, run };
+  };
+  const status = (acc: { criterionId: string; status: string }[], id: string) => acc.find((a) => a.criterionId === id)!.status;
+  const SOURCE_ONLY = "placeholder 是「搜尋工廠」，見 client/src/pages/Home.tsx:1。以上依目前 repository 原始碼確認；未另外驗證正式站實際畫面。";
+
+  it("verified unchanged workspace -> the no-change criterion is satisfied by trusted orchestrator evidence", async () => {
+    const { r, run } = judge(SOURCE_ONLY, { workspace: UNCHANGED });
+    const res = await run;
+    expect(r.calls[0].workspace).toEqual(UNCHANGED);
+    expect(status(res.acceptance, "AC-4")).toBe("satisfied");
+    expect(status(res.acceptance, "AC-7")).toBe("satisfied");
+    expect(res.reviewUnavailable).toBe(false);
+    expect(res.ownerAnswer).toContain("Home.tsx");
+  });
+
+  it("a Worker claiming 'git status clean / no files changed' without workspace evidence never passes", async () => {
+    const { r, run } = judge(`${SOURCE_ONLY} git status clean; no files changed.`);
+    const res = await run;
+    expect(r.calls[0].workspace).toBeUndefined();
+    expect(status(res.acceptance, "AC-4")).toBe("unknown");
+  });
+
+  it("changed or internally inconsistent workspace evidence never passes", async () => {
+    const changed = { ...UNCHANGED, changedPaths: ["client/src/pages/Home.tsx"], changedPathCount: 1, workspaceUnchanged: false };
+    const a = judge(SOURCE_ONLY, { workspace: changed });
+    expect(status((await a.run).acceptance, "AC-4")).toBe("failed");
+    // A verdict that claims "unchanged" while listing changes is withheld (fail closed).
+    for (const bad of [
+      { ...UNCHANGED, changedPaths: ["x/y.ts"], changedPathCount: 1 },
+      { ...UNCHANGED, changedPathCount: 3 },
+      { ...changed, workspaceUnchanged: true },
+      { ...UNCHANGED, changedPaths: ["a/b.ts", "c/d.ts"], changedPathCount: 1, workspaceUnchanged: false },
+    ]) {
+      const b = judge(SOURCE_ONLY, { workspace: bad });
+      const res = await b.run;
+      expect(b.r.calls[0].workspace).toBeUndefined();
+      expect(status(res.acceptance, "AC-4")).toBe("unknown");
+    }
+  });
+
+  it("the reviewer prompt labels the workspace verdict as TRUSTED ORCHESTRATOR WORKSPACE EVIDENCE", async () => {
+    const seen: { system: string; user: string }[] = [];
+    const backend = { async structured(req: { system: string; user: string }) { seen.push(req); return { criteria: [] }; } };
+    const base: GoalReviewInput = { mode: "read_only", intent: "investigate_or_answer", title: "t", originalRequest: "q", interpretedObjective: "o", criteria: [{ id: "AC-4", text: NO_CHANGE }], validations: [], diff: "", diffTruncated: false, answer: "git status clean", citedFiles: [] };
+    const gr = createStructuredGoalReviewer(backend as never);
+    await gr.review({ ...base, workspace: UNCHANGED });
+    await gr.review(base);
+    await gr.review({ ...base, workspace: { ...UNCHANGED, changedPaths: ["a/b.ts"], changedPathCount: 1, workspaceUnchanged: false } });
+    expect(seen[0].user).toContain("TRUSTED ORCHESTRATOR WORKSPACE EVIDENCE (the orchestrator's own Git verification, not a Worker claim)");
+    expect(seen[0].user).toContain("working-tree changes since start: none");
+    expect(seen[0].user).toContain("verdict: WORKSPACE UNCHANGED");
+    expect(seen[1].user).toMatch(/TRUSTED ORCHESTRATOR WORKSPACE EVIDENCE[^\n]*\n\(not provided/);
+    expect(seen[2].user).toContain("1 (a/b.ts)");
+    expect(seen[2].user).toContain("verdict: WORKSPACE CHANGED");
+    expect(seen[0].system).toMatch(/judged ONLY from TRUSTED ORCHESTRATOR WORKSPACE EVIDENCE/);
+    expect(seen[0].system).toMatch(/"no files changed" is never evidence/);
+  });
+
+  it("change tasks never receive or render the read-only workspace block", async () => {
+    const r = reviewer(() => ({}));
+    await semanticAcceptance({
+      goal: { mode: "change", title: "t", objective: "o", goal: { intent: "change_code", originalRequest: "q", interpretedObjective: "o" }, criteria: [{ id: "AC-1", text: "done", kind: "goal" }] },
+      validations: [{ name: "tests", requested: true, executed: true, status: "passed", trusted: true }],
+      reviewer: r,
+      reviewId: "run-c",
+      diff: { text: "+++ b/a.ts\n+x", truncated: false },
+      answer: null,
+      fileContent: () => null,
+      workspace: { ...UNCHANGED, changedPaths: ["a.ts"], changedPathCount: 1, workspaceUnchanged: false },
+      timeoutMs: 1000,
+    });
+    expect(r.calls[0].workspace).toBeUndefined();
+    const seen: string[] = [];
+    await createStructuredGoalReviewer({ async structured(req: { user: string }) { seen.push(req.user); return { criteria: [] }; } } as never).review({ mode: "change", intent: "change_code", title: "t", originalRequest: "q", interpretedObjective: "o", criteria: [], validations: [], diff: "+x", diffTruncated: false, answer: null, citedFiles: [] });
+    expect(seen[0]).not.toContain("WORKSPACE EVIDENCE");
+    expect(seen[0]).toContain("TRUSTED GIT DIFF");
+  });
+
+  it("an answer that qualifies unverified deployed UI passes the uncertainty criterion; asserting it as fact does not", async () => {
+    expect(status((await judge(SOURCE_ONLY, { workspace: UNCHANGED }).run).acceptance, "AC-7")).toBe("satisfied");
+    const overclaim = "placeholder 是「搜尋工廠」，見 client/src/pages/Home.tsx:1。正式站顯示相同文字，iPhone 與英文語系也一樣。";
+    const res = await judge(overclaim, { workspace: UNCHANGED }).run;
+    expect(status(res.acceptance, "AC-7")).toBe("failed");
+    expect(status(res.acceptance, "AC-4")).toBe("satisfied");
+    expect(res.ownerAnswer).toBeNull(); // an unmet goal never yields an owner answer
+  });
+
+  it("an answer fully settled by source needs no invented disclaimer", async () => {
+    const res = await judge("placeholder 是「搜尋工廠」，定義於 client/src/pages/Home.tsx:1，原始碼中沒有其他條件分支。", { workspace: UNCHANGED }).run;
+    expect(status(res.acceptance, "AC-7")).toBe("satisfied");
+  });
+
+  it("the reviewer and Worker contracts separate source-confirmed facts from unverified runtime/deployed state", async () => {
+    const { REVIEWER_SYSTEM } = await import("./planners");
+    expect(REVIEWER_SYSTEM).toMatch(/not_satisfied when the answer asserts such unverified state as fact/);
+    expect(REVIEWER_SYSTEM).toMatch(/do not demand a disclaimer that has nothing to qualify/);
+    expect(REVIEWER_SYSTEM).toMatch(/The Worker claiming it stated its uncertainty is not evidence/);
+    const { buildWorkerPrompt } = await import("../workers/prompt");
+    const prompt = buildWorkerPrompt({ taskId: "t1", runId: "r1", category: "investigation", branch: "agent/task-t1-x", expectedHeadSha: null, mode: "read_only", requiredValidations: [], allowedScope: [], objective: "o", acceptanceCriteria: [] } as never, "green");
+    expect(prompt).toContain("state any uncertainty or unverified assumption");
+    expect(prompt).toMatch(/Present as confirmed fact only what the repository source you read shows/);
+    expect(prompt).toMatch(/do not invent uncertainty or add boilerplate disclaimers/);
+  });
+
+  it("the fixed investigate_or_answer criteria are the core ones only (no fixed uncertainty criterion)", async () => {
+    const { validateAndNormalizeRequest } = await import("../intake/normalize");
+    const r = validateAndNormalizeRequest({
+      idempotencyKey: "k-ro-1",
+      userInstruction: "首頁搜尋框的 placeholder 是什麼？",
+      source: { type: "gateway", requesterId: "telegram-owner", reference: "telegram" },
+      submittedAt: "2026-10-08T00:00:00.000Z",
+      goal: { intent: "investigate_or_answer", originalRequest: "首頁搜尋框的 placeholder 是什麼？", interpretedObjective: "Find the homepage search placeholder in source.", criteria: ["The exact placeholder text is reported"] },
+    } as never);
+    expect(r.ok).toBe(true);
+    const texts = (r as unknown as { value?: { acceptanceCriteria: { text: string }[] }; acceptanceCriteria?: { text: string }[] });
+    const criteria = (texts.value ?? texts).acceptanceCriteria!.map((c) => c.text);
+    expect(criteria).toContain("The owner's question is answered directly");
+    expect(criteria).toContain("The core answer is supported by trusted repository evidence (file paths)");
+    expect(criteria).not.toContain(UNCERTAINTY);
+    // The unverified boundary is still enforced, by the Manager's synthesis rules instead of a fixed AC.
+    const { REVIEWER_SYSTEM } = await import("./planners");
+    expect(REVIEWER_SYSTEM).toMatch(/never introduce an outside fact you did not see/);
+    expect(REVIEWER_SYSTEM).toMatch(/never as confirmed fact\. State an unverified boundary briefly when relevant/);
   });
 });

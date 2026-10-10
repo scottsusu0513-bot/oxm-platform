@@ -42,12 +42,32 @@ describe("evidence validator", () => {
     expect(v.intents).toEqual(["return_to_worker"]);
   });
 
-  it("needs repair on a missing/skipped required validation", () => {
-    for (const status of ["missing", "skipped"] as const) {
+  it("a validation that could not run or cannot be attributed is an advisory, never a repair (worker-favoring)", () => {
+    for (const status of ["missing", "skipped", "unavailable", "unverified"] as const) {
       const v2 = validateEvidence(fakeEvidence({ validations: [{ name: "tests", requested: true, executed: true, status: "passed", trusted: true }, { name: "typecheck", requested: true, executed: false, status, trusted: true }] }));
-      expect(v2.decision).toBe("needs_repair");
-      expect(v2.reasonCodes).toEqual(["validation_missing"]);
+      expect(v2.decision).toBe("accepted");
+      expect(v2.findings).toEqual([]);
+      expect(v2.advisories).toEqual([{ evidenceId: "validation:typecheck", code: "validation_unverified", summary: `validation typecheck ${status}` }]);
     }
+  });
+
+  it("only a validation that ran and failed (failed_due_to_task) needs repair", () => {
+    const v = validateEvidence(fakeEvidence({ validations: [{ name: "tests", requested: true, executed: true, status: "failed", trusted: true }] }));
+    expect(v.decision).toBe("needs_repair");
+    expect(v.reasonCodes).toContain("validation_failed");
+  });
+
+  it("an unverified safeguard criterion is an advisory; an unverified owner criterion still needs repair; a confirmed failure always does", () => {
+    const base = fakeEvidence();
+    const ids = base.acceptanceCriteriaIds;
+    const mk = (over: Partial<ManagerEvidence["acceptance"][number]>) =>
+      fakeEvidence({ acceptance: base.acceptance.map((a, i) => (i === 0 ? { ...a, status: "unknown", evidenceType: "manager_review", reference: null, ...over } : a)) });
+    const safeguard = validateEvidence(mk({ confirmedFailureOnly: true }));
+    expect(safeguard.decision).toBe("accepted");
+    expect(safeguard.advisories.map((a) => a.code)).toEqual(["acceptance_unverified_advisory"]);
+    expect(validateEvidence(mk({})).decision).toBe("needs_repair");
+    expect(validateEvidence(mk({ status: "failed", confirmedFailureOnly: true })).decision).toBe("needs_repair");
+    expect(ids.length).toBeGreaterThan(0);
   });
 
   it("blocks on untrusted validation evidence or no requested validations", () => {

@@ -241,7 +241,7 @@ describe("telegram end to end — commit/publish approval", () => {
     await p.service.observe();
     expect(p.api.sent).toHaveLength(1);
     const msg = p.api.sent[0];
-    expect(msg.text).toMatch(/^「tg4」已完成，也通過我的檢查，等待你批准發布。/);
+    expect(msg.text).toMatch(/^「tg4」已完成，也通過我的檢查。目前尚未發布，等待你批准。/);
     for (const line of ["這次改了 1 個檔案", "自動檢查：全部通過。", "按「批准發布」後，我會建立一次 commit、推送到這個任務的工作分支並開 PR。不會合併，也不會部署。"])
       expect(msg.text).toContain(line);
     expect(findInternalJargon(msg.text)).toEqual([]);
@@ -346,7 +346,7 @@ describe("telegram end to end — /goal and status commands", () => {
     await p.cp.pollOnce();
     const [tasks, status, usage] = p.api.sent.map((m) => m.text);
     expect(tasks).toMatch(/^目前進行中的任務（1）：/);
-    expect(status).toMatch(/任務：tg8\n目前進度：等你批准/);
+    expect(status).toMatch(/任務：tg8\n目前進度：任務暫停，正在等待你的決定（請按批准或拒絕）/);
     expect(usage).toMatch(/^用法：\/status/);
     for (const t of [tasks, status]) expect(findInternalJargon(t)).toEqual([]);
     for (const t of [tasks, status]) expect(t).not.toMatch(/\b[0-9a-f]{40}\b|commit-publish:|prompt/i);
@@ -370,9 +370,9 @@ describe("telegram end to end — natural language and red-risk approval", () =>
     },
   };
 
-  it("plain owner text (no /goal) becomes a task; a stranger's text does nothing", async () => {
+  it("「任務：」 owner text becomes a task; a stranger's text does nothing", async () => {
     const p = await plane({ planner });
-    p.api.updates.push(textUpdate({ chatId: STRANGER, text: ASK, messageId: 200 }), textUpdate({ chatId: OWNER, text: ASK, messageId: 201 }));
+    p.api.updates.push(textUpdate({ chatId: STRANGER, text: `任務：${ASK}`, messageId: 200 }), textUpdate({ chatId: OWNER, text: `任務：${ASK}`, messageId: 201 }));
     await p.cp.pollOnce();
     await p.sim.loop.settle();
     expect(p.sim.loop.tasks()).toHaveLength(1);
@@ -383,7 +383,7 @@ describe("telegram end to end — natural language and red-risk approval", () =>
 
   it("red-risk start approval buttons: owner approves once; a stranger's tap is ignored", async () => {
     const p = await plane({ planner });
-    p.api.updates.push(textUpdate({ chatId: OWNER, text: RED, messageId: 210 }));
+    p.api.updates.push(textUpdate({ chatId: OWNER, text: `任務：${RED}`, messageId: 210 }));
     await p.cp.pollOnce();
     await p.sim.loop.settle();
     expect(p.sim.loop.tasks()[0]).toMatchObject({ risk: "red", approvalPhase: "pre_execution" });

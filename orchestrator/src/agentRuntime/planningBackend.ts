@@ -13,11 +13,12 @@ import {
   type PlanningWorkspace,
 } from "../planning/claudeCli";
 import { CodexManagerError, createCodexManagerBackend, MAX_CODEX_MANAGER_OUTPUT_BYTES, preflightCodexManager, type CodexManagerErrorKind } from "../planning/codexCli";
-import { createStructuredGoalReviewer, createStructuredIntentPlanner, type StructuredPlanningBackend } from "../planning/planners";
+import { createStructuredGoalReviewer, createStructuredIntentPlanner, createStructuredOwnerNoticeComposer, type StructuredPlanningBackend } from "../planning/planners";
+import { createStructuredOwnerQuestionAnswerer, type OwnerQuestionAnswerer } from "../planning/ownerQuestion";
 import { createStructuredCombinedRepairDiagnoser, createStructuredCombinedReviewer, createStructuredGuidanceInterpreter, createStructuredRepairDiagnoser } from "../planning/managerReasoning";
 import type { ManagerReasoningBackends } from "./managerPort";
 import { readPlanningProviderConfig, type PlanningConfigErrorCode, type PlanningProviderConfig } from "../planning/provider";
-import type { GoalReviewer, IntentPlanner } from "../planning/types";
+import type { GoalReviewer, IntentPlanner, OwnerNoticeComposer } from "../planning/types";
 import { createNodeProcessRunner, realTimer } from "../workers/processRunner";
 import type { ProcessRunner, Timer } from "../workers/types";
 
@@ -32,8 +33,17 @@ import type { ProcessRunner, Timer } from "../workers/types";
 export type PlanningBackendErrorCode = PlanningConfigErrorCode | `claude_cli_${ClaudeCliErrorKind}` | `codex_cli_${CodexManagerErrorKind}` | "anthropic_api_configuration";
 
 export type PlanningBackendResult =
-  | { ok: true; provider: "off"; planner: null; reviewer: null; manager: null; diagnostics: string[] }
-  | { ok: true; provider: "codex_cli" | "claude_cli" | "anthropic_api"; planner: IntentPlanner; reviewer: GoalReviewer; manager: Required<ManagerReasoningBackends>; diagnostics: string[] }
+  | { ok: true; provider: "off"; planner: null; reviewer: null; manager: null; questionAnswerer: null; noticeComposer: null; diagnostics: string[] }
+  | {
+      ok: true;
+      provider: "codex_cli" | "claude_cli" | "anthropic_api";
+      planner: IntentPlanner;
+      reviewer: GoalReviewer;
+      manager: Required<ManagerReasoningBackends>;
+      questionAnswerer: OwnerQuestionAnswerer;
+      noticeComposer: OwnerNoticeComposer;
+      diagnostics: string[];
+    }
   | { ok: false; code: PlanningBackendErrorCode; reason: string };
 
 export interface PlanningBackendDeps {
@@ -205,7 +215,7 @@ export async function createPlanningBackendFromConfig(
   deps: PlanningBackendDeps,
 ): Promise<PlanningBackendResult> {
   if (config.provider === "off")
-    return { ok: true, provider: "off", planner: null, reviewer: null, manager: null, diagnostics: ["Agent planner disabled (OXM_AGENT_PLANNER=off): natural-language intake disabled; goal criteria cannot be accepted automatically"] };
+    return { ok: true, provider: "off", planner: null, reviewer: null, manager: null, questionAnswerer: null, noticeComposer: null, diagnostics: ["Agent planner disabled (OXM_AGENT_PLANNER=off): natural-language intake disabled; goal criteria cannot be accepted automatically"] };
 
   let backend: StructuredPlanningBackend;
   let diagnostics: string[];
@@ -246,6 +256,8 @@ export async function createPlanningBackendFromConfig(
     provider: config.provider,
     planner: createStructuredIntentPlanner(backend),
     reviewer: createStructuredGoalReviewer(backend),
+    questionAnswerer: createStructuredOwnerQuestionAnswerer(backend),
+    noticeComposer: createStructuredOwnerNoticeComposer(backend),
     manager: {
       diagnoser: createStructuredRepairDiagnoser(backend),
       guidance: createStructuredGuidanceInterpreter(backend),

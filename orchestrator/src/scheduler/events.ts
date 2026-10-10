@@ -48,6 +48,13 @@ export const ORCHESTRATION_AUDIT_EVENTS = [
   "combined_review_accepted",
   "combined_review_rejected",
   "owner_constraint_unmet",
+  // Fallback audit of a failed evidence record: typed code + classified Git metadata (never only an Error name).
+  "evidence_record_failed",
+  // Implementation accepted; publication waits for re-established trusted Git evidence.
+  "publication_evidence_refresh_required",
+  // Trusted Git metadata re-binding before a follow-up run: accepted (baseline moved) / refused.
+  "git_metadata_rebound",
+  "git_metadata_rebind_refused",
 ] as const;
 export type OrchestrationAuditEvent = (typeof ORCHESTRATION_AUDIT_EVENTS)[number];
 
@@ -65,6 +72,20 @@ export interface OrchestrationAuditMetadata {
   queueReason?: string | null;
   outcome?: string;
   activatedCapabilities?: readonly string[];
+  /** Typed evidence-recorder error code (evidence_record_failed). */
+  evidenceError?: string | null;
+  /** Primary Worker error when a secondary evidence failure happened. */
+  primaryError?: string | null;
+  /** Classified Git metadata delta: component ids, classes, entry labels and config key NAMES only. */
+  gitMetadata?: AuditGitMetadata | null;
+}
+
+export interface AuditGitMetadata {
+  window: string;
+  publicationTrust: string;
+  workerViolation: boolean;
+  summary: string;
+  changes: { component: string; classification: string; change: string; entries: string[]; keys: string[]; reason: string }[];
 }
 
 const cap = (values: readonly string[] | undefined) => (values ?? []).slice(0, 50).map((v) => String(v).slice(0, 80));
@@ -88,6 +109,26 @@ export function orchestrationAuditMetadata(m: OrchestrationAuditMetadata): {
     queueReason: short(m.queueReason),
     outcome: m.outcome ?? null,
     activatedCapabilities: cap(m.activatedCapabilities),
+    ...(m.evidenceError !== undefined ? { evidenceError: short(m.evidenceError) } : {}),
+    ...(m.primaryError !== undefined ? { primaryError: short(m.primaryError) } : {}),
+    ...(m.gitMetadata
+      ? {
+          gitMetadata: {
+            window: short(m.gitMetadata.window),
+            publicationTrust: short(m.gitMetadata.publicationTrust),
+            workerViolation: m.gitMetadata.workerViolation === true,
+            summary: short(m.gitMetadata.summary),
+            changes: m.gitMetadata.changes.slice(0, 25).map((c) => ({
+              component: short(c.component),
+              classification: short(c.classification),
+              change: short(c.change),
+              entries: cap(c.entries).slice(0, 10),
+              keys: cap(c.keys).slice(0, 10),
+              reason: short(c.reason),
+            })),
+          },
+        }
+      : {}),
   });
 }
 

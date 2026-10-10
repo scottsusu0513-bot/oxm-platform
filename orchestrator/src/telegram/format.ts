@@ -49,7 +49,9 @@ export function formatApprovalNotice(n: CommitApprovalNotice): string {
   return clip(
     [
       ...resent(n),
-      commitApprovalMessage({ lang: langOf(n), label: nameOf(n), files: n.filesChanged, checksPassed: n.validationsPassed.length, checksNotPassed: n.validationsNotPassed, risk: n.risk, expiresAt: n.expiresAt }),
+      // The Manager's own explanation of the result leads; the approval scope below is the fixed binding.
+      ...(n.managerSummary ? [n.managerSummary, ""] : []),
+      commitApprovalMessage({ lang: langOf(n), label: nameOf(n), files: n.filesChanged, checksPassed: n.validationsPassed.length, checksNotPassed: n.validationsNotPassed, checksUnverified: n.validationsUnverified ?? [], excludedFiles: n.excludedPaths ?? [], risk: n.risk, expiresAt: n.expiresAt }),
     ].join("\n"),
   );
 }
@@ -102,14 +104,15 @@ export function formatNotice(n: HumanNotice): string {
 
 export const HELP_TEXT = [
   "OXM Agent",
-  "直接用中文告訴我你要什麼就可以，例如「幫我看一下現在搜尋的邏輯是怎麼跑的」或「幫我把搜尋 loading 做順一點，手機版一起處理」。",
-  "問問題我會用唯讀方式查，不會改任何檔案；要修改的需求，我會安排 Claude（程式）或 Codex（畫面設計）處理，檢查過後再請你批准發布。",
+  "一般對話直接傳訊息就可以，例如「現在進度如何？」「幫我查首頁搜尋框文字」。我會直接回答或用唯讀方式查，不建立任務、不改任何檔案。",
+  "要正式執行（修改程式、修 bug）時，請用「任務：」開頭，例如「任務：把首頁搜尋框提示文字改成搜尋工廠」。我會安排 Claude（程式）或 Codex（畫面設計）處理，檢查過後再請你批准發布。",
   "",
   "需要你決定時，直接傳訊息給我即可（同時有多件事要決定時，我會先問你指的是哪一件）。",
   "你的指示只是方向，不代表批准發布；發布和高風險執行都要按訊息上的按鈕。我不會合併或部署。",
   "",
   "可用指令：",
-  "/goal <目標> — 直接建立新任務",
+  "任務：<要做的事> — 建立正式任務",
+  "/goal <目標> — 同上（指令形式）",
   "/goal priority:high <目標> — 指定優先序（系統可能調整）",
   "/tasks — 目前的任務",
   "/status <任務> — 某個任務的進度",

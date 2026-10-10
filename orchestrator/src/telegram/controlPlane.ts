@@ -1,19 +1,36 @@
-import type { AuditHumanInteractionLedger } from "../humanInteraction/ledger";
+import type { AuditHumanInteractionLedger, ResponseRecord } from "../humanInteraction/ledger";
 import type { HumanInteractionService } from "../humanInteraction/service";
 import type { HumanInteractionTransport, InboundResult } from "../humanInteraction/types";
-import { TelegramApiError, type TelegramBotClient, type TelegramUpdate } from "./client";
+import { TelegramApiError, type InlineButton, type TelegramBotClient, type TelegramUpdate } from "./client";
 import type { TelegramConfig } from "./config";
 import { formatNotice, GOAL_USAGE, HELP_TEXT, noticeButtons } from "./format";
-import { parseUpdate } from "./updates";
+import { parseUpdate, type ParsedUpdate } from "./updates";
 
 export const TELEGRAM_CURSOR = "telegram";
 
-/** Outbound Telegram transport: every notice goes to the owner's private chat only. */
+/**
+ * The ONE human-facing exit: every Owner-visible Telegram message (Manager replies and Manager
+ * notices alike) is sent here, and only to the owner's private chat. Nothing else in the
+ * orchestrator calls sendMessage; internal subsystems only produce state for the Manager layer.
+ */
+export interface OwnerDeliveryChannel {
+  send(message: { text: string; replyTo?: number | null; buttons?: InlineButton[][] }, signal?: AbortSignal): Promise<{ messageId: number }>;
+}
+
+export function createOwnerDeliveryChannel(client: TelegramBotClient, ownerChatId: number): OwnerDeliveryChannel {
+  return {
+    send: ({ text, replyTo, buttons }, signal) =>
+      client.sendMessage({ chatId: ownerChatId, text, ...(replyTo != null ? { replyToMessageId: replyTo } : {}), ...(buttons ? { buttons } : {}) }, signal),
+  };
+}
+
+/** Outbound notice transport (Manager notification decisions) over the single Owner channel. */
 export function createTelegramTransport(client: TelegramBotClient, ownerChatId: number): HumanInteractionTransport {
+  const channel = createOwnerDeliveryChannel(client, ownerChatId);
   return {
     async deliver(notice) {
       const buttons = noticeButtons(notice);
-      const sent = await client.sendMessage({ chatId: ownerChatId, text: formatNotice(notice), ...(buttons ? { buttons } : {}) });
+      const sent = await channel.send({ text: formatNotice(notice), ...(buttons ? { buttons } : {}) });
       return { deliveryRef: String(sent.messageId) };
     },
   };
@@ -30,6 +47,9 @@ export interface TelegramControlPlaneDeps {
   pollTimeoutSeconds?: number;
   observeIntervalMs?: number;
   backoff?: { initialMs: number; maxMs: number };
+  now?: () => string;
+  /** Send attempts of one unconfirmed response before it is abandoned (default 3). */
+  maxResponseAttempts?: number;
 }
 
 export class TelegramStartupError extends Error {
@@ -49,6 +69,8 @@ export interface TelegramControlPlane {
   stop(): Promise<void>;
   /** Next backoff delay for a given consecutive failure count (exposed for tests). */
   backoffMs(failures: number, error?: unknown): number;
+  /** One retry round of unconfirmed responses (the observation loop runs it; exposed for tests). */
+  retryPendingResponses(): Promise<void>;
 }
 
 function defaultSleep(ms: number, signal: AbortSignal): Promise<void> {
@@ -70,11 +92,14 @@ export function createTelegramControlPlane(deps: TelegramControlPlaneDeps): Tele
   const observeIntervalMs = deps.observeIntervalMs ?? 5_000;
   const backoff = deps.backoff ?? { initialMs: 1_000, maxMs: 60_000 };
   const owner = deps.config.ownerChatId;
+  const channel = createOwnerDeliveryChannel(deps.client, owner);
   const controller = new AbortController();
   let started = false;
   let botId: number | null = null;
   let running: Promise<void> | null = null;
 
+  const now = deps.now ?? (() => new Date().toISOString());
+  const maxAttempts = deps.maxResponseAttempts ?? 3;
   const quiet = async (fn: () => Promise<unknown>) => {
     try {
       await fn();
@@ -83,30 +108,79 @@ export function createTelegramControlPlane(deps: TelegramControlPlaneDeps): Tele
     }
   };
 
-  async function feedback(chatId: number, replyTo: number | null, result: InboundResult) {
-    if (!result.message) return; // a notice (e.g. a cancel confirmation) already answered
-    await quiet(() => deps.client.sendMessage({ chatId, text: result.message, ...(replyTo !== null ? { replyToMessageId: replyTo } : {}) }, controller.signal));
+  /**
+   * Identity of the ONE logical response to an inbound update: the owner's own Telegram message or
+   * button press (stable across redelivery, re-claim and restart) — never the response text.
+   */
+  function responseIdOf(parsed: Exclude<ParsedUpdate, { kind: "ignored" }>): string | null {
+    if (parsed.kind === "action") return `tg.cbq.${parsed.callbackQueryId.slice(0, 64)}`;
+    return parsed.messageId === null ? null : `tg.reply.${parsed.messageId}`;
+  }
+
+  /** Sends one recorded response whose delivery is not confirmed yet; durable outcome either way. */
+  async function sendRecorded(r: ResponseRecord): Promise<void> {
+    try {
+      const sent = await channel.send({ text: r.text, replyTo: r.replyTo }, controller.signal);
+      deps.ledger.recordResponseDelivered(r.responseId, String(sent.messageId));
+    } catch {
+      deps.ledger.recordResponseFailed(r.responseId);
+      const after = deps.ledger.response(r.responseId);
+      if (after && after.failures >= maxAttempts) {
+        deps.ledger.recordResponseAbandoned(r.responseId);
+        deps.log("telegram: a reply could not be delivered after bounded retries; abandoned");
+      } else deps.log("telegram: reply delivery failed; it will be retried");
+    }
+  }
+
+  /** At most one response per inbound update: intent first, then the send, then the confirmed delivery. */
+  async function respond(responseId: string | null, chatId: number, replyTo: number | null, result: InboundResult) {
+    const text = result.message ?? "";
+    if (responseId === null) {
+      if (text) await quiet(() => channel.send({ text, replyTo }, controller.signal));
+      return;
+    }
+    deps.ledger.recordResponseIntent({ responseId, text, chatId, replyTo, createdAt: now() });
+    // A notice (e.g. a cancel confirmation) already answered: the update is still marked as answered.
+    if (!text) return deps.ledger.recordResponseDelivered(responseId, "none");
+    await sendRecorded(deps.ledger.response(responseId)!);
+  }
+
+  /** Re-sends responses whose delivery was never confirmed (send failure, crash before confirmation). */
+  async function retryPendingResponses() {
+    for (const r of deps.ledger.pendingResponses()) {
+      if (controller.signal.aborted) return;
+      await sendRecorded(r);
+    }
   }
 
   async function handle(update: TelegramUpdate) {
     const parsed = parseUpdate(update, owner, botId);
+    if (parsed.kind === "ignored") return; // never answer strangers
+    const responseId = responseIdOf(parsed);
+    const prior = responseId ? deps.ledger.response(responseId) : null;
+    if (prior) {
+      // The same owner message again (restart before the cursor advanced, gateway re-claim, redelivery):
+      // it was already handled and answered once — never handled or answered a second time.
+      if (prior.deliveryRef === null && !prior.abandoned) await sendRecorded(prior);
+      deps.log("telegram: update already answered; not handled again");
+      return;
+    }
+    const reply = (result: InboundResult) => respond(responseId, parsed.chatId, parsed.messageId, result);
     switch (parsed.kind) {
-      case "ignored":
-        return; // never answer strangers
       case "help":
-        return feedback(parsed.chatId, parsed.messageId, { outcome: "info", message: HELP_TEXT });
+        return reply({ outcome: "info", message: HELP_TEXT });
       case "usage":
-        return feedback(parsed.chatId, parsed.messageId, { outcome: "info", message: parsed.command === "goal" ? GOAL_USAGE : "用法：/status <任務編號（至少 4 個字元）>" });
+        return reply({ outcome: "info", message: parsed.command === "goal" ? GOAL_USAGE : "用法：/status <任務編號（至少 4 個字元）>" });
       case "goal":
-        return feedback(parsed.chatId, parsed.messageId, await deps.service.submitGoal(parsed.inbound));
+        return reply(await deps.service.submitGoal(parsed.inbound));
       case "tasks":
-        return feedback(parsed.chatId, parsed.messageId, await deps.service.listTasks());
+        return reply(await deps.service.listTasks());
       case "status":
-        return feedback(parsed.chatId, parsed.messageId, await deps.service.taskStatus(parsed.reference));
+        return reply(await deps.service.taskStatus(parsed.reference));
       case "cancel":
-        return feedback(parsed.chatId, parsed.messageId, await deps.service.requestCancel(parsed.inbound));
+        return reply(await deps.service.requestCancel(parsed.inbound));
       case "reply":
-        return feedback(parsed.chatId, parsed.messageId, await deps.service.handleReply(parsed.inbound));
+        return reply(await deps.service.handleReply(parsed.inbound));
       case "action": {
         const result = await deps.service.handleAction(parsed.inbound);
         await quiet(() => deps.client.answerCallbackQuery({ callbackQueryId: parsed.callbackQueryId, text: result.message || "Confirmation sent." }, controller.signal));
@@ -117,8 +191,7 @@ export function createTelegramControlPlane(deps: TelegramControlPlaneDeps): Tele
           const messageId = Number(notice.deliveryRef);
           await quiet(() => deps.client.removeButtons({ chatId: parsed.chatId, messageId }, controller.signal));
         }
-        if (result.outcome !== "duplicate") await feedback(parsed.chatId, parsed.messageId, result);
-        return;
+        return reply(result.outcome === "duplicate" ? { ...result, message: "" } : result);
       }
     }
   }
@@ -173,6 +246,7 @@ export function createTelegramControlPlane(deps: TelegramControlPlaneDeps): Tele
   async function observeLoop() {
     while (!controller.signal.aborted) {
       try {
+        await retryPendingResponses();
         await deps.service.observe();
       } catch {
         deps.log("telegram: observation round failed; will retry");
@@ -215,5 +289,6 @@ export function createTelegramControlPlane(deps: TelegramControlPlaneDeps): Tele
       if (running) await running.catch(() => undefined);
     },
     backoffMs,
+    retryPendingResponses,
   };
 }

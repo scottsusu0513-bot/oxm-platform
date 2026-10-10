@@ -49,7 +49,9 @@ export function pushInputFromWorkerResult(
 ): FlowResult<{ localHeadSha: string; expectedRemoteSha: string }> {
   if (!isPlannerApproved(plan)) return { ok: false, reason: "a planner-approved plan is required" };
   if (result.status !== "success" || result.errorType !== null) return { ok: false, reason: "only successful worker runs are pushed" };
-  if (result.checkResult !== "passed") return { ok: false, reason: "validations did not pass" };
+  // The Worker's own check report is advisory (the trusted validation layer and the owner's approval
+  // decide); only a check the Worker itself saw FAIL contradicts publishing.
+  if (result.checkResult === "failed") return { ok: false, reason: "validations did not pass" };
   if (result.branch !== plan.branch) return { ok: false, reason: "worker result is for a different branch" };
   if (!isValidSha(result.headSha)) return { ok: false, reason: "worker result has no verified HEAD SHA" };
   return { ok: true, localHeadSha: result.headSha, expectedRemoteSha: expectedRemoteHead(plan) };

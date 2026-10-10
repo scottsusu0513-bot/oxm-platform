@@ -6,6 +6,7 @@ import type { AuditEvent } from "../store/types";
 const SUPERSEDED: Readonly<Record<string, (e: AuditEvent) => string>> = {
   orchestration_checkpoint: (e) => e.taskId,
   human_transport_cursor: (e) => `${e.taskId}:${String((e.metadata as { transport?: unknown }).transport)}`,
+  human_conversation_focus: (e) => e.taskId,
 };
 
 export interface CompactionResult {

@@ -1,4 +1,5 @@
 import type { InboundAction, InboundCancelRequest, InboundGoal, InboundReply } from "../humanInteraction/types";
+import { TRANSPORT_STATUS_CONTEXT, type TransportStatusContext } from "../planning/types";
 import type { TelegramUpdate } from "./client";
 import { parseCallbackData, REF_LINE } from "./format";
 
@@ -61,6 +62,11 @@ export function parseUpdate(update: TelegramUpdate, ownerChatId: number, botId: 
   if (typeof m.text !== "string") return { kind: "ignored", reason: "non_text_message" };
   const messageId = m.message_id;
   const base = { chatId: ownerChatId, messageId };
+  // Allowlisted transport context only; anything else is dropped (it can never carry content or authority).
+  const told = Array.isArray(update.oxm_transport_status)
+    ? Array.from(new Set((update.oxm_transport_status as unknown[]).filter((v): v is TransportStatusContext => (TRANSPORT_STATUS_CONTEXT as readonly unknown[]).includes(v))))
+    : [];
+  const transport = told.length ? { transportContext: told } : {};
 
   const replied = obj(m.reply_to_message) ? m.reply_to_message : null;
   const replyTo = replied && int(replied.message_id) && (!obj(replied.chat) || replied.chat.id === ownerChatId) ? (replied.message_id as number) : null;
@@ -82,7 +88,7 @@ export function parseUpdate(update: TelegramUpdate, ownerChatId: number, botId: 
       return {
         kind: "goal",
         ...base,
-        inbound: { kind: "goal", idempotencyKey: `tg.goal.${messageId}`, text: goalText, ...(p ? { priority: p[1].toLowerCase() as InboundGoal["priority"] } : {}) },
+        inbound: { kind: "goal", idempotencyKey: `tg.goal.${messageId}`, text: goalText, ...(p ? { priority: p[1].toLowerCase() as InboundGoal["priority"] } : {}), ...transport },
       };
     }
     if (name === "tasks") return { kind: "tasks", ...base };
@@ -103,6 +109,6 @@ export function parseUpdate(update: TelegramUpdate, ownerChatId: number, botId: 
   return {
     kind: "reply",
     ...base,
-    inbound: { kind: "reply", idempotencyKey: `tg.msg.${messageId}`, replyToDeliveryRef: replyTo === null ? null : String(replyTo), replyToNoticeRef: replyRef, text: m.text },
+    inbound: { kind: "reply", idempotencyKey: `tg.msg.${messageId}`, replyToDeliveryRef: replyTo === null ? null : String(replyTo), replyToNoticeRef: replyRef, text: m.text, ...transport },
   };
 }

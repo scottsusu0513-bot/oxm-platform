@@ -3,6 +3,7 @@ import type { ProcessRunner } from "../workers/types";
 import { isValidRepo } from "./policy";
 import {
   PR_BASE_BRANCH,
+  type CommitComparer,
   type GitHubWriteTransport,
   type GitPushTransport,
   type RawRef,
@@ -72,7 +73,7 @@ function pickPr(json: unknown): RawWritePullRequest {
 }
 
 /** GitHub REST via `gh api` (uses gh's own stored auth; no token passes through this code). */
-export function createGhCliWriteTransport(runner: ProcessRunner, repoRoot: string): GitHubWriteTransport {
+export function createGhCliWriteTransport(runner: ProcessRunner, repoRoot: string): GitHubWriteTransport & CommitComparer {
   const gh = async (args: string[]): Promise<{ ok: boolean; notFound: boolean; json: unknown }> => {
     const res = await runner.spawn({ command: "gh", args: ["api", ...args], cwd: repoRoot }).exit;
     if (res.truncated) throw new Error("gh api output truncated");
@@ -95,6 +96,14 @@ export function createGhCliWriteTransport(runner: ProcessRunner, repoRoot: strin
       const sha = String((must(r, "get ref") as RawRef)?.object?.sha ?? "").toLowerCase();
       if (!isValidSha(sha)) throw new Error("gh api returned an invalid ref SHA");
       return sha;
+    },
+    async compareCommits(repo, baseSha, headSha) {
+      if (!isValidSha(baseSha) || !isValidSha(headSha)) throw new Error("refusing compare: invalid SHA");
+      const r = await gh([`${ghRepoPath(repo)}/compare/${baseSha}...${headSha}`, "--jq", "{status: .status}"]);
+      if (!r.ok && r.notFound) return null;
+      const status = String((must(r, "compare") as { status?: unknown })?.status ?? "");
+      if (status !== "ahead" && status !== "behind" && status !== "identical" && status !== "diverged") throw new Error("gh api returned an unknown compare status");
+      return status;
     },
     async createBranchRef(repo, branch, sha) {
       const name = checkTaskBranchName(branch);

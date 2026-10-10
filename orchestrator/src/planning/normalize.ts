@@ -1,7 +1,7 @@
 import { AGENT_INTENTS, TASK_CREATING_INTENTS, modeForIntent, type AgentIntent, type TaskCreatingIntent } from "../domain/types";
-import { isDangerousValue } from "../store/sanitize";
+import { isDangerousValue, REDACTED } from "../store/sanitize";
 import { validatePlannerGoal } from "./structured";
-import type { CriterionReview, IntentDecision } from "./types";
+import { FOLLOW_UP_TOPICS, type CriterionReview, type FollowUpTopic, type IntentDecision } from "./types";
 
 const text = (v: unknown, max: number): string | null => {
   if (typeof v !== "string") return null;
@@ -44,11 +44,26 @@ export function normalizeIntentDecision(raw: unknown, input: { knownTaskIds: rea
       ...(areas ? { workAreas: { programming: areas.programming === true, visual: areas.visual === true } } : {}),
       programmingObjective: part(r.programmingObjective),
       visualObjective: part(r.visualObjective),
+      ownerReply: text(r.ownerReply, 600),
     };
   }
-  if (input.requireTask) return { kind: "clarify", question: "/goal creates a new task, but this reads like a question about an existing task. Send it without /goal." };
+  if (input.requireTask) return { kind: "clarify", question: "「任務：」/goal creates a new task, but this reads like a question about an existing task. Send it without 「任務：」 or /goal." };
   const taskId = typeof r.taskId === "string" && input.knownTaskIds.includes(r.taskId) ? r.taskId : null;
   const kind = intent as Exclude<AgentIntent, TaskCreatingIntent>;
+  if (kind === "task_follow_up") {
+    // Only the fixed topic set survives; order and duplicates are normalized. Unknown topics are dropped.
+    // Missing field (older planner output): topics stay unknown and the answer falls back to the task's outcome.
+    const reply = text(r.ownerReply, 1_200);
+    const ownerReply = reply ? { ownerReply: reply } : {};
+    if (!Array.isArray(r.followUpTopics)) return { kind, intent: kind, taskId, ...ownerReply };
+    const raw = r.followUpTopics as unknown[];
+    const topics = FOLLOW_UP_TOPICS.filter((t) => raw.includes(t)) as FollowUpTopic[];
+    return { kind, intent: kind, taskId, topics, ...ownerReply };
+  }
+  if (kind === "retry_task") {
+    const reply = text(r.ownerReply, 1_200);
+    return { kind, intent: kind, taskId, ...(reply ? { ownerReply: reply } : {}) };
+  }
   return { kind, intent: kind, taskId };
 }
 
@@ -72,6 +87,29 @@ export function normalizeConstraintVerdicts(raw: unknown, ids: readonly string[]
   }
   for (const id of Array.from(dup)) out.set(id, { status: "unsupported", evidence: "reviewer returned conflicting verdicts" });
   return out;
+}
+
+export const MAX_OWNER_ANSWER = 4_000;
+
+/**
+ * The Manager's owner answer (read-only work), or null when missing or not a
+ * string. Output hygiene only: line endings normalized, secret-like
+ * substrings redacted, length bounded. The Manager's prose is NOT
+ * re-validated claim by claim; that judgement is the Manager's.
+ */
+export function normalizeOwnerAnswer(raw: unknown): string | null {
+  const value = raw && typeof raw === "object" ? (raw as { ownerAnswer?: unknown }).ownerAnswer : undefined;
+  if (typeof value !== "string") return null;
+  const answer = value
+    .replace(/\r\n?/g, "\n")
+    .replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, "")
+    .replace(/\b(bearer|basic)\s+\S+/gi, REDACTED)
+    .split(/(\s+)/)
+    .map((tok) => (isDangerousValue(tok) ? REDACTED : tok))
+    .join("")
+    .trim();
+  if (!answer) return null;
+  return answer.length > MAX_OWNER_ANSWER ? `${answer.slice(0, MAX_OWNER_ANSWER - 1)}…` : answer;
 }
 
 /**

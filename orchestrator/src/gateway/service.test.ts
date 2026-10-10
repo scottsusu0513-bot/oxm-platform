@@ -3,6 +3,7 @@ import { createFakeRuntimeScheduler, createInMemoryIntakeRepository } from "../i
 import { createAgentRuntimeService } from "../intake/service";
 import type { IntakeDependencies } from "../intake/types";
 import { approvalAuthorizes } from "../store/repositories";
+import { COMMIT_PUBLISH_ACTION, commitApprovalBinding, type CommitApprovalEvidence } from "../workers/prompt";
 import { createMemoryStore } from "../store/memory";
 import { GatewayError } from "./errors";
 import {
@@ -221,6 +222,49 @@ describe("AgentGatewayService trusted approvals", () => {
       },
     });
     expect(JSON.stringify(result)).not.toMatch(/rawText|prompt|token|stdout|secret/i);
+  });
+
+  it("shared workspace: relays excluded foreign paths and unverified validations, and rejects an exclusion that overlaps the task delta", async () => {
+    const h = harness();
+    const { taskId } = await accepted(h);
+    const evidence: CommitApprovalEvidence = {
+      taskId,
+      branch: `agent/task-${taskId}-x`,
+      expectedHeadSha: "a".repeat(40),
+      changedPaths: ["client/src/Card.tsx"],
+      excludedPaths: ["orchestrator/src/ledger.ts"],
+      contentIdentities: [{ path: "client/src/Card.tsx", mode: "100644", blob: "b".repeat(40) }],
+      gitMetadataDigest: "c".repeat(64),
+      allowedScope: ["client/"],
+      validations: [
+        { name: "tests", requested: true, executed: false, status: "unavailable", trusted: true },
+        { name: "typecheck", requested: true, executed: true, status: "unverified", trusted: true },
+      ],
+      acceptance: [{ criterionId: "AC-1", status: "satisfied", evidenceType: "manager_review", reference: "review:1" }],
+      observedRisk: "green",
+      managerDecision: "accepted",
+      action: COMMIT_PUBLISH_ACTION,
+      authorization: { commit: true, normalPush: true, openOrReusePr: true, merge: false, deploy: false },
+    } as CommitApprovalEvidence;
+    const requirement: PendingApprovalRequirement = {
+      approvalRequestId: "approval-commit-1",
+      taskId,
+      kind: "commit_publish",
+      phase: "commit_publish",
+      risk: "green",
+      action: COMMIT_PUBLISH_ACTION,
+      bindingTarget: commitApprovalBinding(evidence),
+      requestedAt: "2026-10-05T00:00:00.000Z",
+      expiresAt: "2026-10-05T01:00:00.000Z",
+      status: "pending",
+      reasonSummary: "",
+      commitEvidence: evidence,
+    };
+    h.requirements.set(taskId, requirement);
+    const read = await h.service.getPendingApproval(h.call("reader", { taskId }));
+    expect(read.approval?.commitEvidence).toMatchObject({ excludedPaths: ["orchestrator/src/ledger.ts"], validations: [{ status: "unavailable" }, { status: "unverified" }] });
+    h.requirements.set(taskId, { ...requirement, commitEvidence: { ...evidence, excludedPaths: ["client/src/Card.tsx"] } });
+    await expect(h.service.getPendingApproval(h.call("reader", { taskId }))).rejects.toMatchObject({ code: "unavailable" });
   });
 
   it("stores a trusted exact-bound approval, re-evaluates once, and satisfies approvalAuthorizes", async () => {

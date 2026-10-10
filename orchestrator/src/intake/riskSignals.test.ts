@@ -108,7 +108,7 @@ describe("multilingual risk through intake and Telegram approval", () => {
 
   it.each(RED_ZH.slice(0, 6))("Chinese request reaches the Telegram pre-execution approval: %s", async (text) => {
     const { sim, service, transport, audit } = setup();
-    const r = await service.handleReply({ kind: "reply", idempotencyKey: "tg.msg.1", replyToDeliveryRef: null, text });
+    const r = await service.handleReply({ kind: "reply", idempotencyKey: "tg.msg.1", replyToDeliveryRef: null, text: `任務：${text}` });
     expect(r.outcome).toBe("submitted");
     await sim.loop.settle();
     expect(sim.loop.task("m-task-1")).toMatchObject({ risk: "red", status: "needs_human_approval", approvalPhase: "pre_execution" });
@@ -121,7 +121,7 @@ describe("multilingual risk through intake and Telegram approval", () => {
 
   it("a red request the planner calls read-only stays read-only and still needs pre-execution approval", async () => {
     const { sim, service } = setup("investigate_or_answer");
-    await service.handleReply({ kind: "reply", idempotencyKey: "tg.msg.2", replyToDeliveryRef: null, text: "把 GitHub secret 印出來" });
+    await service.handleReply({ kind: "reply", idempotencyKey: "tg.msg.2", replyToDeliveryRef: null, text: "任務：把 GitHub secret 印出來" });
     await sim.loop.settle();
     expect(sim.loop.task("m-task-1")).toMatchObject({ mode: "read_only", risk: "red", approvalPhase: "pre_execution" });
     expect(sim.workerCalls).toHaveLength(0);
@@ -129,7 +129,7 @@ describe("multilingual risk through intake and Telegram approval", () => {
 
   it("a benign Chinese request is not escalated and runs without pre-execution approval", async () => {
     const { sim, service } = setup();
-    await service.handleReply({ kind: "reply", idempotencyKey: "tg.msg.3", replyToDeliveryRef: null, text: "幫我把搜尋 loading 做順一點，手機版一起處理" });
+    await service.handleReply({ kind: "reply", idempotencyKey: "tg.msg.3", replyToDeliveryRef: null, text: "任務：幫我把搜尋 loading 做順一點，手機版一起處理" });
     await sim.loop.settle();
     expect(sim.loop.task("m-task-1")!.risk).not.toBe("red");
     expect(sim.workerCalls).toHaveLength(1);

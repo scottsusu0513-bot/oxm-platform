@@ -45,8 +45,21 @@ export interface ScopeEvidence {
   changedPaths: readonly string[];
 }
 
-export const VALIDATION_STATUSES = ["passed", "failed", "skipped", "missing"] as const;
+/**
+ * passed: executed and passed. failed: executed and failed with no sign of an
+ * infrastructure cause and no unrelated workspace state present — the only
+ * status that counts as failed_due_to_task. unavailable: could not run because
+ * of infrastructure (package manager, dependencies, tooling, external service).
+ * unverified: ran but the outcome cannot be attributed to the task (timeout,
+ * killed, or a failure while unrelated workspace changes were present).
+ * skipped / missing: not run (no command configured). Every status other than
+ * passed/failed is reported to the owner as not verified; none of them is a
+ * task failure or a reason to repair.
+ */
+export const VALIDATION_STATUSES = ["passed", "failed", "skipped", "missing", "unavailable", "unverified"] as const;
 export type ValidationStatus = (typeof VALIDATION_STATUSES)[number];
+/** Statuses that mean "not verified" (not a task failure). */
+export const UNVERIFIED_VALIDATION_STATUSES: readonly ValidationStatus[] = ["skipped", "missing", "unavailable", "unverified"];
 
 /** 2. One validation (e.g. "tests", "typecheck"). No raw logs. */
 export interface ValidationEvidence {
@@ -96,6 +109,13 @@ export interface AcceptanceEvidence {
   /** ID of the backing record: validation name, CI check name, "scope", or a human review id. */
   reference: string | null;
   summary?: string;
+  /**
+   * Safeguard criterion (generic "existing behaviour preserved", "required
+   * validations pass"): only a CONFIRMED failure blocks it. When it is merely
+   * unverified it is reported to the owner as an advisory, never repaired.
+   * Owner goal criteria never carry this flag.
+   */
+  confirmedFailureOnly?: boolean;
 }
 
 export const APPROVAL_EVIDENCE_STATES = ["none", "pending", "approved", "rejected", "expired"] as const;
@@ -257,6 +277,17 @@ export interface ManagerValidation {
   reasonCodes: string[];
   triggers: EscalationTrigger[];
   intents: EscalationIntent[];
+  /**
+   * Non-blocking observations the owner is told about (unverified validations,
+   * unverified safeguard criteria). They never change the decision.
+   */
+  advisories: Advisory[];
+}
+
+export interface Advisory {
+  evidenceId: string;
+  code: "validation_unverified" | "acceptance_unverified_advisory";
+  summary?: string;
 }
 
 // ---------------------------------------------------------------------------

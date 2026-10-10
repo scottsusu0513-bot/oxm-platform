@@ -23,7 +23,9 @@ afterEach(() => {
   root = "";
 });
 
-async function approvedWorkspace() {
+const FOREIGN = "orchestrator/src/foreign-wip.ts";
+
+async function approvedWorkspace(opts: { foreign?: boolean } = {}) {
   root = mkdtempSync(join(tmpdir(), "oxm-trusted-commit-"));
   const repo = join(root, "work");
   const git = (...args: string[]) => execFileSync("git", args, { cwd: repo, encoding: "utf8" }).trim();
@@ -55,15 +57,22 @@ async function approvedWorkspace() {
 
   // Worker edit (no Git writes), then the state the Manager presents for approval.
   writeFileSync(join(repo, PATH), APPROVED);
+  if (opts.foreign) {
+    // Another actor's uncommitted work outside the task scope (shared workspace).
+    mkdirSync(join(repo, "orchestrator", "src"), { recursive: true });
+    writeFileSync(join(repo, FOREIGN), "export const wip = true;\n");
+  }
   const observed = await observeCommitState(leased.lease, deps);
   if (!observed.ok) throw new Error(observed.reason);
   expect(observed.gitMetadataDigest).toBe(prepared.prepared.gitMetadataDigest);
+  const owned = observed.dirtyPaths.filter((p) => p !== FOREIGN);
   const evidence: CommitApprovalEvidence = normalizeCommitApprovalEvidence({
     taskId: plan.taskId,
     branch: plan.branch,
     expectedHeadSha: base,
-    changedPaths: observed.dirtyPaths,
-    contentIdentities: observed.contentIdentities,
+    changedPaths: owned,
+    ...(opts.foreign ? { excludedPaths: [FOREIGN] } : {}),
+    contentIdentities: observed.contentIdentities.filter((id) => owned.includes(id.path)),
     gitMetadataDigest: observed.gitMetadataDigest,
     allowedScope: ["server/drift/"],
     validations: [{ name: "tests", requested: true, executed: true, status: "passed", trusted: true }],
@@ -91,6 +100,14 @@ async function approvedWorkspace() {
 }
 
 describe("trusted commit against a real Git repository", () => {
+  it("shared workspace: commits only the approved task paths and leaves the excluded foreign change untouched", async () => {
+    const { git, base, commit } = await approvedWorkspace({ foreign: true });
+    const result = await commit();
+    expect(result.ok).toBe(true);
+    expect(git("diff", "--name-only", base, "HEAD")).toBe(PATH);
+    expect(git("status", "--porcelain", "--untracked-files=all")).toBe(`?? ${FOREIGN}`);
+  });
+
   it("binds the real Git blob id and commits exactly the approved bytes once", async () => {
     const { repo, git, base, evidence, commit } = await approvedWorkspace();
     expect(evidence.contentIdentities).toEqual([{ path: PATH, mode: "100644", blob: git("hash-object", "--no-filters", "--", PATH) }]);

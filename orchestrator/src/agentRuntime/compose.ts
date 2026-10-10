@@ -5,19 +5,22 @@ import { createLifecycleLeaseRegistry } from "../codespace/lease";
 import { createMemoryLifecycleStateRepository } from "../codespace/state";
 import { checkLiveSafety, createGhReadTransport, readCodespaceObservation } from "../e2e/liveAdapters";
 import { createFakeGatewayAudit, createFakeRateLimiter, createInMemoryGatewayDecisionRepository, createInMemoryHumanDecisionRepository } from "../gateway/fake";
-import { createManagerApprovalRequirementReader, createManagerHumanDecisionReader, createManagerLoopGatewayEvents } from "../gateway/integration";
+import { createManagerApprovalRequirementReader, createManagerHumanDecisionReader, createManagerLoopGatewayEvents, createManagerRetrySourcePort } from "../gateway/integration";
 import { createAgentGatewayService } from "../gateway/service";
 import type { AgentGatewayService } from "../gateway/types";
 import { createGitHubReadClient } from "../github/client";
 import { DEFAULT_REQUIRED_CHECKS } from "../github/types";
 import { createGitHubWriteClient } from "../githubWrite/client";
 import { createWorkspaceLeaseRegistry } from "../githubWrite/lease";
+import { restoreRuntimeWorkspace } from "../githubWrite/workspace";
+import { establishRuntimeBaseline, type RuntimeBaseline } from "../branches/taskBase";
+import { loadRecordedBaseline, recordBaseline, RUNTIME_BASELINE_AUDIT_TASK } from "./runtimeBaseline";
 import { createGhCliWriteTransport, createGitPushTransport } from "../githubWrite/transport";
 import type { HumanOwnerSession } from "../humanInteraction/auth";
 import { createInMemoryIntakeRepository } from "../intake/fake";
 import { createManagerLoopRuntimePort } from "../intake/runtime";
 import { createAgentRuntimeService } from "../intake/service";
-import { createRepositoryJournal, REPOSITORY_JOURNAL_EVENT } from "../persistence/journal";
+import { createRepositoryJournal, describeJournalReplayDetail, JournalReplayError, REPOSITORY_JOURNAL_EVENT } from "../persistence/journal";
 import { createApprovalPort, createQaPort, createRepoStatePort, createWorkerPort, createWorkspacePort } from "../scheduler/adapters";
 import { createManagerLoop, type ManagerLoop } from "../scheduler/loop";
 import { createAuditCheckpointRepository } from "../scheduler/persistence";
@@ -34,8 +37,9 @@ import { describeIssues, reconcileRuntimeState } from "./reconcile";
 import { resolveRepoRoot } from "./repoRoot";
 import { createCommitRangeDiff, createRepoFileReader, createRepoSearch, createWorkingTreeDiff } from "./reviewEvidence";
 import { createManagerReasoningPort, type ManagerReasoningBackends } from "./managerPort";
-import type { GoalReviewer, IntentPlanner } from "../planning/types";
-import { createInMemoryInterpretationRepository } from "../gateway/fake";
+import type { GoalReviewer, IntentPlanner, OwnerNoticeComposer } from "../planning/types";
+import { createReadOnlyInspector, type OwnerQuestionAnswerer } from "../planning/ownerQuestion";
+import { createInMemoryInterpretationRepository, INTERPRETATION_REPLAY_DUPLICATE_POLICY } from "../gateway/fake";
 import { createTrustedValidationEvidencePort } from "./validation";
 
 export interface AgentRuntimeOptions {
@@ -52,7 +56,21 @@ export interface AgentRuntimeOptions {
   reviewer?: GoalReviewer | null;
   /** GPT Manager reasoning backends (repair diagnosis, guidance interpretation, combined review). */
   manager?: ManagerReasoningBackends | null;
+  /** Manager answers to owner questions without a task (read-only repository evidence only). */
+  questionAnswerer?: OwnerQuestionAnswerer | null;
+  /** Manager's proactive owner message for a terminal task state that had no Manager turn. */
+  noticeComposer?: OwnerNoticeComposer | null;
+  /**
+   * Operator-acknowledged journal event ids to skip on replay (historical conflicting duplicates
+   * from a past concurrent runtime). Validated by the journal; once accepted they are recorded in
+   * the replay audit stream and honoured on later starts without being passed again.
+   */
+  supersededJournalEvents?: readonly string[];
 }
+
+/** Startup replay diagnostics; deliberately not the repository journal stream it describes. */
+export const JOURNAL_REPLAY_AUDIT_TASK = "runtime-journal-replay";
+const REPLAY_SKIP_EVENTS = { identical_historical_duplicate: "journal_duplicate_replay_ignored", operator_superseded: "journal_replay_record_superseded" } as const;
 
 export interface AgentRuntime {
   loop: ManagerLoop;
@@ -61,6 +79,10 @@ export interface AgentRuntime {
   restoredTaskIds: string[];
   /** Human-readable descriptions of recoveries applied by --reconcile. */
   reconciled: string[];
+  /** Branch + SHA the runtime runs from; new task branches never start older than it. */
+  runtimeBaseline: RuntimeBaseline;
+  /** Startup return of a finished task-branch checkout to the runtime branch, when it happened. */
+  workspaceRestored: string | null;
   activeTaskIds(): string[];
   allTaskIds(): string[];
 }
@@ -114,8 +136,41 @@ export async function createAgentRuntime(config: AgentRuntimeConfig, options: Ag
     return fail(safety.failureCode, failed?.reason ?? "live safety gate failed");
   }
 
+  // Runtime baseline: the runtime branch/HEAD this process runs from, durable across restarts on a task branch.
+  const git = createGitInspector(runner, config.base.repoRoot);
+  let started: Awaited<ReturnType<typeof git.status>>;
+  try {
+    started = await git.status();
+  } catch {
+    return fail("runtime_baseline_unavailable", "workspace branch/HEAD could not be read; refusing to start");
+  }
+  const established = establishRuntimeBaseline(started, loadRecordedBaseline(options.audit));
+  if (!established.ok) return fail(established.code, established.reason);
+  const baseline = established.baseline;
+  if (established.record) recordBaseline(options.audit, nextAuditId(), baseline);
+  // Started on a finished task branch (stopped before the idle restore, or a legacy checkout):
+  // return to the runtime branch now so the next cold start boots the runtime.
+  const restoreWorkspace = async (taskActive: boolean): Promise<boolean> => {
+    const result = await restoreRuntimeWorkspace({ baseline, taskActive }, { runner, git, repoRoot: config.base.repoRoot });
+    if (result.ok && result.decision.action !== "return") return false;
+    options.audit.append({
+      id: nextAuditId(),
+      taskId: RUNTIME_BASELINE_AUDIT_TASK,
+      actor: "system",
+      event: result.ok ? "runtime_workspace_restored" : "runtime_workspace_restore_failed",
+      metadata: result.ok ? { branch: baseline.branch, sha: baseline.sha } : { error: result.error },
+    });
+    return result.ok;
+  };
+  const workspaceRestored = (await restoreWorkspace(active.some((t) => t.plan !== null))) ? `workspace returned from ${started.branch} to runtime branch ${baseline.branch}` : null;
+
   // Durable runtime / Gateway repositories (journaled into the audit log) and replay.
-  const journal = createRepositoryJournal({ audit: options.audit, nextId: nextAuditId, now });
+  const replayAudit = options.audit.list({ taskId: JOURNAL_REPLAY_AUDIT_TASK });
+  const acceptedOverrides = replayAudit
+    .filter((e) => e.event === REPLAY_SKIP_EVENTS.operator_superseded && typeof e.metadata.journalEventId === "string")
+    .map((e) => e.metadata.journalEventId as string);
+  const superseded = Array.from(new Set([...acceptedOverrides, ...(options.supersededJournalEvents ?? [])]));
+  const journal = createRepositoryJournal({ audit: options.audit, nextId: nextAuditId, now, superseded });
   const clock = journal.clock;
   const tasks = journal.wrap("tasks", createInMemoryTaskRepository(clock), ["create", "update", "transition"]);
   const runs = journal.wrap("runs", createInMemoryTaskRunRepository(clock), ["create", "update"]);
@@ -124,11 +179,28 @@ export async function createAgentRuntime(config: AgentRuntimeConfig, options: Ag
   const gatewayDecisions = journal.wrap("gatewayDecisions", createInMemoryGatewayDecisionRepository(), ["create", "markEventEmitted"]);
   const humanDecisionSubmissions = journal.wrap("humanDecisionSubmissions", createInMemoryHumanDecisionRepository(), ["create", "markEventEmitted"]);
   // Stored interpretations make a redelivered owner message deterministic (the planner is never asked twice).
-  const interpretations = journal.wrap("interpretations", createInMemoryInterpretationRepository(), ["create"]);
+  const interpretations = journal.wrap("interpretations", createInMemoryInterpretationRepository(), ["create"], {
+    replayDuplicate: INTERPRETATION_REPLAY_DUPLICATE_POLICY,
+  });
   try {
     journal.replay();
-  } catch {
-    return fail("journal_replay_failed", "durable runtime journal could not be replayed; refusing to start");
+  } catch (error) {
+    // Only the journal's safe identifiers are reported: never record payloads or repository error text.
+    const diagnostics = error instanceof JournalReplayError ? [describeJournalReplayDetail(error.detail)] : ["category=unexpected_replay_error"];
+    return fail("journal_replay_failed", "durable runtime journal could not be replayed; refusing to start", diagnostics);
+  }
+  // Recovered historical duplicates are audited once each, outside the replayed journal stream.
+  const audited = new Set(replayAudit.map((e) => `${e.event}:${String(e.metadata.journalEventId)}`));
+  for (const skip of journal.replaySkips()) {
+    const event = REPLAY_SKIP_EVENTS[skip.reason];
+    if (audited.has(`${event}:${skip.eventId}`)) continue;
+    options.audit.append({
+      id: nextAuditId(),
+      taskId: JOURNAL_REPLAY_AUDIT_TASK,
+      actor: "system",
+      event,
+      metadata: { journalEventId: skip.eventId, repository: skip.repository, method: skip.method, recordId: skip.key, reason: skip.reason },
+    });
   }
 
   // Startup consistency between the journal and the Manager checkpoint.
@@ -161,9 +233,14 @@ export async function createAgentRuntime(config: AgentRuntimeConfig, options: Ag
 
   const repo = config.base.expectedRepository;
   const writeTransport = createGhCliWriteTransport(runner, config.base.repoRoot);
-  const github = createGitHubWriteClient(repo, { transport: writeTransport, push: createGitPushTransport(runner, config.base.repoRoot) });
+  // One task-base resolver for the planner and the branch creator's stale-base check.
+  const repoState = createRepoStatePort(writeTransport, repo, baseline);
+  const github = createGitHubWriteClient(repo, {
+    transport: writeTransport,
+    push: createGitPushTransport(runner, config.base.repoRoot),
+    taskBaseSha: () => repoState.taskBaseSha(),
+  });
   const leases = createWorkspaceLeaseRegistry();
-  const git = createGitInspector(runner, config.base.repoRoot);
   const identity = {
     codespaceName: config.base.codespaceName,
     repository: { owner: repo.owner, repository: repo.repo },
@@ -239,7 +316,12 @@ export async function createAgentRuntime(config: AgentRuntimeConfig, options: Ag
       ...createRepoSearch(runner, config.base.repoRoot),
     }),
     qa: createQaPort(createGitHubReadClient(createGhReadTransport(runner, config.base.repoRoot)), repo, DEFAULT_REQUIRED_CHECKS),
-    repo: createRepoStatePort(writeTransport, repo),
+    repo: repoState,
+    runtimeWorkspace: {
+      async restoreIfIdle() {
+        await restoreWorkspace(false);
+      },
+    },
     approvals: createApprovalPort(approvals, now),
     ...(options.manager
       ? {
@@ -291,12 +373,17 @@ export async function createAgentRuntime(config: AgentRuntimeConfig, options: Ag
     humanDecisionRequirements: createManagerHumanDecisionReader(loop, (id) => tasks.get(id)?.requesterId ?? null),
     humanDecisionSubmissions,
     ...(options.planner ? { intentPlanner: options.planner } : {}),
+    ...(options.noticeComposer ? { ownerNoticeComposer: options.noticeComposer } : {}),
+    ...(options.questionAnswerer
+      ? { readOnlyInspector: createReadOnlyInspector(options.questionAnswerer, { read: createRepoFileReader(config.base.repoRoot), ...createRepoSearch(runner, config.base.repoRoot) }) }
+      : {}),
     interpretations,
+    retrySources: createManagerRetrySourcePort(loop, (key) => intakeRecords.getByKey(key)?.taskId ?? null),
     taskDirectory: () =>
       loop
         .tasks()
         .reverse()
-        .map((t) => ({ taskId: t.taskId, title: t.title, status: t.status, mode: t.mode })),
+        .map((t) => ({ taskId: t.taskId, title: t.title, status: t.status, mode: t.mode, retryOf: t.retryOf })),
     rateLimiter: createFakeRateLimiter(),
     audit: createFakeGatewayAudit(),
     now,
@@ -321,6 +408,8 @@ export async function createAgentRuntime(config: AgentRuntimeConfig, options: Ag
       checkpointRestored: checkpoint !== null,
       restoredTaskIds: loop.tasks().map((t) => t.taskId),
       reconciled,
+      runtimeBaseline: baseline,
+      workspaceRestored,
       activeTaskIds: () => loop.tasks().filter((t) => isActive(t.status)).map((t) => t.taskId),
       allTaskIds: () => loop.tasks().map((t) => t.taskId),
     },

@@ -558,19 +558,26 @@ describe("Manager Loop — trusted approval notifications", () => {
     expect(sim.remote.calls.filter((call) => call.startsWith("PUSH"))).toHaveLength(1);
   });
 
-  it("refuses Worker results when Git metadata changed before Manager review", async () => {
+  it("unattributed Git metadata drift before Manager review: implementation reviewed, publication paused, Worker not blamed", async () => {
     const sim = createSimulation({ autoApproveCommits: false, holdWorkers: true });
     await sim.create(fakeIntake({ taskId: "meta" }));
     sim.mutateWorkspace("meta", { gitMetadataDigest: "e".repeat(64) });
     sim.releaseWorker("meta");
     await sim.loop.settle();
-    expect(sim.loop.task("meta")?.status).toBe("blocked");
-    expect(sim.loop.task("meta")?.approvalPhase).toBeNull();
+    const t = sim.loop.task("meta")!;
+    // The Manager reviewed the implementation (evidence recorded) …
+    expect(t.evidence?.changedPaths.length).toBeGreaterThan(0);
+    expect(t.workerErrorType).toBeNull();
+    // … but publication waits for re-established trusted Git evidence: no approval request, nothing published.
+    expect(t.status).toBe("blocked");
+    expect(t.blockingReason).toBe("publication paused: Git publication evidence must be re-established");
+    expect(t.escalations.at(-1)).toEqual({ trigger: "git_publication_evidence_refresh_required", action: "block" });
+    expect(t.gitMetadata).toMatchObject({ workerViolation: false, publicationTrust: "refresh_required", changes: [{ component: "opaque", classification: "unattributed_change" }] });
+    expect(t.approvalPhase).toBeNull();
     expect(sim.commits).toEqual([]);
     expect(sim.remote.calls.filter((call) => call.startsWith("PUSH") || call.startsWith("CREATE pr"))).toEqual([]);
-    // No earlier Worker failure: the evidence error itself is the primary failure and stays surfaced.
-    expect(sim.loop.task("meta")?.workerErrorType).toBeNull();
-    expect(sim.loop.task("meta")?.blockingReason).toBe("orchestration error (Error)");
+    const audit = sim.audit.find((e) => e.taskId === "meta" && e.event === "publication_evidence_refresh_required");
+    expect(audit?.metadata).toMatchObject({ gitMetadata: { publicationTrust: "refresh_required", workerViolation: false } });
   });
 
   it("a secondary evidence error never masks a primary Worker failure with headSha=null", async () => {
@@ -585,9 +592,17 @@ describe("Manager Loop — trusted approval notifications", () => {
     expect(t?.blockingReason).not.toContain("orchestration error");
     expect(t?.headSha).toBeNull();
     expect(t?.escalations).toEqual([
-      { trigger: "secondary:evidence_record_failed(Error)", action: "block" },
+      { trigger: "secondary:evidence_record_failed(git_metadata_violation)", action: "block" },
       { trigger: "worker_git_metadata_changed", action: "block" },
     ]);
+    // Fallback audit: typed code, primary error, and the classified component survive the recorder failure.
+    const fallback = sim.audit.find((e) => e.taskId === "meta6" && e.event === "evidence_record_failed");
+    expect(fallback?.metadata).toMatchObject({
+      evidenceError: "git_metadata_violation",
+      primaryError: "git_metadata_changed",
+      gitMetadata: { workerViolation: true, changes: [{ component: "repo.hooks", classification: "worker_security_violation", entries: ["git:hooks/pre-commit"] }] },
+    });
+    expect(t?.gitMetadata?.summary).toBe("repo.hooks=worker_security_violation[git:hooks/pre-commit]");
     expect(t?.budget.workerExecutions).toBe(1);
     expect(sim.commits).toEqual([]);
     expect(sim.remote.calls.filter((call) => call.startsWith("PUSH") || call.startsWith("CREATE pr"))).toEqual([]);

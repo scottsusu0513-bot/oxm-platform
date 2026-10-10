@@ -80,8 +80,9 @@ function setup(reviews: unknown[], diagnoses: (unknown | ((i: CombinedRepairInpu
   };
   const sim = createSimulation({ autoApproveCommits: false, manager, goalReviewer });
   const h = createHumanInteractionHarness({ loop: sim.loop, approvals: sim.approvals, audit, now: sim.ports.now, planner, idPrefix: "m" });
-  const say = async (key: string, text: string) => {
-    const r = await h.service.handleReply({ kind: "reply", idempotencyKey: key, replyToDeliveryRef: null, text });
+  // formal=true: a new 「任務：」 request; false: ordinary owner text (e.g. guidance on a pending decision).
+  const say = async (key: string, text: string, formal = true) => {
+    const r = await h.service.handleReply({ kind: "reply", idempotencyKey: key, replyToDeliveryRef: null, text: formal ? `任務：${text}` : text });
     await sim.loop.settle();
     return r;
   };
@@ -123,8 +124,8 @@ describe("combined-review failure enters cross-part repair", () => {
     expect(lead.budget.managerCalls).toMatchObject({ combinedReview: 2, combinedDiagnosis: 1, interpretation: 1 });
     expect(x.diagnoseCalls[0]).toMatchObject({ round: 1, cycle: 1, stagnated: false, conflicts: ["UI reads isVerified, API returns verified"] });
     await x.service.observe();
-    const repairing = x.milestones().find((m) => m.milestone === "combined_repairing")!;
-    expect(repairing.detail).toContain("我已經安排 Codex 修正畫面部分，修好後會再整體檢查一次。");
+    // The automatic cross-part repair is internal: audited, not a separate owner message; the result is.
+    expect(x.milestones().some((m) => m.milestone === "combined_repairing" || m.milestone === "part_completed")).toBe(false);
     expect(x.milestones().filter((m) => m.milestone === "combined_accepted")).toHaveLength(1);
     for (const m of x.milestones()) expect(findInternalJargon(formatNotice(m))).toEqual([]);
   });
@@ -183,7 +184,7 @@ describe("combined-review failure enters cross-part repair", () => {
     expect(text).toMatch(/的程式和畫面兩部分合在一起，還沒達到你要的效果。/);
     expect(findInternalJargon(text)).toEqual([]);
     // The owner answers naturally (no Reply needed: exactly one pending decision); it binds to the same group.
-    const r = await x.say("tg.2", "以 API 為準，畫面配合調整就好");
+    const r = await x.say("tg.2", "以 API 為準，畫面配合調整就好", false);
     expect(r.outcome).toBe("resumed");
     await x.sim.loop.settle();
     const after = x.sim.loop.task("m-task-1")!;

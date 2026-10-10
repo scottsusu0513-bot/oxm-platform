@@ -1,23 +1,66 @@
 import type { AcceptanceEvidence, ValidationEvidence } from "../manager/types";
 import type { GoalAcceptanceContext } from "../scheduler/types";
-import { gatherSourceEvidence, type SourceEvidencePorts } from "../executive/evidencePlan";
-import { normalizeConstraintVerdicts, normalizeGoalReview } from "./normalize";
-import type { CriterionReview, GoalReviewer } from "./types";
+import { FIXED_GOAL_CRITERIA } from "../intake/normalize";
+import { excerptLineNumbers, excerptLines, gatherSourceEvidence, type LineRange, type SourceEvidencePorts } from "../executive/evidencePlan";
+import { normalizeConstraintVerdicts, normalizeGoalReview, normalizeOwnerAnswer } from "./normalize";
+import type { CriterionReview, GoalReviewer, TrustedWorkspaceEvidence } from "./types";
 
 export const MAX_REVIEW_DIFF = 150_000;
 const MAX_CITED_FILES = 8;
 const MAX_CITED_BYTES = 8_000;
 
-/** Repository paths an answer cites ("client/src/pages/Search.tsx", optionally with :line). */
-export function citedPaths(answer: string): string[] {
-  const out: string[] = [];
-  const re = /(?:^|[\s`'"(\[])((?:[A-Za-z0-9_.@-]+\/)+[A-Za-z0-9_.@-]+\.[A-Za-z0-9]{1,8})(?::\d+(?:-\d+)?)?/g;
-  for (let m = re.exec(answer); m && out.length < MAX_CITED_FILES; m = re.exec(answer)) {
+const MAX_CITED_RANGES = 4;
+const MAX_CITED_SPAN = 60;
+const CITED_CONTEXT_LINES = 8;
+
+export interface CitedLocation {
+  path: string;
+  /** Cited 1-based line ranges (empty when the path was cited without a line). */
+  ranges: LineRange[];
+}
+
+/**
+ * Repository paths an answer cites ("client/src/pages/Search.tsx", optionally
+ * with :line or :line-line), keeping the line references. Absolute and
+ * traversal paths are dropped; paths and ranges are bounded.
+ */
+export function citedLocations(answer: string): CitedLocation[] {
+  const out: CitedLocation[] = [];
+  const re = /(?:^|[\s`'"(\[])((?:[A-Za-z0-9_.@-]+\/)+[A-Za-z0-9_.@-]+\.[A-Za-z0-9]{1,8})(?::(\d{1,7})(?:-(\d{1,7}))?)?/g;
+  for (let m = re.exec(answer); m; m = re.exec(answer)) {
     const p = m[1];
-    if (p.startsWith("/") || p.split("/").some((seg: string) => seg === ".." || seg === ".") || out.includes(p)) continue;
-    out.push(p);
+    if (p.startsWith("/") || p.split("/").some((seg: string) => seg === ".." || seg === ".")) continue;
+    let loc = out.find((l) => l.path === p);
+    if (!loc) {
+      if (out.length >= MAX_CITED_FILES) continue;
+      loc = { path: p, ranges: [] };
+      out.push(loc);
+    }
+    if (!m[2] || loc.ranges.length >= MAX_CITED_RANGES) continue;
+    const a = Number(m[2]);
+    const b = m[3] ? Number(m[3]) : a;
+    const start = Math.max(1, Math.min(a, b));
+    const end = Math.min(Math.max(a, b), start + MAX_CITED_SPAN - 1);
+    if (!loc.ranges.some((r) => r.start === start && r.end === end)) loc.ranges.push({ start, end });
   }
   return out;
+}
+
+/** Repository paths an answer cites (see citedLocations). */
+export function citedPaths(answer: string): string[] {
+  return citedLocations(answer).map((l) => l.path);
+}
+
+/**
+ * Trusted excerpt of a cited file: the cited line ranges with context when
+ * they fall inside the file, otherwise the bounded file head.
+ */
+function citedExcerpt(content: string, ranges: readonly LineRange[]): { excerpt: string; lines: Set<number> } {
+  const ranged = ranges.length ? excerptLines(content, ranges, CITED_CONTEXT_LINES, MAX_CITED_BYTES) : null;
+  if (ranged) return ranged;
+  const head = content.slice(0, MAX_CITED_BYTES);
+  const complete = head.length === content.length ? head.split("\n").length : head.split("\n").length - 1;
+  return { excerpt: head, lines: new Set(Array.from({ length: complete }, (_, i) => i + 1)) };
 }
 
 export interface SemanticAcceptanceInput {
@@ -33,7 +76,22 @@ export interface SemanticAcceptanceInput {
   fileContent: (path: string) => string | null;
   /** Trusted repository listing/search used to gather the Manager's own source evidence (read-only work). */
   sourcePorts?: Omit<SourceEvidencePorts, "read">;
+  /**
+   * The orchestrator's own workspace verdict (read-only work), built only by
+   * the trusted evidence layer after its Git re-verification. Absent or
+   * internally inconsistent evidence is withheld, so "no change" criteria stay
+   * unsupported (fail closed). Never derived from the Worker's report.
+   */
+  workspace?: TrustedWorkspaceEvidence;
   timeoutMs: number;
+}
+
+/** Workspace evidence the reviewer may see: only a self-consistent verdict, otherwise none. */
+function consistentWorkspace(ws: TrustedWorkspaceEvidence | undefined): TrustedWorkspaceEvidence | undefined {
+  if (!ws || !Array.isArray(ws.changedPaths) || !Number.isInteger(ws.changedPathCount)) return undefined;
+  const none = ws.changedPathCount === 0;
+  if (ws.changedPathCount < ws.changedPaths.length || none !== (ws.changedPaths.length === 0) || ws.workspaceUnchanged !== none) return undefined;
+  return ws;
 }
 
 /**
@@ -59,18 +117,43 @@ export interface SemanticAcceptanceResult {
   citedFiles: string[];
   /** Semantic owner-constraint verdicts (only for constraints that were asked). */
   constraintVerdicts: { id: string; status: "satisfied" | "violated" | "unsupported"; evidence: string }[];
+  /**
+   * Read-only work whose goal criteria are all satisfied: the Manager's own
+   * answer for the owner, written in the same review call from the full
+   * Worker report plus the trusted evidence (null otherwise). Only output
+   * hygiene is applied; it is never re-verified and never the Worker's report.
+   */
+  ownerAnswer: string | null;
 }
 
+/**
+ * Status of a criterion backed by the trusted validations: failed only when a
+ * validation ran and failed because of the task; satisfied when all passed;
+ * otherwise unknown (could not be verified — infrastructure or unattributable).
+ */
+export function validationCriterionStatus(validations: readonly Pick<ValidationEvidence, "status">[]): AcceptanceEvidence["status"] {
+  if (validations.some((v) => v.status === "failed")) return "failed";
+  return validations.length > 0 && validations.every((v) => v.status === "passed") ? "satisfied" : "unknown";
+}
+
+/**
+ * Fixed safeguard criteria (see intake FIXED_GOAL_CRITERIA): only a confirmed
+ * violation (not_satisfied) blocks them; "unsupported" is reported, not repaired.
+ * Owner goal criteria are never safeguards.
+ */
+export const SAFEGUARD_GOAL_CRITERIA: readonly string[] = FIXED_GOAL_CRITERIA.change_code;
+
 export async function semanticAcceptance(input: SemanticAcceptanceInput): Promise<SemanticAcceptanceResult> {
-  const allPassed = input.validations.length > 0 && input.validations.every((v) => v.status === "passed");
-  const firstValidation = input.validations[0]?.name ?? null;
+  const technicalStatus = validationCriterionStatus(input.validations);
+  const technicalReference = (technicalStatus === "unknown" ? input.validations.find((v) => v.status !== "passed")?.name : input.validations[0]?.name) ?? null;
   const goalCriteria = input.goal.criteria.filter((c) => c.kind === "goal");
   let reviews: CriterionReview[] = [];
   let reviewUnavailable = false;
   let reviewCalls = 0;
-  let cited: string[] = [];
+  let citedPathList: string[] = [];
   const constraintIds = (input.goal.ownerConstraints ?? []).map((c) => c.id);
   let constraintVerdicts: SemanticAcceptanceResult["constraintVerdicts"] = [];
+  let ownerAnswer: string | null = null;
   if (goalCriteria.length > 0) {
     const unavailable = (reason: string): CriterionReview[] => goalCriteria.map((c) => ({ id: c.id, status: "unsupported", evidence: "", reason }));
     if (!input.reviewer) {
@@ -80,13 +163,15 @@ export async function semanticAcceptance(input: SemanticAcceptanceInput): Promis
     else {
       // Read-only answers and audit_and_fix audit reports are claims verified against the cited files.
       const reportMode = input.goal.mode === "read_only" || input.goal.goal?.intent === "audit_and_fix";
-      const citedFiles =
+      // Paths and line numbers come from the untrusted answer; the excerpt itself only from the trusted reader.
+      const cited =
         reportMode && input.answer
-          ? citedPaths(input.answer)
-              .map((path) => ({ path, content: input.fileContent(path) }))
-              .filter((f): f is { path: string; content: string } => f.content !== null)
-              .map((f) => ({ path: f.path, excerpt: f.content.slice(0, MAX_CITED_BYTES) }))
+          ? citedLocations(input.answer).flatMap((loc) => {
+              const content = input.fileContent(loc.path);
+              return content === null ? [] : [{ path: loc.path, ...citedExcerpt(content, loc.ranges) }];
+            })
           : [];
+      const citedFiles = cited.map((f) => ({ path: f.path, excerpt: f.excerpt }));
       // The Manager gathers source evidence from its own evidence plan, so a Worker that cites
       // nothing cannot leave the reviewer without the repository content the goal needs.
       const plan = input.goal.evidencePlan ?? null;
@@ -94,9 +179,16 @@ export async function semanticAcceptance(input: SemanticAcceptanceInput): Promis
         input.goal.mode === "read_only" && plan && plan.kind !== "change"
           ? (
               await gatherSourceEvidence({ plan, cited: [], ports: { read: input.fileContent, ...(input.sourcePorts ?? {}) } }).catch(() => [])
-            ).filter((f) => !citedFiles.some((c) => c.path === f.path))
+            ).filter((f) => {
+              // Same path as a cited file: keep it only when it shows lines the cited excerpt does not.
+              const c = cited.find((x) => x.path === f.path);
+              if (!c) return true;
+              const shown = excerptLineNumbers(f.excerpt);
+              return shown.size ? Array.from(shown).some((n) => !c.lines.has(n)) : !c.excerpt.includes(f.excerpt);
+            })
           : [];
-      cited = citedFiles.map((f) => f.path);
+      citedPathList = citedFiles.map((f) => f.path);
+      const workspace = consistentWorkspace(input.workspace);
       if (plan && !plan.validationIsEvidence && citedFiles.length === 0 && sourceEvidence.length === 0) {
         // No repository source at all: passing validations can never answer the question.
         reviews = goalCriteria.map((c) => ({
@@ -123,6 +215,7 @@ export async function semanticAcceptance(input: SemanticAcceptanceInput): Promis
             ...(sourceEvidence.length ? { sourceEvidence } : {}),
             ...(plan && plan.kind !== "change" ? { evidenceRequirements: plan.requirements } : {}),
             ...(input.goal.ownerConstraints?.length ? { ownerConstraints: input.goal.ownerConstraints } : {}),
+            ...(input.goal.mode === "read_only" && workspace ? { workspace } : {}),
           }),
           input.timeoutMs,
         );
@@ -130,6 +223,19 @@ export async function semanticAcceptance(input: SemanticAcceptanceInput): Promis
         reviews = normalizeGoalReview(raw, goalCriteria);
         const verdicts = normalizeConstraintVerdicts(raw, constraintIds);
         constraintVerdicts = constraintIds.filter((id) => verdicts.has(id)).map((id) => ({ id, ...verdicts.get(id)! }));
+        if (input.goal.mode === "read_only" && reviews.every((r) => r.status === "satisfied")) {
+          // The Manager's answer is its own synthesis; a missing one is malformed Manager output
+          // (infrastructure, like an outage): no verdict, no Worker re-run, no repair cycle.
+          ownerAnswer = normalizeOwnerAnswer(raw);
+          if (!ownerAnswer) throw new Error("review output has no owner answer");
+        } else if (
+          input.goal.mode !== "read_only" &&
+          // Owner criteria all met and no safeguard confirmed violated (an unverified safeguard is reported, not a gap).
+          reviews.every((r) => r.status === "satisfied" || (r.status === "unsupported" && isSafeguard(goalCriteria, r.id)))
+        ) {
+          // Change work: the Manager's result summary for the owner (optional; a template is the fallback).
+          ownerAnswer = normalizeOwnerAnswer(raw);
+        }
       } catch {
         reviews = unavailable("goal review failed or timed out");
         reviewUnavailable = true;
@@ -139,7 +245,15 @@ export async function semanticAcceptance(input: SemanticAcceptanceInput): Promis
   const byId = new Map(reviews.map((r) => [r.id, r]));
   const acceptance = input.goal.criteria.map((c): AcceptanceEvidence => {
     if (c.kind !== "goal")
-      return { criterionId: c.id, status: allPassed ? "satisfied" : "failed", evidenceType: "validation", reference: firstValidation };
+      return {
+        criterionId: c.id,
+        status: technicalStatus,
+        evidenceType: "validation",
+        reference: technicalReference,
+        ...(technicalStatus === "unknown"
+          ? { confirmedFailureOnly: true, summary: `${c.id} not verified: required validation(s) could not be completed in this environment (not a task failure)` }
+          : {}),
+      };
     const r = byId.get(c.id)!;
     if (r.status === "satisfied")
       return { criterionId: c.id, status: "satisfied", evidenceType: "manager_review", reference: `review:${input.reviewId}`, summary: `${c.id} met: ${r.evidence}`.slice(0, 300) };
@@ -148,10 +262,18 @@ export async function semanticAcceptance(input: SemanticAcceptanceInput): Promis
       status: r.status === "not_satisfied" ? "failed" : "unknown",
       evidenceType: "manager_review",
       reference: null,
-      summary: `${c.id} (${c.text.slice(0, 120)}) ${r.status === "not_satisfied" ? "not met" : "not supported by evidence"}: ${r.reason || "no reason given"}`.slice(0, 300),
+      // A safeguard is unverified, not failed, unless the reviewer confirmed a violation.
+      ...(r.status === "unsupported" && input.goal.mode !== "read_only" && SAFEGUARD_GOAL_CRITERIA.includes(c.text) ? { confirmedFailureOnly: true } : {}),
+      // The Manager's natural-language follow-up leads, so bounded renderings keep it intact.
+      summary: `${c.id} ${r.status === "not_satisfied" ? "not met" : "not supported by evidence"}: ${r.reason || "no reason given"} (criterion: ${c.text.slice(0, 120)})`.slice(0, 300),
     };
   });
-  return { acceptance, reviewUnavailable, reviewCalls, citedFiles: cited, constraintVerdicts };
+  return { acceptance, reviewUnavailable, reviewCalls, citedFiles: citedPathList, constraintVerdicts, ownerAnswer };
+}
+
+function isSafeguard(criteria: readonly { id: string; text: string }[], id: string): boolean {
+  const c = criteria.find((x) => x.id === id);
+  return c !== undefined && SAFEGUARD_GOAL_CRITERIA.includes(c.text);
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {

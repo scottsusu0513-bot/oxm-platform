@@ -7,12 +7,16 @@
  *   pnpm orchestrator:telegram -- --reconcile     apply deterministic startup recoveries, then run
  *   pnpm orchestrator:telegram -- --submit-smoke  diagnostic: also submit the smoke fixture task once
  *
+ * Update source: OXM_AGENT_TELEGRAM_SOURCE=telegram (default, direct getUpdates polling;
+ * the rollback mode) or gateway (pull from the Wake Gateway queue with
+ * OXM_WAKE_GATEWAY_URL + OXM_WAKE_GATEWAY_AGENT_TOKEN; getUpdates is never called).
+ *
  * Tasks are created from Telegram with /goal. Reads TELEGRAM_BOT_TOKEN /
  * TELEGRAM_OWNER_CHAT_ID and the OXM_AGENT_* runtime configuration from the
  * environment and never prints secret values. Durable state lives outside the
  * repository (OXM_ORCHESTRATOR_STATE_DIR, default ~/.oxm-orchestrator).
  */
-import { existsSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { createAgentRuntime } from "../orchestrator/src/agentRuntime/compose";
@@ -23,9 +27,11 @@ import { createHumanOwnerSession } from "../orchestrator/src/humanInteraction/au
 import { createAuditHumanInteractionLedger } from "../orchestrator/src/humanInteraction/ledger";
 import { createHumanInteractionService } from "../orchestrator/src/humanInteraction/service";
 import { compactAuditLog } from "../orchestrator/src/persistence/compact";
+import { acquireInstanceLock } from "../orchestrator/src/runtimeSupervisor/instanceLock";
 import { createFileAuditRepository, type FileAuditRepository } from "../orchestrator/src/persistence/fileAudit";
-import { createTelegramBotClient } from "../orchestrator/src/telegram/client";
-import { readTelegramConfig } from "../orchestrator/src/telegram/config";
+import { createTelegramBotClient, TelegramApiError } from "../orchestrator/src/telegram/client";
+import { readTelegramConfig, readTelegramSourceConfig } from "../orchestrator/src/telegram/config";
+import { checkGateway, createGatewayUpdatesClient } from "../orchestrator/src/telegram/gatewaySource";
 import { createTelegramControlPlane, createTelegramTransport, TelegramStartupError } from "../orchestrator/src/telegram/controlPlane";
 
 const args = new Set(process.argv.slice(2));
@@ -40,7 +46,25 @@ const fail = (line: string, details: string[] = []): never => {
 const telegram = readTelegramConfig(process.env, { expectedBotUsername: "OXM_Agent_bot" });
 if (!telegram.ok) fail(telegram.reason);
 const config = (telegram as Extract<typeof telegram, { ok: true }>).config;
-const client = createTelegramBotClient({ token: config.botToken });
+const source = readTelegramSourceConfig(process.env);
+if (!source.ok) fail(source.reason);
+const sourceConfig = (source as Extract<typeof source, { ok: true }>).config;
+const botClient = createTelegramBotClient({ token: config.botToken });
+// Only getUpdates changes with the source; outbound messages always go to the Bot API directly.
+const client =
+  sourceConfig.source === "gateway" ? createGatewayUpdatesClient({ telegram: botClient, gatewayUrl: sourceConfig.gatewayUrl, agentToken: sourceConfig.agentToken }) : botClient;
+say(`Telegram update source: ${sourceConfig.source}`);
+
+if (sourceConfig.source === "gateway") {
+  try {
+    await checkGateway({ gatewayUrl: sourceConfig.gatewayUrl, agentToken: sourceConfig.agentToken });
+    say("Wake Gateway reachable; Agent pull token accepted");
+  } catch (error) {
+    // A rejected pull token fails closed. An unreachable Gateway is transient: polling retries with backoff.
+    if (args.has("--check") || (error instanceof TelegramApiError && error.kind === "unauthorized")) fail("Wake Gateway check failed (unreachable, or the Agent pull token was rejected)");
+    say("Wake Gateway not reachable yet; polling will retry with backoff");
+  }
+}
 
 if (args.has("--check")) {
   try {
@@ -58,6 +82,21 @@ const stateDir = resolve(process.env.OXM_ORCHESTRATOR_STATE_DIR || join(homedir(
 const rel = relative(process.cwd(), stateDir);
 if (!rel.startsWith("..") && !isAbsolute(rel)) fail("OXM_ORCHESTRATOR_STATE_DIR must be outside the repository");
 const logPath = join(stateDir, "control-plane-audit.jsonl");
+
+// Exactly one runtime per state directory, however it was started: a second one would consume the same
+// owner update queue, answer every message again and append to the same durable log.
+try {
+  mkdirSync(stateDir, { recursive: true });
+} catch {
+  fail("durable state directory could not be created; refusing to start");
+}
+const instanceLock = await acquireInstanceLock(join(stateDir, "runtime-instance.lock"));
+if (!instanceLock.ok)
+  fail(
+    instanceLock.code === "held"
+      ? "another Agent runtime already owns this state directory; refusing to start a second one (it would answer every owner message twice)"
+      : "the runtime instance lock is unavailable (flock); refusing to start without single-instance protection",
+  );
 
 // Bounded log growth: superseded checkpoints/cursors are compacted offline, before the log is opened.
 const compactBytes = Number(process.env.OXM_ORCHESTRATOR_COMPACT_BYTES ?? 64 * 1024 * 1024);
@@ -99,6 +138,10 @@ const created = await createAgentRuntime((runtimeConfig as Extract<typeof runtim
   planner,
   reviewer,
   manager: planned.manager,
+  questionAnswerer: planned.questionAnswerer,
+  noticeComposer: planned.noticeComposer,
+  // Operator acknowledgement of specific historical conflicting journal records (comma-separated event ids).
+  supersededJournalEvents: (process.env.OXM_AGENT_JOURNAL_SUPERSEDE ?? "").split(",").map((s) => s.trim()).filter(Boolean),
 });
 if (!created.ok) {
   const f = created as Extract<typeof created, { ok: false }>;
@@ -106,6 +149,8 @@ if (!created.ok) {
 }
 const runtime = (created as Extract<typeof created, { ok: true }>).runtime;
 for (const line of runtime.reconciled) say(`reconciled ${line}`);
+say(`runtime baseline ${runtime.runtimeBaseline.branch}@${runtime.runtimeBaseline.sha.slice(0, 12)}`);
+if (runtime.workspaceRestored) say(runtime.workspaceRestored);
 say(runtime.checkpointRestored ? `Manager checkpoint restored (${runtime.restoredTaskIds.length} task(s), ${runtime.activeTaskIds().length} active)` : "no Manager checkpoint; starting fresh");
 
 let hiSequence = 0;

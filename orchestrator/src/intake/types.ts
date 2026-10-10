@@ -64,6 +64,11 @@ export interface TaskIntakeRequest {
    * this (from a stored interpretation); no external caller can supply it.
    */
   goal?: IntakeGoal;
+  /**
+   * Lineage of a re-run: the earlier task whose original goal this task runs again. Only the
+   * Gateway's retryTask sets it (from trusted state); it grants nothing and changes no policy.
+   */
+  retryOf?: string;
 }
 
 /** Interpreted goal: intent (which fixes the mode) and semantic goal criteria. */
@@ -197,6 +202,14 @@ export interface TaskTechnicalDetails {
   repairAttempts: { round: number; cycle: number; strategy: string | null; outcome: string }[];
   changedPaths: string[];
   citedFiles: string[];
+  /** Classified Git metadata delta (component ids, classes, key names; never values). Absent: nothing changed. */
+  gitMetadata?: TaskGitMetadataFacts | null;
+}
+
+export interface TaskGitMetadataFacts {
+  publicationTrust: string;
+  workerViolation: boolean;
+  changes: { component: string; what: string; classification: string; keys: string[]; entries: string[] }[];
 }
 
 /** Owner-facing Worker assignment state: area, primary, temporary cover, availability pause. */
@@ -234,6 +247,8 @@ export interface AgentTaskStatus {
   mode: TaskMode;
   /** Manager-accepted answer of a read_only task. */
   answer: string | null;
+  /** Change work: the Manager's result summary for the owner. */
+  resultSummary?: string | null;
   /** Executive view of the Worker assignment (presentation only). */
   workforce?: TaskWorkforceStatus;
   /** Structured technical facts for an explicit owner request (presentation only). */
@@ -289,6 +304,8 @@ export interface PreparedIntake {
   goal?: TaskGoal;
   /** Validated planner risk observations (typed signal kinds; can only raise risk). */
   riskObservations?: string[];
+  /** Re-run lineage (see TaskIntakeRequest.retryOf). */
+  retryOf?: string;
 }
 
 export type ValidationResult =

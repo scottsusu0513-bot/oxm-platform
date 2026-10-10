@@ -40,6 +40,7 @@ export default defineConfig({
       "client/**/*.test.tsx",
       "shared/**/*.test.ts",
       "orchestrator/**/*.test.ts",
+      "services/**/*.test.ts",
     ],
     setupFiles: ["server/test-db-guard.ts"],
     // Shared Cleanup（見對話「Vitest ADMIN_WHITELIST_EMAILS env race」）：

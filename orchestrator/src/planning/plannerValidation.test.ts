@@ -65,7 +65,7 @@ describe("planner structured-output validation boundary", () => {
     };
     const sim = createSimulation({ autoApproveCommits: false });
     const h = createHumanInteractionHarness({ loop: sim.loop, approvals: sim.approvals, audit: createInMemoryAuditRepository(() => "t"), now: sim.ports.now, planner, idPrefix: "v" });
-    const r = await h.service.handleReply({ kind: "reply", idempotencyKey: "tg.msg.1", replyToDeliveryRef: null, text: "把搜尋 API 變快" });
+    const r = await h.service.handleReply({ kind: "reply", idempotencyKey: "tg.msg.1", replyToDeliveryRef: null, text: "任務：把搜尋 API 變快" });
     expect(r.outcome).toBe("submitted");
     await sim.loop.settle();
     expect(sim.loop.tasks()).toHaveLength(1);
@@ -91,7 +91,7 @@ describe("audit_and_fix semantics", () => {
   async function run(r: GoalReviewer) {
     const sim = createSimulation({ autoApproveCommits: false, goalReviewer: r });
     const h = createHumanInteractionHarness({ loop: sim.loop, approvals: sim.approvals, audit: createInMemoryAuditRepository(() => "t"), now: sim.ports.now, planner, idPrefix: "a" });
-    await h.service.handleReply({ kind: "reply", idempotencyKey: "tg.msg.1", replyToDeliveryRef: null, text: "重新檢查登入安全，有問題就修" });
+    await h.service.handleReply({ kind: "reply", idempotencyKey: "tg.msg.1", replyToDeliveryRef: null, text: "任務：重新檢查登入安全，有問題就修" });
     await sim.loop.settle();
     return sim;
   }
@@ -102,7 +102,7 @@ describe("audit_and_fix semantics", () => {
     expect(sim.workerCalls[0].objective).toMatch(/^Audit first, then fix\. .*ONLY to fix those reported, evidence-backed findings.*Do not make any unrelated change/);
     expect(r.calls[0].criteria.map((c) => c.text)).toEqual([
       "Session handling weaknesses in the login flow are fixed",
-      "Every requested audit area was inspected and each finding is reported with cited repository evidence",
+      "Every requested audit area was inspected, and each finding that drives a code change is reported with cited repository evidence",
       "Every code change corresponds to a reported, evidence-backed finding; no unrelated code is changed",
       "Each supported finding within the requested scope is fixed",
     ]);

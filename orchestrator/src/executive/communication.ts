@@ -39,7 +39,9 @@ export function formatResetTime(resetAt: string | null, lang: OwnerLanguage): st
 // ---------------------------------------------------------------------------
 // Task received
 
-export function taskReceivedMessage(input: {
+export interface TaskReceivedInput {
+  /** The transport already told the owner this message was queued (recorded context): no second receipt. */
+  alreadyQueued?: boolean;
   lang: OwnerLanguage;
   label: string;
   mode: TaskMode;
@@ -47,7 +49,10 @@ export function taskReceivedMessage(input: {
   workers: readonly WorkerKind[];
   mixed: boolean;
   needsStartApproval: boolean;
-}): string {
+}
+
+/** Deterministic fallback acknowledgement (Manager unavailable or its reply unusable). */
+export function taskReceivedMessage(input: TaskReceivedInput): string {
   const zh = input.lang === "zh";
   const lines: string[] = [];
   if (input.mode === "read_only") {
@@ -63,11 +68,68 @@ export function taskReceivedMessage(input: {
     const what = input.workers[0] === "codex" ? (zh ? "畫面設計" : "the visual design") : zh ? "程式修改" : "the code change";
     lines.push(zh ? `收到，我會交給 ${who} 處理${what}，完成後我先檢查結果。` : `Got it. ${who} will handle ${what}; I will check the result first.`);
   }
+  if (input.alreadyQueued) lines[0] = lines[0].replace(/^收到[，。]\s*/, "").replace(/^Got it\.\s*/, "");
   if (input.label) lines.push(zh ? `任務：${input.label}` : `Task: ${input.label}`);
-  if (input.needsStartApproval) lines.push(zh ? "這個任務風險較高，開始執行前我會先請你批准。" : "This task is high-risk, so I will ask for your approval before starting.");
-  else if (input.mode !== "read_only")
-    lines.push(zh ? "過程中只有需要你決定、或最後要發布時才會打擾你。" : "I will only interrupt you for a decision or the final publish approval.");
+  lines.push(...policyLines(input));
   return lines.join("\n");
+}
+
+/** Trusted facts appended to the Manager's own message about a stopped task (never Manager-authored). */
+export function stoppedTaskFacts(lang: OwnerLanguage, paused: boolean): string {
+  return lang === "zh"
+    ? paused
+      ? "（任務已暫停，沒有再做任何修改或發布。）"
+      : "（沒有再做任何修改或發布。）"
+    : paused
+      ? "(The task is paused; nothing further was changed or published.)"
+      : "(Nothing further was changed or published.)";
+}
+
+/** Trusted policy facts (approval gate / interruption policy); never written by the Manager. */
+function policyLines(input: TaskReceivedInput): string[] {
+  const zh = input.lang === "zh";
+  if (input.needsStartApproval) return [zh ? "這個任務風險較高，開始執行前我會先請你批准。" : "This task is high-risk, so I will ask for your approval before starting."];
+  if (input.mode !== "read_only") return [zh ? "過程中只有需要你決定、或最後要發布時才會打擾你。" : "I will only interrupt you for a decision or the final publish approval."];
+  return [];
+}
+
+/**
+ * Manager-voiced acknowledgement: the GPT Manager's own reply (semantic content) followed only by
+ * trusted facts the system knows for certain (task name, assigned engineers, read-only, approval gate).
+ */
+export function managerTaskReceivedMessage(reply: string, input: TaskReceivedInput): string {
+  const zh = input.lang === "zh";
+  const lines = [reply];
+  if (input.label) lines.push(zh ? `任務：${input.label}` : `Task: ${input.label}`);
+  if (input.mode === "read_only") lines.push(zh ? "（唯讀：不會修改任何檔案）" : "(Read-only: no file will be changed.)");
+  else if (input.mixed) lines.push(zh ? "負責：Claude（程式）、Codex（畫面設計）" : "Assigned: Claude (programming), Codex (visual design)");
+  else if (input.workers[0]) {
+    const w = input.workers[0];
+    lines.push(zh ? `負責：${WORKER_NAME[w]}（${w === "codex" ? "畫面設計" : "程式"}）` : `Assigned: ${WORKER_NAME[w]} (${w === "codex" ? "visual design" : "programming"})`);
+  }
+  lines.push(...policyLines(input));
+  return lines.join("\n");
+}
+
+/**
+ * Manager-written owner text, or null when it cannot be shown as-is: missing, not in the owner's
+ * language, or carrying internal jargon. Null means the deterministic fallback is used instead.
+ */
+const BARE_RECEIPT = /^(?:收到了?|好的|了解|沒問題|got it|received|ok(?:ay)?)\s*[，,。.!！:：]\s*(?=\S)/i;
+
+export function usableManagerText(text: string | null | undefined, lang: OwnerLanguage, max = 1_200): string | null {
+  if (typeof text !== "string") return null;
+  // A bare receipt adds nothing (the owner may already have a transport "queued" status): start with the substance.
+  const t = text
+    .replace(/\r\n?/g, "\n")
+    .replace(/[\u0000-\u0009\u000b-\u001f\u007f]+/g, " ")
+    .trim()
+    .replace(BARE_RECEIPT, "")
+    .trim();
+  if (!t || t.length > max) return null;
+  if (lang === "zh" && !/[\u3400-\u9fff]/.test(t)) return null;
+  if (findInternalJargon(t).length > 0) return null;
+  return t;
 }
 
 // ---------------------------------------------------------------------------
@@ -160,7 +222,8 @@ export function decisionContent(input: { lang: OwnerLanguage; label: string; mod
 }
 
 export function decisionMessage(d: PlainDecision): string {
-  return [d.headline, d.tried, d.blocker, d.recommendation, "", d.ask].join("\n");
+  // The ask (how to answer; guidance is not approval) is the fixed binding; empty parts are left out.
+  return [...[d.headline, d.tried, d.blocker, d.recommendation].filter((part) => part !== ""), "", d.ask].join("\n");
 }
 
 /**
@@ -208,22 +271,48 @@ export function inputRejection(code: "empty" | "too_long" | "credential" | "inva
 const RISK_ZH: Record<RiskLevel, string> = { green: "低", yellow: "中", red: "高" };
 const RISK_EN: Record<RiskLevel, string> = { green: "low", yellow: "medium", red: "high" };
 
-export function commitApprovalMessage(input: { lang: OwnerLanguage; label: string; files: readonly string[]; checksPassed: number; checksNotPassed: readonly string[]; risk: RiskLevel; expiresAt: string }): string {
+export function commitApprovalMessage(input: {
+  lang: OwnerLanguage;
+  label: string;
+  files: readonly string[];
+  checksPassed: number;
+  checksNotPassed: readonly string[];
+  /** Checks that could not be verified (environment / unrelated workspace state); not task failures. */
+  checksUnverified?: readonly string[];
+  /** Other actors' workspace changes left out of the publish. */
+  excludedFiles?: readonly string[];
+  risk: RiskLevel;
+  expiresAt: string;
+}): string {
   const zh = input.lang === "zh";
   const files = input.files.slice(0, 15);
   const more = input.files.length - files.length;
+  const unverified = input.checksUnverified ?? [];
+  const excluded = input.excludedFiles ?? [];
+  const checks = input.checksNotPassed.length
+    ? zh
+      ? `自動檢查：${input.checksPassed} 項通過，${input.checksNotPassed.length} 項未通過。`
+      : `Checks: ${input.checksPassed} passed, ${input.checksNotPassed.length} not passed.`
+    : unverified.length
+      ? zh
+        ? `自動檢查：${input.checksPassed} 項通過；${unverified.join("、")} 因環境問題或工作區其他無關變更未能完成驗證，目前沒有證據顯示是這次修改造成的問題，但也還沒驗證到。`
+        : `Checks: ${input.checksPassed} passed; ${unverified.join(", ")} could not be verified (environment or unrelated workspace changes). Nothing shows this change caused a problem, but it is not verified yet.`
+      : zh
+        ? "自動檢查：全部通過。"
+        : "Checks: all passed.";
   return [
-    zh ? `「${input.label}」已完成，也通過我的檢查，等待你批准發布。` : `"${input.label}" is done and passed my review. Waiting for your approval to publish.`,
+    zh ? `「${input.label}」已完成，也通過我的檢查。目前尚未發布，等待你批准。` : `"${input.label}" is done and passed my review. Nothing has been published yet; waiting for your approval.`,
     zh ? `這次改了 ${input.files.length} 個檔案：` : `Files changed (${input.files.length}):`,
     ...files.map((f) => `• ${f}`),
     ...(more > 0 ? [zh ? `…另外 ${more} 個` : `…and ${more} more`] : []),
-    input.checksNotPassed.length
-      ? zh
-        ? `自動檢查：${input.checksPassed} 項通過，${input.checksNotPassed.length} 項未通過。`
-        : `Checks: ${input.checksPassed} passed, ${input.checksNotPassed.length} not passed.`
-      : zh
-        ? "自動檢查：全部通過。"
-        : "Checks: all passed.",
+    checks,
+    ...(excluded.length
+      ? [
+          zh
+            ? `工作區另有 ${excluded.length} 個不屬於這個任務的檔案變更（${excluded.slice(0, 5).join("、")}${excluded.length > 5 ? "…" : ""}），不會包含在這次發布中。`
+            : `The workspace also has ${excluded.length} change(s) that are not part of this task (${excluded.slice(0, 5).join(", ")}${excluded.length > 5 ? ", …" : ""}); they are not included in this publish.`,
+        ]
+      : []),
     zh ? `風險：${RISK_ZH[input.risk]}` : `Risk: ${RISK_EN[input.risk]}`,
     "",
     zh
@@ -327,6 +416,8 @@ export function progressMessage(
     cause?: "quota" | "authentication" | "executable" | "service";
     summary?: string | null;
     targets?: readonly ("programming" | "visual")[];
+    /** blocked without a failure (non-terminal stop): paused for the owner, not failed. */
+    paused?: boolean;
   },
 ): string {
   const zh = input.lang === "zh";
@@ -424,15 +515,24 @@ export function progressMessage(
         ? `查到了。\n\n${input.answer ?? "（沒有記錄到答案）"}\n\n這次沒有修改任何檔案，答案已對照實際程式碼確認。`
         : `Here is the answer.\n\n${input.answer ?? "(no answer recorded)"}\n\nNo file was changed; I checked the answer against the actual source.`;
     case "completed":
+      // Manager summary first; then only trusted facts (PR checks, merge/deploy stay with the owner).
+      if (input.summary)
+        return zh
+          ? `${input.summary}\n${input.prNumber ? `PR #${input.prNumber} 已通過自動檢查。` : ""}要不要合併、部署由你決定。`
+          : `${input.summary}\n${input.prNumber ? `PR #${input.prNumber} passed the checks. ` : ""}Merging and deploying are up to you.`;
       return zh
         ? `已完成${input.prNumber ? `，PR #${input.prNumber} 已通過自動檢查` : ""}。要不要合併、部署由你決定。`
         : `Done${input.prNumber ? `; PR #${input.prNumber} passed the checks` : ""}. Merging and deploying are up to you.`;
     case "blocked":
+      if (input.paused)
+        return zh
+          ? "任務暫停，正在等待你的決定。我沒有再做任何修改或發布；可以用 /status 看細節。"
+          : "The task is paused, waiting for your decision. I made no further change or publication; use /status for details.";
       return zh
-        ? "這個任務已停止，我沒有再做任何修改或發布。需要的話可以重新交代，或用 /status 看細節。"
-        : "This task has stopped; I made no further change or publication. You can restate it, or use /status for details.";
+        ? "任務執行失敗，我沒有再做任何修改或發布。需要的話可以用「任務：…」重新交代，或用 /status 看細節。"
+        : "The task failed; I made no further change or publication. You can restate it as 「任務：…」, or use /status for details.";
     case "cancelled":
-      return zh ? "已取消。不會再有任何修改、commit 或發布。" : "Cancelled. There will be no further change, commit or publication.";
+      return zh ? "任務已取消。不會再有任何修改、commit 或發布。" : "The task was cancelled. There will be no further change, commit or publication.";
     case "awaiting_other_approval":
       return zh
         ? "這個任務需要另一種批准（發布後的高風險確認），要在管理後台處理，Telegram 這裡無法批准。"
@@ -465,8 +565,8 @@ export interface TechnicalDetailsView {
   prNumber: number | null;
 }
 
-const STATUS_ZH: Record<string, string> = { passed: "通過", failed: "失敗", skipped: "略過", missing: "沒有執行", unknown: "無法確認", satisfied: "已遵守", violated: "未遵守", unsupported: "無法確認" };
-const OUTCOME_ZH: Record<string, string> = { accepted: "通過", needs_repair: "仍需修正", needs_human_decision: "需要你決定", blocked: "停止", needs_human_approval: "等待批准", running: "進行中" };
+const STATUS_ZH: Record<string, string> = { passed: "通過", failed: "失敗", skipped: "略過", missing: "沒有執行", unavailable: "環境無法執行（未驗證）", unverified: "未能驗證", unknown: "無法確認", satisfied: "已遵守", violated: "未遵守", unsupported: "無法確認" };
+const OUTCOME_ZH: Record<string, string> = { accepted: "通過", needs_repair: "仍需修正", needs_human_decision: "需要你決定", blocked: "失敗", needs_human_approval: "等待批准", running: "進行中" };
 
 /** Readable technical view: structured facts only (no model reasoning, secrets or hashes). */
 export function technicalDetailsMessage(v: TechnicalDetailsView, lang: OwnerLanguage): string {

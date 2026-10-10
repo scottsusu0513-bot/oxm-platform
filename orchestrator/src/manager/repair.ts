@@ -19,6 +19,7 @@ export type Intent<T> = ({ ok: true } & T) | { ok: false; reason: string };
 /** Constant process rules sent with every repair. Never task- or code-specific advice. */
 export const REPAIR_INSTRUCTIONS = [
   "Repair the root cause in the Manager diagnosis; you decide how to change the code.",
+  "Keep work that is already verified; close only the gap the diagnosis names instead of redoing the whole task.",
   "Stay on the assigned branch. Do not create, switch, rename, or reset branches.",
   "Change only paths within allowedScope.",
   "Rerun every validation in rerunValidations and report the results.",
@@ -156,12 +157,14 @@ function renderDiagnosis(d: ManagerDiagnosis, compact: boolean): string[] {
 /** Deterministic, data-only rendering of a repair request (used as untrusted task data in the worker prompt). */
 export function renderRepairBlock(r: RepairRequest, compact = false, minimal = false): string {
   if (minimal) {
-    // Last resort for very long objectives: the plan, owner constraints, rerun and the fixed process rules.
+    // Last resort for very long objectives: the plan, owner constraints (incl. the validations the
+    // owner rejected), rerun and the fixed process rules.
     return [
       `Repair attempt ${r.attempt} of ${r.maxRepairAttempts} (Manager-guided repair cycle).`,
       ...renderManagerPlan(r.diagnosis, 2),
       ...(r.diagnosis.managerPlan ? [] : [`- requiredFix: ${r.diagnosis.requiredFix}`]),
       ...(r.diagnosis.ownerConstraints ?? []).map((c) => `- ownerConstraint: ${c}`),
+      ...(r.diagnosis.deferredValidations?.length ? [`- notRerun (owner rejected; not evidence): ${r.diagnosis.deferredValidations.join(", ")}`] : []),
       r.rerunValidations.length ? `Rerun: ${r.rerunValidations.join(", ")}.` : "Rerun: none (gather the required evidence instead).",
       ...r.instructions,
     ].join("\n");

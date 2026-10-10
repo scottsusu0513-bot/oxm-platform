@@ -1,9 +1,11 @@
-import { fingerprintRequest } from "../intake/normalize";
+import { isTerminalState } from "../domain/taskState";
+import { FIXED_GOAL_CRITERIA, fingerprintRequest } from "../intake/normalize";
 import type { ManagerLoop } from "../scheduler/loop";
 import type {
   ApprovalRequirementReader,
   GatewayControlEventPort,
   HumanDecisionRequirementReader,
+  RetrySourcePort,
 } from "./types";
 
 /**
@@ -114,5 +116,41 @@ export function createManagerApprovalRequirementReader(
         ...(check.startEvidence ? { startEvidence: structuredClone(check.startEvidence) } : {}),
       };
     },
+  };
+}
+
+/**
+ * Trusted re-run source: the Manager's own record of each task's original intake (goal,
+ * criteria, scope, validations), the re-run lineage and the scheduler's Worker availability.
+ * `createdBy` resolves an intake idempotency key to the task it created (intake records).
+ */
+export function createManagerRetrySourcePort(loop: Pick<ManagerLoop, "intakeOf" | "tasks" | "workerAvailability">, createdBy: (idempotencyKey: string) => string | null): RetrySourcePort {
+  return {
+    source(taskId) {
+      const intake = loop.intakeOf(taskId);
+      if (!intake) return null;
+      const goal = intake.goal ?? null;
+      const fixed = new Set(goal ? FIXED_GOAL_CRITERIA[goal.intent] : []);
+      const goalCriteria = intake.acceptanceCriteria.filter((c) => c.kind === "goal" && !fixed.has(c.text)).map((c) => c.text);
+      return {
+        taskId,
+        title: intake.title,
+        objective: intake.objective,
+        mode: intake.mode === "read_only" ? "read_only" : "change",
+        goal: goal ? structuredClone(goal) : null,
+        // A goal whose planner criteria all coincided with the fixed ones keeps the first fixed one (never empty).
+        goalCriteria: goalCriteria.length ? goalCriteria : goal ? FIXED_GOAL_CRITERIA[goal.intent].slice(0, 1) : [],
+        riskObservations: (intake.riskSignals ?? []).filter((r) => r.source === "planner_observation").map((r) => r.kind),
+        acceptanceCriteria: intake.acceptanceCriteria.map((c) => c.text),
+        expectedScope: [...intake.expectedPaths],
+        requiredValidations: [...intake.requiredValidations],
+        requestedPriority: intake.requestedPriority ?? null,
+        decomposed: Boolean(goal?.group || intake.groupRepairOf),
+        retryOf: intake.retryOf ?? null,
+      };
+    },
+    createdBy,
+    lineage: () => loop.tasks().map((t) => ({ taskId: t.taskId, retryOf: t.retryOf, active: !isTerminalState(t.state) })),
+    availability: () => loop.workerAvailability(),
   };
 }

@@ -90,7 +90,7 @@ describe("audit-journaled repositories", () => {
     audit.append({ id: "x", taskId: "repository-journal", actor: "system", event: "repository_journal_op", metadata: { repository: "evil", method: "create", at: "2026-10-07T00:00:00.000Z", args: [] } });
     const j = createRepositoryJournal({ audit, nextId: () => "y", now: () => "t" });
     j.wrap("approvals", createInMemoryApprovalRepository(j.clock), ["create"]);
-    expect(() => j.replay()).toThrow(/refusing to replay/);
+    expect(() => j.replay()).toThrow(/replay refused: category=unknown_repository index=0 event=x repository=evil/);
     audit.close();
   });
 });

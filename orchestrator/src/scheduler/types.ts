@@ -13,6 +13,7 @@
  *
  * Pure type/constant definitions: no I/O, env, network, or nondeterminism.
  */
+import type { GitMetadataEvidence } from "../workers/gitMetadataPolicy";
 import type { AssignedBranchPlan, BranchLineage } from "../branches/types";
 import type { ApprovalPhase } from "../domain/taskState";
 import type { ClassificationResult, RiskLevel, RoutingDecision, TaskAction, TaskCategory, TaskGoal, TaskMode, TaskState, WorkerKind } from "../domain/types";
@@ -358,6 +359,8 @@ export interface TaskIntake {
   goal?: TaskGoal;
   /** Set on a cross-part repair task: the group part (same lineage branch) it continues. */
   groupRepairOf?: string;
+  /** Re-run lineage: the earlier (finished) task whose original goal this NEW task runs again. */
+  retryOf?: string;
   /** Typed, auditable risk signals that raised this task's risk at intake (never lowered). */
   riskSignals?: readonly { kind: string; level: "red" | "yellow"; rule: string; evidence: readonly string[]; source: string }[];
 }
@@ -404,7 +407,10 @@ export type OrchestrationEventType = OrchestrationEvent["type"];
 
 /** Trusted record of one worker run, produced by the git/validation layer — never worker prose. */
 export interface TrustedRunRecord {
+  /** Task-owned delta of the run (see workers/attribution.ts); never other actors' workspace changes. */
   changedPaths: readonly string[];
+  /** Shared-workspace changes that are not this task's: excluded from scope checks and from publication. */
+  foreignPaths?: readonly string[];
   validations: readonly ValidationEvidence[];
   acceptance: readonly AcceptanceEvidence[];
   /** Workspace HEAD verified from git after the run. */
@@ -418,8 +424,15 @@ export interface TrustedRunRecord {
   citedFiles?: readonly string[];
   /** GPT reviewer verdicts on semantic owner-constraint checks, by check id. */
   constraintVerdicts?: readonly { id: string; status: "satisfied" | "violated" | "unsupported"; evidence: string }[];
+  /** The Manager reviewer's own owner text (read-only answer / change-task result summary); never the Worker's report. Persisted in the checkpoint. */
+  managerAnswer?: string | null;
   /** Per-constraint verification attached by the Manager Loop (trusted + semantic). */
   ownerConstraints?: readonly ConstraintVerdict[];
+  /**
+   * Classified Git metadata delta since workspace preparation (absent: nothing changed). Its
+   * publicationTrust decides whether the owner's commit approval may bind to the current metadata.
+   */
+  gitMetadata?: GitMetadataEvidence;
 }
 
 export interface WorkerPort {
@@ -429,9 +442,14 @@ export interface WorkerPort {
 
 export interface WorkspacePort {
   /** Wraps githubWrite/workspace.prepareAssignedWorkspace. */
-  prepare(input: { plan: unknown; lease: unknown; creation: BranchCreation | null }): Promise<PrepareResult>;
+  prepare(input: { plan: unknown; lease: unknown; creation: BranchCreation | null; allowedScope?: readonly string[] }): Promise<PrepareResult>;
   /** Wraps githubWrite/workspace.checkWorkerPreconditions with the live git status. */
   checkPreconditions(input: { prepared: unknown; plan: unknown; contract: WorkerTaskContract; lease: unknown }): Promise<PreconditionResult>;
+  /**
+   * Trusted Git metadata re-binding right before a follow-up run (repair/retry/continuation):
+   * returns the digest the run must bind to, or refuses on a security-relevant delta.
+   */
+  rebindGitMetadata(input: { lease: WorkspaceLease; contract: WorkerTaskContract }): Promise<{ ok: true; gitMetadataDigest: string; evidence: GitMetadataEvidence | null } | { ok: false; reason: string; evidence: GitMetadataEvidence | null }>;
   /** Branch/HEAD of the leased workspace from git (repair start check). */
   head(lease: WorkspaceLease): Promise<{ branch: string; headSha: string } | null>;
   /** Re-reads branch, HEAD, and dirty paths from trusted Git. */
@@ -450,8 +468,17 @@ export interface QaPort {
 }
 
 export interface RepoStatePort {
-  /** Current main HEAD SHA (read-only). */
-  mainHeadSha(): Promise<string>;
+  /**
+   * The commit new task branches start from (read-only): main, or the runtime
+   * baseline when it is strictly ahead of main (see branches/taskBase).
+   */
+  taskBaseSha(): Promise<string>;
+}
+
+/** Returns the idle workspace to the runtime branch (githubWrite/workspace.restoreRuntimeWorkspace). */
+export interface RuntimeWorkspacePort {
+  /** Called only when no task is active; the port re-checks Git and never forces. */
+  restoreIfIdle(): Promise<void>;
 }
 
 export interface ApprovalCheck {
@@ -554,6 +581,10 @@ export interface PersistedTaskRecord {
   commitApprovalEvidence?: CommitApprovalEvidence | null;
   queueReason: string | null;
   blockingReason: string | null;
+  /** Classified Git metadata delta of the latest run (optional: absent in older checkpoints). */
+  gitMetadata?: GitMetadataEvidence | null;
+  /** Strictest publication trust of the task's trusted metadata re-bindings (optional in older checkpoints). */
+  gitMetadataRebind?: GitMetadataEvidence | null;
   escalations: EscalationRecord[];
   capabilities: Capability[];
   pendingSideEffect: PendingSideEffect;
@@ -634,6 +665,8 @@ export interface OrchestrationPorts {
   audit: (event: Omit<NewAuditEvent, "id">) => void;
   /** GPT Manager reasoning (diagnosis, guidance, combined review). Absent: deterministic-only Manager (simulation/legacy). */
   manager?: ManagerReasoningPort;
+  /** Configured deployments provide it; absent in isolated simulations (the workspace is never moved back). */
+  runtimeWorkspace?: RuntimeWorkspacePort;
   /** Optional only for backwards-compatible local simulations; configured deployments provide it. */
   lifecycle?: {
     reconcile(work: LifecycleWorkload, now: IsoTimestamp): Promise<LifecycleOutcome>;
@@ -647,10 +680,14 @@ export interface TaskSnapshot {
   taskId: string;
   seq: number;
   title: string;
+  /** Re-run lineage (null for an original task). */
+  retryOf: string | null;
   category: TaskCategory;
   mode: TaskMode;
   /** Accepted answer of a read_only task (Worker report judged by the Manager's reviewer); null otherwise. */
   answer: string | null;
+  /** Change work: the Manager reviewer's own result summary for the owner (in memory only; absent after restart). */
+  resultSummary?: string | null;
   /** A finished run is waiting for the goal reviewer (infrastructure), with this many retries used. */
   pendingReview: boolean;
   reviewRetries: number;
@@ -721,4 +758,6 @@ export interface TaskSnapshot {
     /** Criterion texts (ids -> owner-level wording) for readable technical details. */
     criteria: { id: string; text: string }[];
   } | null;
+  /** Classified Git metadata delta (components, classes, key names; never values). null: nothing changed. */
+  gitMetadata?: GitMetadataEvidence | null;
 }

@@ -52,6 +52,7 @@ function evidenceReviewer(mode: "evidence" | "never"): GoalReviewer & { calls: G
           evidence: shown ? "client/src/pages/Home.tsx:6 placeholder" : "",
           reason: shown ? "" : "the homepage source was not provided",
         })),
+        ownerAnswer: shown ? "首頁搜尋框目前顯示「搜尋工廠、產品或製程」，來源 client/src/pages/Home.tsx:6。" : "",
       };
     },
   };
@@ -61,7 +62,7 @@ async function start(reviewer: GoalReviewer, repo: Record<string, string> | unde
   const audit = createInMemoryAuditRepository(() => "2026-10-07T00:00:00.000Z");
   const sim = createSimulation({ autoApproveCommits: false, goalReviewer: reviewer, ...(repo ? { repoFiles: repo } : {}), answers: { "e-task-1": answer } });
   const h = createHumanInteractionHarness({ loop: sim.loop, approvals: sim.approvals, audit, now: sim.ports.now, planner, idPrefix: "e" });
-  const r = await h.service.handleReply({ kind: "reply", idempotencyKey: "tg.msg.1", replyToDeliveryRef: null, text: ASK });
+  const r = await h.service.handleReply({ kind: "reply", idempotencyKey: "tg.msg.1", replyToDeliveryRef: null, text: `任務：${ASK}` });
   await sim.loop.settle();
   return { sim, r, ...h };
 }

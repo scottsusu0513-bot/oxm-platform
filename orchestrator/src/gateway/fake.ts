@@ -16,6 +16,7 @@ import type {
   PersistedInterpretation,
 } from "./types";
 import type { HumanDecisionInput } from "../manager/types";
+import type { ReplayDuplicatePolicy } from "../persistence/journal";
 
 export function createFakeAuthenticator(
   principals: Readonly<Record<string, Omit<AuthContext, "requestId">>>,
@@ -144,3 +145,18 @@ export function createInMemoryInterpretationRepository(): GatewayInterpretationR
     },
   };
 }
+
+/**
+ * Replay policy for historical duplicate interpretation creates (two runtimes
+ * once wrote one journal). Only the runtime-local `createdAt` is excluded: the
+ * message identity (fingerprint, principal, request) and the decision must match.
+ */
+export const INTERPRETATION_REPLAY_DUPLICATE_POLICY: ReplayDuplicatePolicy<GatewayInterpretationRepository> = {
+  method: "create",
+  keyOf(args) {
+    const record = args[0] as { interpretationId?: unknown } | null | undefined;
+    return args.length === 1 && record && typeof record === "object" && typeof record.interpretationId === "string" && record.interpretationId ? record.interpretationId : null;
+  },
+  existing: (repo, key) => repo.get(key),
+  ignoredFields: ["createdAt"],
+};

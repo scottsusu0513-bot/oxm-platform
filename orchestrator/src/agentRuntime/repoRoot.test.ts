@@ -22,7 +22,7 @@ function safetyRunner(extra: (spec: { command: string; args: readonly string[] }
   return {
     spawn(spec) {
       let result = extra(spec) ?? ok();
-      if (spec.command === "git" && spec.args[0] === "rev-parse") result = ok("agent/telegram-control-plane\n");
+      if (spec.command === "git" && spec.args[0] === "rev-parse") result = ok(spec.args[1] === "HEAD" ? `${"a".repeat(40)}\n` : "agent/telegram-control-plane\n");
       else if (spec.command === "gh" && spec.args[0] === "repo") result = ok(JSON.stringify({ nameWithOwner: "oxm/oxm-platform" }));
       else if (spec.command === "gh" && spec.args[0] === "api") result = ok(JSON.stringify({ name: "oxm-space", state: "Available", repository: { full_name: "oxm/oxm-platform" } }));
       return { exit: Promise.resolve(result), kill() {} };

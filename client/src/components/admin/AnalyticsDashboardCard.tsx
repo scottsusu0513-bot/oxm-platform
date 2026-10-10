@@ -222,29 +222,37 @@ export function AnalyticsDashboardCard() {
         </div>
 
         {trend && trend.buckets.length > 0 ? (
-          <div className="flex items-end gap-0.5 h-12">
-            {trend.buckets.map(b => {
-              const height = Math.round((b.visitors / maxBucket) * 100);
-              const isSelected = selectedSlot != null &&
-                ((trend.mode === "hourly" && selectedSlot.hour === Number(b.key) && selectedSlot.date === start) ||
-                 (trend.mode === "daily" && selectedSlot.hour === null && selectedSlot.date === b.key));
-              return (
-                <button
-                  key={b.key}
-                  type="button"
-                  className="flex-1 flex flex-col items-center justify-end h-12 group relative"
-                  onClick={() => onBucketClick(b.key)}
-                >
-                  <div
-                    className={`w-full max-w-[10px] rounded-t-sm transition-all ${isSelected ? "bg-orange-600" : "bg-orange-400 group-hover:bg-orange-500"}`}
-                    style={{ height: `${height}%`, minHeight: b.visitors > 0 ? 2 : 0 }}
-                  />
-                  <div className="absolute -top-6 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-xs px-1 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none z-10">
-                    {trend.mode === "hourly" ? `${b.key}時` : b.key}: {b.visitors}
-                  </div>
-                </button>
-              );
-            })}
+          <div className="overflow-x-auto pt-6 -mt-6">
+            <div className="flex items-end gap-1">
+              {trend.buckets.map(b => {
+                const height = Math.round((b.visitors / maxBucket) * 100);
+                const isSelected = selectedSlot != null &&
+                  ((trend.mode === "hourly" && selectedSlot.hour === Number(b.key) && selectedSlot.date === start) ||
+                   (trend.mode === "daily" && selectedSlot.hour === null && selectedSlot.date === b.key));
+                return (
+                  <button
+                    key={b.key}
+                    type="button"
+                    className="flex-1 basis-10 min-w-max px-1 flex flex-col items-center group relative"
+                    onClick={() => onBucketClick(b.key)}
+                  >
+                    <div className="h-12 w-full flex items-end justify-center">
+                      <div
+                        className={`w-full max-w-[10px] rounded-t-sm transition-all ${isSelected ? "bg-orange-600" : "bg-orange-400 group-hover:bg-orange-500"}`}
+                        style={{ height: `${height}%`, minHeight: b.visitors > 0 ? 2 : 0 }}
+                      />
+                    </div>
+                    <span className="mt-1 text-xs font-medium tabular-nums text-gray-700 whitespace-nowrap">{b.visitors}</span>
+                    <span className="text-[10px] text-gray-500 whitespace-nowrap">
+                      {trend.mode === "hourly" ? `${b.key}時` : b.key.slice(5)}
+                    </span>
+                    <div className="absolute -top-6 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-xs px-1 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none z-10">
+                      {trend.mode === "hourly" ? `${b.key}時` : b.key}: {b.visitors}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
           </div>
         ) : (
           <div className="h-12 flex items-center justify-center text-xs text-muted-foreground">尚無資料</div>

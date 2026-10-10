@@ -1,0 +1,2 @@
+# Shell scripts run inside Linux Codespaces (e.g. the postStartCommand); never check them out with CRLF.
+*.sh text eol=lf

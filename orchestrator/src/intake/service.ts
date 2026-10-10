@@ -333,6 +333,7 @@ export function createAgentRuntimeService(
     audit("task_created", {
       taskId,
       requestId: input.requestId,
+      ...(input.retryOf ? { retryOf: input.retryOf } : {}),
       category: classification.category,
       risk: risk.level,
       priority: priority.priority,
@@ -365,6 +366,7 @@ export function createAgentRuntimeService(
       requiredValidations: input.requiredValidations,
       ...(mode === "read_only" ? { mode: "read_only" as const } : {}),
       ...(input.goal ? { goal: input.goal } : {}),
+      ...(input.retryOf ? { retryOf: input.retryOf } : {}),
       ...(signals.length ? { riskSignals: signals.map((s) => ({ ...s, evidence: [...s.evidence] })) } : {}),
       workspaceId: "default",
       prioritySignals: classification.prioritySignals,

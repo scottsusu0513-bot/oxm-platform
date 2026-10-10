@@ -9,7 +9,8 @@
  * Privacy: nothing here holds a full prompt, raw stdout/stderr, or secrets.
  */
 import type { ActionKind, RiskLevel, TaskAction, TaskCategory, TaskMode, WorkerKind } from "../domain/types";
-import type { PathContentIdentity } from "./gitIntegrity";
+import type { GitMetadataSnapshot, PathContentIdentity } from "./gitIntegrity";
+import type { GitMetadataEvidence } from "./gitMetadataPolicy";
 import type { Approval, IsoTimestamp } from "../store/types";
 
 // ---------------------------------------------------------------------------
@@ -53,8 +54,10 @@ export interface WorkerTaskContract {
   expectedHeadSha?: string;
   /**
    * Git metadata digest captured by the orchestrator right after workspace
-   * preparation. The worker refuses to start unless it matches, and any change
-   * during or after the run is a security failure (see workers/gitIntegrity.ts).
+   * preparation. The worker refuses to start unless it matches; a change during
+   * the run is diffed by component and classified (workers/gitMetadataPolicy.ts):
+   * only a Worker-attributable security change fails the run, anything else is
+   * recorded and decides publication trust.
    */
   gitMetadataDigest?: string;
 }
@@ -135,6 +138,18 @@ export interface WorkerResult {
   errorType: WorkerErrorType | null;
   /** Worker's own snake_case failure code, if it reported one. */
   workerErrorCode: string | null;
+  /**
+   * Shared-workspace paths excluded from this run's task-owned delta (see
+   * workers/attribution.ts): preExisting = dirty before the run and unchanged;
+   * unattributed = out of scope, changed during the run, not reported by the
+   * Worker. Never committed; never a Worker scope violation.
+   */
+  workspaceAttribution?: { preExisting: string[]; unattributed: string[] };
+  /**
+   * Component-level Git metadata delta of this execution, classified (see workers/gitMetadataPolicy.ts).
+   * Present whenever any metadata component changed during the run; trusted (adapter-computed).
+   */
+  gitMetadata?: GitMetadataEvidence;
   /** Typed availability classification of a failed CLI run (quota, rate limit, auth, …) with a trusted reset time when exposed. */
   availability?: { kind: "quota_exhausted" | "rate_limited_transient" | "service_unavailable" | "authentication_unavailable" | "executable_unavailable" | "process_failure"; resetAt: string | null };
 }
@@ -227,6 +242,11 @@ export interface GitInspector {
   contentIdentities(paths: readonly string[]): Promise<PathContentIdentity[]>;
   /** Digest of Git metadata that could alter trusted staging/commit; throws when unverifiable. */
   metadataDigest(): Promise<string>;
+  /**
+   * Component-level view of the same metadata (its digest equals metadataDigest()), used to explain
+   * and classify a change. Optional: a digest-only inspector yields one opaque component.
+   */
+  metadataSnapshot?(): Promise<GitMetadataSnapshot>;
 }
 
 export interface PromptFile {
