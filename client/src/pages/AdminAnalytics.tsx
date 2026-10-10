@@ -166,19 +166,24 @@ function AdminAnalyticsContent() {
               </CardHeader>
               <CardContent>
                 {r.trend.buckets.length > 0 ? (
-                  <div className="flex items-end gap-1 h-24">
-                    {r.trend.buckets.map(b => (
-                      <div key={b.key} className="flex-1 flex flex-col items-center justify-end h-24 group relative">
-                        <div
-                          className="w-full max-w-[18px] bg-orange-400 group-hover:bg-orange-500 rounded-t-sm transition-all"
-                          style={{ height: `${Math.round((b.visitors / maxBucket) * 100)}%`, minHeight: b.visitors > 0 ? 2 : 0 }}
-                        />
-                        <span className="text-[10px] text-gray-400 mt-1">{r.trend.mode === "hourly" ? b.key : b.key.slice(5)}</span>
-                        <div className="absolute -top-6 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-xs px-1 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none z-10">
-                          {b.visitors}
+                  <div className="overflow-x-auto pt-6 -mt-6">
+                    <div className="flex items-end gap-1">
+                      {r.trend.buckets.map(b => (
+                        <div key={b.key} className="flex-1 basis-10 min-w-max px-1 flex flex-col items-center group relative">
+                          <div className="h-24 w-full flex items-end justify-center">
+                            <div
+                              className="w-full max-w-[18px] bg-orange-400 group-hover:bg-orange-500 rounded-t-sm transition-all"
+                              style={{ height: `${Math.round((b.visitors / maxBucket) * 100)}%`, minHeight: b.visitors > 0 ? 2 : 0 }}
+                            />
+                          </div>
+                          <span className="mt-1 text-xs font-medium tabular-nums text-gray-700 whitespace-nowrap">{b.visitors}</span>
+                          <span className="text-[10px] text-gray-500 whitespace-nowrap">{r.trend.mode === "hourly" ? b.key : b.key.slice(5)}</span>
+                          <div className="absolute -top-6 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-xs px-1 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none z-10">
+                            {b.visitors}
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
                   </div>
                 ) : <p className="text-sm text-muted-foreground">尚無資料</p>}
               </CardContent>
