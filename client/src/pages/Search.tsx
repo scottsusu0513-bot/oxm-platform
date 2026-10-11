@@ -557,7 +557,7 @@ export default function Search() {
   });
   const searchLoadingPhase = useSearchLoadingPhase(activeSearchPending, currentSearchFingerprint);
 
-  const trackSearchEvent = trpc.analyticsV2.trackEvent.useMutation();
+  const trackSearchEvent = trpc.analyticsV2.trackEvent.useMutation({ retry: false });
   const searchTrackStateRef = useRef<SearchTrackDecisionState>({ lastTrackedFingerprint: null });
   useEffect(() => {
     const decision = decideSearchTrack({ isFetching, data, currentFingerprint: currentSearchFingerprint }, searchTrackStateRef.current);

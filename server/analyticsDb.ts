@@ -20,6 +20,7 @@ import {
 } from "./analyticsClassify";
 import { hashIp, anonymizeIpPrefix } from "./_core/requestMeta";
 import { sanitizeAnalyticsFilters, sanitizeAnalyticsQueryString, sanitizeReferrer } from "./analyticsPrivacy";
+import { isExcludedAnalyticsPath } from "../shared/analyticsPolicy";
 import { ALLOWED_PAGE_TYPES } from "../shared/analyticsPageType";
 
 export { ALLOWED_PAGE_TYPES }; // 讓 routers.ts 繼續可以從這裡 import，不用改呼叫端
@@ -184,6 +185,7 @@ async function getOrCreateSession(
  * failure 不可以讓頁面 error，見對話中「效能要求」），由呼叫端包 try/catch。
  */
 export async function recordAnalyticsEvent(input: TrackEventInput, meta: RequestMeta): Promise<void> {
+  if (isExcludedAnalyticsPath(input.pathname)) return;
   const db = await getDb();
   if (!db) return;
   const nowMs = Date.now();
@@ -460,6 +462,8 @@ export async function getSlotDetail(date: string, hour: number | null): Promise<
 function emptyFullReport(kpi: KpiSummary, trend: { mode: "hourly" | "daily"; buckets: { key: string; visitors: number }[] }) {
   return {
     kpi, trend, sessions: 0,
+    trafficQuality: [] as { classification: string; risk: string; sessions: number }[],
+    recentFlaggedSessions: [] as { sessionKey: string; startedAt: Date; classification: string; knownBotName: string | null; score: number; signals: string[]; eventCount: number }[],
     sources: [] as { source: string; count: number }[],
     referrerHosts: [] as { host: string; count: number }[],
     utmCampaigns: [] as { source: string | null; medium: string | null; campaign: string | null; count: number }[],
@@ -476,7 +480,7 @@ function emptyFullReport(kpi: KpiSummary, trend: { mode: "hourly" | "daily"; buc
   };
 }
 
-export async function getFullReport(startDate: string, endDate: string) {
+export async function getFullReport(startDate: string, endDate: string, classFilter: ClassificationFilter = "all") {
   const db = await getDb();
   if (!db) return emptyFullReport(
     { visitors: 0, humanVisitors: 0, botSuspiciousVisitors: 0, pageviews: 0 },
@@ -484,13 +488,31 @@ export async function getFullReport(startDate: string, endDate: string) {
   );
 
   const kpi = await getKpiSummary(startDate, endDate);
-  const trend = await getTrendSeries(startDate, endDate, "all");
+  const trend = await getTrendSeries(startDate, endDate, classFilter);
 
-  const sessionRange = dateRangeCondition(analyticsSessions.date, startDate, endDate);
-  const eventRange = dateRangeCondition(analyticsEvents.date, startDate, endDate);
+  const classCondition = classFilter === "human" ? eq(analyticsSessions.classification, "human")
+    : classFilter === "bot_suspicious" ? sql`${analyticsSessions.classification} != 'human'` : sql`1=1`;
+  const sessionRange = and(dateRangeCondition(analyticsSessions.date, startDate, endDate), classCondition);
+  const eventRange = and(dateRangeCondition(analyticsEvents.date, startDate, endDate), classCondition);
 
   const [sessionCountRow] = await db.select({ count: sql<number>`COUNT(*)` })
     .from(analyticsSessions).where(sessionRange);
+
+  const risk = sql<string>`CASE WHEN ${analyticsSessions.classification} != 'suspicious' THEN 'none'
+    WHEN ${analyticsSessions.suspiciousScore} >= 80 THEN 'high'
+    WHEN ${analyticsSessions.suspiciousScore} >= 60 THEN 'medium' ELSE 'low' END`;
+  const qualityRows = await db.select({
+    classification: analyticsSessions.classification, risk,
+    sessions: sql<number>`COUNT(*)`,
+  }).from(analyticsSessions).where(dateRangeCondition(analyticsSessions.date, startDate, endDate)).groupBy(analyticsSessions.classification, risk);
+  const flaggedRows = await db.select({
+    sessionKey: analyticsSessions.sessionKey, startedAt: analyticsSessions.startedAt,
+    classification: analyticsSessions.classification, knownBotName: analyticsSessions.knownBotName,
+    score: analyticsSessions.suspiciousScore, signals: analyticsSessions.suspiciousSignals,
+    eventCount: analyticsSessions.eventCount,
+  }).from(analyticsSessions)
+    .where(and(dateRangeCondition(analyticsSessions.date, startDate, endDate), sql`${analyticsSessions.classification} != 'human'`))
+    .orderBy(desc(analyticsSessions.startedAt)).limit(50);
 
   const sources = await db.select({
     source: analyticsSessions.sourceClassification,
@@ -517,6 +539,7 @@ export async function getFullReport(startDate: string, endDate: string) {
     pathname: analyticsEvents.pathname,
     count: sql<number>`COUNT(*)`,
   }).from(analyticsEvents)
+    .innerJoin(analyticsSessions, eq(analyticsEvents.sessionRowId, analyticsSessions.id))
     .where(and(eventRange, eq(analyticsEvents.isLandingPage, true)))
     .groupBy(analyticsEvents.pathname).orderBy(desc(sql`COUNT(*)`)).limit(20);
 
@@ -524,6 +547,7 @@ export async function getFullReport(startDate: string, endDate: string) {
     pathname: analyticsEvents.pathname,
     count: sql<number>`COUNT(*)`,
   }).from(analyticsEvents)
+    .innerJoin(analyticsSessions, eq(analyticsEvents.sessionRowId, analyticsSessions.id))
     .where(and(eventRange, eq(analyticsEvents.eventType, "pageview")))
     .groupBy(analyticsEvents.pathname).orderBy(desc(sql`COUNT(*)`)).limit(30);
 
@@ -535,9 +559,10 @@ export async function getFullReport(startDate: string, endDate: string) {
     factoryId: analyticsEvents.factoryId,
     views: sql<number>`COUNT(*)`,
     uniqueVisitors: sql<number>`COUNT(DISTINCT ${analyticsEvents.visitorId})`,
-    human: sql<number>`COUNT(CASE WHEN ${analyticsEvents.classification}='human' THEN 1 END)`,
-    botSuspicious: sql<number>`COUNT(CASE WHEN ${analyticsEvents.classification}!='human' THEN 1 END)`,
+    human: sql<number>`COUNT(CASE WHEN ${analyticsSessions.classification}='human' THEN 1 END)`,
+    botSuspicious: sql<number>`COUNT(CASE WHEN ${analyticsSessions.classification}!='human' THEN 1 END)`,
   }).from(analyticsEvents)
+    .innerJoin(analyticsSessions, eq(analyticsEvents.sessionRowId, analyticsSessions.id))
     .where(and(eventRange, eq(analyticsEvents.pageType, "factory"), sql`${analyticsEvents.factoryId} IS NOT NULL`))
     .groupBy(analyticsEvents.factoryId).orderBy(desc(sql`COUNT(*)`)).limit(20);
 
@@ -559,9 +584,10 @@ export async function getFullReport(startDate: string, endDate: string) {
     uniqueVisitors: sql<number>`COUNT(DISTINCT ${analyticsEvents.visitorId})`,
     avgResults: sql<number>`AVG(${analyticsEvents.resultCount})`,
     aiCount: sql<number>`COUNT(CASE WHEN ${analyticsEvents.useAIMode}=1 THEN 1 END)`,
-    human: sql<number>`COUNT(CASE WHEN ${analyticsEvents.classification}='human' THEN 1 END)`,
-    botSuspicious: sql<number>`COUNT(CASE WHEN ${analyticsEvents.classification}!='human' THEN 1 END)`,
+    human: sql<number>`COUNT(CASE WHEN ${analyticsSessions.classification}='human' THEN 1 END)`,
+    botSuspicious: sql<number>`COUNT(CASE WHEN ${analyticsSessions.classification}!='human' THEN 1 END)`,
   }).from(analyticsEvents)
+    .innerJoin(analyticsSessions, eq(analyticsEvents.sessionRowId, analyticsSessions.id))
     .where(and(eventRange, eq(analyticsEvents.eventType, "search"), sql`${analyticsEvents.keywordNormalized} IS NOT NULL AND ${analyticsEvents.keywordNormalized} != ''`))
     .groupBy(analyticsEvents.keywordNormalized).orderBy(desc(sql`COUNT(*)`)).limit(30);
 
@@ -578,6 +604,8 @@ export async function getFullReport(startDate: string, endDate: string) {
 
   return {
     kpi, trend, sessions: Number(sessionCountRow?.count ?? 0),
+    trafficQuality: qualityRows.map(r => ({ ...r, sessions: Number(r.sessions) })),
+    recentFlaggedSessions: flaggedRows.map(r => ({ ...r, signals: r.signals ?? [] })),
     sources: sources.map(s => ({ source: s.source ?? "unknown", count: Number(s.count) })),
     referrerHosts: referrerHosts.map(r => ({ host: r.host as string, count: Number(r.count) })),
     utmCampaigns: utmCampaigns.map(u => ({ source: u.source, medium: u.medium, campaign: u.campaign, count: Number(u.count) })),

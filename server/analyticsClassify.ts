@@ -157,7 +157,7 @@ export function classifyReferrer(input: ReferrerInput): SourceClassification {
   } catch {
     return "unknown";
   }
-  if (host.includes("oxmmatch.com")) return "direct"; // 站內導覽不算外部來源
+  if (/(^|\.)oxmmatch\.com$/.test(host)) return "direct"; // 站內導覽不算外部來源
   if (/(^|\.)google\./.test(host)) return "google_organic";
   if (/(^|\.)bing\.com$/.test(host)) return "bing_organic";
   if (/(^|\.)threads\.net$/.test(host)) return "threads";

@@ -231,3 +231,17 @@ describe("Capacitor App 不應被誤判（對話中「四十、APP 不可被誤�
     expect(finalClass).toBe("human");
   });
 });
+
+
+describe("analytics precision regression", () => {
+  it("retains the single-signal IP visitor threshold above 20", () => {
+    expect(computeSuspiciousScore({ ...allFalseSignals(), newVisitorIdsPerIpRecent: 20 }).level).toBe("human");
+    const result = computeSuspiciousScore({ ...allFalseSignals(), newVisitorIdsPerIpRecent: 21 });
+    expect(result.level).toBe("suspicious_low");
+    expect(result.signals).toEqual(["HIGH_NEW_VISITOR_RATE"]);
+  });
+  it("does not classify an external domain containing the site name as direct", () => {
+    expect(classifyReferrer({ referrer: "https://oxmmatch.com.example.org/path" })).toBe("other_referral");
+    expect(classifyReferrer({ referrer: "https://www.oxmmatch.com/path" })).toBe("direct");
+  });
+});

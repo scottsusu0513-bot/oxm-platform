@@ -13,6 +13,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { trpc } from "@/lib/trpc";
 import { ANALYTICS_MIN_DATE, taipeiTodayStr, addDaysToDateStr } from "@shared/analyticsTz";
 
+import { analyticsRiskLabel, analyticsSignalLabel } from "@shared/analyticsPolicy";
+
 type RangeMode = "today" | "yesterday" | "7d" | "30d" | "custom";
 
 const SOURCE_LABELS: Record<string, string> = {
@@ -22,7 +24,7 @@ const SOURCE_LABELS: Record<string, string> = {
 };
 
 const CLASSIFICATION_BADGE: Record<string, { label: string; className: string }> = {
-  human: { label: "真人", className: "bg-green-100 text-green-700" },
+  human: { label: "正常", className: "bg-green-100 text-green-700" },
   known_bot: { label: "已知 Bot", className: "bg-blue-100 text-blue-700" },
   suspicious: { label: "可疑", className: "bg-orange-100 text-orange-700" },
 };
@@ -54,6 +56,7 @@ export default function AdminAnalytics() {
 
 function AdminAnalyticsContent() {
   const today = useMemo(() => taipeiTodayStr(), []);
+  const [classFilter, setClassFilter] = useState<"all" | "human" | "bot_suspicious">("human");
   const [rangeMode, setRangeMode] = useState<RangeMode>("7d");
   const [customStart, setCustomStart] = useState(ANALYTICS_MIN_DATE);
   const [customEnd, setCustomEnd] = useState(today);
@@ -77,7 +80,7 @@ function AdminAnalyticsContent() {
     return { start: s, end: e, rangeLabel: `${s} ~ ${e}` };
   }, [rangeMode, today, customStart, customEnd]);
 
-  const reportQuery = trpc.analyticsV2.getFullReport.useQuery({ startDate: start, endDate: end });
+  const reportQuery = trpc.analyticsV2.getFullReport.useQuery({ startDate: start, endDate: end, classFilter });
   const r = reportQuery.data;
   const maxBucket = r ? Math.max(...r.trend.buckets.map(b => b.visitors), 1) : 1;
 
@@ -131,6 +134,13 @@ function AdminAnalyticsContent() {
           </Popover>
         </div>
 
+        <div className="flex flex-wrap gap-2 mb-4">
+          {([{ key: "human", label: "正常流量" }, { key: "all", label: "全部流量" }, { key: "bot_suspicious", label: "Bot／可疑流量" }] as const).map(f => (
+            <Button key={f.key} size="sm" variant={classFilter === f.key ? "default" : "outline"} onClick={() => setClassFilter(f.key)}>{f.label}</Button>
+          ))}
+          <p className="text-xs text-muted-foreground w-full">篩選套用於趨勢、造訪次數、來源、熱門頁面、工廠、搜尋及裝置；總覽 KPI 與流量品質保留全部分類。</p>
+        </div>
+
         {/* Batch 3.12：查詢失敗原本落在「載入中...」永遠轉圈 */}
         {reportQuery.isError ? (
           <QueryErrorState error={reportQuery.error} onRetry={() => reportQuery.refetch()} retrying={reportQuery.isFetching} />
@@ -141,11 +151,11 @@ function AdminAnalyticsContent() {
             {/* KPI */}
             <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
               {[
-                { label: "訪客", value: r.kpi.visitors },
-                { label: "真人訪客", value: r.kpi.humanVisitors },
+                { label: "正常訪客", value: r.kpi.humanVisitors },
+                { label: "總訪客", value: r.kpi.visitors },
                 { label: "Bot・可疑", value: r.kpi.botSuspiciousVisitors },
-                { label: "Sessions", value: r.sessions },
-                { label: "Pageviews", value: r.kpi.pageviews },
+                { label: "造訪（依篩選）", value: r.sessions },
+                { label: "總瀏覽量", value: r.kpi.pageviews },
                 { label: "異常事件", value: r.anomalies.length },
               ].map(kpi => (
                 <Card key={kpi.label}>
@@ -156,6 +166,45 @@ function AdminAnalyticsContent() {
                 </Card>
               ))}
             </div>
+
+            <p className="text-xs text-muted-foreground">
+              訪客以瀏覽器識別碼去重；換裝置或無痕視窗可能重複計算。30 分鐘無活動視為新造訪。
+              正常代表未達可疑門檻，不保證是真人；Bot 依 User-Agent 命中，未驗證爬蟲身分。
+              已登入管理員與後台頁面不納入新增流量。工廠與搜尋報表依造訪最新分類計算，事件原始判定保留。統計口徑：2026-10 修訂。
+            </p>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base">流量品質與判定原因</CardTitle>
+                <CardDescription>以下計算造訪次數，同一訪客可有多次造訪。IP 五分鐘超過 20 個訪客 ID 的門檻維持不變。</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex flex-wrap gap-2">
+                  {r.trafficQuality.map(q => (
+                    <Badge key={`${q.classification}-${q.risk}`} variant="secondary">
+                      {analyticsRiskLabel(q.classification, q.risk === "high" ? 80 : q.risk === "medium" ? 60 : 30)}：{q.sessions} 次造訪
+                    </Badge>
+                  ))}
+                </div>
+                {r.recentFlaggedSessions.length === 0 ? <p className="text-sm text-muted-foreground">此範圍沒有 Bot 或可疑造訪</p> : (
+                  <Table>
+                    <TableHeader><TableRow>
+                      <TableHead>造訪時間（台北）</TableHead><TableHead>分類</TableHead><TableHead>分數</TableHead>
+                      <TableHead>判定原因</TableHead><TableHead>事件數</TableHead>
+                    </TableRow></TableHeader>
+                    <TableBody>{r.recentFlaggedSessions.map(s => (
+                      <TableRow key={s.sessionKey}>
+                        <TableCell>{new Date(s.startedAt).toLocaleString("zh-TW", { timeZone: "Asia/Taipei" })}</TableCell>
+                        <TableCell>{analyticsRiskLabel(s.classification, s.score)}</TableCell>
+                        <TableCell>{s.classification === "known_bot" ? "—" : s.score}</TableCell>
+                        <TableCell className="text-xs">{s.knownBotName ?? (s.signals.map(analyticsSignalLabel).join("、") || "未保存原因")}</TableCell>
+                        <TableCell>{s.eventCount}</TableCell>
+                      </TableRow>
+                    ))}</TableBody>
+                  </Table>
+                )}
+                <p className="text-xs text-muted-foreground">最多顯示最近 50 次 Bot／可疑造訪。低風險 30–59 分、中風險 60–79 分、高風險 80–100 分。</p>
+              </CardContent>
+            </Card>
 
             {/* 時間趨勢 */}
             <Card>
@@ -215,7 +264,7 @@ function AdminAnalyticsContent() {
                           <TableCell>
                             <Badge variant={a.severity === "high" ? "destructive" : "secondary"}>{a.severity ?? "-"}</Badge>
                           </TableCell>
-                          <TableCell className="text-xs">{Array.isArray(a.signals) ? a.signals.join("、") : ""}</TableCell>
+                          <TableCell className="text-xs">{Array.isArray(a.signals) ? a.signals.map(s => analyticsSignalLabel(String(s))).join("、") : ""}</TableCell>
                           <TableCell className="text-xs">{a.actionTaken ?? "-"}</TableCell>
                         </TableRow>
                       ))}
@@ -227,7 +276,7 @@ function AdminAnalyticsContent() {
 
             <div className="grid md:grid-cols-2 gap-6">
               <Card>
-                <CardHeader className="pb-2"><CardTitle className="text-base">流量來源</CardTitle></CardHeader>
+                <CardHeader className="pb-2"><CardTitle className="text-base">流量來源（造訪次數）</CardTitle></CardHeader>
                 <CardContent>
                   <SimpleBarList
                     items={r.sources.map(s => ({ label: s.source, count: s.count }))}
@@ -274,7 +323,7 @@ function AdminAnalyticsContent() {
                   {r.topFactories.length === 0 ? <p className="text-sm text-muted-foreground">尚無資料</p> : (
                     <Table>
                       <TableHeader>
-                        <TableRow><TableHead>工廠</TableHead><TableHead className="text-right">瀏覽數</TableHead><TableHead className="text-right">不重複訪客</TableHead><TableHead className="text-right">真人</TableHead><TableHead className="text-right">Bot・可疑</TableHead></TableRow>
+                        <TableRow><TableHead>工廠</TableHead><TableHead className="text-right">瀏覽數</TableHead><TableHead className="text-right">不重複訪客</TableHead><TableHead className="text-right">正常</TableHead><TableHead className="text-right">Bot・可疑</TableHead></TableRow>
                       </TableHeader>
                       <TableBody>
                         {r.topFactories.map(f => (
@@ -302,7 +351,7 @@ function AdminAnalyticsContent() {
                       <TableRow>
                         <TableHead>關鍵字</TableHead><TableHead className="text-right">次數</TableHead>
                         <TableHead className="text-right">不重複訪客</TableHead><TableHead className="text-right">平均結果數</TableHead>
-                        <TableHead className="text-right">AI 搜尋</TableHead><TableHead className="text-right">真人</TableHead><TableHead className="text-right">Bot・可疑</TableHead>
+                        <TableHead className="text-right">AI 搜尋</TableHead><TableHead className="text-right">正常</TableHead><TableHead className="text-right">Bot・可疑</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>

@@ -4,6 +4,8 @@
  * 追蹤也需要同一個 visitorId，抽成共用小工具避免兩處各自維護一份
  * localStorage 邏輯。
  */
+let memoryVisitorId: string | undefined;
+
 export function getVisitorId(): string {
   try {
     let id = localStorage.getItem("oxm_visitor_id");
@@ -15,6 +17,7 @@ export function getVisitorId(): string {
     }
     return id;
   } catch {
-    return `anon-${Math.random().toString(36).slice(2)}`;
+    memoryVisitorId ??= `anon-${Math.random().toString(36).slice(2)}`;
+    return memoryVisitorId;
   }
 }

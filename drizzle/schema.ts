@@ -811,8 +811,7 @@ export const analyticsEvents = mysqlTable("analyticsEvents", {
   filtersJson: json("filtersJson"),
   useAIMode: boolean("useAIMode"),
   resultCount: int("resultCount"),
-  // event 當下的分類快照（不是即時讀 session 目前的分類——session 分類可能
-  // 隨後續行為往上調整，事件本身的分類保留當時判定，避免歷史報表隨之變動）。
+  // 保留 event 當下的分類快照供稽核；報表以關聯 session 的最新分類統一計算。
   classification: varchar("classification", { length: 15 }).notNull(),
   date: varchar("date", { length: 10 }).notNull(), // Asia/Taipei
   hour: int("hour").notNull(), // 0-23，Asia/Taipei

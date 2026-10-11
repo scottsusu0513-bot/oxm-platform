@@ -5,6 +5,8 @@ import { userNeedsConsent, CURRENT_TERMS_VERSION, CURRENT_PRIVACY_VERSION } from
 import { userNeedsOnboarding } from "@shared/onboarding";
 import { normalizeTaxId, isValidTaiwanTaxId } from "@shared/taxId";
 import { sdk } from "./_core/sdk";
+import { isAdminUser } from "./_core/admin";
+import { isExcludedAnalyticsPath } from "../shared/analyticsPolicy";
 import * as analyticsDb from "./analyticsDb";
 import { getClientIp } from "./_core/requestMeta";
 import { maskEmail } from "./_core/resilience";
@@ -1314,10 +1316,10 @@ export const appRouter = router({
       }),
   }),
 
-  // 舊系統維持完全不動（見對話中「新舊資料切割」——新系統驗證正常前不能
-  // 動舊功能，避免正式站中間出現無統計狀態）。
+  // 舊版追蹤保留；與 Analytics 2.0 一樣排除已驗證的管理員活動。
   analytics: router({
-    record: publicProcedure.input(z.object({ visitorId: z.string().regex(/^[a-zA-Z0-9\-_]+$/).min(1).max(64) })).mutation(async ({ input }) => {
+    record: publicProcedure.input(z.object({ visitorId: z.string().regex(/^[a-zA-Z0-9\-_]+$/).min(1).max(64), pathname: z.string().max(500).optional() })).mutation(async ({ input, ctx }) => {
+      if (isAdminUser(ctx.user) || isExcludedAnalyticsPath(input.pathname)) return;
       await db.recordPageView(input.visitorId);
     }),
     getStats: adminProcedure.query(async () => {
@@ -1360,6 +1362,8 @@ export const appRouter = router({
       utmTerm: z.string().max(255).optional(),
       platform: z.enum(["web", "ios_app", "android_app"]).optional(),
     })).mutation(async ({ input, ctx }) => {
+      // 使用伺服器認證身分與後台白名單，避免管理員活動影響訪客數與 Bot 分類。
+      if (isAdminUser(ctx.user)) return { success: true } as const;
       try {
         await analyticsDb.recordAnalyticsEvent(input, {
           ip: getClientIp(ctx.req),
@@ -1401,10 +1405,11 @@ export const appRouter = router({
     getFullReport: adminProcedure.input(z.object({
       startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
       endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      classFilter: z.enum(["all", "human", "bot_suspicious"]).optional(),
     })).query(async ({ input }) => {
       const range = clampAnalyticsDateRange(input.startDate, input.endDate);
       await analyticsDb.ensureAnomaliesDetected(range.start, range.end);
-      const report = await analyticsDb.getFullReport(range.start, range.end);
+      const report = await analyticsDb.getFullReport(range.start, range.end, input.classFilter ?? "all");
       return { ...report, range, minDate: ANALYTICS_MIN_DATE };
     }),
   }),

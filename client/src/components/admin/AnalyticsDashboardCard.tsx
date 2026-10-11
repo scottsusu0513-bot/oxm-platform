@@ -31,7 +31,7 @@ export function AnalyticsDashboardCard() {
   const [customStart, setCustomStart] = useState(ANALYTICS_MIN_DATE);
   const [customEnd, setCustomEnd] = useState(today);
   const [customOpen, setCustomOpen] = useState(false);
-  const [classFilter, setClassFilter] = useState<ClassFilter>("all");
+  const [classFilter, setClassFilter] = useState<ClassFilter>("human");
   const [selectedSlot, setSelectedSlot] = useState<{ date: string; hour: number | null } | null>(null);
 
   const { start, end, rangeLabel } = useMemo(() => {
@@ -163,12 +163,12 @@ export function AnalyticsDashboardCard() {
         {/* 4 個 KPI */}
         <div className="grid grid-cols-4 gap-2 mb-3">
           <div className="text-center">
-            <div className="text-xl font-bold">{d?.visitors ?? 0}</div>
-            <div className="text-[11px] text-gray-500">訪客</div>
+            <div className="text-xl font-bold text-green-600">{d?.humanVisitors ?? 0}</div>
+            <div className="text-[11px] text-gray-500">正常訪客</div>
           </div>
           <div className="text-center">
-            <div className="text-xl font-bold text-green-600">{d?.humanVisitors ?? 0}</div>
-            <div className="text-[11px] text-gray-500">真人訪客</div>
+            <div className="text-xl font-bold">{d?.visitors ?? 0}</div>
+            <div className="text-[11px] text-gray-500">總訪客</div>
           </div>
           <div className="text-center">
             <div className="text-xl font-bold text-amber-600">{d?.botSuspiciousVisitors ?? 0}</div>
@@ -206,7 +206,7 @@ export function AnalyticsDashboardCard() {
           <div className="flex gap-1">
             {([
               { key: "all", label: "全部" },
-              { key: "human", label: "真人" },
+              { key: "human", label: "正常" },
               { key: "bot_suspicious", label: "Bot・可疑" },
             ] as const).map(opt => (
               <button
@@ -278,7 +278,7 @@ export function AnalyticsDashboardCard() {
               <div className="space-y-2 text-xs">
                 <div className="flex gap-4 flex-wrap">
                   <span>訪客 {slotDetailQuery.data.visitors}</span>
-                  <span className="text-green-600">真人 {slotDetailQuery.data.human}</span>
+                  <span className="text-green-600">正常 {slotDetailQuery.data.human}</span>
                   <span className="text-amber-600">已知 Bot {slotDetailQuery.data.knownBot}</span>
                   <span className="text-orange-600">可疑 {slotDetailQuery.data.suspicious}</span>
                   <span>Pageviews {slotDetailQuery.data.pageviews}</span>
